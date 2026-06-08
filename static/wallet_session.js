@@ -639,30 +639,89 @@
 
         // Address mismatch - check for active binding (re-key ceremony case)
         if (activeNormalized && derivedNormalized && activeNormalized !== derivedNormalized) {
+          console.warn('[UnlockWallet] Address mismatch detected:', {
+            active: activeNormalized.substring(0, 10) + '...',
+            derived: derivedNormalized.substring(0, 10) + '...',
+            checking_binding: true
+          });
+
           // Try to verify through binding
+          let bindingCheckErr = null;
+          let binding = null;
           try {
-            const binding = await getActiveKeyBinding(activeAddr);
-            if (binding && binding.bound_key_address && derivedNormalized === normalizeAddress(binding.bound_key_address)) {
-              // Binding exists and matches derived address - binding-aware unlock
+            binding = await getActiveKeyBinding(activeAddr);
+            console.info('[UnlockWallet] Binding check completed:', {
+              found: !!binding,
+              bound_key_address: binding && binding.bound_key_address ? binding.bound_key_address.substring(0, 10) + '...' : 'n/a'
+            });
+          } catch (bErr) {
+            bindingCheckErr = bErr;
+            console.warn('[UnlockWallet] Binding check failed:', bErr.message);
+          }
+
+          // Check if binding is valid (exists and matches derived address)
+          if (binding && binding.bound_key_address) {
+            const boundNormalized = normalizeAddress(binding.bound_key_address);
+            if (derivedNormalized === boundNormalized) {
+              // Binding exists and matches derived address - binding-aware unlock (bound signer case)
+              console.info('[UnlockWallet] ✓ Bound signer recognized - unlock accepted');
               unlockedPrivateKeyHex = decryptedPrivKeyHex;
               unlockedForAddress = activeAddr;
               setBound(true);
               localStorage.setItem(LOCK_KEY, '0');
               return true;
+            } else {
+              // Binding exists but derived address doesn't match it
+              console.warn('[UnlockWallet] Binding exists but derived address does not match');
+              const err = new Error('wallet_signing_key_does_not_match_active_address');
+              err.code = 'KEY_MISMATCH';
+              err.error_type = 'binding_hash_mismatch';
+              err.derived_address = derivedAddress;
+              err.active_address = activeAddr;
+              err.binding_exists = true;
+              err.binding_address = binding.bound_key_address;
+              err.decrypt_succeeded = true;
+              lastSigningKeyMismatch = {
+                derived_address: derivedAddress,
+                active_address: activeAddr,
+                error_type: 'binding_hash_mismatch',
+                binding_address: binding.bound_key_address,
+                decrypt_succeeded: true,
+                timestamp: Date.now()
+              };
+              throw err;
             }
-          } catch (bindingCheckErr) {
-            // Binding check failed, fall through to mismatch error
+          } else if (bindingCheckErr) {
+            // Binding check failed (network error or endpoint issue)
+            console.error('[UnlockWallet] Binding check failed - treating as true mismatch:', bindingCheckErr.message);
+            const err = new Error('wallet_signing_key_does_not_match_active_address');
+            err.code = 'KEY_MISMATCH';
+            err.error_type = 'binding_check_failed';
+            err.derived_address = derivedAddress;
+            err.active_address = activeAddr;
+            err.decrypt_succeeded = true;
+            lastSigningKeyMismatch = {
+              derived_address: derivedAddress,
+              active_address: activeAddr,
+              error_type: 'binding_check_failed',
+              decrypt_succeeded: true,
+              timestamp: Date.now()
+            };
+            throw err;
           }
 
-          // No matching binding - generic key mismatch
+          // No matching binding exists - true key mismatch
+          console.warn('[UnlockWallet] No binding registered - key mismatch');
           const err = new Error('wallet_signing_key_does_not_match_active_address');
           err.code = 'KEY_MISMATCH';
+          err.error_type = 'binding_not_registered';
           err.derived_address = derivedAddress;
           err.active_address = activeAddr;
           err.decrypt_succeeded = true;
           lastSigningKeyMismatch = {
             derived_address: derivedAddress,
             active_address: activeAddr,
+            error_type: 'binding_not_registered',
             decrypt_succeeded: true,
             timestamp: Date.now()
           };

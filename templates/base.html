@@ -7520,7 +7520,8 @@ async function walletV1ProcessRecoveryKit() {
             return alert('Recovery kit missing required fields');
         }
 
-        console.log('[Restore] Processing recovery kit for:', kit.canonical_v1_address.substring(0, 10) + '...');
+        const canonicalAddr = kit.canonical_v1_address.toUpperCase();
+        console.log('[Restore] Processing recovery kit for:', canonicalAddr.substring(0, 10) + '...');
 
         // Decrypt the private key with the provided PIN
         if (!walletSession.decryptPrivateKeyHex) {
@@ -7534,17 +7535,104 @@ async function walletV1ProcessRecoveryKit() {
 
         console.log('[Restore] Key decrypted successfully');
 
-        // Save encrypted backup to local storage
+        // Derive public key and address from decrypted material
+        let derivedAddr = null;
+        let publicKeyHex = null;
+        try {
+            // Use wallet_session utility if available
+            if (walletSession.deriveAddressFromPrivateKey) {
+                const result = await walletSession.deriveAddressFromPrivateKey(decrypted);
+                if (result && result.address && result.public_key) {
+                    derivedAddr = result.address.toUpperCase();
+                    publicKeyHex = result.public_key;
+                }
+            }
+        } catch (deriveErr) {
+            console.warn('[Restore] Could not derive address from key:', deriveErr.message);
+            // Continue anyway - we have the canonical address from kit
+        }
+
+        // Save to localStorage using normalized key names
+        localStorage.setItem('wallet_v1_canonical_address', canonicalAddr);
+        localStorage.setItem('wallet_v1_encrypted_private_key', kit.encrypted_private_key_backup);
+        if (publicKeyHex) {
+            localStorage.setItem('wallet_v1_public_key', publicKeyHex);
+        }
+        if (kit.bound_key_address) {
+            localStorage.setItem('wallet_v1_bound_signer_address', kit.bound_key_address.toUpperCase());
+        }
+
+        // Also set legacy key names for backwards compatibility
+        localStorage.setItem('wallet_v1_address', canonicalAddr);
         localStorage.setItem('wallet_v1_encrypted_priv', kit.encrypted_private_key_backup);
-        localStorage.setItem('wallet_v1_address', kit.canonical_v1_address);
+
+        console.log('[Restore] localStorage keys updated:', {
+            canonical_address: canonicalAddr.substring(0, 10) + '...',
+            derived_address: derivedAddr ? derivedAddr.substring(0, 10) + '...' : 'unknown',
+            has_encrypted_key: true,
+            has_public_key: !!publicKeyHex,
+            has_bound_signer: !!kit.bound_key_address
+        });
+
+        // Register binding with backend if needed (derived != canonical)
+        if (derivedAddr && derivedAddr !== canonicalAddr && publicKeyHex) {
+            console.log('[Restore] Registering bound signer binding...');
+            try {
+                const bindingResp = await fetch('/api/v1/wallet/bind_public_key', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        address: canonicalAddr,
+                        credential_lookup_address: canonicalAddr,
+                        public_key: publicKeyHex
+                    })
+                });
+                const bindingResult = await bindingResp.json();
+                if (bindingResult.ok) {
+                    console.log('[Restore] Binding registered successfully');
+                } else {
+                    console.warn('[Restore] Binding registration failed:', bindingResult.error);
+                }
+            } catch (bindErr) {
+                console.warn('[Restore] Binding registration error:', bindErr.message);
+                // Continue anyway - unlock can proceed without binding being pre-registered
+            }
+        }
 
         // Clear restore form
         document.getElementById('walletV1RecoveryKitInput').value = '';
         document.getElementById('walletV1RecoveryKitPin').value = '';
         document.getElementById('walletV1RecoverKitRestoreForm').style.display = 'none';
 
-        alert('✓ Recovery kit restored successfully!\n\nYou can now unlock your wallet with your PIN.');
-        updateHeaderWalletUi();
+        // Unlock wallet with the provided PIN (this loads runtime signing material)
+        console.log('[Restore] Unlocking wallet...');
+        try {
+            const unlocked = await walletSession.unlockWallet({ pin, address: canonicalAddr });
+            if (unlocked) {
+                console.log('[Restore] ✓ Wallet unlocked successfully');
+                alert('✓ Recovery kit restored and wallet unlocked!\n\nYou can now sign transactions.');
+                updateHeaderWalletUi();
+                loadWalletBalances(true);
+                window.dispatchEvent(new CustomEvent('thronos:wallet:v1:unlocked', { detail: { address: canonicalAddr } }));
+                window.dispatchEvent(new Event('thronos:wallet:state-changed'));
+            } else {
+                console.warn('[Restore] Unlock failed - wrong PIN or wallet not found');
+                alert('Recovery kit restored, but unlock failed.\n\nTry entering your PIN again.');
+                updateHeaderWalletUi();
+            }
+        } catch (unlockErr) {
+            console.warn('[Restore] Unlock error:', unlockErr.message);
+            // Key mismatch or other unlock error
+            // Show the error but keep the restored state so user can try again or recover
+            if (unlockErr.message && unlockErr.message.includes('wallet_signing_key_does_not_match_active_address')) {
+                console.log('[Restore] Mismatch detected - showing recovery options');
+                updateHeaderWalletUi();
+                showKeyMismatchRecovery(unlockErr);
+            } else {
+                alert('Restore completed but unlock failed: ' + (unlockErr.message || 'Unknown error'));
+                updateHeaderWalletUi();
+            }
+        }
 
     } catch(err) {
         console.error('[Restore] Error:', err);

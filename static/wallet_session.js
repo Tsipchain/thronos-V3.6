@@ -562,6 +562,18 @@
     }
   }
 
+  async function deriveAddressFromPrivateKey(privateKeyHex){
+    // Convenience wrapper: derive address and public key from private key
+    // Used by restore flow to calculate what address the imported key will sign for
+    // Returns {address, public_key} or throws error
+    const result = await derivePublicKeyAndAddress(privateKeyHex);
+    if (!result.success) throw new Error(result.error);
+    return {
+      address: result.address,
+      public_key: result.publicKey
+    };
+  }
+
   function hasSigningMaterial(address){
     return !!(localStorage.getItem(V1_ENCRYPTED_KEY) || unlockedPrivateKeyHex || getSendSeed(address));
   }
@@ -1302,7 +1314,7 @@
     getSigningKeyMismatch, getUnusableKeyDiagnostics, clearLocalSigningKey, clearUnusableSigningKey,
     getActiveKeyBinding, importSigningKeyForAddress, getWalletState,
     hasPledgeOrMigrationSource, getModalState,
-    generateV1KeyPair, derivePublicKeyAndAddress,
+    generateV1KeyPair, derivePublicKeyAndAddress, deriveAddressFromPrivateKey,
     resolveCanonicalWalletAddress
   };
 })(window);

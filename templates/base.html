@@ -6405,6 +6405,14 @@ function switchWalletV1Mode(){
     if (importEl) importEl.style.display = (displayMode === 'import_signing_key' && (importAllowed || adminSignerAllowed)) ? 'block' : 'none';
     if (adminSignerEl) adminSignerEl.style.display = (displayMode === 'admin_generate_signer' && adminSignerAllowed) ? 'block' : 'none';
 
+    // Ensure modeSelect.value matches what's displayed (Fix #3: Deterministic mode/CTA)
+    if (modeSelect && displayMode) {
+        const availableOption = Array.from(modeSelect.options).find(opt => opt.value === displayMode);
+        if (availableOption && !availableOption.disabled) {
+            modeSelect.value = displayMode;  // Match dropdown to displayed mode
+        }
+    }
+
     // When import mode is shown, activate Recovery Kit restore primary UI
     if (importEl && importEl.style.display !== 'none') {
         walletV1ShowRecoveryKitRestorePrimary();
@@ -6551,10 +6559,12 @@ async function showKeyMismatchRecovery(err) {
     let recoveryOptions = 'clear_or_import';
 
     if (errorType === 'binding_not_registered') {
-        // Binding not found - this could be a legitimate bound signer not yet registered
+        // Binding not found - this key belongs to a different address
         title = '⚠️ Bound Signer Not Registered';
-        message = `This signing key (${shortDerived}) is not registered as a bound signer for your wallet (${shortActive}).
-                   You need to register the binding first, or import the correct key.`;
+        message = `❌ <strong>This signing key belongs to a different address.</strong><br><br>
+                   Your wallet: <strong>${shortActive}</strong><br>
+                   This key derives to: <strong>${shortDerived}</strong><br><br>
+                   You can either import the correct key for your wallet, or register this key as a bound signer (admin only).`;
         recoveryOptions = 'clear_or_rekey';
     } else if (errorType === 'binding_hash_mismatch') {
         // Binding exists but derived doesn't match it
@@ -6602,14 +6612,22 @@ async function showKeyMismatchRecovery(err) {
         `;
     }
 
-    // For binding_not_registered error, also offer to register derived as bound signer (admin flow)
+    // For binding_not_registered error, offer to register derived as bound signer (ADMIN ONLY)
     if (errorType === 'binding_not_registered') {
         const derivedAddr = diagnostics && diagnostics.derived_address ? diagnostics.derived_address : null;
-        if (derivedAddr) {
+        const isAdmin = window.WALLET_V1_LEGACY_REPAIR_UI_ENABLED === true || window.WALLET_V1_LEGACY_REPAIR_UI_ENABLED === '1';
+
+        if (derivedAddr && isAdmin) {
             html += `
                 <button onclick="walletV1RegisterBoundSigner('${derivedAddr}')" style="flex:1; min-width:150px; padding:10px; background:#0066cc; color:#fff; border:1px solid #00aaff; border-radius:8px; cursor:pointer; font-size:0.9em;">
-                    🔗 Register This Key as Bound Signer
+                    🔗 [ADMIN] Register as Bound Signer
                 </button>
+            `;
+        } else if (derivedAddr && !isAdmin) {
+            html += `
+                <div style="flex:1; min-width:150px; padding:10px; background:#333; color:#999; border:1px solid #666; border-radius:8px; font-size:0.85em; text-align:center;">
+                    ℹ️ Admin feature: Register as Bound Signer
+                </div>
             `;
         }
     }
@@ -6673,13 +6691,12 @@ async function walletV1RegisterBoundSigner(derivedAddress) {
             return;
         }
 
-        // Step 2: Call backend endpoint to register binding
-        const response = await fetch('/api/wallet/v1/bind-signer', {
+        // Step 2: Call backend endpoint to register binding (/api/v1/wallet/bind_public_key)
+        const response = await fetch('/api/v1/wallet/bind_public_key', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                canonical_v1_address: canonicalAddr,
-                derived_v1_address: derivedAddress,
+                address: derivedAddress,
                 public_key: publicKey
             })
         });
@@ -6687,7 +6704,7 @@ async function walletV1RegisterBoundSigner(derivedAddress) {
         const result = await response.json();
 
         if (result.ok) {
-            alert('✅ Bound signer registered successfully!\nYour derived key is now registered to sign for your canonical wallet.');
+            alert('✅ Bound signer registered successfully!\nYour derived key is now registered to sign for your canonical wallet.\n\nRetrying unlock...');
             // Refresh UI to show binding is now registered
             if (typeof updateHeaderWalletUi === 'function') {
                 updateHeaderWalletUi();
@@ -6695,6 +6712,11 @@ async function walletV1RegisterBoundSigner(derivedAddress) {
             if (typeof switchWalletV1Mode === 'function') {
                 switchWalletV1Mode();
             }
+            // Retry unlock now that binding is registered
+            // Remove the error message and let user try again
+            const recovery = document.querySelector('[data-mismatch-recovery]');
+            if (recovery) recovery.remove();
+            alert('Binding registered. Try unlocking again with your PIN.');
         } else {
             alert('❌ Failed to register binding:\n' + (result.error || 'Unknown error'));
         }

@@ -820,13 +820,14 @@ class TestWalletV1RegressionSuite:
         assert "walletV1RegisterBoundSigner" in html, \
             "walletV1RegisterBoundSigner must be called in error handler"
 
-        # VERIFY 3: Check endpoint reference
-        assert "/api/wallet/v1/bind-signer" in html, \
-            "Must reference /api/wallet/v1/bind-signer endpoint for binding registration"
+        # VERIFY 3: Check endpoint reference (correct endpoint is /api/v1/wallet/bind_public_key)
+        assert "/api/v1/wallet/bind_public_key" in html, \
+            "Must reference /api/v1/wallet/bind_public_key endpoint for binding registration"
 
-        # VERIFY 4: Check button shows for binding_not_registered
-        assert "binding_not_registered" in html and "Register This Key as Bound Signer" in html, \
-            "binding_not_registered error must show 'Register Bound Signer' button"
+        # VERIFY 4: Check button or notice shows for binding_not_registered
+        assert "binding_not_registered" in html and \
+               ("Register as Bound Signer" in html or "[ADMIN]" in html), \
+            "binding_not_registered error must show 'Register Bound Signer' button (admin only)"
 
         print("✅ Binding Not Registered - Register Option (PR #617):")
         print("  - walletV1RegisterBoundSigner() function defined ✓")

@@ -5974,17 +5974,19 @@ function applyWalletV1ProductionMode(status) {
         // Set body class for CSS guard
         document.body.classList.add('wallet-v1-production-mode');
 
-        // Hide LEGACY/ADMIN form containers by ID, but NOT Recovery Kit restore
-        // Recovery Kit restore is the PRIMARY feature for users without signing key
+        // Hide LEGACY/ADMIN form containers by ID
+        // Recovery Kit restore (walletV1ImportMode) is the PRIMARY feature for users without signing key
+        const restoreForm = document.getElementById('walletV1RestoreMode');  // LEGACY migration restore - NOT Recovery Kit
         const migrateForm = document.getElementById('walletV1MigrateMode');  // Legacy migrate
         const legacyRecoveryForm = document.getElementById('walletV1LegacyRecoveryForm');
         const rekeyForm = document.getElementById('walletV1RekeyCeremonyForm');  // Admin feature
         const recoverySection = document.getElementById('walletRecoverySection');  // Legacy recovery
         const advancedZone = document.getElementById('walletAdvancedRecoveryZone');  // Admin zone
 
-        // NOTE: walletV1RestoreMode is the Recovery Kit restore - KEEP IT VISIBLE
-        // It's the primary way users unlock after pledge/migration
+        // NOTE: walletV1ImportMode is the Recovery Kit restore - KEEP IT VISIBLE
+        // It's the primary way users unlock after missing signing key
 
+        if (restoreForm) { restoreForm.style.display = 'none'; hiddenLegacyElements++; }
         if (migrateForm) { migrateForm.style.display = 'none'; hiddenLegacyElements++; }
         if (legacyRecoveryForm) { legacyRecoveryForm.style.display = 'none'; hiddenLegacyElements++; }
         if (advancedImportForm) { advancedImportForm.style.display = 'none'; hiddenLegacyElements++; }

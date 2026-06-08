@@ -6343,10 +6343,10 @@ function switchWalletV1Mode(){
         if (migrateEl) migrateEl.style.display = 'none';
         if (adminSignerEl) adminSignerEl.style.display = 'none';
 
-        // Show import key form and recovery message
-        if (importEl) importEl.style.display = 'block';
+        // Show missing signing key recovery message
         showMissingSigningKeyRecovery();
-        showImportSigningKeyForm();
+        // NOTE: Do NOT auto-open Advanced accordion - let user click "Advanced Options" button
+        // showImportSigningKeyForm();
 
         return; // Exit early for locked state
     } else if (adminSignerAllowed && modalState === 'active_wallet_no_key') {

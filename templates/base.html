@@ -6006,13 +6006,14 @@ function applyWalletV1ProductionMode(status) {
         if (advancedBySelector && advancedBySelector !== advancedRecoveryBtn) { advancedBySelector.style.display = 'none'; hiddenLegacyElements++; }
         if (resetBySelector && resetBySelector !== resetWalletBtn) { resetBySelector.style.display = 'none'; hiddenLegacyElements++; }
 
-        // Remove LEGACY options from mode select (NOT restore - that's Recovery Kit)
+        // Remove LEGACY options from mode select (restore is legacy migration restore, NOT Recovery Kit)
         const modeSelect = document.getElementById('walletWidgetMode');
         if (modeSelect) {
             const options = modeSelect.querySelectorAll('option');
-            // IMPORTANT: 'restore' option is Recovery Kit restore (primary feature), NOT legacy
-            const legacyValues = ['migrate', 'legacy', 'rekey'];  // Removed 'restore' - it's not legacy
-            const legacyTexts = ['Migrate Legacy', 'Verify Legacy', 'Advanced Import', 'Re-Key'];
+            // IMPORTANT: 'restore' option is LEGACY MIGRATION restore (restore existing migrated wallet)
+            // Recovery Kit import is 'import_signing_key' option, NOT 'restore'
+            const legacyValues = ['restore', 'migrate', 'legacy', 'rekey'];
+            const legacyTexts = ['Migrate Legacy', 'Verify Legacy', 'Advanced Import', 'Re-Key', 'Restore Existing Migrated'];
 
             options.forEach(option => {
                 const shouldRemove = legacyValues.includes(option.value) ||
@@ -6334,8 +6335,8 @@ function switchWalletV1Mode(){
     let displayMode = mode;
 
     if (hasNoSigningKey) {
-        // Wallet missing signing key: Recovery Kit (restore) is primary
-        displayMode = 'restore';
+        // Wallet missing signing key: Recovery Kit (import_signing_key) is primary
+        displayMode = 'import_signing_key';  // Set mode to match what's shown (Recovery Kit)
 
         // In production mode: show ONLY Recovery Kit (walletV1ImportMode)
         // In admin mode: show both Recovery Kit and Legacy Restore options
@@ -6403,6 +6404,14 @@ function switchWalletV1Mode(){
     if (migrateEl) migrateEl.style.display = (displayMode === 'migrate') ? 'block' : 'none';
     if (importEl) importEl.style.display = (displayMode === 'import_signing_key' && (importAllowed || adminSignerAllowed)) ? 'block' : 'none';
     if (adminSignerEl) adminSignerEl.style.display = (displayMode === 'admin_generate_signer' && adminSignerAllowed) ? 'block' : 'none';
+
+    // Ensure modeSelect.value matches what's displayed (Fix #3: Deterministic mode/CTA)
+    if (modeSelect && displayMode) {
+        const availableOption = Array.from(modeSelect.options).find(opt => opt.value === displayMode);
+        if (availableOption && !availableOption.disabled) {
+            modeSelect.value = displayMode;  // Match dropdown to displayed mode
+        }
+    }
 
     // When import mode is shown, activate Recovery Kit restore primary UI
     if (importEl && importEl.style.display !== 'none') {
@@ -6550,10 +6559,12 @@ async function showKeyMismatchRecovery(err) {
     let recoveryOptions = 'clear_or_import';
 
     if (errorType === 'binding_not_registered') {
-        // Binding not found - this could be a legitimate bound signer not yet registered
+        // Binding not found - this key belongs to a different address
         title = '⚠️ Bound Signer Not Registered';
-        message = `This signing key (${shortDerived}) is not registered as a bound signer for your wallet (${shortActive}).
-                   You need to register the binding first, or import the correct key.`;
+        message = `❌ <strong>This signing key belongs to a different address.</strong><br><br>
+                   Your wallet: <strong>${shortActive}</strong><br>
+                   This key derives to: <strong>${shortDerived}</strong><br><br>
+                   You can either import the correct key for your wallet, or register this key as a bound signer (admin only).`;
         recoveryOptions = 'clear_or_rekey';
     } else if (errorType === 'binding_hash_mismatch') {
         // Binding exists but derived doesn't match it
@@ -6601,6 +6612,26 @@ async function showKeyMismatchRecovery(err) {
         `;
     }
 
+    // For binding_not_registered error, offer to register derived as bound signer (ADMIN ONLY)
+    if (errorType === 'binding_not_registered') {
+        const derivedAddr = diagnostics && diagnostics.derived_address ? diagnostics.derived_address : null;
+        const isAdmin = window.WALLET_V1_LEGACY_REPAIR_UI_ENABLED === true || window.WALLET_V1_LEGACY_REPAIR_UI_ENABLED === '1';
+
+        if (derivedAddr && isAdmin) {
+            html += `
+                <button onclick="walletV1RegisterBoundSigner('${derivedAddr}')" style="flex:1; min-width:150px; padding:10px; background:#0066cc; color:#fff; border:1px solid #00aaff; border-radius:8px; cursor:pointer; font-size:0.9em;">
+                    🔗 [ADMIN] Register as Bound Signer
+                </button>
+            `;
+        } else if (derivedAddr && !isAdmin) {
+            html += `
+                <div style="flex:1; min-width:150px; padding:10px; background:#333; color:#999; border:1px solid #666; border-radius:8px; font-size:0.85em; text-align:center;">
+                    ℹ️ Admin feature: Register as Bound Signer
+                </div>
+            `;
+        }
+    }
+
     html += `
         </div>
     </div>
@@ -6632,6 +6663,66 @@ async function clearMismatchedSigningKey() {
         }
     } catch(err) {
         alert('Error clearing key: ' + (err.message || 'Unknown'));
+    }
+}
+
+async function walletV1RegisterBoundSigner(derivedAddress) {
+    /**
+     * Register a derived (mismatch) key as a bound signer for the canonical wallet.
+     * This allows a key from a different device/recovery kit to sign for the canonical address.
+     */
+    const canonicalAddr = localStorage.getItem('wallet_v1_address') || walletSession.getAddress?.();
+
+    if (!canonicalAddr) {
+        alert('Cannot register binding: No canonical address found');
+        return;
+    }
+
+    if (!derivedAddress) {
+        alert('Cannot register binding: No derived address provided');
+        return;
+    }
+
+    try {
+        // Step 1: Get the derived public key from current localStorage
+        const publicKey = localStorage.getItem('wallet_v1_public_key');
+        if (!publicKey) {
+            alert('Cannot register binding: No public key found in current signing material');
+            return;
+        }
+
+        // Step 2: Call backend endpoint to register binding (/api/v1/wallet/bind_public_key)
+        const response = await fetch('/api/v1/wallet/bind_public_key', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                address: derivedAddress,
+                public_key: publicKey
+            })
+        });
+
+        const result = await response.json();
+
+        if (result.ok) {
+            alert('✅ Bound signer registered successfully!\nYour derived key is now registered to sign for your canonical wallet.\n\nRetrying unlock...');
+            // Refresh UI to show binding is now registered
+            if (typeof updateHeaderWalletUi === 'function') {
+                updateHeaderWalletUi();
+            }
+            if (typeof switchWalletV1Mode === 'function') {
+                switchWalletV1Mode();
+            }
+            // Retry unlock now that binding is registered
+            // Remove the error message and let user try again
+            const recovery = document.querySelector('[data-mismatch-recovery]');
+            if (recovery) recovery.remove();
+            alert('Binding registered. Try unlocking again with your PIN.');
+        } else {
+            alert('❌ Failed to register binding:\n' + (result.error || 'Unknown error'));
+        }
+    } catch (err) {
+        console.error('[RegisterBoundSigner] Error:', err);
+        alert('❌ Error registering bound signer:\n' + (err.message || 'Network error'));
     }
 }
 

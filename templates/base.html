@@ -3279,7 +3279,6 @@ function walletV1ShowRecoveryKitRestorePrimary() {
 
     // Hide legacy forms by default (move to Advanced)
     const legacyForm = document.getElementById('walletV1LegacyRecoveryForm');
-    const advancedForm = document.getElementById('walletV1AdvancedKeyImportForm');
     const rekeyForm = document.getElementById('walletV1RekeyCeremonyForm');
 
     if (legacyForm) legacyForm.style.display = 'none';
@@ -5979,7 +5978,6 @@ function applyWalletV1ProductionMode(status) {
         // Recovery Kit restore is the PRIMARY feature for users without signing key
         const migrateForm = document.getElementById('walletV1MigrateMode');  // Legacy migrate
         const legacyRecoveryForm = document.getElementById('walletV1LegacyRecoveryForm');
-        const advancedImportForm = document.getElementById('walletV1AdvancedKeyImportForm');  // Advanced admin
         const rekeyForm = document.getElementById('walletV1RekeyCeremonyForm');  // Admin feature
         const recoverySection = document.getElementById('walletRecoverySection');  // Legacy recovery
         const advancedZone = document.getElementById('walletAdvancedRecoveryZone');  // Admin zone
@@ -6053,13 +6051,11 @@ function applyWalletV1ProductionMode(status) {
         const restoreForm = document.getElementById('walletV1RestoreMode');
         const migrateForm = document.getElementById('walletV1MigrateMode');
         const legacyRecoveryForm = document.getElementById('walletV1LegacyRecoveryForm');
-        const advancedImportForm = document.getElementById('walletV1AdvancedKeyImportForm');
         const recoverySection = document.getElementById('walletRecoverySection');
 
         if (restoreForm) restoreForm.style.display = 'block';
         if (migrateForm) migrateForm.style.display = 'block';
         if (legacyRecoveryForm) legacyRecoveryForm.style.display = 'block';
-        if (advancedImportForm) advancedImportForm.style.display = 'block';
         if (recoverySection) recoverySection.style.display = 'block';
 
         console.log('[WalletV1] admin mode active: legacy repair UI visible');
@@ -6921,7 +6917,6 @@ async function performLegacyOwnershipVerification() {
 
         // Hide legacy recovery form, show re-key ceremony form
         document.getElementById('walletV1LegacyRecoveryForm').style.display = 'none';
-        document.getElementById('walletV1AdvancedKeyImportForm').style.display = 'none';
         document.getElementById('walletV1RekeyCeremonyForm').style.display = 'block';
 
         // Clear sensitive form data
@@ -6957,16 +6952,12 @@ function showWalletV1RekeyCeremonyFlow() {
     // Show the ownership verification form and initialize it
     const legacyForm = document.getElementById('walletV1LegacyRecoveryForm');
     const ceremonyForm = document.getElementById('walletV1RekeyCeremonyForm');
-    const advancedForm = document.getElementById('walletV1AdvancedKeyImportForm');
 
     if (legacyForm) {
         legacyForm.style.display = 'block';
     }
     if (ceremonyForm) {
         ceremonyForm.style.display = 'none';
-    }
-    if (advancedForm) {
-        advancedForm.style.display = 'none';
     }
 
     // Auto-fill the ownership verification form
@@ -8602,7 +8593,6 @@ body.wallet-v1-production-mode [data-wallet-legacy-repair],
 body.wallet-v1-production-mode #walletV1RestoreMode,
 body.wallet-v1-production-mode #walletV1MigrateMode,
 body.wallet-v1-production-mode #walletV1LegacyRecoveryForm,
-body.wallet-v1-production-mode #walletV1AdvancedKeyImportForm,
 body.wallet-v1-production-mode #walletV1RekeyCeremonyForm,
 body.wallet-v1-production-mode #walletWidgetResetPointersBtn,
 body.wallet-v1-production-mode #walletWidgetAdvancedRecoveryBtn,

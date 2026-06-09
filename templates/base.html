@@ -8708,6 +8708,12 @@ body.wallet-v1-production-mode [data-wallet-rekey-ceremony] {
     display: none !important;
 }
 
+/* Production mode: Hide legacy dropdown options as additional safeguard */
+body.wallet-v1-production-mode option[value="restore"],
+body.wallet-v1-production-mode option[value="migrate"] {
+    display: none !important;
+}
+
 .global-music-player {
     position: fixed;
     bottom: 0;
@@ -9712,6 +9718,28 @@ window.addEventListener('beforeunload', () => {
         GlobalMusicPlayer.stopPositionSaving();
     }
 });
+</script>
+
+<script>
+// Wallet V1 Production Mode: Early synchronous cleanup (before async initialization)
+// Remove legacy dropdown options immediately to prevent visibility race condition
+function sanitizeLegacyDropdownOptionsSync() {
+    const modeSelect = document.getElementById('walletWidgetMode');
+    if (modeSelect) {
+        const legacyValues = ['restore', 'migrate'];
+        Array.from(modeSelect.options).forEach(option => {
+            if (legacyValues.includes(option.value)) {
+                option.remove();
+            }
+        });
+    }
+}
+// Run synchronously ASAP
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', sanitizeLegacyDropdownOptionsSync);
+} else {
+    sanitizeLegacyDropdownOptionsSync();
+}
 </script>
 
 <script>

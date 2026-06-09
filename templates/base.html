@@ -6696,7 +6696,8 @@ async function walletV1RegisterBoundSigner(derivedAddress) {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                address: derivedAddress,
+                address: canonicalAddr,
+                credential_lookup_address: derivedAddress,
                 public_key: publicKey
             })
         });

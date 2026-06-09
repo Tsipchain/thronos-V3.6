@@ -16,6 +16,7 @@ Key scenarios:
 
 import json
 import os
+import re
 import sqlite3
 from datetime import datetime
 import pytest
@@ -835,6 +836,58 @@ class TestWalletV1RegressionSuite:
         print("  - 'Register This Key as Bound Signer' button shown ✓")
         print("  - References /api/wallet/v1/bind-signer endpoint ✓")
 
+    def test_bind_public_key_request_format_correct(self):
+        """
+        CRITICAL Regression Test: Bind Public Key Request Format
+
+        Bug Fix: walletV1RegisterBoundSigner() must send correct JSON body:
+        - address: canonical (the wallet being signed FOR)
+        - credential_lookup_address: derived (the signing key being bound)
+        - public_key: the public key hex
+
+        Previous bug: sent address=derivedAddress which caused 405 errors.
+        """
+        with open('templates/base.html', 'r') as f:
+            html = f.read()
+
+        # Find the walletV1RegisterBoundSigner function
+        assert 'async function walletV1RegisterBoundSigner(derivedAddress)' in html, \
+            "walletV1RegisterBoundSigner function must be defined"
+
+        # Extract the section with the fetch call
+        # Look for the bind_public_key fetch call and its body
+        pattern = r'fetch\([\'"]\/api\/v1\/wallet\/bind_public_key.*?JSON\.stringify\(\{([^}]+)\}\)'
+        match = re.search(pattern, html, re.DOTALL)
+
+        assert match, \
+            "walletV1RegisterBoundSigner must call /api/v1/wallet/bind_public_key with JSON body"
+
+        body_section = match.group(0)
+
+        # VERIFY 1: Must use canonicalAddr for address (not derivedAddress)
+        # Check that the request uses address: canonicalAddr
+        assert re.search(r'address\s*:\s*canonicalAddr', body_section), \
+            "Request body must use 'address: canonicalAddr'"
+
+        # VERIFY 2: Must include credential_lookup_address field with derivedAddress
+        assert re.search(r'credential_lookup_address\s*:\s*derivedAddress', body_section), \
+            "Request body must include 'credential_lookup_address: derivedAddress'"
+
+        # VERIFY 3: Must include public_key field
+        assert re.search(r'public_key\s*:\s*publicKey', body_section), \
+            "Request body must include 'public_key: publicKey'"
+
+        # VERIFY 4: address should NOT be set to derivedAddress (this was the bug)
+        # Use negative lookahead to exclude credential_lookup_address
+        assert not re.search(r'\baddress\s*:\s*derivedAddress(?!\s*})', body_section), \
+            "CRITICAL BUG: address must NOT be derivedAddress (causes 405 validation error)"
+
+        print("✅ Bind Public Key Request Format (Regression):")
+        print("  - address field set to canonicalAddr ✓")
+        print("  - credential_lookup_address field set to derivedAddress ✓")
+        print("  - public_key field included ✓")
+        print("  - No longer sends address=derivedAddress (405 fix) ✓")
+
     def test_advanced_accordion_no_auto_open(self):
         """
         CRITICAL Regression Test: Advanced Accordion No Auto-Open
@@ -952,6 +1005,7 @@ if __name__ == '__main__':
     test_regression.test_production_dropdown_options_hidden_pr617()
     test_regression.test_displaymode_matches_shown_panel_pr617()
     test_regression.test_binding_not_registered_register_option_pr617()
+    test_regression.test_bind_public_key_request_format_correct()
 
     print("\n" + "=" * 80)
     print("ALL TESTS PASSED ✓")

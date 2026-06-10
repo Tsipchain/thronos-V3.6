@@ -2701,6 +2701,39 @@ function hasCanonical() {
     return !!(canonical && canonical.startsWith('THR') && canonical.length > 10);
 }
 
+async function refreshWalletStateFromServer(canonicalAddr) {
+    /**
+     * Refresh wallet modal state from server after import/restore.
+     * Prevents stale modalState ('no_active_wallet') after canonical is restored locally.
+     *
+     * Returns: { modal_state, address, ... } from /api/wallet/v1/status
+     * Stores in: window.walletV1LastStatus
+     */
+    if (!canonicalAddr) {
+        console.warn('[RefreshState] No address provided');
+        return null;
+    }
+
+    try {
+        console.log('[RefreshState] Fetching authoritative state from server for:', canonicalAddr.substring(0, 10) + '...');
+        const response = await fetch(`/api/wallet/v1/status?address=${encodeURIComponent(canonicalAddr)}`);
+        if (!response.ok) {
+            console.warn('[RefreshState] Server status check failed:', response.status);
+            return null;
+        }
+
+        const status = await response.json();
+        console.log('[RefreshState] Server returned:', { modal_state: status.modal_state, address: status.address });
+
+        // Store as authority source
+        window.walletV1LastStatus = status;
+        return status;
+    } catch (e) {
+        console.error('[RefreshState] Error fetching server state:', e.message);
+        return null;
+    }
+}
+
 async function loadWalletBalances(force = false) {
     // PR-5a: Guard to prevent multiple simultaneous loads
     if (window.__walletLoadInProgress && !force) return;
@@ -3427,8 +3460,12 @@ async function walletV1RestoreFromRecoveryKit(recoveryKitJson, pin) {
         if (typeof updateHeaderWalletUi === 'function') {
             updateHeaderWalletUi();
         }
+        // Step 14: Refresh authoritative state from server (prevents stale 'no_active_wallet')
+        if (typeof refreshWalletStateFromServer === 'function') {
+            await refreshWalletStateFromServer(canonical);
+        }
         if (typeof switchWalletV1Mode === 'function') {
-            switchWalletV1Mode();
+            switchWalletV1Mode();  // Now uses server truth
         }
 
         console.log('[RestoreKit] Wallet restored successfully from Recovery Kit');
@@ -6282,7 +6319,12 @@ function switchWalletV1Mode(){
     }
 
     // Get current modal state for pledge-backed wallet flow
-    const modalState = walletSession.getModalState ? walletSession.getModalState() : 'no_active_wallet';
+    // CRITICAL: Prefer server truth (walletV1LastStatus) over client-side state
+    let modalState = walletSession.getModalState ? walletSession.getModalState() : 'no_active_wallet';
+    if (window.walletV1LastStatus && window.walletV1LastStatus.modal_state) {
+        console.log('[SwitchMode] Using server modal_state:', window.walletV1LastStatus.modal_state, '(was client state:', modalState + ')');
+        modalState = window.walletV1LastStatus.modal_state;
+    }
     const hasPledge = walletSession.hasPledgeOrMigrationSource ? walletSession.hasPledgeOrMigrationSource() : false;
     const allowWebCreate = window.WALLET_V1_ALLOW_WEB_CREATE === true || window.WALLET_V1_ALLOW_WEB_CREATE === '1';
 
@@ -7159,7 +7201,12 @@ async function performCanonicalImportSigningKey() {
                 if (recovery) recovery.remove();
                 // Update UI
                 updateHeaderWalletUi();
-                switchWalletV1Mode();  // Refresh modal state after import
+                // Refresh wallet state from server (prevents stale 'no_active_wallet' after restore)
+                const canonical = localStorage.getItem('wallet_v1_canonical_address');
+                if (canonical) {
+                    await refreshWalletStateFromServer(canonical);
+                }
+                switchWalletV1Mode();  // Now uses server truth
                 loadWalletBalances(true);
                 return;
             } else {

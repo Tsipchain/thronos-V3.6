@@ -1601,7 +1601,7 @@
                         Create a new Wallet V1 through our pledge activation process.
                     </p>
                     <div style="margin:12px 0;">
-                        <button class="primary" style="background:#0a6a1a; width:100%;" onclick="window.location.href='/pledge'">Go to Pledge Activation</button>
+                        <button class="primary" style="background:#0a6a1a; width:100%;" onclick="if(hasCanonical()) { alert('❌ Canonical wallet already exists. Use Unlock or Import mode instead.'); } else { window.location.href='/pledge'; }">Go to Pledge Activation</button>
                     </div>
                     <p style="font-size:0.8em; color:#9f9; margin:8px 0;">
                         After pledge confirmation, return here to set up your signing key.
@@ -2694,6 +2694,11 @@ function getActiveWalletAddress() {
         });
     }
     return active || '';
+}
+
+function hasCanonical() {
+    const canonical = localStorage.getItem('wallet_v1_canonical_address');
+    return !!(canonical && canonical.startsWith('THR') && canonical.length > 10);
 }
 
 async function loadWalletBalances(force = false) {
@@ -6285,7 +6290,8 @@ function switchWalletV1Mode(){
     const adminModeEnabled = window.WALLET_V1_LEGACY_REPAIR_UI_ENABLED === true || window.WALLET_V1_LEGACY_REPAIR_UI_ENABLED === '1';
 
     // Determine which modes are allowed based on wallet state
-    const createAllowed = allowWebCreate || hasPledge;
+    // CRITICAL: createAllowed = false if canonical already exists (immutability)
+    const createAllowed = !hasCanonical() && (allowWebCreate || hasPledge);
     const unlockAllowed = modalState === 'active_wallet_with_encrypted_key' || modalState === 'signing_ready';
     const importAllowed = modalState === 'active_wallet_no_key';
     const restoreAllowed = modalState === 'no_active_wallet' || modalState === 'active_wallet_no_key';  // Both states allow restore (Recovery Kit)
@@ -6385,8 +6391,13 @@ function switchWalletV1Mode(){
     } else if (modalState === 'no_active_wallet') {
         // No active wallet - show restore/migrate options (if available in production mode)
         const restoreOpt = document.querySelector('option[value="restore"]');
-        const defaultMode = restoreOpt ? 'restore' : 'create';
-        displayMode = mode === 'restore' || mode === 'migrate' ? mode : defaultMode;
+        // CRITICAL: Never allow 'create' if canonical exists, even if user tries via devtools
+        const defaultMode = hasCanonical() ? 'unlock' : (restoreOpt ? 'restore' : 'create');
+        displayMode = (mode === 'restore' || mode === 'migrate') ? mode : defaultMode;
+        // Force override if user tried to select 'create' with existing canonical
+        if (hasCanonical() && mode === 'create') {
+            displayMode = 'unlock';
+        }
         if (modeSelect && !mode) modeSelect.value = defaultMode;
     } else if (unlockAllowed && mode === 'unlock') {
         displayMode = 'unlock';
@@ -6459,8 +6470,8 @@ function switchWalletV1Mode(){
     const addrLabel = document.getElementById('walletWidgetAddrLabel');
 
     if (pledgePanel) {
-        if (isProductionMode && modalState === 'no_active_wallet') {
-            // Production mode with no wallet: show pledge CTA
+        if (isProductionMode && modalState === 'no_active_wallet' && !hasCanonical()) {
+            // Production mode with no wallet AND no canonical: show pledge CTA
             pledgePanel.style.display = 'block';
             if (modeSelect) modeSelect.style.display = 'none';
             if (modeLabel) modeLabel.style.display = 'none';
@@ -7117,11 +7128,16 @@ async function performCanonicalImportSigningKey() {
     if (!keyHex.match(/^[0-9a-fA-F]{64}$/)) return alert('Invalid key format. Must be 64 hex characters.');
     if (!pin.match(/^\d{4,8}$/)) return alert('PIN must be 4-8 digits');
 
-    try {
-        console.log('[ImportSigningKey] Importing private key...');
+    // CRITICAL: Import requires existing canonical (no auto-pledge)
+    if (!hasCanonical()) {
+        return alert('❌ No canonical wallet found. Please go through Pledge Activation first.');
+    }
 
-        // Get target address (active wallet)
-        const targetAddr = walletSession.getActiveAddress ? walletSession.getActiveAddress() : localStorage.getItem('wallet_v1_address');
+    try {
+        console.log('[ImportSigningKey] Importing private key for canonical...');
+
+        // Get target address (must be the canonical)
+        const targetAddr = hasCanonical() ? localStorage.getItem('wallet_v1_canonical_address') : (walletSession.getActiveAddress ? walletSession.getActiveAddress() : localStorage.getItem('wallet_v1_address'));
 
         if (!targetAddr) {
             return alert('No active wallet address found');
@@ -7143,6 +7159,7 @@ async function performCanonicalImportSigningKey() {
                 if (recovery) recovery.remove();
                 // Update UI
                 updateHeaderWalletUi();
+                switchWalletV1Mode();  // Refresh modal state after import
                 loadWalletBalances(true);
                 return;
             } else {

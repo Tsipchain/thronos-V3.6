@@ -16946,8 +16946,11 @@ def pledge_submit():
             except Exception as regen_err:
                 app.logger.warning(f"PDF regen failed for {exists['thr_address']}: {regen_err}")
         return jsonify(
-            status="already_verified",
+            ok=True,
+            canonical_v1_address=exists["thr_address"],
             thr_address=exists["thr_address"],
+            created=False,
+            status="already_has_canonical",
             pledge_hash=exists["pledge_hash"],
             pdf_url=pdf_url,
             recovery_required=True,
@@ -17033,8 +17036,11 @@ def pledge_submit():
         pdf_url = f"/contracts/{pdf_name}" if os.path.isfile(pdf_path) else None
 
         return jsonify(
-            status="verified",
+            ok=True,
+            canonical_v1_address=thr_addr,
             thr_address=thr_addr,
+            created=True,
+            status="newly_created",
             pledge_hash=phash,
             pdf_url=pdf_url,
             send_secret=send_seed

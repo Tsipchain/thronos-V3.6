@@ -1601,7 +1601,7 @@
                         Create a new Wallet V1 through our pledge activation process.
                     </p>
                     <div style="margin:12px 0;">
-                        <button class="primary" style="background:#0a6a1a; width:100%;" onclick="window.location.href='/pledge'">Go to Pledge Activation</button>
+                        <button class="primary" style="background:#0a6a1a; width:100%;" onclick="if(hasCanonical()) { alert('❌ Canonical wallet already exists. Use Unlock or Import mode instead.'); } else { window.location.href='/pledge'; }">Go to Pledge Activation</button>
                     </div>
                     <p style="font-size:0.8em; color:#9f9; margin:8px 0;">
                         After pledge confirmation, return here to set up your signing key.
@@ -2696,6 +2696,44 @@ function getActiveWalletAddress() {
     return active || '';
 }
 
+function hasCanonical() {
+    const canonical = localStorage.getItem('wallet_v1_canonical_address');
+    return !!(canonical && canonical.startsWith('THR') && canonical.length > 10);
+}
+
+async function refreshWalletStateFromServer(canonicalAddr) {
+    /**
+     * Refresh wallet modal state from server after import/restore.
+     * Prevents stale modalState ('no_active_wallet') after canonical is restored locally.
+     *
+     * Returns: { modal_state, address, ... } from /api/wallet/v1/status
+     * Stores in: window.walletV1LastStatus
+     */
+    if (!canonicalAddr) {
+        console.warn('[RefreshState] No address provided');
+        return null;
+    }
+
+    try {
+        console.log('[RefreshState] Fetching authoritative state from server for:', canonicalAddr.substring(0, 10) + '...');
+        const response = await fetch(`/api/wallet/v1/status?address=${encodeURIComponent(canonicalAddr)}`);
+        if (!response.ok) {
+            console.warn('[RefreshState] Server status check failed:', response.status);
+            return null;
+        }
+
+        const status = await response.json();
+        console.log('[RefreshState] Server returned:', { modal_state: status.modal_state, address: status.address });
+
+        // Store as authority source
+        window.walletV1LastStatus = status;
+        return status;
+    } catch (e) {
+        console.error('[RefreshState] Error fetching server state:', e.message);
+        return null;
+    }
+}
+
 async function loadWalletBalances(force = false) {
     // PR-5a: Guard to prevent multiple simultaneous loads
     if (window.__walletLoadInProgress && !force) return;
@@ -3422,8 +3460,12 @@ async function walletV1RestoreFromRecoveryKit(recoveryKitJson, pin) {
         if (typeof updateHeaderWalletUi === 'function') {
             updateHeaderWalletUi();
         }
+        // Step 14: Refresh authoritative state from server (prevents stale 'no_active_wallet')
+        if (typeof refreshWalletStateFromServer === 'function') {
+            await refreshWalletStateFromServer(canonical);
+        }
         if (typeof switchWalletV1Mode === 'function') {
-            switchWalletV1Mode();
+            switchWalletV1Mode();  // Now uses server truth
         }
 
         console.log('[RestoreKit] Wallet restored successfully from Recovery Kit');
@@ -6277,7 +6319,12 @@ function switchWalletV1Mode(){
     }
 
     // Get current modal state for pledge-backed wallet flow
-    const modalState = walletSession.getModalState ? walletSession.getModalState() : 'no_active_wallet';
+    // CRITICAL: Prefer server truth (walletV1LastStatus) over client-side state
+    let modalState = walletSession.getModalState ? walletSession.getModalState() : 'no_active_wallet';
+    if (window.walletV1LastStatus && window.walletV1LastStatus.modal_state) {
+        console.log('[SwitchMode] Using server modal_state:', window.walletV1LastStatus.modal_state, '(was client state:', modalState + ')');
+        modalState = window.walletV1LastStatus.modal_state;
+    }
     const hasPledge = walletSession.hasPledgeOrMigrationSource ? walletSession.hasPledgeOrMigrationSource() : false;
     const allowWebCreate = window.WALLET_V1_ALLOW_WEB_CREATE === true || window.WALLET_V1_ALLOW_WEB_CREATE === '1';
 
@@ -6285,7 +6332,8 @@ function switchWalletV1Mode(){
     const adminModeEnabled = window.WALLET_V1_LEGACY_REPAIR_UI_ENABLED === true || window.WALLET_V1_LEGACY_REPAIR_UI_ENABLED === '1';
 
     // Determine which modes are allowed based on wallet state
-    const createAllowed = allowWebCreate || hasPledge;
+    // CRITICAL: createAllowed = false if canonical already exists (immutability)
+    const createAllowed = !hasCanonical() && (allowWebCreate || hasPledge);
     const unlockAllowed = modalState === 'active_wallet_with_encrypted_key' || modalState === 'signing_ready';
     const importAllowed = modalState === 'active_wallet_no_key';
     const restoreAllowed = modalState === 'no_active_wallet' || modalState === 'active_wallet_no_key';  // Both states allow restore (Recovery Kit)
@@ -6385,8 +6433,13 @@ function switchWalletV1Mode(){
     } else if (modalState === 'no_active_wallet') {
         // No active wallet - show restore/migrate options (if available in production mode)
         const restoreOpt = document.querySelector('option[value="restore"]');
-        const defaultMode = restoreOpt ? 'restore' : 'create';
-        displayMode = mode === 'restore' || mode === 'migrate' ? mode : defaultMode;
+        // CRITICAL: Never allow 'create' if canonical exists, even if user tries via devtools
+        const defaultMode = hasCanonical() ? 'unlock' : (restoreOpt ? 'restore' : 'create');
+        displayMode = (mode === 'restore' || mode === 'migrate') ? mode : defaultMode;
+        // Force override if user tried to select 'create' with existing canonical
+        if (hasCanonical() && mode === 'create') {
+            displayMode = 'unlock';
+        }
         if (modeSelect && !mode) modeSelect.value = defaultMode;
     } else if (unlockAllowed && mode === 'unlock') {
         displayMode = 'unlock';
@@ -6459,8 +6512,8 @@ function switchWalletV1Mode(){
     const addrLabel = document.getElementById('walletWidgetAddrLabel');
 
     if (pledgePanel) {
-        if (isProductionMode && modalState === 'no_active_wallet') {
-            // Production mode with no wallet: show pledge CTA
+        if (isProductionMode && modalState === 'no_active_wallet' && !hasCanonical()) {
+            // Production mode with no wallet AND no canonical: show pledge CTA
             pledgePanel.style.display = 'block';
             if (modeSelect) modeSelect.style.display = 'none';
             if (modeLabel) modeLabel.style.display = 'none';
@@ -6696,7 +6749,8 @@ async function walletV1RegisterBoundSigner(derivedAddress) {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                address: derivedAddress,
+                address: canonicalAddr,
+                credential_lookup_address: derivedAddress,
                 public_key: publicKey
             })
         });
@@ -7116,11 +7170,16 @@ async function performCanonicalImportSigningKey() {
     if (!keyHex.match(/^[0-9a-fA-F]{64}$/)) return alert('Invalid key format. Must be 64 hex characters.');
     if (!pin.match(/^\d{4,8}$/)) return alert('PIN must be 4-8 digits');
 
-    try {
-        console.log('[ImportSigningKey] Importing private key...');
+    // CRITICAL: Import requires existing canonical (no auto-pledge)
+    if (!hasCanonical()) {
+        return alert('❌ No canonical wallet found. Please go through Pledge Activation first.');
+    }
 
-        // Get target address (active wallet)
-        const targetAddr = walletSession.getActiveAddress ? walletSession.getActiveAddress() : localStorage.getItem('wallet_v1_address');
+    try {
+        console.log('[ImportSigningKey] Importing private key for canonical...');
+
+        // Get target address (must be the canonical)
+        const targetAddr = hasCanonical() ? localStorage.getItem('wallet_v1_canonical_address') : (walletSession.getActiveAddress ? walletSession.getActiveAddress() : localStorage.getItem('wallet_v1_address'));
 
         if (!targetAddr) {
             return alert('No active wallet address found');
@@ -7142,6 +7201,12 @@ async function performCanonicalImportSigningKey() {
                 if (recovery) recovery.remove();
                 // Update UI
                 updateHeaderWalletUi();
+                // Refresh wallet state from server (prevents stale 'no_active_wallet' after restore)
+                const canonical = localStorage.getItem('wallet_v1_canonical_address');
+                if (canonical) {
+                    await refreshWalletStateFromServer(canonical);
+                }
+                switchWalletV1Mode();  // Now uses server truth
                 loadWalletBalances(true);
                 return;
             } else {
@@ -8707,6 +8772,12 @@ body.wallet-v1-production-mode [data-wallet-rekey-ceremony] {
     display: none !important;
 }
 
+/* Production mode: Hide legacy dropdown options as additional safeguard */
+body.wallet-v1-production-mode option[value="restore"],
+body.wallet-v1-production-mode option[value="migrate"] {
+    display: none !important;
+}
+
 .global-music-player {
     position: fixed;
     bottom: 0;
@@ -9711,6 +9782,28 @@ window.addEventListener('beforeunload', () => {
         GlobalMusicPlayer.stopPositionSaving();
     }
 });
+</script>
+
+<script>
+// Wallet V1 Production Mode: Early synchronous cleanup (before async initialization)
+// Remove legacy dropdown options immediately to prevent visibility race condition
+function sanitizeLegacyDropdownOptionsSync() {
+    const modeSelect = document.getElementById('walletWidgetMode');
+    if (modeSelect) {
+        const legacyValues = ['restore', 'migrate'];
+        Array.from(modeSelect.options).forEach(option => {
+            if (legacyValues.includes(option.value)) {
+                option.remove();
+            }
+        });
+    }
+}
+// Run synchronously ASAP
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', sanitizeLegacyDropdownOptionsSync);
+} else {
+    sanitizeLegacyDropdownOptionsSync();
+}
 </script>
 
 <script>

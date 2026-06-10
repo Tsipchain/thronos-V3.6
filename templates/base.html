@@ -1601,7 +1601,7 @@
                         Create a new Wallet V1 through our pledge activation process.
                     </p>
                     <div style="margin:12px 0;">
-                        <button class="primary" style="background:#0a6a1a; width:100%;" onclick="if(hasCanonical()) { alert('❌ Canonical wallet already exists. Use Unlock or Import mode instead.'); } else { window.location.href='/pledge'; }">Go to Pledge Activation</button>
+                        <button class="primary" style="background:#0a6a1a; width:100%;" onclick="if(hasCanonical()) { alert('❌ Canonical wallet already exists. Use Unlock or Import mode instead.'); } else if(window.location.pathname === '/pledge') { const pledgeForm = document.getElementById('pledgeForm') || document.querySelector('form'); if(pledgeForm) { pledgeForm.scrollIntoView({behavior: 'smooth'}); } else { alert('Pledge form is ready. Please scroll down.'); } } else { window.location.href='/pledge'; }">Go to Pledge Activation</button>
                     </div>
                     <p style="font-size:0.8em; color:#9f9; margin:8px 0;">
                         After pledge confirmation, return here to set up your signing key.
@@ -6021,6 +6021,7 @@ function applyWalletV1ProductionMode(status) {
         const restoreForm = document.getElementById('walletV1RestoreMode');  // LEGACY migration restore - NOT Recovery Kit
         const migrateForm = document.getElementById('walletV1MigrateMode');  // Legacy migrate
         const legacyRecoveryForm = document.getElementById('walletV1LegacyRecoveryForm');
+        const advancedImportForm = document.getElementById('walletV1AdvancedImportForm');  // Admin import form
         const rekeyForm = document.getElementById('walletV1RekeyCeremonyForm');  // Admin feature
         const recoverySection = document.getElementById('walletRecoverySection');  // Legacy recovery
         const advancedZone = document.getElementById('walletAdvancedRecoveryZone');  // Admin zone

@@ -2698,9 +2698,15 @@ function getActiveWalletAddress() {
 
 function hasCanonical() {
     // Check all known canonical address keys (defensive - handles multiple key naming conventions)
-    const canonical = localStorage.getItem('wallet_v1_canonical_address')
+    let canonical = localStorage.getItem('wallet_v1_canonical_address')
         || localStorage.getItem('wallet_v1_address')
         || localStorage.getItem('wallet_v1_active_address');
+
+    // Safety net: If canonical found in legacy key but not in canonical key, promote it
+    if (canonical && !localStorage.getItem('wallet_v1_canonical_address')) {
+        localStorage.setItem('wallet_v1_canonical_address', canonical);  // Heal old sessions
+    }
+
     return !!(canonical && canonical.startsWith('THR') && canonical.length > 10);
 }
 

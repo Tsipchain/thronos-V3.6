@@ -348,6 +348,20 @@
             return false;
         },
 
+        async clearUnusableSigningKey() {
+            if (window.walletSession && typeof window.walletSession.clearUnusableSigningKey === 'function') {
+                const result = await window.walletSession.clearUnusableSigningKey();
+                if (result.success) {
+                    lastMismatchError = null;
+                    cachedAuthSecret = '';
+                    cachedAuthAddress = '';
+                    cachedRuntimeSigningAddress = '';
+                }
+                return result;
+            }
+            return {success: false, error: 'Wallet session unavailable'};
+        },
+
         async importSigningKeyForAddress(privateKeyHex, pin, targetAddress) {
             if (window.walletSession && typeof window.walletSession.importSigningKeyForAddress === 'function') {
                 const result = await window.walletSession.importSigningKeyForAddress(privateKeyHex, pin, targetAddress);

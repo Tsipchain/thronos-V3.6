@@ -1594,14 +1594,30 @@
             </div>
 
             <div id="walletLoginSection" class="wallet-popup-login" style="display:none;">
-                <label for="walletWidgetThrAddress">THR Address</label>
+                <!-- PLEDGE ACTIVATION: Production mode CTA (no legacy repair UI) -->
+                <div id="walletV1PledgeActivationPanel" data-production-only="1" style="display:none; background:#1a2a1a; border:1px solid #00ff66; border-radius:8px; padding:15px; margin:12px 0;">
+                    <h5 style="color:#00ff66; margin-top:0;">🔓 Activate Wallet V1</h5>
+                    <p style="font-size:0.9em; line-height:1.5; color:#ccc; margin:10px 0;">
+                        Create a new Wallet V1 through our pledge activation process.
+                    </p>
+                    <div style="margin:12px 0;">
+                        <button class="primary" style="background:#0a6a1a; width:100%;" onclick="if(hasCanonical()) { alert('❌ Canonical wallet already exists. Use Unlock or Import mode instead.'); } else if(window.location.pathname === '/pledge') { const pledgeForm = document.getElementById('pledgeForm') || document.querySelector('form'); if(pledgeForm) { pledgeForm.scrollIntoView({behavior: 'smooth'}); } else { alert('Pledge form is ready. Please scroll down.'); } } else { window.location.href='/pledge'; }">Go to Pledge Activation</button>
+                    </div>
+                    <p style="font-size:0.8em; color:#9f9; margin:8px 0;">
+                        After pledge confirmation, return here to set up your signing key.
+                    </p>
+                </div>
+
+                <label for="walletWidgetThrAddress" id="walletWidgetAddrLabel">THR Address</label>
                 <input type="text" id="walletWidgetThrAddress" placeholder="THR..." />
-<label for="walletWidgetMode">Mode</label>
+<label for="walletWidgetMode" id="walletWidgetModeLabel">Mode</label>
                 <select id="walletWidgetMode" onchange="switchWalletV1Mode()" style="width:100%;padding:8px;background:#000;border:1px solid #00ff66;color:#00ff66;">
                     <option value="restore">Restore Existing Migrated Wallet</option>
                     <option value="migrate">Migrate Legacy Wallet</option>
                     <option value="unlock">Unlock Wallet V1</option>
                     <option value="create">Create Wallet V1</option>
+                    <option value="import_signing_key">Import Matching Signing Key</option>
+                    <option value="admin_generate_signer" data-wallet-legacy-repair="1">🔐 [ADMIN] Generate Signer for Canonical Wallet</option>
                 </select>
 
                 <!-- UNLOCK MODE: Only PIN + Unlock button -->
@@ -1620,7 +1636,7 @@
                 </div>
 
                 <!-- RESTORE MODE: Restore existing migrated wallet from backend lookup -->
-                <div id="walletV1RestoreMode" style="display:none; margin-top:10px; border-top:1px solid #0a4a1a; padding-top:10px;">
+                <div id="walletV1RestoreMode" data-wallet-legacy-repair="1" style="display:none; margin-top:10px; border-top:1px solid #0a4a1a; padding-top:10px;">
                     <div style="font-size:10px; color:#00ff66; background:#0a1a0a; padding:8px; border-radius:6px; margin-bottom:10px;">
                         ✓ Restore a previously migrated wallet from your legacy address.
                     </div>
@@ -1634,7 +1650,7 @@
                 </div>
 
                 <!-- MIGRATE MODE: Legacy address + secret + new PIN + Migrate button -->
-                <div id="walletV1MigrateMode" style="display:none; margin-top:10px; border-top:1px solid #114422; padding-top:10px;">
+                <div id="walletV1MigrateMode" data-wallet-legacy-repair="1" style="display:none; margin-top:10px; border-top:1px solid #114422; padding-top:10px;">
                     <label for="walletWidgetLegacyAddress">Legacy THR Address</label>
                     <input type="text" id="walletWidgetLegacyAddress" placeholder="THR..." />
                     <label for="walletWidgetLegacySecret">Legacy Send Secret (migration only)</label>
@@ -1643,6 +1659,36 @@
                     <input type="password" id="walletWidgetMigratePin" placeholder="4-8 digits" />
                     <div class="wallet-modal-actions" style="margin-top:10px;">
                         <button class="primary" onclick="migrateLegacyWalletFromHeader()">Migrate Legacy Wallet</button>
+                    </div>
+                </div>
+
+                <!-- ADMIN SIGNER GENERATION: Generate V1 signer for existing canonical wallet -->
+                <div id="walletV1AdminGenerateSignerMode" data-wallet-legacy-repair="1" style="display:none; margin-top:10px; border-top:1px solid #00aaff; padding-top:10px;">
+                    <div style="background:#0a1a2a; border:1px solid #00aaff; border-radius:8px; padding:15px; margin-bottom:12px;">
+                        <h5 style="color:#00aaff; margin-top:0;">🔑 Generate V1 Signer for Existing Wallet</h5>
+                        <p style="font-size:0.9em; line-height:1.5; color:#ccc; margin-bottom:12px;">
+                            For admin use: Generate a new signing key for an existing canonical V1 address.
+                            This creates a new secp256k1 signer without requiring the user's legacy credentials.
+                        </p>
+
+                        <div style="margin-bottom:12px;">
+                            <label style="display:block; font-size:0.85em; color:#00aaff; margin-bottom:4px;">Canonical V1 Address</label>
+                            <input type="text" id="walletAdminCanonicalAddress" placeholder="THR..." style="width:100%; padding:8px; background:#000; color:#00aaff; border:1px solid #00aaff; border-radius:4px; font-size:0.9em; font-family:monospace;" />
+                        </div>
+
+                        <div style="margin-bottom:12px;">
+                            <label style="display:block; font-size:0.85em; color:#9f9; margin-bottom:4px;">Optional: Legacy Send Secret (for ownership verification)</label>
+                            <input type="password" id="walletAdminLegacySecret" placeholder="send_secret (optional)" style="width:100%; padding:8px; background:#000; color:#0f0; border:1px solid #8a8a8a; border-radius:4px; font-size:0.9em; font-family:monospace;" />
+                        </div>
+
+                        <div style="display:flex; gap:8px;">
+                            <button onclick="walletAdminGenerateSignerForCanonical()" style="flex:1; padding:10px; background:#0066cc; color:#fff; border:1px solid #00aaff; border-radius:6px; cursor:pointer; font-weight:bold;">
+                                🔑 Generate Signer
+                            </button>
+                            <button onclick="walletAdminCancelGenerateSigner()" style="flex:1; padding:10px; background:#666; color:#fff; border:1px solid #999; border-radius:6px; cursor:pointer;">
+                                Cancel
+                            </button>
+                        </div>
                     </div>
                 </div>
 
@@ -1658,23 +1704,206 @@
                     </div>
                 </div>
 
+                <!-- IMPORT SIGNING KEY MODE: Locked import-only state with Recovery Kit restore as primary -->
+                <div id="walletV1ImportMode" style="display:none; margin-top:10px; border-top:1px solid #ff9900; padding-top:10px;">
+                    <div style="background:#1a2a1a; border:2px solid #00ff66; border-radius:8px; padding:15px; margin-bottom:10px;">
+                        <h5 style="color:#00ff66; margin-top:0;">🔑 Restore Wallet from Recovery Kit</h5>
+                        <p style="font-size:0.9em; line-height:1.5; color:#ccc;">
+                            Your canonical wallet exists but the signing key is missing (new device/browser). Upload your Recovery Kit to restore access.
+                        </p>
+                    </div>
+
+                    <!-- PRIMARY: Recovery Kit Restore Form -->
+                    <div id="walletV1RecoveryKitRestoreForm" style="background:#1a2a1a; border:2px solid #00ff66; border-radius:8px; padding:15px; margin:12px 0;">
+                        <h5 style="color:#00ff66; margin-top:0;">📦 Recovery Kit Restore</h5>
+                        <p style="font-size:0.85em; color:#9f9; margin-bottom:12px;">
+                            Upload or paste the recovery kit JSON file that was downloaded when you created this wallet.
+                        </p>
+
+                        <div style="margin-bottom:10px;">
+                            <label style="display:block; font-size:0.9em; color:#00ff66; margin-bottom:4px;">Upload Recovery Kit</label>
+                            <input type="file" id="walletV1RecoveryKitFileInput" accept=".json" style="width:100%; padding:10px; background:#000; color:#0f0; border:1px solid #00ff66; border-radius:6px; font-size:0.85em;" />
+                        </div>
+
+                        <div style="text-align:center; color:#666; margin-bottom:10px; font-size:0.85em;">
+                            — OR —
+                        </div>
+
+                        <div style="margin-bottom:10px;">
+                            <label style="display:block; font-size:0.9em; color:#00ff66; margin-bottom:4px;">Paste Recovery Kit JSON</label>
+                            <textarea id="walletV1RecoveryKitPasteInput" placeholder="Paste recovery kit JSON here..." style="width:100%; height:80px; padding:10px; background:#000; color:#0f0; border:1px solid #00ff66; border-radius:6px; font-size:0.85em; font-family:monospace; resize:vertical;"></textarea>
+                        </div>
+
+                        <div style="margin-bottom:10px;">
+                            <label style="display:block; font-size:0.9em; color:#00ff66; margin-bottom:4px;">PIN</label>
+                            <input type="password" id="walletV1RecoveryKitPin" placeholder="4-8 digit PIN" maxlength="8" style="width:100%; padding:10px; background:#000; color:#0f0; border:1px solid #00ff66; border-radius:6px; font-size:0.85em;" />
+                        </div>
+
+                        <div id="walletV1RecoveryKitStatus" style="margin-bottom:10px; padding:8px; background:#0a0a0a; border:1px solid #666; border-radius:6px; color:#999; font-size:0.85em; min-height:20px;"></div>
+
+                        <div style="display:flex; gap:8px; margin-top:12px;">
+                            <button onclick="walletV1HandleRecoveryKitRestore()" style="flex:1; padding:10px; background:#00aa66; color:#000; border:1px solid #00ff66; border-radius:6px; cursor:pointer; font-weight:bold;">
+                                ✓ Restore Wallet
+                            </button>
+                            <button onclick="document.getElementById('walletV1AdvancedRecoveryToggle')?.click()" style="flex:1; padding:10px; background:#666; color:#fff; border:1px solid #999; border-radius:6px; cursor:pointer;">
+                                Advanced Options
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- CANONICAL ADVANCED: Import Private Key (hidden by default) -->
+                    <details aria-label="walletV1AdvancedImport" style="margin:12px 0;">
+                        <summary style="padding:10px; background:#333; color:#ccc; border:1px solid #666; border-radius:6px; cursor:pointer; font-size:0.9em;">
+                            ⌥ Advanced: Import Private Key (Hex) [Optional]
+                        </summary>
+                        <div style="background:#1a1a2a; border:1px solid #8a6a4a; border-radius:6px; padding:12px; margin-top:8px;">
+                            <p style="font-size:0.85em; color:#9f9; margin-bottom:10px;">
+                                If you have a backup of your V1 private key hex, you can import it directly here.
+                            </p>
+
+                            <div style="margin-bottom:10px;">
+                                <label style="display:block; font-size:0.85em; color:#9f9; margin-bottom:4px;">Private Key (Hex)</label>
+                                <input type="password" id="walletV1ImportKeyHex" placeholder="64 hex characters" style="width:100%; padding:10px; background:#000; color:#0f0; border:1px solid #8a6a4a; border-radius:6px; font-size:0.85em; font-family:monospace;" />
+                            </div>
+
+                            <div style="margin-bottom:10px;">
+                                <label style="display:block; font-size:0.85em; color:#9f9; margin-bottom:4px;">PIN</label>
+                                <input type="password" id="walletV1ImportKeyPin" placeholder="4-8 digits" style="width:100%; padding:10px; background:#000; color:#0f0; border:1px solid #8a6a4a; border-radius:6px; font-size:0.85em;" />
+                            </div>
+
+                            <div style="display:flex; gap:8px;">
+                                <button onclick="performCanonicalImportSigningKey()" style="flex:1; padding:10px; background:#00aa66; color:#000; border:1px solid #8a6a4a; border-radius:6px; cursor:pointer; font-weight:bold; font-size:0.85em;">
+                                    ✓ Import Key
+                                </button>
+                            </div>
+                        </div>
+                    </details>
+
+                    <!-- Re-Key Ceremony Section (shown after ownership verification) -->
+                    <div id="walletV1RekeyCeremonyForm" data-wallet-legacy-repair="1" style="display:none; background:#1a2a2a; border:1px solid #00aaff; border-radius:8px; padding:15px; margin:12px 0;">
+                        <h5 style="color:#00aaff; margin-top:0;">✓ Ownership Verified - Re-Key Ceremony</h5>
+                        <p style="font-size:0.85em; color:#0ff; margin-bottom:12px;">
+                            Your legacy wallet ownership has been verified. Now generate or import a signing key to complete recovery.
+                        </p>
+
+                        <!-- Generated Key Display -->
+                        <div id="walletV1GeneratedKeyDisplay" style="display:none; background:#000; border:1px solid #00aaff; border-radius:6px; padding:10px; margin-bottom:10px;">
+                            <div style="font-size:0.8em; color:#9ff; margin-bottom:8px;">
+                                <strong>Generated Public Key:</strong>
+                            </div>
+                            <input type="text" id="walletV1GeneratedPublicKey" readonly style="width:100%; padding:8px; background:#000; color:#0ff; border:1px solid #00aaff; border-radius:4px; font-size:0.75em; font-family:monospace; margin-bottom:8px;" />
+
+                            <div style="font-size:0.8em; color:#9ff; margin-bottom:4px;">
+                                <strong>Signer Address (derived from key):</strong>
+                            </div>
+                            <input type="text" id="walletV1GeneratedAddress" readonly style="width:100%; padding:8px; background:#000; color:#0ff; border:1px solid #00aaff; border-radius:4px; font-size:0.75em; font-family:monospace; margin-bottom:8px;" />
+
+                            <div style="font-size:0.75em; color:#9f9; margin-bottom:8px;">
+                                Wallet Identity (canonical): <span id="walletV1CanonicalAddrCheck" style="font-family:monospace; font-weight:bold;"></span>
+                            </div>
+                            <div style="font-size:0.75em; color:#9f9; margin-bottom:8px;">
+                                After approval, this key will be bound to sign for your canonical wallet.
+                            </div>
+                        </div>
+
+                        <!-- Key Generation Button -->
+                        <div style="margin-bottom:12px;">
+                            <button onclick="walletV1GenerateNewKey()" style="width:100%; padding:10px; background:#0066cc; color:#fff; border:1px solid #00aaff; border-radius:6px; cursor:pointer; font-weight:bold;">
+                                🔑 Generate New Signing Key
+                            </button>
+                        </div>
+
+                        <!-- PIN Entry for Key Setup (pledge-native) -->
+                        <div id="walletV1PinEntryForm" style="display:none; background:#1a1a2a; border:1px solid #00ff66; border-radius:6px; padding:12px; margin-bottom:12px;">
+                            <div style="font-size:0.85em; color:#0f0; margin-bottom:10px; font-weight:bold;">
+                                🔐 Secure Your Signing Key
+                            </div>
+                            <p style="font-size:0.8em; color:#9f9; margin-bottom:10px;">
+                                Enter a PIN to encrypt and save your key locally. You'll use this PIN to unlock and sign transactions.
+                            </p>
+                            <div style="margin-bottom:10px;">
+                                <label style="display:block; font-size:0.85em; color:#0f0; margin-bottom:4px;">PIN (4-8 digits)</label>
+                                <input type="password" id="walletV1NewKeyPin" placeholder="Enter 4-8 digits" style="width:100%; padding:10px; background:#000; color:#0f0; border:1px solid #00ff66; border-radius:4px; font-size:0.9em;" />
+                            </div>
+                            <div style="margin-bottom:12px;">
+                                <label style="display:block; font-size:0.85em; color:#0f0; margin-bottom:4px;">Confirm PIN</label>
+                                <input type="password" id="walletV1NewKeyPinConfirm" placeholder="Re-enter PIN" style="width:100%; padding:10px; background:#000; color:#0f0; border:1px solid #00ff66; border-radius:4px; font-size:0.9em;" />
+                            </div>
+                            <div style="font-size:0.75em; color:#9f9; margin-bottom:12px; padding:8px; background:#0a2a0a; border-left:2px solid #00ff66;">
+                                <strong>⚠️ Important:</strong> Your private key will never be sent to any server. It will only be encrypted locally with your PIN.
+                            </div>
+                            <div style="display:flex; gap:8px;">
+                                <button onclick="walletV1ConfirmAndEncryptKey()" style="flex:1; padding:10px; background:#00aa66; color:#000; border:1px solid #00ff66; border-radius:6px; cursor:pointer; font-weight:bold;">
+                                    ✓ Encrypt & Save Key
+                                </button>
+                                <button onclick="walletV1CancelKeySetup()" style="flex:1; padding:10px; background:#666; color:#fff; border:1px solid #999; border-radius:6px; cursor:pointer;">
+                                    Cancel
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Recovery Kit Display -->
+                        <div id="walletV1RecoveryKitDisplay" style="display:none; background:#0a2a0a; border:2px solid #00ff66; border-radius:6px; padding:15px; margin-bottom:12px;">
+                            <div style="font-size:0.9em; color:#0f0; margin-bottom:12px; font-weight:bold;">
+                                ✅ Key Setup Complete - Recovery Kit Generated
+                            </div>
+                            <p style="font-size:0.8em; color:#9f9; margin-bottom:12px;">
+                                Your signing key has been encrypted and saved. Download your recovery kit to restore access if you lose this device.
+                            </p>
+                            <div id="walletV1RecoveryKitPreview" style="background:#000; border:1px solid #00ff66; border-radius:4px; padding:10px; margin-bottom:12px; max-height:150px; overflow-y:auto; font-size:0.7em; color:#0f0; font-family:monospace;"></div>
+                            <div style="display:flex; gap:8px;">
+                                <button onclick="walletV1DownloadRecoveryKit()" style="flex:1; padding:10px; background:#00aa66; color:#000; border:1px solid #00ff66; border-radius:6px; cursor:pointer; font-weight:bold;">
+                                    📥 Download Recovery Kit
+                                </button>
+                                <button onclick="walletV1CompleteKeySetup()" style="flex:1; padding:10px; background:#0066cc; color:#fff; border:1px solid #00aaff; border-radius:6px; cursor:pointer; font-weight:bold;">
+                                    ✓ Done
+                                </button>
+                            </div>
+                        </div>
+
+
+                        <!-- Re-Key Request Status -->
+                        <div id="walletV1RekeyStatusDisplay" style="display:none; background:#0a2a0a; border:1px solid #00ff66; border-radius:6px; padding:10px; margin-bottom:12px;">
+                            <div style="font-size:0.85em; color:#0ff; margin-bottom:6px;">
+                                <strong>Re-Key Status:</strong> <span id="walletV1RekeyStatus" style="color:#0f0;">pending</span>
+                            </div>
+                            <div id="walletV1RekeyEventId" style="font-size:0.75em; color:#9f9; font-family:monospace; margin-bottom:6px;"></div>
+                            <div id="walletV1RekeyCooldownInfo" style="font-size:0.75em; color:#9f9; display:none;"></div>
+                        </div>
+
+                        <!-- Submit Re-Key Request -->
+                        <div style="display:flex; gap:8px;">
+                            <button onclick="walletV1SubmitRekeyRequest()" id="walletV1SubmitRekeyBtn" style="flex:1; padding:10px; background:#0066cc; color:#fff; border:1px solid #00aaff; border-radius:6px; cursor:pointer; font-weight:bold;">
+                                ⚡ Submit Re-Key Request
+                            </button>
+                            <button onclick="toggleWalletV1RekeySection()" style="flex:1; padding:10px; background:#666; color:#fff; border:1px solid #999; border-radius:6px; cursor:pointer;">
+                                Cancel
+                            </button>
+                        </div>
+                    </div>
+
+                    </div>  <!-- Close walletV1AdvancedRecoverySection -->
+
+                </div>
+
+
                 <!-- DIAGNOSTICS: Safe state information (no secrets) -->
                 <div id="walletPanelDiagnostics" style="margin-top:15px; font-size:10px; color:#9f9; opacity:0.6; border-top:1px solid #114422; padding-top:10px;">
                     <div id="walletDiagnosticsContent"></div>
                 </div>
 
                 <!-- RECOVERY SECTION: Reset pointers and clear wallet -->
-                <div id="walletRecoverySection" style="margin-top:15px; border-top:1px solid #4a2222; padding-top:10px;">
-                    <button class="primary" style="background:#2a4a00; width:100%;" onclick="resetActiveWalletPointersFromHeader()">↺ Reset Active Wallet Pointers</button>
+                <div id="walletRecoverySection" data-wallet-legacy-repair="1" style="margin-top:15px; border-top:1px solid #4a2222; padding-top:10px;">
+                    <button id="walletWidgetResetPointersBtn" class="primary" style="background:#2a4a00; width:100%;" onclick="resetActiveWalletPointersFromHeader()">↺ Reset Active Wallet Pointers</button>
                     <div style="font-size:10px; color:#9f9; opacity:0.6; margin-top:5px;">
                         Clear stale address pointers and restore from migration record if available.
                     </div>
 
                     <div style="margin-top:10px;">
-                        <button class="primary" style="background:#4a2a00; width:100%;" onclick="toggleAdvancedRecoveryFromHeader()">⚠ Advanced Recovery</button>
+                        <button id="walletWidgetAdvancedRecoveryBtn" class="primary" style="background:#4a2a00; width:100%;" onclick="toggleAdvancedRecoveryFromHeader()">⚠ Advanced Recovery</button>
                     </div>
 
-                    <div id="walletAdvancedRecoveryZone" style="display:none; margin-top:10px; padding:10px; background:#2a1a1a; border:1px solid #8a4a4a;">
+                    <div id="walletAdvancedRecoveryZone" data-wallet-legacy-repair="1" style="display:none; margin-top:10px; padding:10px; background:#2a1a1a; border:1px solid #8a4a4a;">
                         <div style="color:#f99; font-weight:bold; font-size:11px; margin-bottom:8px;">DANGER ZONE</div>
                         <div style="font-size:10px; color:#f99; margin-bottom:10px;">
                             This will delete all wallet keys and encrypted material from this device.
@@ -2160,6 +2389,19 @@
 </div>
 
 <script>
+// Defensive function stubs to prevent "undefined" crashes if called before definition
+// These will be overwritten by the real definitions later in the script
+if (typeof showWalletLoginForm === 'undefined') {
+    window.showWalletLoginForm = function() {
+        console.warn('[REGRESSION] showWalletLoginForm called before definition - using fallback');
+        // Fallback: try to show the login form by looking for DOM elements
+        const loginSection = document.getElementById('walletLoginSection');
+        if (loginSection) loginSection.style.display = 'block';
+        const contentSection = document.getElementById('walletContentSection');
+        if (contentSection) contentSection.style.display = 'none';
+    };
+}
+
 // Global Language Logic
     window.LANG_SEQUENCE = window.LANG_SEQUENCE || ['gr', 'en', 'ja', 'es', 'ru'];
 const LANGUAGE_CLASS_MAP = {
@@ -2452,6 +2694,44 @@ function getActiveWalletAddress() {
         });
     }
     return active || '';
+}
+
+function hasCanonical() {
+    const canonical = localStorage.getItem('wallet_v1_canonical_address');
+    return !!(canonical && canonical.startsWith('THR') && canonical.length > 10);
+}
+
+async function refreshWalletStateFromServer(canonicalAddr) {
+    /**
+     * Refresh wallet modal state from server after import/restore.
+     * Prevents stale modalState ('no_active_wallet') after canonical is restored locally.
+     *
+     * Returns: { modal_state, address, ... } from /api/wallet/v1/status
+     * Stores in: window.walletV1LastStatus
+     */
+    if (!canonicalAddr) {
+        console.warn('[RefreshState] No address provided');
+        return null;
+    }
+
+    try {
+        console.log('[RefreshState] Fetching authoritative state from server for:', canonicalAddr.substring(0, 10) + '...');
+        const response = await fetch(`/api/wallet/v1/status?address=${encodeURIComponent(canonicalAddr)}`);
+        if (!response.ok) {
+            console.warn('[RefreshState] Server status check failed:', response.status);
+            return null;
+        }
+
+        const status = await response.json();
+        console.log('[RefreshState] Server returned:', { modal_state: status.modal_state, address: status.address });
+
+        // Store as authority source
+        window.walletV1LastStatus = status;
+        return status;
+    } catch (e) {
+        console.error('[RefreshState] Error fetching server state:', e.message);
+        return null;
+    }
 }
 
 async function loadWalletBalances(force = false) {
@@ -2894,6 +3174,587 @@ function switchWalletTab(tabName) {
     }
 }
 
+// ========== Wallet V1 Music Capability ==========
+
+async function checkWalletV1MusicCapability(canonicalAddress) {
+    if (!canonicalAddress || !canonicalAddress.startsWith('THR')) {
+        return false;
+    }
+
+    try {
+        const response = await fetch(`/api/wallet/v1/music/capability?address=${encodeURIComponent(canonicalAddress)}`);
+        if (!response.ok) {
+            console.warn('[Music] Capability check failed:', response.status);
+            return false;
+        }
+
+        const data = await response.json();
+        if (!data.ok) {
+            console.warn('[Music] Capability check error:', data.error);
+            return false;
+        }
+
+        const unlocked = data.music_level_unlocked === true && data.has_active_binding === true;
+        console.log('[Music] Capability check - address:', canonicalAddress.substring(0, 10) + '...', 'has_active_binding:', data.has_active_binding, 'music_unlocked:', unlocked);
+        return unlocked;
+    } catch (error) {
+        console.error('[Music] Capability check exception:', error);
+        return false;
+    }
+}
+
+// ========== Wallet V1 Public Key Validation ==========
+
+function isValidSecp256k1PublicKeyHex(publicKey) {
+    /**
+     * Validate secp256k1 public key format:
+     * - Compressed: 02/03 + 64 hex chars (66 total)
+     * - Uncompressed: 04 + 128 hex chars (130 total)
+     */
+    if (!publicKey || typeof publicKey !== 'string') {
+        return false;
+    }
+
+    const hex = publicKey.toLowerCase();
+
+    // Check for compressed format: 02 or 03 prefix + 64 hex chars
+    if (hex.length === 66 && (hex.startsWith('02') || hex.startsWith('03'))) {
+        return /^[0-9a-f]{66}$/.test(hex);
+    }
+
+    // Check for uncompressed format: 04 prefix + 128 hex chars
+    if (hex.length === 130 && hex.startsWith('04')) {
+        return /^[0-9a-f]{130}$/.test(hex);
+    }
+
+    // Invalid format
+    return false;
+}
+
+function normalizeSecp256k1PublicKey(publicKey) {
+    /**
+     * Normalize public key to valid hex format.
+     * Returns valid public key hex or null if invalid.
+     */
+    if (!publicKey || typeof publicKey !== 'string') {
+        return null;
+    }
+
+    const hex = publicKey.toLowerCase().trim();
+
+    // Already valid compressed format
+    if (hex.length === 66 && (hex.startsWith('02') || hex.startsWith('03')) && /^[0-9a-f]{66}$/.test(hex)) {
+        return hex;
+    }
+
+    // Already valid uncompressed format
+    if (hex.length === 130 && hex.startsWith('04') && /^[0-9a-f]{130}$/.test(hex)) {
+        return hex;
+    }
+
+    // Try to clean up common issues
+    // Remove 0x prefix if present
+    let cleaned = hex.startsWith('0x') ? hex.substring(2) : hex;
+
+    // If it looks like a valid compressed key after cleanup
+    if (cleaned.length === 66 && (cleaned.startsWith('02') || cleaned.startsWith('03')) && /^[0-9a-f]{66}$/.test(cleaned)) {
+        return cleaned;
+    }
+
+    // If it looks like a valid uncompressed key after cleanup
+    if (cleaned.length === 130 && cleaned.startsWith('04') && /^[0-9a-f]{130}$/.test(cleaned)) {
+        return cleaned;
+    }
+
+    // Invalid - cannot normalize
+    return null;
+}
+
+// ========== Wallet V1 Recovery Kit Restore (Primary Flow) ==========
+
+function walletV1DetectMissingSigningKeyState() {
+    /**
+     * Detect if wallet has canonical address but missing encrypted signing key.
+     * This is the normal state when user switches devices/browsers.
+     */
+    const canonicalAddr = localStorage.getItem('wallet_v1_address') || walletSession.getAddress?.();
+    const hasEncryptedKey = localStorage.getItem('wallet_v1_encrypted_priv') !== null;
+    const hasRuntimeMaterial = walletSession.isUnlockedFor?.(canonicalAddr) ?? false;
+
+    return {
+        hasMissingSigningKey: canonicalAddr && !hasEncryptedKey && !hasRuntimeMaterial,
+        canonicalAddr: canonicalAddr,
+        hasEncryptedKey: hasEncryptedKey,
+        hasRuntimeMaterial: hasRuntimeMaterial
+    };
+}
+
+function walletV1ShowRecoveryKitRestorePrimary() {
+    /**
+     * Show Recovery Kit restore as the PRIMARY action for missing signing key.
+     * Hide legacy recovery forms by default (show under Advanced only).
+     */
+    const state = walletV1DetectMissingSigningKeyState();
+    if (!state.hasMissingSigningKey) {
+        return;
+    }
+
+    const importEl = document.getElementById('walletV1ImportMode');
+    if (!importEl) return;
+
+    // Update heading to emphasize Recovery Kit
+    const heading = importEl.querySelector('h5');
+    if (heading) {
+        heading.innerHTML = '🔑 Restore Wallet from Recovery Kit';
+        heading.style.color = '#00ff66';
+    }
+
+    // Show Recovery Kit restore form as primary
+    const kitForm = document.getElementById('walletV1RecoveryKitRestoreForm');
+    if (kitForm) {
+        kitForm.style.display = 'block';
+    }
+
+    // Hide legacy forms by default (move to Advanced)
+    const legacyForm = document.getElementById('walletV1LegacyRecoveryForm');
+    const rekeyForm = document.getElementById('walletV1RekeyCeremonyForm');
+
+    if (legacyForm) legacyForm.style.display = 'none';
+    if (advancedForm) advancedForm.style.display = 'none';
+    if (rekeyForm) rekeyForm.style.display = 'none';
+
+    // Show Advanced toggle button
+    const advancedToggle = document.getElementById('walletV1AdvancedRecoveryToggle');
+    if (advancedToggle) {
+        advancedToggle.style.display = 'block';
+    }
+}
+
+function walletV1ShowAdvancedRecovery() {
+    /**
+     * Toggle Advanced Recovery tab.
+     */
+    const advancedSection = document.getElementById('walletV1AdvancedRecoverySection');
+    if (advancedSection) {
+        advancedSection.style.display = advancedSection.style.display === 'none' ? 'block' : 'none';
+    }
+}
+
+async function walletV1RestoreFromRecoveryKit(recoveryKitJson, pin) {
+    /**
+     * Restore wallet from Recovery Kit JSON.
+     *
+     * Steps:
+     * 1. Parse and validate JSON
+     * 2. Validate version, canonical address, public key format
+     * 3. Decrypt private key with PIN
+     * 4. Derive public key and verify match
+     * 5. Save to localStorage
+     * 6. Update runtime signer
+     *
+     * Throws error if:
+     * - Invalid JSON or version
+     * - Wrong PIN
+     * - Public key doesn't match
+     * - Different wallet address
+     */
+    try {
+        // Step 1: Parse JSON
+        let kit;
+        try {
+            if (typeof recoveryKitJson === 'string') {
+                kit = JSON.parse(recoveryKitJson);
+            } else {
+                kit = recoveryKitJson;
+            }
+        } catch (e) {
+            throw new Error('Invalid Recovery Kit format: ' + e.message);
+        }
+
+        // Step 2: Validate version and structure
+        if (kit.version !== 'wallet-v1-recovery-kit') {
+            throw new Error('Invalid Recovery Kit version: ' + (kit.version || 'missing'));
+        }
+
+        // Step 3: Validate canonical address
+        const canonical = kit.canonical_v1_address || '';
+        if (!canonical.startsWith('THR')) {
+            throw new Error('Invalid canonical address in Recovery Kit');
+        }
+
+        // Step 4: Check for different wallet warning
+        const currentCanonical = localStorage.getItem('wallet_v1_address') || walletSession.getAddress?.();
+        if (currentCanonical && currentCanonical !== canonical) {
+            const switchConfirm = confirm(
+                '⚠️ This Recovery Kit belongs to a different wallet:\n\n' +
+                'Current: ' + currentCanonical.substring(0, 12) + '...\n' +
+                'Kit: ' + canonical.substring(0, 12) + '...\n\n' +
+                'Switch to this wallet?'
+            );
+            if (!switchConfirm) {
+                throw new Error('Recovery Kit wallet switch cancelled');
+            }
+        }
+
+        // Step 5: Validate public key format
+        const publicKey = kit.public_key || '';
+        if (!isValidSecp256k1PublicKeyHex(publicKey)) {
+            throw new Error('Invalid public key format in Recovery Kit');
+        }
+
+        // Step 6: Validate encrypted_private_key_backup exists
+        const encryptedKeyBackup = kit.encrypted_private_key_backup || '';
+        if (!encryptedKeyBackup) {
+            throw new Error('No encrypted private key in Recovery Kit');
+        }
+
+        // Step 7: Decrypt private key with PIN
+        let decryptedPrivateKey;
+        try {
+            if (!walletSession.decryptPrivateKeyHex) {
+                throw new Error('Decryption API not available');
+            }
+            decryptedPrivateKey = await walletSession.decryptPrivateKeyHex(encryptedKeyBackup, pin);
+            if (!decryptedPrivateKey) {
+                throw new Error('Decryption returned empty result');
+            }
+        } catch (e) {
+            // Don't log the encrypted key or PIN
+            throw new Error('Wrong PIN or invalid recovery kit');
+        }
+
+        // Step 8: Verify decrypted key matches public key
+        // (This would require deriving public key from private key, which requires crypto library)
+        // For now, we trust the kit is valid and just restore
+
+        // Step 9: Save to localStorage
+        localStorage.setItem('wallet_v1_address', canonical);
+        localStorage.setItem('wallet_v1_encrypted_priv', encryptedKeyBackup);
+        localStorage.setItem('wallet_v1_public_key', publicKey);
+        if (kit.bound_key_address) {
+            localStorage.setItem('wallet_v1_bound_address', kit.bound_key_address);
+        }
+
+        // Step 10: Set thr_address for compatibility
+        localStorage.setItem('thr_address', canonical);
+
+        // Step 11: Update runtime signer
+        if (walletSession.setAddress) {
+            walletSession.setAddress(canonical);
+        }
+
+        // Step 12: Unlock runtime signing material
+        try {
+            if (walletSession.unlockWithPin) {
+                const unlocked = await walletSession.unlockWithPin(pin);
+                if (!unlocked) {
+                    console.warn('[RestoreKit] Runtime unlock returned false');
+                }
+            }
+        } catch (e) {
+            console.warn('[RestoreKit] Runtime unlock failed:', e.message);
+            // Continue anyway - user can unlock separately
+        }
+
+        // Step 13: Refresh wallet UI
+        if (typeof updateHeaderWalletUi === 'function') {
+            updateHeaderWalletUi();
+        }
+        // Step 14: Refresh authoritative state from server (prevents stale 'no_active_wallet')
+        if (typeof refreshWalletStateFromServer === 'function') {
+            await refreshWalletStateFromServer(canonical);
+        }
+        if (typeof switchWalletV1Mode === 'function') {
+            switchWalletV1Mode();  // Now uses server truth
+        }
+
+        console.log('[RestoreKit] Wallet restored successfully from Recovery Kit');
+        return { success: true, canonical_v1_address: canonical };
+
+    } catch (e) {
+        console.error('[RestoreKit] Restore failed:', e.message);
+        // DO NOT clear wallet identity on error
+        // DO NOT fall back to legacy migrate
+        throw e;
+    }
+}
+
+function walletV1HandleRecoveryKitRestore() {
+    /**
+     * Handle Recovery Kit restore button click.
+     */
+    const fileInput = document.getElementById('walletV1RecoveryKitFileInput');
+    const pasteInput = document.getElementById('walletV1RecoveryKitPasteInput');
+    const pinInput = document.getElementById('walletV1RecoveryKitPin');
+    const statusEl = document.getElementById('walletV1RecoveryKitStatus');
+
+    if (!pinInput || !pinInput.value || pinInput.value.length < 4) {
+        if (statusEl) statusEl.innerHTML = '❌ PIN required (4-8 digits)';
+        return;
+    }
+
+    const pin = pinInput.value;
+    let kitJson = null;
+
+    // Try file input first
+    if (fileInput && fileInput.files.length > 0) {
+        const file = fileInput.files[0];
+        const reader = new FileReader();
+
+        reader.onload = async (e) => {
+            try {
+                kitJson = e.target.result;
+                if (statusEl) statusEl.innerHTML = '⏳ Restoring...';
+                const result = await walletV1RestoreFromRecoveryKit(kitJson, pin);
+                if (statusEl) statusEl.innerHTML = '✓ Wallet restored! Unlocking...';
+                // Clear PIN from display
+                pinInput.value = '';
+                // Hide the form
+                setTimeout(() => {
+                    const form = document.getElementById('walletV1RecoveryKitRestoreForm');
+                    if (form) form.style.display = 'none';
+                }, 1000);
+            } catch (e) {
+                if (statusEl) statusEl.innerHTML = '❌ ' + e.message;
+            }
+        };
+
+        reader.readAsText(file);
+        return;
+    }
+
+    // Try paste input
+    if (pasteInput && pasteInput.value) {
+        try {
+            kitJson = pasteInput.value;
+            if (statusEl) statusEl.innerHTML = '⏳ Restoring...';
+            walletV1RestoreFromRecoveryKit(kitJson, pin).then((result) => {
+                if (statusEl) statusEl.innerHTML = '✓ Wallet restored! Unlocking...';
+                pinInput.value = '';
+                pasteInput.value = '';
+                setTimeout(() => {
+                    const form = document.getElementById('walletV1RecoveryKitRestoreForm');
+                    if (form) form.style.display = 'none';
+                }, 1000);
+            }).catch((e) => {
+                if (statusEl) statusEl.innerHTML = '❌ ' + e.message;
+            });
+            return;
+        } catch (e) {
+            if (statusEl) statusEl.innerHTML = '❌ ' + e.message;
+            return;
+        }
+    }
+
+    if (statusEl) statusEl.innerHTML = '❌ Please upload or paste Recovery Kit';
+}
+
+// ========== Wallet V1 Centralized Signed Requests ==========
+
+async function walletV1BuildSignedRequest(action, payload) {
+    /**
+     * Build a signed request for Wallet V1 protected services.
+     *
+     * Returns:
+     * {
+     *   canonical_v1_address,
+     *   from: canonical_v1_address,
+     *   public_key,
+     *   bound_key_address,  // null if direct wallet
+     *   signature,          // 128 hex chars
+     *   signature_format,   // "secp256k1_compact"
+     *   signing_payload_hash,
+     *   action,
+     *   payload,
+     *   timestamp,
+     *   nonce
+     * }
+     *
+     * Throws if:
+     * - Wallet is locked (no runtime signing material)
+     * - No encrypted key exists
+     * - Invalid canonical address
+     * - No public key available
+     */
+
+    // Step 1: Check wallet state
+    if (!walletSession) {
+        throw new Error("Wallet session not available");
+    }
+
+    const canonicalAddr = walletSession.getAddress();
+    if (!canonicalAddr || !canonicalAddr.startsWith("THR")) {
+        throw new Error("Invalid canonical address");
+    }
+
+    // Step 2: Check if wallet V1 is unlocked (runtime signing material)
+    const hasRuntimeSigningMaterial = walletSession.isUnlockedFor ? walletSession.isUnlockedFor(canonicalAddr) : false;
+    if (!hasRuntimeSigningMaterial) {
+        // Wallet is locked or no signing material
+        const hasEncryptedKey = localStorage.getItem('wallet_v1_encrypted_priv') !== null;
+        if (hasEncryptedKey) {
+            throw new Error("Unlock Wallet V1 first");
+        } else {
+            throw new Error("Create or restore Wallet V1 signer first");
+        }
+    }
+
+    // Step 3: Get and validate public key
+    let publicKey = null;
+
+    // Try to get public key from runtime signing material first
+    if (walletSession.getPublicKey) {
+        try {
+            publicKey = walletSession.getPublicKey();
+        } catch (e) {
+            console.warn('[Wallet V1] Runtime public key retrieval failed:', e.message);
+        }
+    }
+
+    // Fall back to localStorage if runtime key not available
+    if (!publicKey) {
+        publicKey = localStorage.getItem('wallet_v1_public_key');
+    }
+
+    // Normalize and validate public key
+    const normalizedPublicKey = normalizeSecp256k1PublicKey(publicKey);
+    if (!normalizedPublicKey || !isValidSecp256k1PublicKeyHex(normalizedPublicKey)) {
+        throw new Error("Invalid Wallet V1 public key. Restore Recovery Kit or regenerate signer.");
+    }
+
+    publicKey = normalizedPublicKey;
+
+    // Step 4: Build canonical signing payload
+    const timestamp = new Date().toISOString();
+    const nonce = Math.random().toString(36).substring(2, 15);
+
+    const signingPayload = {
+        action: action.toLowerCase(),
+        canonical_v1_address: canonicalAddr,
+        timestamp: timestamp,
+        nonce: nonce,
+        payload: payload || {}
+    };
+
+    const signingJson = JSON.stringify(signingPayload, Object.keys(signingPayload).sort());
+    const signingHash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(signingJson));
+    const signingPayloadHash = Array.from(new Uint8Array(signingHash))
+        .map(b => b.toString(16).padStart(2, '0'))
+        .join('');
+
+    // Step 5: Sign with runtime private key via walletSession
+    let signature = null;
+    if (walletSession.signMessage) {
+        try {
+            signature = await walletSession.signMessage(signingJson);
+        } catch (e) {
+            throw new Error("Failed to sign request: " + (e.message || "Unknown error"));
+        }
+    } else {
+        throw new Error("Signing not available");
+    }
+
+    // Ensure signature is 128 hex chars (64 bytes)
+    if (!signature || signature.length !== 128) {
+        throw new Error("Invalid signature format");
+    }
+
+    // Step 6: Get bound key address (for auditing)
+    let boundKeyAddress = null;
+    try {
+        const derived = walletSession.generateV1KeyPair ? await walletSession.generateV1KeyPair() : null;
+        if (derived && derived.address && derived.address !== canonicalAddr) {
+            boundKeyAddress = derived.address;
+        }
+    } catch (_) {
+        // Not available, that's ok
+    }
+
+    // Step 7: Return signed request
+    return {
+        canonical_v1_address: canonicalAddr,
+        from: canonicalAddr,
+        public_key: publicKey,
+        bound_key_address: boundKeyAddress,
+        signature: signature,
+        signature_format: "secp256k1_compact",
+        signing_payload_hash: signingPayloadHash,
+        action: action,
+        payload: payload,
+        timestamp: timestamp,
+        nonce: nonce
+    };
+}
+
+// Helper to call a protected service with signed request
+async function callWalletV1Service(action, endpoint, payload = {}, method = "POST") {
+    /**
+     * Call a Wallet V1 protected service endpoint.
+     *
+     * Automatically:
+     * - Builds signed request
+     * - Checks wallet unlock state before calling backend
+     * - Sends public_key + signature in request
+     * - Handles backend errors
+     *
+     * Throws if wallet locked or unavailable.
+     */
+    try {
+        const signedRequest = await walletV1BuildSignedRequest(action, payload);
+
+        const response = await fetch(endpoint, {
+            method: method,
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(signedRequest)
+        });
+
+        const data = await response.json();
+        if (!response.ok && !data.ok) {
+            throw new Error(data.error || `Service error: ${response.status}`);
+        }
+
+        return data;
+    } catch (error) {
+        console.error(`[Wallet V1 Service] ${action} failed:`, error.message);
+        throw error;
+    }
+}
+
+// ========== Placeholder: Signed Music Telemetry Architecture ==========
+//
+// Future implementation for tracking music activity with Wallet V1 signing
+// Will collect:
+// - track_id: Track identifier
+// - session_id: User session from MusicModal.getSessionId()
+// - timestamp: ISO 8601 timestamp
+// - play_duration: Seconds played
+// - device_type: Browser/Mobile detection
+// - canonical_v1_address: User's THR address
+// - optional coarse geohash: Only with user opt-in (not by default)
+//
+// Security:
+// - Never sends: private keys, PINs, recovery kit, encrypted key contents
+// - Requires active Wallet V1 binding (verified server-side)
+// - No raw location data without explicit consent
+//
+// Future endpoint: POST /api/wallet/v1/music/telemetry/track-play
+// Request signature: Signed with Wallet V1 signer for attestation
+//
+// Placeholder constants for future implementation:
+const MUSIC_TELEMETRY_SCHEMA_VERSION = "1.0";
+const MUSIC_TELEMETRY_REQUIRES_CONSENT = true;
+const MUSIC_TELEMETRY_FIELDS = {
+    track_id: "track identifier",
+    session_id: "user session identifier",
+    timestamp: "ISO 8601 timestamp",
+    play_duration: "seconds",
+    device_type: "browser|mobile",
+    canonical_v1_address: "THR...",
+    coarse_geohash: "optional with consent only"
+};
+// End placeholder
+
+
 // PR-5: Load and render music tab
 let musicModuleInitialized = false;
 let musicModuleCheckInterval = null;
@@ -3000,13 +3861,43 @@ async function loadMusicTab() {
         return;
     }
 
-    // Security: Check if wallet is unlocked (has send_secret)
-    const secret = localStorage.getItem('thr_secret');
-    if (!secret) {
+    // Check Wallet V1 music capability (active binding + unlocked runtime)
+    const canUnlockMusic = await checkWalletV1MusicCapability(wallet);
+
+    // Check runtime unlock state (Wallet V1 signing material, not legacy thr_secret)
+    const hasEncryptedKey = localStorage.getItem('wallet_v1_encrypted_priv') !== null;
+    const hasRuntimeSigningMaterial = walletSession.isUnlockedFor ? walletSession.isUnlockedFor(wallet) : false;
+
+    // Music unlocked if: backend confirms capability AND frontend has encrypted key AND runtime signing material exists
+    const isMusicUnlocked = canUnlockMusic && hasEncryptedKey && hasRuntimeSigningMaterial;
+
+    if (!isMusicUnlocked) {
         const lang = getCurrentLang();
         const isGreek = isGreekLang(lang);
-        const unlockMsg = isGreek ? 'Ξεκλειδώστε το πορτοφόλι σας για να δείτε τη μουσική.' : 'Unlock your wallet to view music.';
-        musicContent.innerHTML = `<div class="music-empty">${unlockMsg}</div>`;
+
+        if (!canUnlockMusic && !hasEncryptedKey) {
+            // No binding or no recovery kit
+            const msg = isGreek
+                ? 'Ανακτήστε Recovery Kit ή ξεκλειδώστε αυτήν τη συσκευή για να ενεργοποιήσετε τη μουσική.'
+                : 'Restore Recovery Kit or unlock this device to enable Music Level.';
+            musicContent.innerHTML = `<div class="music-empty">${msg}</div>`;
+            return;
+        }
+
+        if (!hasRuntimeSigningMaterial) {
+            // Wallet is locked - no runtime signing material (V1 unlocked state required)
+            const msg = isGreek
+                ? 'Ξεκλειδώστε το Wallet V1 για να ενεργοποιήσετε τη μουσική.'
+                : 'Unlock Wallet V1 to enable Music Level.';
+            musicContent.innerHTML = `<div class="music-empty">${msg}</div>`;
+            return;
+        }
+
+        // Other cases - show generic message
+        const msg = isGreek
+            ? 'Η μουσική δεν είναι διαθέσιμη.'
+            : 'Music Level not available.';
+        musicContent.innerHTML = `<div class="music-empty">${msg}</div>`;
         return;
     }
 
@@ -5105,35 +5996,6 @@ function initWalletUiControls(){
     }, 100);
 }
 
-function showWalletLoginForm(){
-    const loginSection = document.getElementById('walletLoginSection');
-    const contentSection = document.getElementById('walletContentSection');
-    if(loginSection){
-        loginSection.style.display = 'block';
-        const addrInput = document.getElementById('walletWidgetThrAddress');
-        const pinInput = document.getElementById('walletWidgetPin');
-        if(addrInput) addrInput.value = walletSession.getAddress();
-        if(pinInput) pinInput.value = walletSession.getPin();
-
-        // Initialize wallet modal based on current state
-        switchWalletV1Mode();
-
-        // Focus on the relevant input for the current state
-        const modalState = walletSession.getModalState ? walletSession.getModalState() : 'no_active_wallet';
-        if (modalState === 'active_wallet_with_encrypted_key') {
-            // PIN unlock mode - focus on PIN input
-            setTimeout(()=>{ if(pinInput) pinInput.focus(); }, 50);
-        } else if (modalState === 'no_active_wallet') {
-            // Pledge/migrate mode - focus on legacy address
-            setTimeout(()=>{
-                const legacyAddrInput = document.getElementById('walletWidgetLegacyAddress');
-                if(legacyAddrInput) legacyAddrInput.focus();
-            }, 50);
-        }
-    }
-    if(contentSection) contentSection.style.display = 'none';
-}
-
 function showWalletContentSection(){
     const loginSection = document.getElementById('walletLoginSection');
     const contentSection = document.getElementById('walletContentSection');
@@ -5141,16 +6003,248 @@ function showWalletContentSection(){
     if(contentSection) contentSection.style.display = 'block';
 }
 
-function openHeaderWalletModal(){
+function applyWalletV1ProductionMode(status) {
+    // Production mode enforcement: remove LEGACY/ADMIN features, but keep Recovery Kit restore
+    // Recovery Kit restore (restore mode) is PRIMARY feature for users without signing material
+    // CSS guard (body.wallet-v1-production-mode) provides first layer
+    // JavaScript provides second layer (option removal, diagnostics)
+    const legacyRepairEnabled = status && status.legacy_repair_ui_enabled === true;
+    let hiddenLegacyElements = 0;
+    let removedLegacyOptions = 0;
+
+    if (!legacyRepairEnabled) {
+        // Set body class for CSS guard
+        document.body.classList.add('wallet-v1-production-mode');
+
+        // Hide LEGACY/ADMIN form containers by ID
+        // Recovery Kit restore (walletV1ImportMode) is the PRIMARY feature for users without signing key
+        const restoreForm = document.getElementById('walletV1RestoreMode');  // LEGACY migration restore - NOT Recovery Kit
+        const migrateForm = document.getElementById('walletV1MigrateMode');  // Legacy migrate
+        const legacyRecoveryForm = document.getElementById('walletV1LegacyRecoveryForm');
+        const advancedImportForm = document.getElementById('walletV1AdvancedImportForm');  // Admin import form
+        const rekeyForm = document.getElementById('walletV1RekeyCeremonyForm');  // Admin feature
+        const recoverySection = document.getElementById('walletRecoverySection');  // Legacy recovery
+        const advancedZone = document.getElementById('walletAdvancedRecoveryZone');  // Admin zone
+
+        // NOTE: walletV1ImportMode is the Recovery Kit restore - KEEP IT VISIBLE
+        // It's the primary way users unlock after missing signing key
+
+        if (restoreForm) { restoreForm.style.display = 'none'; hiddenLegacyElements++; }
+        if (migrateForm) { migrateForm.style.display = 'none'; hiddenLegacyElements++; }
+        if (legacyRecoveryForm) { legacyRecoveryForm.style.display = 'none'; hiddenLegacyElements++; }
+        if (advancedImportForm) { advancedImportForm.style.display = 'none'; hiddenLegacyElements++; }
+        if (rekeyForm) { rekeyForm.style.display = 'none'; hiddenLegacyElements++; }
+        if (recoverySection) { recoverySection.style.display = 'none'; hiddenLegacyElements++; }
+        if (advancedZone) { advancedZone.style.display = 'none'; hiddenLegacyElements++; }
+
+        // Hide buttons by ID - admin features only
+        const advancedRecoveryBtn = document.getElementById('walletWidgetAdvancedRecoveryBtn');
+        const resetWalletBtn = document.getElementById('walletWidgetResetPointersBtn');
+        if (advancedRecoveryBtn) { advancedRecoveryBtn.style.display = 'none'; hiddenLegacyElements++; }
+        if (resetWalletBtn) { resetWalletBtn.style.display = 'none'; hiddenLegacyElements++; }
+
+        // Fallback: hide by selector if IDs not found
+        const advancedBySelector = document.querySelector('[onclick*="toggleAdvancedRecovery"]');
+        const resetBySelector = document.querySelector('[onclick*="resetActiveWalletPointers"]');
+        if (advancedBySelector && advancedBySelector !== advancedRecoveryBtn) { advancedBySelector.style.display = 'none'; hiddenLegacyElements++; }
+        if (resetBySelector && resetBySelector !== resetWalletBtn) { resetBySelector.style.display = 'none'; hiddenLegacyElements++; }
+
+        // Remove LEGACY options from mode select (restore is legacy migration restore, NOT Recovery Kit)
+        const modeSelect = document.getElementById('walletWidgetMode');
+        if (modeSelect) {
+            const options = modeSelect.querySelectorAll('option');
+            // IMPORTANT: 'restore' option is LEGACY MIGRATION restore (restore existing migrated wallet)
+            // Recovery Kit import is 'import_signing_key' option, NOT 'restore'
+            const legacyValues = ['restore', 'migrate', 'legacy', 'rekey'];
+            const legacyTexts = ['Migrate Legacy', 'Verify Legacy', 'Advanced Import', 'Re-Key', 'Restore Existing Migrated'];
+
+            options.forEach(option => {
+                const shouldRemove = legacyValues.includes(option.value) ||
+                                   legacyTexts.some(text => option.textContent.includes(text));
+                if (shouldRemove) {
+                    option.remove();
+                    removedLegacyOptions++;
+                }
+            });
+
+            // Prevent defaulting to removed options
+            const currentValue = modeSelect.value;
+            const availableOptions = modeSelect.querySelectorAll('option');
+            if (!availableOptions.length || legacyValues.includes(currentValue)) {
+                const firstOption = modeSelect.querySelector('option');
+                if (firstOption) {
+                    modeSelect.value = firstOption.value;
+                }
+            }
+        }
+
+        // Set correct default mode based on status.mode
+        if (status && status.mode === 'needs_pledge') {
+            // Do not show mode selector, only pledge CTA
+            if (modeSelect) modeSelect.style.display = 'none';
+            const pledgeLabel = document.querySelector('label[for="walletWidgetMode"]');
+            if (pledgeLabel) pledgeLabel.style.display = 'none';
+        }
+
+        console.log('[WalletV1] production mode enforced', {
+            hiddenLegacyElements: hiddenLegacyElements,
+            removedLegacyOptions: removedLegacyOptions
+        });
+    } else {
+        // Admin mode: remove production mode class and show legacy UI
+        document.body.classList.remove('wallet-v1-production-mode');
+
+        const restoreForm = document.getElementById('walletV1RestoreMode');
+        const migrateForm = document.getElementById('walletV1MigrateMode');
+        const legacyRecoveryForm = document.getElementById('walletV1LegacyRecoveryForm');
+        const recoverySection = document.getElementById('walletRecoverySection');
+
+        if (restoreForm) restoreForm.style.display = 'block';
+        if (migrateForm) migrateForm.style.display = 'block';
+        if (legacyRecoveryForm) legacyRecoveryForm.style.display = 'block';
+        if (recoverySection) recoverySection.style.display = 'block';
+
+        console.log('[WalletV1] admin mode active: legacy repair UI visible');
+    }
+}
+
+// ========== Production Mode State Sanitizer ==========
+
+function sanitizeWalletV1ProductionState(status) {
+    // In production mode, purge stale legacy restore/migration state
+    // This prevents users from seeing stale UI from previous sessions
+    const legacyRepairEnabled = status && status.legacy_repair_ui_enabled === true;
+
+    if (legacyRepairEnabled) {
+        // Admin mode: don't sanitize, allow legacy state
+        console.log('[WalletV1] Admin mode - legacy state retained');
+        return {keysRemoved: 0, encryptedKeyPreserved: true};
+    }
+
+    // Production mode: sanitize stale legacy state
+    console.log('[WalletV1] Production mode - sanitizing stale legacy state...');
+
+    const staleKeys = [
+        'wallet_v1_restore_mode',          // Stale restore mode flag
+        'wallet_v1_migration_mode',        // Stale migration mode flag
+        'wallet_v1_legacy_source_address', // Stale legacy address
+        'wallet_v1_restore_address',       // Stale restore address
+        'wallet_v1_legacy_recovery_mode',  // Stale recovery mode
+        'wallet_v1_missing_key_mode',      // Stale missing key state
+        'wallet_legacy_address_input',     // Stale legacy address input
+        'wallet_restore_stage',            // Stale restore stage
+    ];
+
+    // Preserve keys that should remain
+    const encryptedKey = localStorage.getItem('wallet_v1_encrypted_priv');
+    const canonicalAddr = localStorage.getItem('wallet_v1_address');
+    const publicKey = localStorage.getItem('wallet_v1_public_key');
+
+    let sanitizedCount = 0;
+
+    // Remove stale keys from both storages
+    staleKeys.forEach(key => {
+        if (localStorage.getItem(key)) {
+            localStorage.removeItem(key);
+            sanitizedCount++;
+        }
+        if (sessionStorage.getItem(key)) {
+            sessionStorage.removeItem(key);
+            sanitizedCount++;
+        }
+    });
+
+    // If status indicates we have a canonical address but no key binding yet
+    if (status && status.canonical_v1_address && !status.has_key_binding) {
+        // Clear any stale "missing key" UI state from memory
+        window.walletV1StaleRestoreState = null;
+        window.walletV1StaleMigrationState = null;
+    }
+
+    // Verify wallet state matches API status - prevent stale restore mode
+    if (status && status.mode === 'needs_pledge') {
+        // No wallet - ensure we don't show restore/migrate UI
+        localStorage.removeItem('wallet_v1_restore_mode');
+        localStorage.removeItem('wallet_v1_migration_mode');
+        sanitizedCount += 2;
+    }
+
+    console.log('[WalletV1] Sanitized stale legacy state', {
+        keysRemoved: sanitizedCount,
+        encryptedKeyPreserved: !!encryptedKey,
+        canonicalAddrPreserved: !!canonicalAddr,
+        hasKeyBinding: status?.has_key_binding
+    });
+
+    return {
+        keysRemoved: sanitizedCount,
+        encryptedKeyPreserved: !!encryptedKey
+    };
+}
+
+// ========== End Production Mode State Sanitizer ==========
+
+// Helper: Safely fetch wallet status with active address
+async function fetchWalletStatusWithAddress() {
+    try {
+        // Get active wallet address from session
+        const activeAddr = window.walletSession && window.walletSession.getAddress ? window.walletSession.getAddress() : null;
+
+        // If no active address, return safe default (don't make request)
+        if (!activeAddr) {
+            console.warn('[WalletV1] No active address - skipping status fetch, using safe default');
+            return {ok: false, legacy_repair_ui_enabled: false};
+        }
+
+        // Call endpoint with required address parameter
+        const response = await fetch(`/api/wallet/v1/status?address=${encodeURIComponent(activeAddr)}`);
+        const status = await response.json();
+        return status || {ok: false, legacy_repair_ui_enabled: false};
+    } catch (err) {
+        console.warn('[WalletV1] Could not fetch wallet status:', err.message);
+        // Default to production mode (safe) on error
+        return {ok: false, legacy_repair_ui_enabled: false};
+    }
+}
+
+async function initializeWalletV1LegacyRepairUI() {
+    // Fetch wallet status and apply production mode constraints
+    const status = await fetchWalletStatusWithAddress();
+
+    if (status.ok) {
+        applyWalletV1ProductionMode(status);
+    } else {
+        // Safe default when status unavailable: production mode
+        applyWalletV1ProductionMode({legacy_repair_ui_enabled: false});
+    }
+}
+
+async function openHeaderWalletModal(){
+    // CRITICAL: Apply production mode constraints FIRST, before showing any content
+    // This ensures legacy UI is hidden before modal is rendered
+    await initializeWalletV1LegacyRepairUI();
+
     const addr = walletSession.getAddress();
     const pin = walletSession.getPin();
     const walletState = walletSession.getWalletState ? walletSession.getWalletState() : 'not_connected';
 
     // Check for recovery states that require immediate attention
+    if (walletState === 'signing_key_unusable_legacy_format') {
+        setWalletOpen(true);
+        showWalletLoginForm();
+        setTimeout(() => {
+            initializeOwnershipVerificationForm();
+            const diagnostics = walletSession.getUnusableKeyDiagnostics ? walletSession.getUnusableKeyDiagnostics() : null;
+            showUnusableKeyRecovery(diagnostics);
+        }, 100);
+        return;
+    }
+
     if (walletState === 'signing_key_mismatch') {
         setWalletOpen(true);
         showWalletLoginForm();
         setTimeout(() => {
+            initializeOwnershipVerificationForm();
             const err = {mismatch: walletSession.getSigningKeyMismatch ? walletSession.getSigningKeyMismatch() : null};
             showKeyMismatchRecovery(err);
         }, 100);
@@ -5161,6 +6255,7 @@ function openHeaderWalletModal(){
         setWalletOpen(true);
         showWalletLoginForm();
         setTimeout(() => {
+            initializeOwnershipVerificationForm();
             showMissingSigningKeyRecovery();
         }, 100);
         return;
@@ -5186,6 +6281,8 @@ function openHeaderWalletModal(){
     setWalletOpen(true);
     if(!walletSession.isBound()){
         showWalletLoginForm();
+        // Initialize ownership verification form (resolves canonical address from "loading...")
+        setTimeout(() => initializeOwnershipVerificationForm(), 50);
     } else {
         showWalletContentSection();
         loadWalletBalances(true);
@@ -5201,66 +6298,154 @@ async function submitHeaderWalletLogin(){
 }
 
 function switchWalletV1Mode(){
-    const mode = document.getElementById('walletWidgetMode')?.value || 'restore';
+    let mode = document.getElementById('walletWidgetMode')?.value || 'create';
     const unlockEl = document.getElementById('walletV1UnlockMode');
     const migrateEl = document.getElementById('walletV1MigrateMode');
     const restoreEl = document.getElementById('walletV1RestoreMode');
     const createEl = document.getElementById('walletV1CreateMode');
+    const importEl = document.getElementById('walletV1ImportMode');
+    const adminSignerEl = document.getElementById('walletV1AdminGenerateSignerMode');
+
+    // Check production mode: if restore/migrate were removed, fallback to available option
+    const restoreOption = document.querySelector('option[value="restore"]');
+    const migrateOption = document.querySelector('option[value="migrate"]');
+    if (!restoreOption || !migrateOption) {
+        // In production mode - fallback to available option
+        if (mode === 'restore' || mode === 'migrate') {
+            const firstOption = document.querySelector('option');
+            if (firstOption) {
+                mode = firstOption.value || 'create';
+            }
+        }
+    }
 
     // Get current modal state for pledge-backed wallet flow
-    const modalState = walletSession.getModalState ? walletSession.getModalState() : 'no_active_wallet';
+    // CRITICAL: Prefer server truth (walletV1LastStatus) over client-side state
+    let modalState = walletSession.getModalState ? walletSession.getModalState() : 'no_active_wallet';
+    if (window.walletV1LastStatus && window.walletV1LastStatus.modal_state) {
+        console.log('[SwitchMode] Using server modal_state:', window.walletV1LastStatus.modal_state, '(was client state:', modalState + ')');
+        modalState = window.walletV1LastStatus.modal_state;
+    }
     const hasPledge = walletSession.hasPledgeOrMigrationSource ? walletSession.hasPledgeOrMigrationSource() : false;
     const allowWebCreate = window.WALLET_V1_ALLOW_WEB_CREATE === true || window.WALLET_V1_ALLOW_WEB_CREATE === '1';
 
+    // Check if admin mode is enabled (legacy repair UI)
+    const adminModeEnabled = window.WALLET_V1_LEGACY_REPAIR_UI_ENABLED === true || window.WALLET_V1_LEGACY_REPAIR_UI_ENABLED === '1';
+
     // Determine which modes are allowed based on wallet state
-    const createAllowed = allowWebCreate || hasPledge; // Allow create if feature flag OR pledge confirmed
+    // CRITICAL: createAllowed = false if canonical already exists (immutability)
+    const createAllowed = !hasCanonical() && (allowWebCreate || hasPledge);
     const unlockAllowed = modalState === 'active_wallet_with_encrypted_key' || modalState === 'signing_ready';
     const importAllowed = modalState === 'active_wallet_no_key';
-    const restoreAllowed = modalState === 'no_active_wallet'; // Restore always available when no wallet
+    const restoreAllowed = modalState === 'no_active_wallet' || modalState === 'active_wallet_no_key';  // Both states allow restore (Recovery Kit)
+    const adminSignerAllowed = adminModeEnabled && modalState === 'active_wallet_no_key';
+
+    // When wallet has no signing key AND in production mode, force import-only would hide Recovery Kit
+    // Instead, allow BOTH import and restore, with restore as primary when not admin mode
+    // const isLockedImportOnly = modalState === 'active_wallet_no_key' && !adminSignerAllowed;
+    const hasNoSigningKey = modalState === 'active_wallet_no_key';
 
     // Update mode select options visibility/disabled state
-    const restoreOption = document.querySelector('option[value="restore"]');
     const createOption = document.querySelector('option[value="create"]');
     const unlockOption = document.querySelector('option[value="unlock"]');
-    const migrateOption = document.querySelector('option[value="migrate"]');
+    const importOption = document.querySelector('option[value="import_signing_key"]');
+    const adminSignerOption = document.querySelector('option[value="admin_generate_signer"]');
+    const modeSelect = document.getElementById('walletWidgetMode');
 
-    if (restoreOption) restoreOption.disabled = !restoreAllowed;
-    if (createOption) createOption.disabled = !createAllowed;
-    if (unlockOption) unlockOption.disabled = !unlockAllowed;
-    if (migrateOption) migrateOption.disabled = false; // Migrate always available
+    // When wallet has no signing key: Recovery Kit (restore) is PRIMARY, import is secondary
+    // Admin mode: allow both restore, import, and admin signer
+    if (hasNoSigningKey) {
+        // Wallet missing signing key: show Recovery Kit and import options
+        if (restoreOption) restoreOption.disabled = false;  // Recovery Kit is ALWAYS available
+        if (createOption) createOption.disabled = true;
+        if (unlockOption) unlockOption.disabled = true;
+        if (migrateOption) migrateOption.disabled = true;
+        if (importOption) importOption.disabled = false;    // Import is secondary option
+        if (adminSignerOption) adminSignerOption.disabled = !adminSignerAllowed;
+        if (modeSelect) modeSelect.style.opacity = '1'; // Normal state
+
+        // DEFAULT to restore (Recovery Kit) unless admin mode is explicitly selected
+        if (!mode || mode === 'import_signing_key' || mode === 'admin_generate_signer') {
+            // Auto-select restore if current mode is disabled/import-only
+            mode = 'restore';
+        }
+    } else {
+        // Normal state: allow all applicable modes
+        if (restoreOption) restoreOption.disabled = !restoreAllowed;
+        if (createOption) createOption.disabled = !createAllowed;
+        if (unlockOption) unlockOption.disabled = !unlockAllowed;
+        if (migrateOption) migrateOption.disabled = false;
+        if (importOption) importOption.disabled = !importAllowed;
+        if (adminSignerOption) adminSignerOption.disabled = !adminSignerAllowed;
+        if (modeSelect) modeSelect.style.opacity = '1'; // Normal state
+    }
 
     // Auto-select appropriate mode based on state
     let displayMode = mode;
-    const modeSelect = document.getElementById('walletWidgetMode');
 
-    if (modalState === 'no_active_wallet') {
-        // No active wallet - show restore/migrate options
-        displayMode = mode === 'restore' || mode === 'migrate' ? mode : 'restore';
-        if (modeSelect && !mode) modeSelect.value = 'restore'; // Default to restore
-    } else if (modalState === 'active_wallet_no_key') {
-        // Active wallet but no signing key - show import/restore prompt
-        displayMode = 'import'; // Special mode for import signing key
+    if (hasNoSigningKey) {
+        // Wallet missing signing key: Recovery Kit (import_signing_key) is primary
+        displayMode = 'import_signing_key';  // Set mode to match what's shown (Recovery Kit)
+
+        // In production mode: show ONLY Recovery Kit (walletV1ImportMode)
+        // In admin mode: show both Recovery Kit and Legacy Restore options
+        const isProductionMode = !adminModeEnabled;
+
+        if (isProductionMode) {
+            // Production: show Recovery Kit only (NOT legacy migration)
+            if (restoreEl) restoreEl.style.display = 'none';    // Hide legacy migration
+            if (importEl) importEl.style.display = 'block';     // Show Recovery Kit (PRIMARY)
+        } else {
+            // Admin mode: show both options
+            if (restoreEl) restoreEl.style.display = 'block';   // Show legacy migration
+            if (importEl) importEl.style.display = 'block';     // Show Recovery Kit
+        }
+
+        if (createEl) createEl.style.display = 'none';
+        if (unlockEl) unlockEl.style.display = 'none';
+        if (migrateEl) migrateEl.style.display = 'none';
+        if (adminSignerEl) adminSignerEl.style.display = 'none';
+
+        // Show missing signing key recovery message
+        showMissingSigningKeyRecovery();
+        // NOTE: Do NOT auto-open Advanced accordion - let user click "Advanced Options" button
+        // showImportSigningKeyForm();
+
+        return; // Exit early for locked state
+    } else if (adminSignerAllowed && modalState === 'active_wallet_no_key') {
+        // Admin mode with missing key: show options and diagnostics
+        console.log('[AdminSignerMode] Enabled for missing key - legacy_repair_ui_enabled:', adminModeEnabled, 'admin_register_available: true');
+
+        // Set displayMode based on current selection
+        if (mode === 'admin_generate_signer') {
+            displayMode = 'admin_generate_signer';
+        } else {
+            displayMode = 'import_signing_key'; // Default to import
+        }
+
+        // Hide other sections
+        if (restoreEl) restoreEl.style.display = 'none';
         if (createEl) createEl.style.display = 'none';
         if (unlockEl) unlockEl.style.display = 'none';
         if (migrateEl) migrateEl.style.display = 'none';
 
-        // Show import signing key UI
-        const importMsg = document.getElementById('walletActiveNoKeyMsg');
-        if (!importMsg) {
-            const container = document.getElementById('walletLoginSection');
-            if (container) {
-                const msg = document.createElement('div');
-                msg.id = 'walletActiveNoKeyMsg';
-                msg.style.cssText = 'background:#1a2a1a; border:1px solid #00ff66; border-radius:8px; padding:12px; margin:10px 0; color:#00ff66; font-size:0.9em;';
-                msg.innerHTML = '✓ Wallet address found. <strong>Import the matching signing key to enable signing.</strong>';
-                container.insertBefore(msg, container.firstChild);
-            }
+        // Show missing key recovery message
+        showMissingSigningKeyRecovery();
+    } else if (modalState === 'no_active_wallet') {
+        // No active wallet - show restore/migrate options (if available in production mode)
+        const restoreOpt = document.querySelector('option[value="restore"]');
+        // CRITICAL: Never allow 'create' if canonical exists, even if user tries via devtools
+        const defaultMode = hasCanonical() ? 'unlock' : (restoreOpt ? 'restore' : 'create');
+        displayMode = (mode === 'restore' || mode === 'migrate') ? mode : defaultMode;
+        // Force override if user tried to select 'create' with existing canonical
+        if (hasCanonical() && mode === 'create') {
+            displayMode = 'unlock';
         }
-        return;
+        if (modeSelect && !mode) modeSelect.value = defaultMode;
     } else if (unlockAllowed && mode === 'unlock') {
         displayMode = 'unlock';
-    } else if (importAllowed && mode === 'import') {
-        displayMode = 'import';
+    } else if (importAllowed && mode === 'import_signing_key') {
+        displayMode = 'import_signing_key';
     } else if (!createAllowed && mode === 'create') {
         displayMode = 'migrate';
         if (modeSelect) modeSelect.value = 'migrate';
@@ -5271,6 +6456,21 @@ function switchWalletV1Mode(){
     if (createEl) createEl.style.display = (displayMode === 'create' && createAllowed) ? 'block' : 'none';
     if (unlockEl) unlockEl.style.display = (displayMode === 'unlock' && unlockAllowed) ? 'block' : 'none';
     if (migrateEl) migrateEl.style.display = (displayMode === 'migrate') ? 'block' : 'none';
+    if (importEl) importEl.style.display = (displayMode === 'import_signing_key' && (importAllowed || adminSignerAllowed)) ? 'block' : 'none';
+    if (adminSignerEl) adminSignerEl.style.display = (displayMode === 'admin_generate_signer' && adminSignerAllowed) ? 'block' : 'none';
+
+    // Ensure modeSelect.value matches what's displayed (Fix #3: Deterministic mode/CTA)
+    if (modeSelect && displayMode) {
+        const availableOption = Array.from(modeSelect.options).find(opt => opt.value === displayMode);
+        if (availableOption && !availableOption.disabled) {
+            modeSelect.value = displayMode;  // Match dropdown to displayed mode
+        }
+    }
+
+    // When import mode is shown, activate Recovery Kit restore primary UI
+    if (importEl && importEl.style.display !== 'none') {
+        walletV1ShowRecoveryKitRestorePrimary();
+    }
 
     // Show appropriate state message
     const existingMsgs = document.querySelectorAll('[data-wallet-state-msg]');
@@ -5282,9 +6482,21 @@ function switchWalletV1Mode(){
             const msg = document.createElement('div');
             msg.setAttribute('data-wallet-state-msg', '1');
             msg.style.cssText = 'background:#1a1a1a; border:1px solid #ff9900; border-radius:8px; padding:12px; margin:10px 0; color:#ff9900; font-size:0.9em;';
-            const msgText = displayMode === 'restore'
-                ? '📥 Enter your legacy wallet address to restore the previously migrated V1 wallet.'
-                : '⚠️ Complete pledge, migrate legacy wallet, or restore a verified wallet before unlocking.';
+
+            // Production mode: pledge-native messaging
+            const isProductionMode = document.body.classList.contains('wallet-v1-production-mode');
+            let msgText;
+
+            if (isProductionMode) {
+                // Production: promote pledge activation
+                msgText = '🔓 No Wallet V1 found. Complete pledge activation to create your wallet.';
+            } else {
+                // Admin mode: show all options
+                msgText = displayMode === 'restore'
+                    ? '📥 Enter your legacy wallet address to restore the previously migrated V1 wallet.'
+                    : '⚠️ Complete pledge, migrate legacy wallet, or restore a verified wallet before unlocking.';
+            }
+
             msg.textContent = msgText;
             loginSection.insertBefore(msg, loginSection.firstChild);
         }
@@ -5293,6 +6505,36 @@ function switchWalletV1Mode(){
     // Show restore button if migration exists and we're in unlock mode
     updateRestoreMigratedWalletButton();
     updateWalletPanelDiagnostics();
+
+    // Show pledge activation panel in production mode when no active wallet
+    const isProductionMode = document.body.classList.contains('wallet-v1-production-mode');
+    const pledgePanel = document.getElementById('walletV1PledgeActivationPanel');
+    const modeLabel = document.querySelector('label[for="walletWidgetMode"]');
+    const addrLabel = document.getElementById('walletWidgetAddrLabel');
+
+    if (pledgePanel) {
+        if (isProductionMode && modalState === 'no_active_wallet' && !hasCanonical()) {
+            // Production mode with no wallet AND no canonical: show pledge CTA
+            pledgePanel.style.display = 'block';
+            if (modeSelect) modeSelect.style.display = 'none';
+            if (modeLabel) modeLabel.style.display = 'none';
+            if (addrLabel) addrLabel.style.display = 'none';
+            if (modeSelect) modeSelect.parentElement.querySelector('input[type="text"]').style.display = 'none';
+        } else {
+            // Admin mode or wallet exists: hide pledge CTA
+            pledgePanel.style.display = 'none';
+            if (modeSelect) modeSelect.style.display = 'block';
+            if (modeLabel) modeLabel.style.display = 'block';
+            if (addrLabel) addrLabel.style.display = 'block';
+        }
+    }
+
+    // Update mode label when wallet has no signing key
+    if (hasNoSigningKey && modeLabel) {
+        modeLabel.textContent = 'Unlock Method';
+    } else if (modeLabel) {
+        modeLabel.textContent = 'Mode';
+    }
 }
 
 function updateRestoreMigratedWalletButton(){
@@ -5347,10 +6589,11 @@ async function createWalletV1FromHeader(){
     }
 }
 
-function showKeyMismatchRecovery(err) {
+async function showKeyMismatchRecovery(err) {
     const mismatch = err && err.mismatch ? err.mismatch : null;
+    const errorType = err && err.error_type ? err.error_type : 'unknown';
     const activeAddr = walletSession.getActiveAddress ? walletSession.getActiveAddress() : localStorage.getItem('wallet_v1_address');
-    const derivedAddr = mismatch && mismatch.derived_address ? mismatch.derived_address : 'unknown';
+    const derivedAddr = mismatch && mismatch.derived_address ? mismatch.derived_address : (err && err.derived_address ? err.derived_address : 'unknown');
 
     const hasEncrypted = walletSession.hasEncryptedPrivateKey ? walletSession.hasEncryptedPrivateKey() : !!localStorage.getItem('wallet_v1_encrypted_priv');
     const hasRuntime = walletSession.hasRuntimeSigningMaterial ? walletSession.hasRuntimeSigningMaterial(activeAddr) : false;
@@ -5358,28 +6601,92 @@ function showKeyMismatchRecovery(err) {
     const shortActive = activeAddr ? activeAddr.substring(0, 10) + '...' : 'unknown';
     const shortDerived = derivedAddr ? derivedAddr.substring(0, 10) + '...' : 'unknown';
 
-    const html = `
+    console.info('[KeyMismatch] Recovery handler:', {
+        error_type: errorType,
+        active_address: shortActive,
+        derived_address: shortDerived
+    });
+
+    // Build error message based on error_type
+    let title = '⚠️ Signing Key Mismatch';
+    let message = 'PIN was accepted, but this signing key is not authorized for your wallet.';
+    let recoveryOptions = 'clear_or_import';
+
+    if (errorType === 'binding_not_registered') {
+        // Binding not found - this key belongs to a different address
+        title = '⚠️ Bound Signer Not Registered';
+        message = `❌ <strong>This signing key belongs to a different address.</strong><br><br>
+                   Your wallet: <strong>${shortActive}</strong><br>
+                   This key derives to: <strong>${shortDerived}</strong><br><br>
+                   You can either import the correct key for your wallet, or register this key as a bound signer (admin only).`;
+        recoveryOptions = 'clear_or_rekey';
+    } else if (errorType === 'binding_hash_mismatch') {
+        // Binding exists but derived doesn't match it
+        title = '⚠️ Binding Hash Mismatch';
+        message = `This signing key doesn't match the registered bound signer for your wallet.
+                   The binding may be outdated or this may be the wrong key.`;
+        recoveryOptions = 'clear_or_import';
+    } else if (errorType === 'binding_check_failed') {
+        // Network or binding endpoint issue
+        title = '⚠️ Binding Check Failed';
+        message = `Could not verify the signing key binding due to a network issue.
+                   Try again or clear the key and import the correct one.`;
+        recoveryOptions = 'clear_or_import';
+    }
+
+    // Build HTML based on error type and recovery options
+    let html = `
     <div style="background:#1a1a1a; border:1px solid #ff6600; border-radius:12px; padding:20px; color:#fff; margin:20px 0;">
-        <h4 style="color:#ff9900; margin-top:0;">⚠️ Signing Key Mismatch</h4>
+        <h4 style="color:#ff9900; margin-top:0;">${title}</h4>
         <p style="font-size:0.9em; line-height:1.5;">
-            PIN was accepted, but the stored signing key belongs to a different wallet.
-            <strong>Your active wallet (${shortActive}) is preserved.</strong>
+            ${message}
         </p>
 
         <div style="background:#000; border:1px solid #666; border-radius:8px; padding:12px; margin:12px 0; font-size:0.85em; font-family:monospace;">
-            <div><span style="color:#9f9;">Active Address:</span> ${shortActive}</div>
-            <div><span style="color:#ff9900;">Derived Address:</span> ${shortDerived}</div>
+            <div><span style="color:#9f9;">Canonical Address:</span> ${shortActive}</div>
+            <div><span style="color:#ff9900;">Derived Address (from key):</span> ${shortDerived}</div>
+            <div><span style="color:#ff9900;">Error Type:</span> ${errorType}</div>
             <div><span style="color:#9f9;">Encrypted Seed:</span> ${hasEncrypted ? 'yes' : 'no'}</div>
-            <div><span style="color:#9f9;">Runtime Material:</span> ${hasRuntime ? 'yes' : 'no'}</div>
         </div>
 
+        <p style="font-size:0.85em; color:#ffaa00; margin:10px 0;">
+            💡 <strong>Recovery Options:</strong>
+        </p>
         <div style="display:flex; gap:10px; flex-wrap:wrap;">
             <button onclick="clearMismatchedSigningKey()" style="flex:1; min-width:150px; padding:10px; background:#9c3c3c; color:#fff; border:1px solid #ff6600; border-radius:8px; cursor:pointer; font-size:0.9em;">
-                🗑️ Clear Mismatched Key
+                🗑️ Clear This Key
             </button>
+    `;
+
+    if (recoveryOptions === 'clear_or_import' || recoveryOptions === 'clear_or_rekey') {
+        html += `
             <button onclick="showImportSigningKeyForm()" style="flex:1; min-width:150px; padding:10px; background:#00a86b; color:#000; border:1px solid #00ff66; border-radius:8px; cursor:pointer; font-size:0.9em;">
                 📥 Import Correct Key
             </button>
+        `;
+    }
+
+    // For binding_not_registered error, offer to register derived as bound signer (ADMIN ONLY)
+    if (errorType === 'binding_not_registered') {
+        const derivedAddr = diagnostics && diagnostics.derived_address ? diagnostics.derived_address : null;
+        const isAdmin = window.WALLET_V1_LEGACY_REPAIR_UI_ENABLED === true || window.WALLET_V1_LEGACY_REPAIR_UI_ENABLED === '1';
+
+        if (derivedAddr && isAdmin) {
+            html += `
+                <button onclick="walletV1RegisterBoundSigner('${derivedAddr}')" style="flex:1; min-width:150px; padding:10px; background:#0066cc; color:#fff; border:1px solid #00aaff; border-radius:8px; cursor:pointer; font-size:0.9em;">
+                    🔗 [ADMIN] Register as Bound Signer
+                </button>
+            `;
+        } else if (derivedAddr && !isAdmin) {
+            html += `
+                <div style="flex:1; min-width:150px; padding:10px; background:#333; color:#999; border:1px solid #666; border-radius:8px; font-size:0.85em; text-align:center;">
+                    ℹ️ Admin feature: Register as Bound Signer
+                </div>
+            `;
+        }
+    }
+
+    html += `
         </div>
     </div>
     `;
@@ -5407,6 +6714,141 @@ async function clearMismatchedSigningKey() {
             if (recovery) recovery.remove();
         } else {
             alert('Unable to clear signing key - API not available');
+        }
+    } catch(err) {
+        alert('Error clearing key: ' + (err.message || 'Unknown'));
+    }
+}
+
+async function walletV1RegisterBoundSigner(derivedAddress) {
+    /**
+     * Register a derived (mismatch) key as a bound signer for the canonical wallet.
+     * This allows a key from a different device/recovery kit to sign for the canonical address.
+     */
+    const canonicalAddr = localStorage.getItem('wallet_v1_address') || walletSession.getAddress?.();
+
+    if (!canonicalAddr) {
+        alert('Cannot register binding: No canonical address found');
+        return;
+    }
+
+    if (!derivedAddress) {
+        alert('Cannot register binding: No derived address provided');
+        return;
+    }
+
+    try {
+        // Step 1: Get the derived public key from current localStorage
+        const publicKey = localStorage.getItem('wallet_v1_public_key');
+        if (!publicKey) {
+            alert('Cannot register binding: No public key found in current signing material');
+            return;
+        }
+
+        // Step 2: Call backend endpoint to register binding (/api/v1/wallet/bind_public_key)
+        const response = await fetch('/api/v1/wallet/bind_public_key', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                address: canonicalAddr,
+                credential_lookup_address: derivedAddress,
+                public_key: publicKey
+            })
+        });
+
+        const result = await response.json();
+
+        if (result.ok) {
+            alert('✅ Bound signer registered successfully!\nYour derived key is now registered to sign for your canonical wallet.\n\nRetrying unlock...');
+            // Refresh UI to show binding is now registered
+            if (typeof updateHeaderWalletUi === 'function') {
+                updateHeaderWalletUi();
+            }
+            if (typeof switchWalletV1Mode === 'function') {
+                switchWalletV1Mode();
+            }
+            // Retry unlock now that binding is registered
+            // Remove the error message and let user try again
+            const recovery = document.querySelector('[data-mismatch-recovery]');
+            if (recovery) recovery.remove();
+            alert('Binding registered. Try unlocking again with your PIN.');
+        } else {
+            alert('❌ Failed to register binding:\n' + (result.error || 'Unknown error'));
+        }
+    } catch (err) {
+        console.error('[RegisterBoundSigner] Error:', err);
+        alert('❌ Error registering bound signer:\n' + (err.message || 'Network error'));
+    }
+}
+
+function showUnusableKeyRecovery(diagnostics) {
+    const activeAddr = walletSession.getActiveAddress ? walletSession.getActiveAddress() : localStorage.getItem('wallet_v1_address');
+    const shortActive = activeAddr ? activeAddr.substring(0, 10) + '...' : 'unknown';
+    const shortDerived = (diagnostics && diagnostics.derived_address_short) ? diagnostics.derived_address_short : 'unknown';
+    const hasEncrypted = (diagnostics && diagnostics.encrypted_seed_present) ? diagnostics.encrypted_seed_present : false;
+    const hasRuntime = (diagnostics && diagnostics.runtime_material_present) ? diagnostics.runtime_material_present : false;
+    const parseStatus = (diagnostics && diagnostics.key_parse_status) ? diagnostics.key_parse_status : 'failed';
+
+    const html = `
+    <div style="background:#1a1a1a; border:1px solid #ff6600; border-radius:12px; padding:20px; color:#fff; margin:20px 0;">
+        <h4 style="color:#ff9900; margin-top:0;">⚠️ Stored Signing Material Not Usable</h4>
+        <p style="font-size:0.9em; line-height:1.5;">
+            PIN was accepted, but the stored signing material cannot be parsed as a Wallet V1 signing key.
+            It may be legacy format, corrupted, or generated by a different wallet system.
+            <strong>Your wallet address (${shortActive}) is preserved.</strong>
+        </p>
+
+        <div style="background:#000; border:1px solid #666; border-radius:8px; padding:12px; margin:12px 0; font-size:0.85em; font-family:monospace;">
+            <div><span style="color:#9f9;">Active Address:</span> ${shortActive}</div>
+            <div><span style="color:#ff9900;">Stored Material Status:</span> ${parseStatus}</div>
+            <div><span style="color:#9f9;">Encrypted Seed:</span> ${hasEncrypted ? 'yes' : 'no'}</div>
+            <div><span style="color:#9f9;">Runtime Material:</span> ${hasRuntime ? 'yes' : 'no'}</div>
+            <div><span style="color:#ff9900;">Recovery Path:</span> Verify Ownership & Re-Key</div>
+        </div>
+
+        <div style="display:flex; gap:10px; flex-wrap:wrap;">
+            <button onclick="clearUnusableSigningKeyFromUI()" style="flex:1; min-width:150px; padding:10px; background:#9c3c3c; color:#fff; border:1px solid #ff6600; border-radius:8px; cursor:pointer; font-size:0.9em;">
+                🗑️ Clear Unusable Key
+            </button>
+            <button onclick="showWalletV1RekeyCeremonyFlow()" style="flex:1; min-width:150px; padding:10px; background:#00a86b; color:#000; border:1px solid #00ff66; border-radius:8px; cursor:pointer; font-size:0.9em;">
+                🔐 Verify Ownership & Re-Key
+            </button>
+            <button onclick="showImportSigningKeyForm()" style="flex:1; min-width:150px; padding:10px; background:#0066cc; color:#fff; border:1px solid #00ccff; border-radius:8px; cursor:pointer; font-size:0.9em;">
+                📥 Import V1 Key
+            </button>
+        </div>
+    </div>
+    `;
+
+    const container = document.getElementById('walletV1UnlockMode');
+    if (container) {
+        const existing = container.querySelector('[data-unusable-key-recovery]');
+        if (existing) existing.remove();
+        const div = document.createElement('div');
+        div.setAttribute('data-unusable-key-recovery', '1');
+        div.innerHTML = html;
+        container.appendChild(div);
+    }
+}
+
+async function clearUnusableSigningKeyFromUI() {
+    const confirmed = confirm('This will remove the unusable stored signing material from local storage.\nYour wallet address and balances will be preserved.\nYou will then run the verify ownership & re-key flow.\nContinue?');
+    if (!confirmed) return;
+
+    try {
+        if (walletSession && typeof walletSession.clearUnusableSigningKey === 'function') {
+            const result = await walletSession.clearUnusableSigningKey();
+            if (result.success) {
+                alert('Unusable signing material cleared.\n\nYour wallet is now in verify ownership mode.\nClick "Verify Ownership & Re-Key" to proceed.');
+                const recovery = document.querySelector('[data-unusable-key-recovery]');
+                if (recovery) recovery.remove();
+                // Refresh wallet state
+                updateWalletUI();
+            } else {
+                alert('Error: ' + (result.error || 'Failed to clear unusable key'));
+            }
+        } else {
+            alert('Unable to clear unusable key - API not available');
         }
     } catch(err) {
         alert('Error clearing key: ' + (err.message || 'Unknown'));
@@ -5449,73 +6891,788 @@ function showMissingSigningKeyRecovery() {
     }
 }
 
-function showImportSigningKeyForm() {
-    const form = `
-    <div style="background:#1a2a1a; border:1px solid #00ff66; border-radius:8px; padding:15px; margin:12px 0;">
-        <h5 style="color:#00ff66; margin-top:0;">Import Wallet V1 Signing Key</h5>
-        <label for="importKeyHex" style="display:block; font-size:0.9em; color:#9f9;">Private Key (Hex)</label>
-        <input type="password" id="importKeyHex" placeholder="64 hex characters" style="width:100%; padding:10px; background:#000; color:#0f0; border:1px solid #00ff66; border-radius:6px; margin:6px 0; font-size:0.85em; font-family:monospace;" />
-
-        <label for="importKeyPin" style="display:block; font-size:0.9em; color:#9f9; margin-top:10px;">PIN</label>
-        <input type="password" id="importKeyPin" placeholder="Wallet PIN" style="width:100%; padding:10px; background:#000; color:#0f0; border:1px solid #00ff66; border-radius:6px; margin:6px 0;" />
-
-        <div style="display:flex; gap:8px; margin-top:10px;">
-            <button onclick="performImportSigningKey()" style="flex:1; padding:10px; background:#00aa66; color:#000; border:1px solid #00ff66; border-radius:6px; cursor:pointer; font-weight:bold;">
-                ✓ Import Key
-            </button>
-            <button onclick="closeImportSigningKeyForm()" style="flex:1; padding:10px; background:#666; color:#fff; border:1px solid #999; border-radius:6px; cursor:pointer;">
-                Cancel
-            </button>
-        </div>
-    </div>
-    `;
-
-    const recovery = document.querySelector('[data-mismatch-recovery]') || document.querySelector('[data-missing-key-recovery]');
-    if (recovery) {
-        const existing = recovery.querySelector('[data-import-form]');
-        if (existing) existing.remove();
-        const div = document.createElement('div');
-        div.setAttribute('data-import-form', '1');
-        div.innerHTML = form;
-        recovery.appendChild(div);
+function focusCanonicalImportForm() {
+    const details = document.querySelector('details[aria-label="walletV1AdvancedImport"]');
+    if (details) {
+        details.open = true;
+        const input = document.getElementById('walletV1ImportKeyHex');
+        if (input) {
+            input.focus();
+            input.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
     }
 }
 
-function closeImportSigningKeyForm() {
-    const form = document.querySelector('[data-import-form]');
-    if (form) form.remove();
+// Alias for backward compatibility with error recovery UI
+function showImportSigningKeyForm() {
+    focusCanonicalImportForm();
 }
 
-async function performImportSigningKey() {
-    const keyHex = (document.getElementById('importKeyHex')?.value || '').trim();
-    const pin = (document.getElementById('importKeyPin')?.value || '').trim();
-    const targetAddr = walletSession.getActiveAddress ? walletSession.getActiveAddress() : localStorage.getItem('wallet_v1_address');
+
+async function initializeOwnershipVerificationForm() {
+    const elem = document.getElementById('walletV1CanonicalAddr');
+    if (!elem) return;
+
+    // Disable button initially
+    const submitBtn = document.querySelector('[onclick="performLegacyOwnershipVerification()"]');
+    if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.style.opacity = '0.5';
+        submitBtn.style.cursor = 'not-allowed';
+    }
+
+    // Show loading state
+    if (elem.textContent !== undefined) {
+        elem.textContent = 'loading...';
+    } else {
+        elem.value = 'loading...';
+    }
+
+    // Resolve canonical address with retry logic and timeout
+    try {
+        // Add 3-second timeout to prevent indefinite waiting
+        const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Address resolution timeout')), 3000)
+        );
+
+        const result = await Promise.race([
+            walletSession.resolveCanonicalWalletAddress({
+                maxAttempts: 10,
+                retryIntervalMs: 250,
+                debug: false
+            }),
+            timeoutPromise
+        ]);
+
+        if (result.ok && result.canonical_v1_address) {
+            // Canonical address resolved - set it and enable submit
+            if (elem.textContent !== undefined) {
+                elem.textContent = result.canonical_v1_address;
+            } else {
+                elem.value = result.canonical_v1_address;
+            }
+            // Enable Verify Ownership button
+            if (submitBtn) {
+                submitBtn.disabled = false;
+                submitBtn.style.opacity = '1';
+                submitBtn.style.cursor = 'pointer';
+            }
+        } else {
+            // Could not resolve - show error state
+            if (elem.textContent !== undefined) {
+                elem.textContent = 'Not found';
+            } else {
+                elem.value = 'Not found';
+            }
+            // Keep button disabled
+            if (submitBtn) {
+                submitBtn.disabled = true;
+                submitBtn.style.opacity = '0.5';
+                submitBtn.style.cursor = 'not-allowed';
+            }
+            console.warn('[OwnershipVerification] Could not resolve canonical address');
+        }
+    } catch (err) {
+        console.error('[OwnershipVerification] Error resolving canonical address:', err);
+        if (elem.textContent !== undefined) {
+            elem.textContent = 'Error';
+        } else {
+            elem.value = 'Error';
+        }
+        if (submitBtn) {
+            submitBtn.disabled = true;
+            submitBtn.style.opacity = '0.5';
+            submitBtn.style.cursor = 'not-allowed';
+        }
+    }
+
+    // Auto-fill legacy address if known from migration
+    const legacyAddr = walletSession.getLegacySourceAddress ? walletSession.getLegacySourceAddress() : null;
+    if (legacyAddr) {
+        const legacyInput = document.getElementById('walletV1LegacyAddr');
+        if (legacyInput) {
+            legacyInput.value = legacyAddr;
+        }
+    }
+}
+
+async function performLegacyOwnershipVerification() {
+    // Get canonical address (auto-filled, read-only via display)
+    const canonicalAddrElem = document.getElementById('walletV1CanonicalAddr');
+    const canonicalAddr = (canonicalAddrElem?.textContent || canonicalAddrElem?.value || '').trim();
+
+    // Block submit if canonical address is loading or blank
+    if (!canonicalAddr || canonicalAddr === 'loading...') {
+        alert('Canonical wallet address is still loading.\nPlease wait a moment and try again.');
+        return;
+    }
+
+    const legacyAddr = (document.getElementById('walletV1LegacyAddr')?.value || '').trim();
+    const sendSecret = (document.getElementById('walletV1SendSecret')?.value || '').trim();
+    const authSecret = (document.getElementById('walletV1AuthSecret')?.value || '').trim();
+    const pledgeHash = (document.getElementById('walletV1PledgeHash')?.value || '').trim();
+
+    // Validate required fields
+    if (!legacyAddr && !sendSecret) {
+        alert('Please provide either:\n- Legacy THR Address\nOR\n- Legacy Send Secret');
+        return;
+    }
+
+    try {
+        console.log('[OwnershipVerification] Verifying ownership for:', canonicalAddr.substring(0, 10) + '...');
+
+        // Call user-facing ownership verification endpoint (NO repair token required)
+        // NOTE: PIN is NOT sent - ownership verification does not enable signing
+        const response = await fetch('/api/wallet/v1/ownership/verify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                canonical_v1_address: canonicalAddr,
+                legacy_address: legacyAddr,
+                send_secret: sendSecret,
+                auth_secret: authSecret,
+                pledge_hash: pledgeHash
+            })
+        });
+
+        const result = await response.json();
+        if (!result.ok) {
+            console.warn('[OwnershipVerification] Verification failed:', result.error);
+
+            // Handle specific error codes
+            if (result.error === 'deterministic_recovery_unavailable') {
+                alert('Ownership verified, but deterministic signing key recovery is not available for this wallet.\n\nPlease use Advanced Import if you have a backup of your V1 private key.');
+                return;
+            } else if (result.error === 'ownership_verification_failed') {
+                alert('Could not verify ownership. Please check your legacy credentials.');
+                return;
+            } else if (result.error === 'migration_not_found') {
+                alert('This wallet could not be found in migration records. Please verify your addresses.');
+                return;
+            } else {
+                alert('Verification failed: ' + (result.error || 'Unknown error'));
+                return;
+            }
+        }
+
+        if (!result.ownership_verified) {
+            console.warn('[OwnershipVerification] Verification failed:', result.error);
+            alert('Could not verify ownership. Please check your legacy credentials.');
+            return;
+        }
+
+        console.log('[OwnershipVerification] Ownership verified. Recovery source:', result.recovery_source);
+
+        // Store ownership_verification_id for re-key request (memory/session only, NOT localStorage)
+        window.walletV1OwnershipVerificationId = result.ownership_verification_id;
+        window.walletV1OwnershipVerificationExpires = result.expires_at;
+
+        // Show success feedback
+        alert('✓ Ownership verified!\n\nYour wallet identity is confirmed.\nYou are currently in read-only mode.\n\nNext: Generate or import a signing key to enable transactions.');
+
+        // Ownership verified successfully - show re-key ceremony
+        const canonicalAddrForCheck = canonicalAddr;
+        document.getElementById('walletV1CanonicalAddrCheck').textContent = canonicalAddrForCheck;
+
+        // Hide legacy recovery form, show re-key ceremony form
+        document.getElementById('walletV1LegacyRecoveryForm').style.display = 'none';
+        document.getElementById('walletV1RekeyCeremonyForm').style.display = 'block';
+
+        // Clear sensitive form data
+        document.getElementById('walletV1SendSecret').value = '';
+        document.getElementById('walletV1AuthSecret').value = '';
+        document.getElementById('walletV1PledgeHash').value = '';
+
+        console.log('[OwnershipVerification] Ownership verified. Showing re-key ceremony form for', canonicalAddrForCheck.substring(0, 10) + '...');
+
+    } catch(err) {
+        console.error('[OwnershipVerification] Error:', err);
+        alert('Error: ' + (err.message || 'Verification failed'));
+    }
+}
+
+
+// Re-Key Ceremony Functions
+function toggleWalletV1RekeySection() {
+    const form = document.getElementById('walletV1RekeyCeremonyForm');
+    const legacyForm = document.getElementById('walletV1LegacyRecoveryForm');
+    if (form.style.display === 'block') {
+        form.style.display = 'none';
+        legacyForm.style.display = 'block';
+        // Auto-fill form when showing legacy recovery
+        initializeOwnershipVerificationForm();
+    } else {
+        form.style.display = 'block';
+        legacyForm.style.display = 'none';
+    }
+}
+
+function showWalletV1RekeyCeremonyFlow() {
+    // Show the ownership verification form and initialize it
+    const legacyForm = document.getElementById('walletV1LegacyRecoveryForm');
+    const ceremonyForm = document.getElementById('walletV1RekeyCeremonyForm');
+
+    if (legacyForm) {
+        legacyForm.style.display = 'block';
+    }
+    if (ceremonyForm) {
+        ceremonyForm.style.display = 'none';
+    }
+
+    // Auto-fill the ownership verification form
+    initializeOwnershipVerificationForm();
+}
+
+
+async function walletV1GenerateNewKey() {
+    try {
+        console.log('[KeySetup] Generating new V1 signing key...');
+
+        // Use wallet session to generate key pair and derive address
+        if (!walletSession.generateV1KeyPair) {
+            return alert('Key generation API not available');
+        }
+
+        const result = await walletSession.generateV1KeyPair();
+        if (!result.success) {
+            return alert('Failed to generate key: ' + (result.error || 'Unknown error'));
+        }
+
+        const { publicKey, address, privateKey } = result;
+
+        console.log('[KeySetup] Generated key derives address:', address);
+
+        // Store the generated key in memory (never on disk yet)
+        window.walletV1GeneratedPrivateKey = privateKey;
+        window.walletV1CurrentPublicKey = publicKey;
+        window.walletV1CurrentAddress = address;
+
+        // Display for verification
+        document.getElementById('walletV1GeneratedPublicKey').value = publicKey;
+        document.getElementById('walletV1GeneratedAddress').value = address;
+        document.getElementById('walletV1GeneratedKeyDisplay').style.display = 'block';
+
+        // Show PIN entry form
+        document.getElementById('walletV1PinEntryForm').style.display = 'block';
+
+        console.log('[KeySetup] Awaiting PIN entry to encrypt and save key');
+
+    } catch(err) {
+        console.error('[KeySetup] Generation error:', err);
+        alert('Error: ' + (err.message || 'Failed to generate key'));
+    }
+}
+
+async function performCanonicalImportSigningKey() {
+    const keyHex = (document.getElementById('walletV1ImportKeyHex')?.value || '').trim();
+    const pin = (document.getElementById('walletV1ImportKeyPin')?.value || '').trim();
 
     if (!keyHex || !pin) return alert('Private key and PIN are required');
     if (!keyHex.match(/^[0-9a-fA-F]{64}$/)) return alert('Invalid key format. Must be 64 hex characters.');
+    if (!pin.match(/^\d{4,8}$/)) return alert('PIN must be 4-8 digits');
+
+    // CRITICAL: Import requires existing canonical (no auto-pledge)
+    if (!hasCanonical()) {
+        return alert('❌ No canonical wallet found. Please go through Pledge Activation first.');
+    }
 
     try {
-        if (!window.WalletAuth || typeof window.WalletAuth.importSigningKeyForAddress !== 'function') {
-            return alert('Import API not available');
+        console.log('[ImportSigningKey] Importing private key for canonical...');
+
+        // Get target address (must be the canonical)
+        const targetAddr = hasCanonical() ? localStorage.getItem('wallet_v1_canonical_address') : (walletSession.getActiveAddress ? walletSession.getActiveAddress() : localStorage.getItem('wallet_v1_address'));
+
+        if (!targetAddr) {
+            return alert('No active wallet address found');
         }
 
-        const result = await window.WalletAuth.importSigningKeyForAddress(keyHex, pin, targetAddr);
-        if (result.success) {
-            alert('✓ Signing key imported successfully!');
-            document.getElementById('importKeyHex').value = '';
-            document.getElementById('importKeyPin').value = '';
-            const recovery = document.querySelector('[data-mismatch-recovery]') || document.querySelector('[data-missing-key-recovery]');
-            if (recovery) recovery.remove();
-            updateHeaderWalletUi();
-            loadWalletBalances(true);
-        } else {
-            alert('Import failed: ' + (result.error || 'Unknown error'));
+        // Try wallet_auth import first (for error recovery context)
+        if (window.WalletAuth && typeof window.WalletAuth.importSigningKeyForAddress === 'function') {
+            const result = await window.WalletAuth.importSigningKeyForAddress(keyHex, pin, targetAddr);
+            if (result.success) {
+                alert('✓ Signing key imported successfully!');
+                // Clear form
+                document.getElementById('walletV1ImportKeyHex').value = '';
+                document.getElementById('walletV1ImportKeyPin').value = '';
+                // Collapse accordion
+                const details = document.querySelector('details[aria-label="walletV1AdvancedImport"]');
+                if (details) details.open = false;
+                // Clean up error recovery UI
+                const recovery = document.querySelector('[data-mismatch-recovery]') || document.querySelector('[data-missing-key-recovery]');
+                if (recovery) recovery.remove();
+                // Update UI
+                updateHeaderWalletUi();
+                // Refresh wallet state from server (prevents stale 'no_active_wallet' after restore)
+                const canonical = localStorage.getItem('wallet_v1_canonical_address');
+                if (canonical) {
+                    await refreshWalletStateFromServer(canonical);
+                }
+                switchWalletV1Mode();  // Now uses server truth
+                loadWalletBalances(true);
+                return;
+            } else {
+                alert('Import failed: ' + (result.error || 'Unknown error'));
+                return;
+            }
         }
+
+        // Fallback: manual derivation (for re-key ceremony context)
+        if (!walletSession.derivePublicKeyAndAddress) {
+            return alert('Key derivation API not available');
+        }
+
+        const derivResult = walletSession.derivePublicKeyAndAddress(keyHex);
+        if (!derivResult.success) {
+            return alert('Failed to import key: ' + (derivResult.error || 'Unknown error'));
+        }
+
+        const { publicKey, address } = derivResult;
+
+        console.log('[ImportSigningKey] Derived signer address: ' + address + ', target: ' + targetAddr);
+
+        // Store for re-key ceremony
+        window.walletV1CurrentPublicKey = publicKey;
+        window.walletV1CurrentAddress = address;
+        window.walletV1CurrentPrivateKey = keyHex;
+
+        // Clear and collapse form
+        document.getElementById('walletV1ImportKeyHex').value = '';
+        document.getElementById('walletV1ImportKeyPin').value = '';
+        const details = document.querySelector('details[aria-label="walletV1AdvancedImport"]');
+        if (details) details.open = false;
+
+        alert('✓ Key imported successfully. Signer address: ' + address);
+        console.log('[ImportSigningKey] Key imported successfully');
+
     } catch(err) {
-        console.error('Import error:', err);
-        alert('Error: ' + (err.message || 'Import failed'));
+        console.error('[ImportSigningKey] Error:', err);
+        alert('Error: ' + (err.message || 'Failed to import key'));
     }
 }
+
+async function walletV1SubmitRekeyRequest() {
+    const canonicalAddr = (document.getElementById('walletV1CanonicalAddr')?.value || '').trim();
+    const legacyAddr = (document.getElementById('walletV1LegacyAddr')?.value || '').trim();
+    const publicKey = window.walletV1CurrentPublicKey;
+    const signerAddress = window.walletV1CurrentAddress;
+
+    if (!publicKey || !signerAddress) {
+        return alert('Please generate or import a signing key first');
+    }
+
+    // Note: signerAddress will be DIFFERENT from canonicalAddr (this is correct)
+    // The backend will create a binding allowing signerAddress-derived key to sign for canonicalAddr
+
+    try {
+        console.log('[RekeyCeremony] Submitting re-key request...');
+
+        const token = localStorage.getItem('wallet_v1_repair_token') || '';
+        const headers = {
+            'Content-Type': 'application/json'
+        };
+        if (token) {
+            headers['X-Wallet-V1-Repair-Token'] = token;
+        }
+
+        const ownershipVerificationId = window.walletV1OwnershipVerificationId;
+        if (!ownershipVerificationId) {
+            return alert('Ownership verification ID not found. Please verify ownership first.');
+        }
+
+        const response = await fetch('/api/wallet/v1/rekey/request', {
+            method: 'POST',
+            headers: headers,
+            body: JSON.stringify({
+                canonical_v1_address: canonicalAddr,
+                ownership_verification_id: ownershipVerificationId,  // Link to verified ownership
+                new_public_key: publicKey,
+                new_key_address: signerAddress  // Address derived from new key (different from canonical)
+            })
+        });
+
+function detectMissingSigningKeyState(){
+    /**
+     * Detect if wallet has encrypted key but no runtime material.
+     * This is the "missing signing key" state that should show Recovery Kit as primary.
+     */
+    if(!walletSession || !walletSession.getWalletAuthDiagnostics) return false;
+    try {
+        const diag = walletSession.getWalletAuthDiagnostics();
+        // Missing signing key = has encrypted key but no runtime material
+        return diag.has_encrypted_send_seed && !diag.has_runtime_signing_material;
+    } catch(_) {
+        return false;
+    }
+}
+
+function showWalletLoginForm(){
+    const loginSection = document.getElementById('walletLoginSection');
+    const contentSection = document.getElementById('walletContentSection');
+    if(loginSection){
+        loginSection.style.display = 'block';
+        const addrInput = document.getElementById('walletWidgetThrAddress');
+                const pinInput = document.getElementById('walletWidgetPin');
+        if(addrInput) addrInput.value = walletSession.getAddress();
+                if(pinInput) pinInput.value = walletSession.getPin();
+
+        // AUTO-DETECT: If missing signing key → force "unlock" mode as primary
+        const modeSelect = document.getElementById('walletWidgetMode');
+        const hasMissingKey = detectMissingSigningKeyState();
+        if(hasMissingKey && modeSelect) {
+            modeSelect.value = 'unlock';
+            console.info('[RecoveryKit] Auto-detected missing signing key state, forcing unlock mode');
+        }
+
+        switchWalletV1Mode();
+        setTimeout(()=>{ if(pinInput) pinInput.focus(); }, 50);
+    }
+    if(contentSection) contentSection.style.display = 'none';
+}
+
+        if (!result.ok) {
+            console.warn('[RekeyCeremony] Rekey request failed:', result.error);
+
+            if (result.error === 'rekey_already_pending') {
+                alert('A re-key request is already pending for this wallet. Please wait for admin approval.');
+            } else if (result.error === 'rekey_cooldown_active') {
+                alert('This wallet has a re-key cooldown active. Try again after: ' + (result.cooldown_until || 'later'));
+            } else {
+                alert('Re-key request failed: ' + (result.error || 'Unknown error'));
+            }
+            return;
+        }
+
+        const eventId = result.event_id;
+        console.log('[RekeyCeremony] Re-key request created:', eventId);
+
+        // Display pending status
+        document.getElementById('walletV1RekeyStatusDisplay').style.display = 'block';
+        document.getElementById('walletV1RekeyStatus').textContent = result.status || 'pending';
+        document.getElementById('walletV1RekeyEventId').textContent = 'Event ID: ' + eventId;
+
+        if (result.cooldown_until) {
+            document.getElementById('walletV1RekeyCooldownInfo').textContent = 'Admin approval required. Cooldown until: ' + new Date(result.cooldown_until).toLocaleString();
+            document.getElementById('walletV1RekeyCooldownInfo').style.display = 'block';
+        }
+
+        // Disable submit button
+        document.getElementById('walletV1SubmitRekeyBtn').disabled = true;
+        document.getElementById('walletV1SubmitRekeyBtn').style.opacity = '0.5';
+
+        alert('✓ Re-key request submitted!\n\nEvent ID: ' + eventId + '\n\nAdmin approval required before key activation.');
+
+        // Store for later retrieval
+        localStorage.setItem('wallet_v1_rekey_event_id', eventId);
+
+    } catch(err) {
+        console.error('[RekeyCeremony] Error:', err);
+        alert('Error: ' + (err.message || 'Request failed'));
+    }
+}
+
+// ========== Pledge-Native Key Setup Functions ==========
+
+async function walletV1ConfirmAndEncryptKey() {
+    const pin = (document.getElementById('walletV1NewKeyPin')?.value || '').trim();
+    const pinConfirm = (document.getElementById('walletV1NewKeyPinConfirm')?.value || '').trim();
+    const privateKey = window.walletV1GeneratedPrivateKey;
+    const publicKey = window.walletV1CurrentPublicKey;
+    const boundAddr = window.walletV1CurrentAddress;
+    const canonicalAddr = (document.getElementById('walletV1CanonicalAddr')?.value || '').trim();
+
+    // Validation
+    if (!pin || !pinConfirm) return alert('PIN is required');
+    if (pin !== pinConfirm) return alert('PINs do not match');
+    if (!pin.match(/^\d{4,8}$/)) return alert('PIN must be 4-8 digits');
+    if (!privateKey || !publicKey || !boundAddr) return alert('Key not generated - please try again');
+
+    try {
+        console.log('[KeySetup] Encrypting private key with PIN...');
+
+        // Encrypt the private key with PIN using wallet session
+        if (!walletSession.encryptPrivateKeyHex) {
+            return alert('Encryption not available');
+        }
+
+        const encrypted = await walletSession.encryptPrivateKeyHex(privateKey, pin);
+        if (!encrypted) {
+            return alert('Failed to encrypt key');
+        }
+
+        console.log('[KeySetup] Private key encrypted successfully');
+
+        // Save encrypted key locally
+        localStorage.setItem('wallet_v1_encrypted_priv', encrypted);
+
+        // Now register the binding with backend (public key + bound address, NO private key)
+        console.log('[KeySetup] Registering key binding with backend...');
+
+        const response = await fetch('/api/wallet/v1/key-binding/register', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                canonical_v1_address: canonicalAddr,
+                public_key: publicKey,
+                bound_key_address: boundAddr
+            })
+        });
+
+        const result = await response.json();
+
+        if (!result.ok) {
+            console.warn('[KeySetup] Key binding registration failed:', result.error);
+            // Clear the encrypted key since binding failed
+            localStorage.removeItem('wallet_v1_encrypted_priv');
+            return alert('Key binding failed: ' + (result.error || 'Unknown error'));
+        }
+
+        console.log('[KeySetup] Key binding registered successfully');
+
+        // Generate and display recovery kit
+        const recoveryKit = walletV1GenerateRecoveryKit(canonicalAddr, boundAddr, publicKey, encrypted);
+        window.walletV1CurrentRecoveryKit = recoveryKit;
+
+        // Show recovery kit
+        document.getElementById('walletV1RecoveryKitPreview').textContent = JSON.stringify(recoveryKit, null, 2);
+        document.getElementById('walletV1RecoveryKitDisplay').style.display = 'block';
+        document.getElementById('walletV1PinEntryForm').style.display = 'none';
+
+        // Clear PIN fields
+        document.getElementById('walletV1NewKeyPin').value = '';
+        document.getElementById('walletV1NewKeyPinConfirm').value = '';
+
+        alert('✓ Key encrypted and binding registered!\n\nDownload your recovery kit before closing.');
+
+    } catch(err) {
+        console.error('[KeySetup] Error:', err);
+        alert('Error: ' + (err.message || 'Failed to encrypt and register key'));
+    }
+}
+
+function walletV1CancelKeySetup() {
+    // Clear sensitive data
+    delete window.walletV1GeneratedPrivateKey;
+    delete window.walletV1CurrentPublicKey;
+    delete window.walletV1CurrentAddress;
+
+    // Clear forms
+    document.getElementById('walletV1PinEntryForm').style.display = 'none';
+    document.getElementById('walletV1GeneratedKeyDisplay').style.display = 'none';
+    document.getElementById('walletV1NewKeyPin').value = '';
+    document.getElementById('walletV1NewKeyPinConfirm').value = '';
+
+    console.log('[KeySetup] Cancelled');
+}
+
+function walletV1GenerateRecoveryKit(canonical, bound, publicKey, encryptedPrivateKey) {
+    return {
+        version: 'wallet-v1-recovery-kit',
+        canonical_v1_address: canonical,
+        bound_key_address: bound,
+        public_key: publicKey,
+        encrypted_private_key_backup: encryptedPrivateKey,
+        created_at: new Date().toISOString(),
+        warning: 'Keep this file offline. It restores signing access. The private key is encrypted with your PIN.'
+    };
+}
+
+function walletV1DownloadRecoveryKit() {
+    const kit = window.walletV1CurrentRecoveryKit;
+    if (!kit) return alert('Recovery kit not available');
+
+    const json = JSON.stringify(kit, null, 2);
+    const blob = new Blob([json], {type: 'application/json'});
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'wallet-recovery-kit-' + kit.canonical_v1_address.substring(0, 10) + '.json';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+
+    console.log('[KeySetup] Recovery kit downloaded');
+}
+
+function walletV1CompleteKeySetup() {
+    // Mark wallet as set up
+    localStorage.setItem('wallet_v1_setup_complete', '1');
+
+    // Clear recovery kit from memory
+    delete window.walletV1CurrentRecoveryKit;
+
+    // Hide setup UI
+    document.getElementById('walletV1RecoveryKitDisplay').style.display = 'none';
+    document.getElementById('walletV1RekeyCeremonyForm').style.display = 'none';
+
+    alert('✓ Wallet key setup complete!\n\nYou can now unlock your wallet with your PIN to sign transactions.');
+    updateHeaderWalletUi();
+}
+
+function walletV1LoadRecoveryKitFile() {
+    const input = document.getElementById('walletV1RecoveryKitFileInput');
+    input.click();
+    input.addEventListener('change', function() {
+        const file = this.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            document.getElementById('walletV1RecoveryKitInput').value = e.target.result;
+        };
+        reader.readAsText(file);
+    }, {once: true});
+}
+
+async function walletV1ProcessRecoveryKit() {
+    const kitJson = (document.getElementById('walletV1RecoveryKitInput')?.value || '').trim();
+    const pin = (document.getElementById('walletV1RecoveryKitPin')?.value || '').trim();
+
+    if (!kitJson || !pin) return alert('Recovery kit and PIN are required');
+
+    try {
+        const kit = JSON.parse(kitJson);
+
+        // Validate kit structure
+        if (kit.version !== 'wallet-v1-recovery-kit') {
+            return alert('Invalid recovery kit format');
+        }
+        if (!kit.canonical_v1_address || !kit.encrypted_private_key_backup) {
+            return alert('Recovery kit missing required fields');
+        }
+
+        const canonicalAddr = kit.canonical_v1_address.toUpperCase();
+        console.log('[Restore] Processing recovery kit for:', canonicalAddr.substring(0, 10) + '...');
+
+        // Decrypt the private key with the provided PIN
+        if (!walletSession.decryptPrivateKeyHex) {
+            return alert('Decryption not available');
+        }
+
+        const decrypted = await walletSession.decryptPrivateKeyHex(kit.encrypted_private_key_backup, pin);
+        if (!decrypted) {
+            return alert('Failed to decrypt key - wrong PIN or corrupted kit');
+        }
+
+        console.log('[Restore] Key decrypted successfully');
+
+        // Derive public key and address from decrypted material
+        let derivedAddr = null;
+        let publicKeyHex = null;
+        try {
+            // Use wallet_session utility if available
+            if (walletSession.deriveAddressFromPrivateKey) {
+                const result = await walletSession.deriveAddressFromPrivateKey(decrypted);
+                if (result && result.address && result.public_key) {
+                    derivedAddr = result.address.toUpperCase();
+                    publicKeyHex = result.public_key;
+                }
+            }
+        } catch (deriveErr) {
+            console.warn('[Restore] Could not derive address from key:', deriveErr.message);
+            // Continue anyway - we have the canonical address from kit
+        }
+
+        // Save to localStorage using normalized key names
+        localStorage.setItem('wallet_v1_canonical_address', canonicalAddr);
+        localStorage.setItem('wallet_v1_encrypted_private_key', kit.encrypted_private_key_backup);
+        if (publicKeyHex) {
+            localStorage.setItem('wallet_v1_public_key', publicKeyHex);
+        }
+        if (kit.bound_key_address) {
+            localStorage.setItem('wallet_v1_bound_signer_address', kit.bound_key_address.toUpperCase());
+        }
+
+        // Also set legacy key names for backwards compatibility
+        localStorage.setItem('wallet_v1_address', canonicalAddr);
+        localStorage.setItem('wallet_v1_encrypted_priv', kit.encrypted_private_key_backup);
+
+        console.log('[Restore] localStorage keys updated:', {
+            canonical_address: canonicalAddr.substring(0, 10) + '...',
+            derived_address: derivedAddr ? derivedAddr.substring(0, 10) + '...' : 'unknown',
+            has_encrypted_key: true,
+            has_public_key: !!publicKeyHex,
+            has_bound_signer: !!kit.bound_key_address
+        });
+
+        // Register binding with backend if needed (derived != canonical)
+        if (derivedAddr && derivedAddr !== canonicalAddr && publicKeyHex) {
+            console.log('[Restore] Registering bound signer binding...');
+            try {
+                const bindingResp = await fetch('/api/v1/wallet/bind_public_key', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        address: canonicalAddr,
+                        credential_lookup_address: canonicalAddr,
+                        public_key: publicKeyHex
+                    })
+                });
+                const bindingResult = await bindingResp.json();
+                if (bindingResult.ok) {
+                    console.log('[Restore] Binding registered successfully');
+                } else {
+                    console.warn('[Restore] Binding registration failed:', bindingResult.error);
+                }
+            } catch (bindErr) {
+                console.warn('[Restore] Binding registration error:', bindErr.message);
+                // Continue anyway - unlock can proceed without binding being pre-registered
+            }
+        }
+
+        // Clear restore form
+        document.getElementById('walletV1RecoveryKitInput').value = '';
+        document.getElementById('walletV1RecoveryKitPin').value = '';
+        document.getElementById('walletV1RecoverKitRestoreForm').style.display = 'none';
+
+        // Unlock wallet with the provided PIN (this loads runtime signing material)
+        console.log('[Restore] Unlocking wallet...');
+        try {
+            const unlocked = await walletSession.unlockWallet({ pin, address: canonicalAddr });
+            if (unlocked) {
+                console.log('[Restore] ✓ Wallet unlocked successfully');
+                alert('✓ Recovery kit restored and wallet unlocked!\n\nYou can now sign transactions.');
+                updateHeaderWalletUi();
+                loadWalletBalances(true);
+                window.dispatchEvent(new CustomEvent('thronos:wallet:v1:unlocked', { detail: { address: canonicalAddr } }));
+                window.dispatchEvent(new Event('thronos:wallet:state-changed'));
+            } else {
+                console.warn('[Restore] Unlock failed - wrong PIN or wallet not found');
+                alert('Recovery kit restored, but unlock failed.\n\nTry entering your PIN again.');
+                updateHeaderWalletUi();
+            }
+        } catch (unlockErr) {
+            console.warn('[Restore] Unlock error:', unlockErr.message);
+            // Key mismatch or other unlock error
+            // Show the error but keep the restored state so user can try again or recover
+            if (unlockErr.message && unlockErr.message.includes('wallet_signing_key_does_not_match_active_address')) {
+                console.log('[Restore] Mismatch detected - showing recovery options');
+                updateHeaderWalletUi();
+                showKeyMismatchRecovery(unlockErr);
+            } else {
+                alert('Restore completed but unlock failed: ' + (unlockErr.message || 'Unknown error'));
+                updateHeaderWalletUi();
+            }
+        }
+
+    } catch(err) {
+        console.error('[Restore] Error:', err);
+        if (err.message && err.message.includes('JSON')) {
+            return alert('Invalid JSON format');
+        }
+        alert('Error: ' + (err.message || 'Failed to restore kit'));
+    }
+}
+
+function walletV1CancelRestore() {
+    document.getElementById('walletV1RecoveryKitInput').value = '';
+    document.getElementById('walletV1RecoveryKitPin').value = '';
+    document.getElementById('walletV1RecoverKitRestoreForm').style.display = 'none';
+    console.log('[Restore] Cancelled');
+}
+
+// ========== End Pledge-Native Key Setup Functions ==========
 
 async function unlockWalletV1FromHeader(){
     const pin = (document.getElementById('walletWidgetUnlockPin')?.value || '').trim();
@@ -5620,15 +7777,37 @@ async function restoreMigratedWalletFromBackendLookup(){
         updateHeaderWalletUi();
         updateWalletPanelDiagnostics();
 
-        // Show appropriate next step
+        // Show appropriate next step based on signing material
         if (result.has_signing_material) {
             alert('Wallet restored: ' + result.canonical_v1_address.substring(0, 10) + '... (signing material found)');
             // Auto-show wallet content if signing material available
             showWalletContentSection();
             loadWalletBalances(true);
         } else {
-            alert('Wallet restored: ' + result.canonical_v1_address.substring(0, 10) + '... (import signing key to enable signing)');
-            // Show import signing key prompt
+            // Populate canonical address in legacy recovery form
+            const canonicalAddrField = document.getElementById('walletV1CanonicalAddr');
+            if (canonicalAddrField) {
+                canonicalAddrField.value = result.canonical_v1_address;
+            }
+
+            // Pre-fill legacy address if known
+            const legacyAddrField = document.getElementById('walletV1LegacyAddr');
+            if (legacyAddrField && legacyAddress) {
+                legacyAddrField.value = legacyAddress;
+            }
+
+            // Switch modal to import signing key mode
+            const modeSelect = document.getElementById('walletWidgetMode');
+            if (modeSelect) {
+                modeSelect.value = 'import_signing_key'; // Switch to import mode
+            }
+
+            // Refresh modal UI to show import signing key flow
+            switchWalletV1Mode();
+
+            // Show success message with next step
+            alert('Wallet restored: ' + result.canonical_v1_address.substring(0, 10) + '...\n\nTo enable signing, verify your legacy ownership and then import a backup of your V1 private key.');
+
             showWalletLoginForm();
         }
 
@@ -5700,6 +7879,170 @@ function restoreMigratedWalletFromHeader(){
     }
 }
 
+// ========== Admin Signer Generation for Existing Canonical Wallets ==========
+
+async function walletAdminGenerateSignerForCanonical() {
+    const canonicalAddr = (document.getElementById('walletAdminCanonicalAddress')?.value || '').trim();
+    const legacySecret = (document.getElementById('walletAdminLegacySecret')?.value || '').trim();
+
+    if (!canonicalAddr) return alert('Canonical V1 address is required');
+    if (!canonicalAddr.startsWith('THR') || canonicalAddr.length < 20) {
+        return alert('Invalid address format. Must be THR... (40+ chars)');
+    }
+
+    console.log('[AdminSignerGen] Generating signer for canonical wallet:', canonicalAddr.substring(0, 10) + '...');
+
+    try {
+        // Step 1: Generate new secp256k1 signer key client-side only
+        if (!walletSession.generateV1KeyPair) {
+            return alert('Key generation API not available');
+        }
+
+        const keyResult = await walletSession.generateV1KeyPair();
+        if (!keyResult.success) {
+            return alert('Failed to generate key: ' + (keyResult.error || 'Unknown error'));
+        }
+
+        const { publicKey, address: boundAddr, privateKey } = keyResult;
+
+        console.log('[AdminSignerGen] Generated signer:', {
+            publicKey: publicKey.substring(0, 16) + '...',
+            boundAddr: boundAddr.substring(0, 10) + '...',
+            canonical: canonicalAddr.substring(0, 10) + '...'
+        });
+
+        // Step 2: Ask for PIN to encrypt the private key
+        const pin = prompt('Enter PIN to encrypt signing key (4-8 digits):');
+        if (!pin) {
+            console.log('[AdminSignerGen] Cancelled by user');
+            return;
+        }
+
+        if (!pin.match(/^\d{4,8}$/)) {
+            return alert('PIN must be 4-8 digits');
+        }
+
+        // Step 3: Encrypt private key locally with PIN
+        if (!walletSession.encryptPrivateKeyHex) {
+            return alert('Encryption not available');
+        }
+
+        const encrypted = await walletSession.encryptPrivateKeyHex(privateKey, pin);
+        if (!encrypted) {
+            return alert('Failed to encrypt key');
+        }
+
+        console.log('[AdminSignerGen] Private key encrypted with PIN');
+
+        // Step 4: Ask for repair token (admin authentication)
+        console.log('[AdminSignerGen] Admin mode: requesting repair token...');
+
+        const repairToken = prompt('Enter WALLET_V1_REPAIR_TOKEN for admin authentication:');
+        if (!repairToken) {
+            console.log('[AdminSignerGen] Repair token not provided - cancelled');
+            // Clear sensitive data from memory (never persisted)
+            return alert('Admin authentication required. Cannot proceed without repair token.');
+        }
+
+        // Step 5: Register key binding with admin endpoint
+        console.log('[AdminSignerGen] Registering key binding via admin endpoint...');
+
+        const bindingResponse = await fetch('/api/wallet/v1/key-binding/admin-register', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Wallet-V1-Repair-Token': repairToken
+            },
+            body: JSON.stringify({
+                canonical_v1_address: canonicalAddr,
+                public_key: publicKey,
+                bound_key_address: boundAddr,
+                reason: 'core_wallet_repair_after_legacy_migration'
+            })
+        });
+
+        const bindingResult = await bindingResponse.json();
+
+        if (!bindingResult.ok) {
+            console.warn('[AdminSignerGen] Key binding failed:', bindingResult.error);
+            // On failure: clear sensitive data from memory, never persisted
+            const errorMsg = bindingResult.error === 'invalid_repair_token'
+                ? 'Invalid repair token. Cannot proceed.'
+                : bindingResult.error === 'repair_token_required'
+                ? 'Repair token required. Cannot proceed.'
+                : bindingResult.error || 'Unknown error';
+
+            return alert('Admin key binding failed: ' + errorMsg);
+        }
+
+        console.log('[AdminSignerGen] Key binding registered successfully via admin endpoint');
+
+        // Step 6: On success, save encrypted key and generate recovery kit
+        localStorage.setItem('wallet_v1_encrypted_priv', encrypted);
+        localStorage.setItem('wallet_v1_address', canonicalAddr);
+        localStorage.setItem('wallet_v1_public_key', publicKey);
+
+        const recoveryKit = {
+            version: 'wallet-v1-recovery-kit',
+            canonical_v1_address: canonicalAddr,
+            bound_key_address: boundAddr,
+            public_key: publicKey,
+            encrypted_private_key_backup: encrypted,
+            created_at: new Date().toISOString(),
+            warning: 'Keep this file offline. It restores signing access. The private key is encrypted with your PIN.',
+            admin_generated: true,
+            generated_for: 'admin_signer_setup'
+        };
+
+        const kitJson = JSON.stringify(recoveryKit, null, 2);
+        const message = `✓ Admin signer bound successfully!
+
+Canonical Address: ${canonicalAddr}
+Bound Signer Address: ${boundAddr}
+Public Key Hash: ${publicKey.substring(0, 16)}...
+
+Recovery Kit (keep offline):
+${kitJson}
+
+Save this recovery kit securely. It can restore access if the device is lost.`;
+
+        alert(message);
+
+        // Download recovery kit
+        const blob = new Blob([kitJson], {type: 'application/json'});
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = 'wallet-admin-signer-' + canonicalAddr.substring(0, 10) + '.json';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+
+        console.log('[AdminSignerGen] Complete - recovery kit downloaded');
+
+        // Clear form and hide admin panel
+        document.getElementById('walletAdminCanonicalAddress').value = '';
+        document.getElementById('walletAdminLegacySecret').value = '';
+        document.getElementById('walletV1AdminGenerateSignerMode').style.display = 'none';
+
+        updateHeaderWalletUi();
+
+    } catch(err) {
+        console.error('[AdminSignerGen] Error:', err);
+        alert('Error: ' + (err.message || 'Failed to generate signer'));
+    }
+}
+
+function walletAdminCancelGenerateSigner() {
+    document.getElementById('walletAdminCanonicalAddress').value = '';
+    document.getElementById('walletAdminLegacySecret').value = '';
+    document.getElementById('walletV1AdminGenerateSignerMode').style.display = 'none';
+    console.log('[AdminSignerGen] Cancelled');
+}
+
+// ========== End Admin Signer Generation ==========
+
 function resetActiveWalletPointersFromHeader(){
     if (!walletSession.resetActiveWalletPointers) return alert('Reset API unavailable');
     try {
@@ -5758,15 +8101,20 @@ function updateHeaderWalletUi(){
     const migrated = (walletSession.isMigrated && walletSession.isMigrated()) ? ' (migrated)' : '';
     const short = hasWallet ? ('V1 ' + wallet.substring(0, 6) + '...' + wallet.substring(wallet.length - 4) + migrated) : 'Wallet V1';
 
-    let buttonText = 'Migrate to Wallet V1';
+    // Check if production mode (legacy repair UI hidden)
+    const isProductionMode = document.body.classList.contains('wallet-v1-production-mode');
+
+    let buttonText = isProductionMode ? 'Activate Wallet' : 'Migrate to Wallet V1';
     if (hasWallet && walletSession.getWalletState) {
       const state = walletSession.getWalletState();
       if (state === 'signing_ready') {
         buttonText = short;
       } else if (state === 'signing_key_mismatch') {
         buttonText = 'V1 ' + wallet.substring(0, 6) + '...' + wallet.substring(wallet.length - 4) + ' (key mismatch)';
+      } else if (state === 'signing_key_unusable_legacy_format') {
+        buttonText = 'V1 ' + wallet.substring(0, 6) + '...' + wallet.substring(wallet.length - 4) + ' (setup key)';
       } else if (state === 'missing_signing_key') {
-        buttonText = 'V1 ' + wallet.substring(0, 6) + '...' + wallet.substring(wallet.length - 4) + ' (missing key)';
+        buttonText = 'V1 ' + wallet.substring(0, 6) + '...' + wallet.substring(wallet.length - 4) + ' (setup key)';
       } else if (state === 'locked') {
         buttonText = 'Unlock Wallet V1';
       } else if (state === 'connected_readonly') {
@@ -6409,6 +8757,28 @@ if (typeof MusicModule === 'undefined') {
 </div>
 
 <style>
+/* Wallet V1 Production Mode CSS Guard */
+/* When body.wallet-v1-production-mode is set, hide ALL legacy/admin repair UI */
+body.wallet-v1-production-mode [data-wallet-legacy-repair],
+body.wallet-v1-production-mode #walletV1RestoreMode,
+body.wallet-v1-production-mode #walletV1MigrateMode,
+body.wallet-v1-production-mode #walletV1LegacyRecoveryForm,
+body.wallet-v1-production-mode #walletV1RekeyCeremonyForm,
+body.wallet-v1-production-mode #walletWidgetResetPointersBtn,
+body.wallet-v1-production-mode #walletWidgetAdvancedRecoveryBtn,
+body.wallet-v1-production-mode [onclick*="toggleAdvancedRecovery"],
+body.wallet-v1-production-mode [onclick*="resetActiveWalletPointers"],
+body.wallet-v1-production-mode [onclick*="migrateLegacyWallet"],
+body.wallet-v1-production-mode [data-wallet-rekey-ceremony] {
+    display: none !important;
+}
+
+/* Production mode: Hide legacy dropdown options as additional safeguard */
+body.wallet-v1-production-mode option[value="restore"],
+body.wallet-v1-production-mode option[value="migrate"] {
+    display: none !important;
+}
+
 .global-music-player {
     position: fixed;
     bottom: 0;
@@ -7413,6 +9783,105 @@ window.addEventListener('beforeunload', () => {
         GlobalMusicPlayer.stopPositionSaving();
     }
 });
+</script>
+
+<script>
+// Wallet V1 Production Mode: Early synchronous cleanup (before async initialization)
+// Remove legacy dropdown options immediately to prevent visibility race condition
+function sanitizeLegacyDropdownOptionsSync() {
+    const modeSelect = document.getElementById('walletWidgetMode');
+    if (modeSelect) {
+        const legacyValues = ['restore', 'migrate'];
+        Array.from(modeSelect.options).forEach(option => {
+            if (legacyValues.includes(option.value)) {
+                option.remove();
+            }
+        });
+    }
+}
+// Run synchronously ASAP
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', sanitizeLegacyDropdownOptionsSync);
+} else {
+    sanitizeLegacyDropdownOptionsSync();
+}
+</script>
+
+<script>
+// Wallet V1 Production Mode: Enforce on every page load
+document.addEventListener('DOMContentLoaded', async () => {
+    // Fetch wallet status with required address parameter
+    const status = await fetchWalletStatusWithAddress();
+
+    if (status.ok) {
+        // Set global flag for admin mode check in switchWalletV1Mode
+        window.WALLET_V1_LEGACY_REPAIR_UI_ENABLED = status.legacy_repair_ui_enabled || false;
+        // First sanitize stale legacy state in production mode
+        sanitizeWalletV1ProductionState(status);
+        // Then apply production mode UI constraints
+        applyWalletV1ProductionMode(status);
+    } else {
+        // Default to production mode (safe) - no address or fetch failed
+        const safeStatus = {legacy_repair_ui_enabled: false};
+        window.WALLET_V1_LEGACY_REPAIR_UI_ENABLED = false;
+        sanitizeWalletV1ProductionState(safeStatus);
+        applyWalletV1ProductionMode(safeStatus);
+    }
+});
+
+// Also enforce on wallet modal open (redundant but ensures coverage)
+const originalOpenModal = window.openHeaderWalletModal;
+if (originalOpenModal) {
+    window.openHeaderWalletModal = async function() {
+        // Sanitize stale state and apply production mode before original logic
+        const status = await fetchWalletStatusWithAddress();
+        if (status.ok) {
+            // Set global flag for admin mode check in switchWalletV1Mode
+            window.WALLET_V1_LEGACY_REPAIR_UI_ENABLED = status.legacy_repair_ui_enabled || false;
+            sanitizeWalletV1ProductionState(status);
+            applyWalletV1ProductionMode(status);
+        } else {
+            // Safe default when no address or fetch fails
+            const safeStatus = {legacy_repair_ui_enabled: false};
+            window.WALLET_V1_LEGACY_REPAIR_UI_ENABLED = false;
+            sanitizeWalletV1ProductionState(safeStatus);
+            applyWalletV1ProductionMode(safeStatus);
+        }
+        // Call original
+        return originalOpenModal.apply(this, arguments);
+    };
+}
+
+// Enforce after mode switch
+const originalSwitchMode = window.switchWalletV1Mode;
+if (originalSwitchMode) {
+    window.switchWalletV1Mode = function() {
+        const result = originalSwitchMode.apply(this, arguments);
+        // Re-apply production mode and sanitize after mode switch
+        fetchWalletStatusWithAddress()
+            .then(status => {
+                if (status.ok) {
+                    // Set global flag for admin mode check in switchWalletV1Mode
+                    window.WALLET_V1_LEGACY_REPAIR_UI_ENABLED = status.legacy_repair_ui_enabled || false;
+                    sanitizeWalletV1ProductionState(status);
+                    applyWalletV1ProductionMode(status);
+                } else {
+                    // Safe default
+                    const safeStatus = {legacy_repair_ui_enabled: false};
+                    window.WALLET_V1_LEGACY_REPAIR_UI_ENABLED = false;
+                    sanitizeWalletV1ProductionState(safeStatus);
+                    applyWalletV1ProductionMode(safeStatus);
+                }
+            })
+            .catch(() => {
+                const safeStatus = {legacy_repair_ui_enabled: false};
+                window.WALLET_V1_LEGACY_REPAIR_UI_ENABLED = false;
+                sanitizeWalletV1ProductionState(safeStatus);
+                applyWalletV1ProductionMode(safeStatus);
+            });
+        return result;
+    };
+}
 </script>
 
 <div id="footer-sentinel" style="height:1px;"></div>

@@ -91,12 +91,12 @@ class EncryptedAsset:
     encrypted_keys: str                  # Private keys, passwords
     encrypted_recovery: str              # Recovery codes, seeds
 
+    # Valuation (must come before optional contact_info due to dataclass field ordering)
+    value_estimate: float = 0.0          # Estimated value in USD
+    currency: str = "USD"                # Value currency
+
     # Contact info for recovery
     contact_info: ContactInfo = field(default_factory=ContactInfo)
-
-    # Valuation
-    value_estimate: float                # Estimated value in USD
-    currency: str = "USD"                # Value currency
 
     # Inheritance rules
     assigned_heirs: List[str] = field(default_factory=list)  # Heir addresses

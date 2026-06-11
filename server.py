@@ -776,6 +776,28 @@ APP_GIT_SHA     = (
     or "unknown"
 )
 
+# Build fingerprint for production verification
+def _get_git_commit_short():
+    """Get short git SHA from repo if available."""
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=BASE_DIR,
+            capture_output=True,
+            text=True,
+            timeout=1
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except:
+        pass
+    return APP_GIT_SHA[:7] if APP_GIT_SHA and APP_GIT_SHA != "unknown" else "unknown"
+
+GIT_COMMIT_SHORT = _get_git_commit_short()
+BUILD_TIMESTAMP = str(int(time.time()))
+BUILD_ID = f"{GIT_COMMIT_SHORT}-{BUILD_TIMESTAMP}"
+
 AI_LOG_API_KEY = os.getenv("AI_LOG_API_KEY", os.getenv("ADMIN_SECRET", "CHANGE_ME_NOW"))
 
 DATA_DIR = os.getenv("MUSIC_VOLUME", os.getenv("DATA_DIR", os.path.join(BASE_DIR, "data")))
@@ -10737,73 +10759,6 @@ def api_wallet_thr_reconciliation_repair():
     return jsonify(proposal), 200
 
 
-@app.route("/api/wallet/v1/restore-migration", methods=["POST"])
-def api_wallet_v1_restore_migration():
-    """
-    Restore an existing migrated wallet from backend lookup.
-    Accepts legacy_address (required) and migration_proof (optional).
-    Looks up existing migration mapping without creating new wallets or mutating ledger.
-    Returns migration status with safe diagnostics only.
-    """
-    SYSTEM_WALLET_ADDRESS = "THR5DF27A86C477F381594E896F0E55357DEC5942BA"
-
-    def normalize_address(addr):
-        return (addr or "").strip().upper()
-
-    def is_system_wallet(addr):
-        return normalize_address(addr) == SYSTEM_WALLET_ADDRESS
-
-    data = request.get_json(silent=True) or {}
-    legacy_address = normalize_address(data.get("legacy_address", ""))
-    migration_proof = data.get("migration_proof", "")
-
-    if not legacy_address:
-        return jsonify({"ok": False, "error": "legacy_address_required"}), 400
-
-    if not validate_thr_address(legacy_address):
-        return jsonify({"ok": False, "error": "invalid_legacy_address_format"}), 400
-
-    if is_system_wallet(legacy_address):
-        return jsonify({"ok": False, "error": "system_wallet_cannot_be_restored"}), 400
-
-    try:
-        from wallet_v1_migration import _load_map
-        migration_map = _load_map() or {}
-        migration_record = migration_map.get(legacy_address) or {}
-
-        if not migration_record or "new_v1_address" not in migration_record:
-            return jsonify({"ok": False, "error": "migration_not_found"}), 404
-
-        canonical_v1_address = normalize_address(migration_record.get("new_v1_address"))
-
-        if not validate_thr_address(canonical_v1_address):
-            return jsonify({"ok": False, "error": "invalid_canonical_address_format"}), 500
-
-        if is_system_wallet(canonical_v1_address):
-            return jsonify({"ok": False, "error": "system_wallet_cannot_be_restored"}), 400
-
-        migration_status = migration_record.get("status") or "confirmed"
-        has_signing_material = bool(
-            migration_record.get("has_signing_material") or
-            migration_record.get("migration_tx_id") or
-            migration_record.get("verified")
-        )
-
-        return jsonify({
-            "ok": True,
-            "legacy_address": legacy_address,
-            "canonical_v1_address": canonical_v1_address,
-            "migration_status": migration_status,
-            "has_signing_material": has_signing_material,
-            "legacy_address_short": legacy_address[:10] + "...",
-            "canonical_v1_address_short": canonical_v1_address[:10] + "...",
-        }), 200
-
-    except Exception as e:
-        console_log(f"[wallet_v1_restore_migration] Error: {e}", level="error")
-        return jsonify({"ok": False, "error": "internal_error"}), 500
-
-
 @app.route("/api/last_hash")
 def api_last_hash():
     return last_block_hash()
@@ -11469,9 +11424,24 @@ def api_health():
         "last_hash": CHAIN_META.get("last_hash") or "0" * 64,
         "ts": int(now),
         "version": APP_VERSION,
+        "build_id": BUILD_ID,
+        "git_commit": GIT_COMMIT_SHORT,
+        "build_time": BUILD_TIMESTAMP,
     }
     HEALTH_CACHE.update({"ts": now, "data": payload})
     return jsonify(payload), 200
+
+
+@app.route("/api/build", methods=["GET"])
+def api_build():
+    """Quick endpoint to check build/commit information."""
+    return jsonify({
+        "ok": True,
+        "build_id": BUILD_ID,
+        "git_commit": GIT_COMMIT_SHORT,
+        "build_time": int(BUILD_TIMESTAMP),
+        "version": APP_VERSION,
+    }), 200
 
 
 @app.route("/health", methods=["GET", "OPTIONS"])
@@ -16976,8 +16946,11 @@ def pledge_submit():
             except Exception as regen_err:
                 app.logger.warning(f"PDF regen failed for {exists['thr_address']}: {regen_err}")
         return jsonify(
-            status="already_verified",
+            ok=True,
+            canonical_v1_address=exists["thr_address"],
             thr_address=exists["thr_address"],
+            created=False,
+            status="already_has_canonical",
             pledge_hash=exists["pledge_hash"],
             pdf_url=pdf_url,
             recovery_required=True,
@@ -17063,8 +17036,11 @@ def pledge_submit():
         pdf_url = f"/contracts/{pdf_name}" if os.path.isfile(pdf_path) else None
 
         return jsonify(
-            status="verified",
+            ok=True,
+            canonical_v1_address=thr_addr,
             thr_address=thr_addr,
+            created=True,
+            status="newly_created",
             pledge_hash=phash,
             pdf_url=pdf_url,
             send_secret=send_seed
@@ -22261,6 +22237,34 @@ def _short_wallet_address(address):
     return f"{address[:10]}..." if address else ""
 
 
+def _extract_signed_payload(payload_raw, field_name="signed_tx"):
+    """Extract and validate signed payload (handles dict or JSON string).
+
+    Args:
+        payload_raw: dict, string, or other type
+        field_name: name of the field for error messages
+
+    Returns:
+        (payload_dict, error_message) tuple. If error_message is not None, payload_dict is empty {}
+    """
+    if payload_raw is None:
+        return {}, None
+
+    if isinstance(payload_raw, dict):
+        return payload_raw, None
+
+    if isinstance(payload_raw, str):
+        try:
+            parsed = json.loads(payload_raw)
+            if not isinstance(parsed, dict):
+                return {}, f"invalid_{field_name}_format: must be JSON object, got {type(parsed).__name__}"
+            return parsed, None
+        except (json.JSONDecodeError, ValueError) as e:
+            return {}, f"invalid_{field_name}_format: {str(e)}"
+
+    return {}, f"invalid_{field_name}_type: expected dict or string, got {type(payload_raw).__name__}"
+
+
 def verify_swap_wallet_v1_or_legacy(payload, expected_action=SWAP_EXPECTED_ACTION):
     """Verify swap auth before any swap state mutation."""
     # Extract addresses from payload - normalize them
@@ -22272,7 +22276,18 @@ def verify_swap_wallet_v1_or_legacy(payload, expected_action=SWAP_EXPECTED_ACTIO
     public_key = (payload.get("public_key") or "").strip()
 
     if signed_tx_raw:
-        signed_tx = signed_tx_raw if isinstance(signed_tx_raw, dict) else {}
+        # Defensively handle signed_tx that might be string JSON or dict
+        if isinstance(signed_tx_raw, dict):
+            signed_tx = signed_tx_raw
+        elif isinstance(signed_tx_raw, str):
+            try:
+                signed_tx = json.loads(signed_tx_raw)
+                if not isinstance(signed_tx, dict):
+                    signed_tx = {}
+            except (json.JSONDecodeError, ValueError):
+                return False, {"ok": False, "status": "error", "error": "invalid_signed_tx_format", "message": "signed_tx must be a valid JSON object or dict"}, None
+        else:
+            signed_tx = {}
 
         if not signed_tx.get("signature"):
             return False, {"ok": False, "status": "error", "error": "missing_signature", "message": "Signature is required in signed_tx"}, None
@@ -22364,30 +22379,32 @@ def verify_swap_wallet_v1_or_legacy(payload, expected_action=SWAP_EXPECTED_ACTIO
 
 @app.route("/api/swap/execute", methods=["POST"])
 def api_swap_execute():
+    """Execute swap with comprehensive error handling. All user input errors return 400, never 500."""
     try:
         data = request.get_json() or {}
+
+        # Safe extraction: strip strings, handle missing values
         token_in = (data.get("token_in") or "").upper().strip()
         token_out = (data.get("token_out") or "").upper().strip()
         trader = (data.get("trader_thr") or "").strip()
         auth_secret = (data.get("auth_secret") or "").strip()
         passphrase = (data.get("passphrase") or "").strip()
         min_amount_out_raw = data.get("min_amount_out", 0)
+
+        # Safe amount parsing - any TypeError/ValueError is 400
         try:
             amount_in = float(data.get("amount_in", 0))
             min_amount_out = float(min_amount_out_raw)
-        except (TypeError, ValueError):
-            return jsonify(status="error", message="Invalid amounts"), 400
-    except Exception as exc:
-        return jsonify(status="error", message=str(exc)), 500
+        except (TypeError, ValueError) as e:
+            return jsonify(status="error", error="invalid_amounts", message=f"Invalid amount values: {str(e)}"), 400
 
-    try:
-        # Validate input parameters
+        # Validate input parameters (all user errors are 400)
         if not token_in or not token_out or amount_in <= 0:
-            return jsonify(status="error", message="Invalid input"), 400
+            return jsonify(status="error", error="invalid_input", message="Invalid token pair or amount"), 400
         if not trader:
-            return jsonify(status="error", message="Missing trader"), 400
+            return jsonify(status="error", error="missing_trader", message="Missing trader address"), 400
         if not is_swap_symbol_allowed(token_in) or not is_swap_symbol_allowed(token_out):
-            return jsonify(status="error", message="Unsupported token"), 400
+            return jsonify(status="error", error="unsupported_token", message=f"Unsupported token: {token_in} or {token_out}"), 400
 
         # Wallet V1 or legacy auth verification
         auth_ok, auth_error, verified_trader = verify_swap_wallet_v1_or_legacy(data, SWAP_EXPECTED_ACTION)
@@ -22403,9 +22420,9 @@ def api_swap_execute():
         # Get swap quote and route
         quote, err = quote_swap_route(token_in, token_out, amount_in)
         if err:
-            return jsonify(ok=False, status="error", error=err, message=err), 400
+            return jsonify(ok=False, status="error", error="quote_failed", message=err), 400
         if quote["amount_out"] < min_amount_out:
-            return jsonify(status="error", message="Slippage too high", expected_minimum=min_amount_out, actual_output=quote["amount_out"]), 400
+            return jsonify(status="error", error="slippage_too_high", message="Output amount below minimum", expected_minimum=min_amount_out, actual_output=quote["amount_out"]), 400
 
         # Load state
         thr_ledger = load_json(LEDGER_FILE, {})
@@ -22421,7 +22438,7 @@ def api_swap_execute():
             return float(token_balances.get(sym, {}).get(trader, 0.0))
 
         if get_balance(token_in) < amount_in:
-            return jsonify(status="error", message=f"Insufficient {token_in} balance"), 400
+            return jsonify(status="error", error="insufficient_balance", message=f"Insufficient {token_in} balance"), 400
 
         def deduct(sym, amt):
             if sym == "THR":
@@ -22554,15 +22571,44 @@ def api_swap_execute():
             tx_id=tx_id,
             route=swap_trace,
         ), 200
+
     except ValueError as ve:
-        return jsonify(status="error", error="invalid_swap_amount", message=str(ve)), 400
+        logger.error(f"[api_swap_execute] ValueError: {ve}")
+        return jsonify(status="error", error="invalid_value", message=str(ve)), 400
+
     except KeyError as ke:
-        return jsonify(status="error", error="pool_not_found", message=f"Missing pool field: {ke}"), 400
+        logger.error(f"[api_swap_execute] KeyError: {ke}")
+        return jsonify(status="error", error="missing_field", message=f"Missing field: {ke}"), 400
+
     except Exception as exc:
         import traceback
         tb = traceback.format_exc()
         logger.error(f"[api_swap_execute] Unhandled exception: {exc}\n{tb}")
-        return jsonify(status="error", error="swap_execution_failed", message=str(exc), exception_type=type(exc).__name__), 500
+        return jsonify(status="error", error="swap_execution_failed", message="Swap execution error"), 400
+
+@app.route("/api/v1/wallet/fee-estimate", methods=["POST"])
+def api_v1_wallet_fee_estimate():
+    """Estimate transaction fee (minimal stub returns 0 for now)."""
+    try:
+        data = request.get_json() or {}
+        amount = data.get("amount", 0)
+        token = (data.get("token") or "THR").upper().strip()
+
+        try:
+            amount = float(amount)
+        except (TypeError, ValueError):
+            return jsonify(status="error", error="invalid_amount", fee=0), 400
+
+        if amount < 0:
+            return jsonify(status="error", error="negative_amount", fee=0), 400
+
+        fee = 0.0
+        return jsonify(status="success", fee=fee), 200
+
+    except Exception as exc:
+        logger.error(f"[api_v1_wallet_fee_estimate] Exception: {exc}")
+        return jsonify(status="error", error="fee_estimate_failed", fee=0), 400
+
 
 # ─── Token Balances API (NEW) ─────────────────────────────────────
 #
@@ -25650,6 +25696,16 @@ def api_wallet_activate():
         btc_address=btc_address,
         status="activated"
     ), 200
+
+
+@app.route("/api/wallet/v1/status", methods=["GET"])
+def api_wallet_v1_status():
+    """
+    Backward-compatibility endpoint for /api/wallet/v1/status.
+    Redirects to /api/wallet/status with same parameters.
+    """
+    # Simply forward to the current endpoint
+    return api_wallet_status()
 
 
 @app.route("/api/wallet/status", methods=["GET"])
@@ -36279,6 +36335,43 @@ def api_v1_wallet_bind_public_key():
     }
     save_json(WALLET_V1_PUBLIC_KEY_BINDINGS_FILE, store)
     return jsonify({"ok": True, "binding": store["bindings"][address]}), 200
+
+
+@app.route("/api/wallet/v1/key-binding/<address>", methods=["GET"])
+def api_wallet_v1_key_binding(address):
+    """
+    Get binding status for a canonical wallet address.
+    Frontend uses this to determine if a derived address is a bound signer.
+
+    Returns: {ok: bool, binding: {address, public_key_address, bound_at, ...} or null}
+    """
+    from wallet_v1_address_derivation import validate_thronos_address
+
+    address = (address or "").strip().upper()
+    if not validate_thronos_address(address):
+        return jsonify({"ok": False, "error": "invalid_address"}), 400
+
+    try:
+        store = load_json(WALLET_V1_PUBLIC_KEY_BINDINGS_FILE, {"bindings": {}})
+        binding = store.get("bindings", {}).get(address)
+
+        if binding:
+            return jsonify({
+                "ok": True,
+                "binding": {
+                    "address": binding.get("address"),
+                    "bound_key_address": binding.get("public_key_address"),  # Derived from bound public key
+                    "status": "active",
+                    "bound_at": binding.get("bound_at")
+                }
+            }), 200
+        else:
+            return jsonify({
+                "ok": True,
+                "binding": None  # No binding exists
+            }), 200
+    except Exception as err:
+        return jsonify({"ok": False, "error": "binding_lookup_failed"}), 400
 
 
 # ─── Startup hooks ────────────────────────────────────────────────────────────

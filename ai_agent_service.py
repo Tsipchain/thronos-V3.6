@@ -60,35 +60,6 @@ from llm_registry import (
 )
 
 
-# ─── Hotfix: wallet_history sentinel KeyError ────────────────────────────────
-# commit c05ba27f added total_sentinel_spent accumulation to
-# _collect_wallet_history_transactions but forgot to initialize the key in the
-# inline summary dict (only _empty_wallet_history_summary was updated).
-# This thread patches the function after server.py finishes defining it.
-def _apply_wallet_sentinel_hotfix() -> None:
-    deadline = time.time() + 30
-    while time.time() < deadline:
-        main_mod = sys.modules.get("__main__")
-        if main_mod and hasattr(main_mod, "_collect_wallet_history_transactions"):
-            _orig = main_mod._collect_wallet_history_transactions
-
-            def _patched(address: str, category_filter: str):
-                wallet_txs, summary = _orig(address, category_filter)
-                summary.setdefault("total_sentinel_spent", 0.0)
-                summary.setdefault("sentinel_count", 0)
-                return wallet_txs, summary
-
-            main_mod._collect_wallet_history_transactions = _patched
-            logger.info("[hotfix] wallet_history sentinel keys patched successfully")
-            return
-        time.sleep(0.5)
-    logger.warning("[hotfix] wallet_history patch timed out — server module not found in 30s")
-
-
-threading.Thread(target=_apply_wallet_sentinel_hotfix, daemon=True).start()
-# ─────────────────────────────────────────────────────────────────────────────
-
-
 def _resolve_model(
     model: Optional[str],
     normalized_mode: Optional[str] = None,

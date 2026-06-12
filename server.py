@@ -22372,6 +22372,71 @@ def verify_wallet_v1_signed_request(request_json, expected_action):
         return False, {'error': 'verification_failed', 'detail': str(e)}
 
 
+@app.route("/api/wallet/v1/restore-migration", methods=["POST"])
+def api_wallet_v1_restore_migration():
+    """
+    Map a legacy/pledge address to its canonical V1 (mirage) address.
+
+    Called by: wallet UI after pledge to find the actual canonical address
+    used during migration or initial pledge.
+
+    Input:
+    {
+      "legacy_address": "THR79ca94a7eb70a6aa99d12d7fdb01446ef246301a",
+      "migration_proof": ""  // optional: send_secret or migration tx id
+    }
+
+    Output (success):
+    {
+      "ok": true,
+      "canonical_v1_address": "THR683318ACF083723B3EDFE6C0A30AD62670F00353",
+      "migration_status": "confirmed",
+      "has_signing_material": false
+    }
+
+    Output (error):
+    {
+      "ok": false,
+      "error": "migration_not_found"
+    }
+    """
+    try:
+        data = request.get_json() or {}
+        legacy_address = (data.get("legacy_address") or "").strip().upper()
+        migration_proof = (data.get("migration_proof") or "").strip()
+
+        # Validate legacy address format
+        if not legacy_address or not legacy_address.startswith("THR") or len(legacy_address) != 43:
+            return jsonify(ok=False, error="invalid_legacy_address"), 400
+
+        # Import migration utilities
+        from wallet_v1_migration import search_all_migration_sources
+
+        # Search for migration record
+        migration = search_all_migration_sources(legacy_address=legacy_address)
+
+        if not migration:
+            return jsonify(ok=False, error="migration_not_found"), 404
+
+        canonical_v1_address = migration.get("canonical_v1_address")
+        migration_status = migration.get("migration_status", "confirmed")
+        has_signing_material = migration.get("has_signing_material", False)
+
+        return jsonify(
+            ok=True,
+            canonical_v1_address=canonical_v1_address,
+            migration_status=migration_status,
+            has_signing_material=has_signing_material
+        ), 200
+
+    except ImportError:
+        logger.error("[RestoreMigration] wallet_v1_migration module not available")
+        return jsonify(ok=False, error="migration_system_unavailable"), 500
+    except Exception as e:
+        logger.error(f"[RestoreMigration] Error: {e}")
+        return jsonify(ok=False, error="internal_error", detail=str(e)), 500
+
+
 def verify_swap_wallet_v1_or_legacy(payload, expected_action=SWAP_EXPECTED_ACTION):
     """Verify swap auth before any swap state mutation."""
     # Extract addresses from payload - normalize them

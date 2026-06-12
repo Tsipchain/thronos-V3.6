@@ -237,8 +237,13 @@ document.getElementById("pledgeForm").onsubmit = async (e) => {
       ⛏️ <a class="pdf-link" href="/static/thronos_kit.zip" download>${msg.miner}</a> <small style="color:#888;">(password: <code>thronos2026</code>)</small><br>
       💼 <a class="pdf-link" href="/">${msg.wallet}</a>
     `;
-    // Auto-connect wallet with new credentials
-    if (data.send_secret) await activateWallet(data.thr_address, data.send_secret);
+    // Auto-connect wallet so the canonical (mirage) address is recognized and the
+    // import signing-key UI unlocks. CRITICAL: activate whenever we have a THR
+    // address, NOT only when a fresh send_secret was minted. Legacy users who
+    // already pledged receive their existing thr_address with NO new send_secret
+    // (it is shown only once); gating activation on send_secret left them stuck —
+    // hasCanonical() stayed false and they could never import their key or set a PIN.
+    if (data.thr_address) await activateWallet(data.thr_address, data.send_secret || '');
   } catch (err) {
     result.classList.add("error");
     const errMsg = lang === 'el' ? "❌ Σφάλμα:" : "❌ Error:";

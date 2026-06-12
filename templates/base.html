@@ -1611,7 +1611,7 @@
                 <label for="walletWidgetThrAddress" id="walletWidgetAddrLabel">THR Address</label>
                 <input type="text" id="walletWidgetThrAddress" placeholder="THR..." />
 <label for="walletWidgetMode" id="walletWidgetModeLabel">Mode</label>
-                <select id="walletWidgetMode" onchange="switchWalletV1Mode()" style="width:100%;padding:8px;background:#000;border:1px solid #00ff66;color:#00ff66;">
+                <select id="walletWidgetMode" onchange="switchWalletV1Mode(); setTimeout(() => validateWalletV1ModeCTAMatch(), 50);" style="width:100%;padding:8px;background:#000;border:1px solid #00ff66;color:#00ff66;">
                     <option value="restore">Restore Existing Migrated Wallet</option>
                     <option value="migrate">Migrate Legacy Wallet</option>
                     <option value="unlock">Unlock Wallet V1</option>
@@ -6461,13 +6461,29 @@ function switchWalletV1Mode(){
         if (modeSelect) modeSelect.value = 'migrate';
     }
 
-    // Show/hide mode sections based on state
-    if (restoreEl) restoreEl.style.display = (displayMode === 'restore' && restoreAllowed) ? 'block' : 'none';
-    if (createEl) createEl.style.display = (displayMode === 'create' && createAllowed) ? 'block' : 'none';
-    if (unlockEl) unlockEl.style.display = (displayMode === 'unlock' && unlockAllowed) ? 'block' : 'none';
-    if (migrateEl) migrateEl.style.display = (displayMode === 'migrate') ? 'block' : 'none';
-    if (importEl) importEl.style.display = (displayMode === 'import_signing_key' && (importAllowed || adminSignerAllowed)) ? 'block' : 'none';
-    if (adminSignerEl) adminSignerEl.style.display = (displayMode === 'admin_generate_signer' && adminSignerAllowed) ? 'block' : 'none';
+    // ATOMIC VISIBILITY UPDATE: Hide all first, then show exactly one
+    // This prevents race conditions where create div stays visible when unlock should be shown
+    if (restoreEl) restoreEl.style.display = 'none';
+    if (createEl) createEl.style.display = 'none';
+    if (unlockEl) unlockEl.style.display = 'none';
+    if (migrateEl) migrateEl.style.display = 'none';
+    if (importEl) importEl.style.display = 'none';
+    if (adminSignerEl) adminSignerEl.style.display = 'none';
+
+    // Now show exactly ONE mode based on final displayMode
+    if (displayMode === 'restore' && restoreAllowed && restoreEl) {
+        restoreEl.style.display = 'block';
+    } else if (displayMode === 'create' && createAllowed && createEl) {
+        createEl.style.display = 'block';
+    } else if (displayMode === 'unlock' && unlockAllowed && unlockEl) {
+        unlockEl.style.display = 'block';
+    } else if (displayMode === 'migrate' && migrateEl) {
+        migrateEl.style.display = 'block';
+    } else if (displayMode === 'import_signing_key' && (importAllowed || adminSignerAllowed) && importEl) {
+        importEl.style.display = 'block';
+    } else if (displayMode === 'admin_generate_signer' && adminSignerAllowed && adminSignerEl) {
+        adminSignerEl.style.display = 'block';
+    }
 
     // Ensure modeSelect.value matches what's displayed (Fix #3: Deterministic mode/CTA)
     if (modeSelect && displayMode) {
@@ -6545,6 +6561,55 @@ function switchWalletV1Mode(){
     } else if (modeLabel) {
         modeLabel.textContent = 'Mode';
     }
+
+    // Runtime guard: ensure visible mode matches dropdown (prevents mode/CTA mismatch bug)
+    validateWalletV1ModeCTAMatch();
+}
+
+function validateWalletV1ModeCTAMatch() {
+    /**
+     * RUNTIME GUARD: Validate visible mode matches dropdown
+     *
+     * Detects and corrects mismatches where dropdown shows one mode
+     * but visible CTA shows another (the reported production bug).
+     *
+     * If mismatch detected, re-run switchWalletV1Mode to force correction.
+     */
+    const modeSelect = document.getElementById('walletWidgetMode');
+    if (!modeSelect) return;
+
+    const selectedValue = modeSelect.value;
+    const visibleModes = [];
+
+    // Check which mode divs are visible
+    const modeMap = {
+        'unlock': document.getElementById('walletV1UnlockMode'),
+        'create': document.getElementById('walletV1CreateMode'),
+        'import_signing_key': document.getElementById('walletV1ImportMode'),
+        'restore': document.getElementById('walletV1RestoreMode'),
+        'migrate': document.getElementById('walletV1MigrateMode'),
+        'admin_generate_signer': document.getElementById('walletV1AdminGenerateSignerMode'),
+    };
+
+    for (const [mode, el] of Object.entries(modeMap)) {
+        if (el && el.style.display === 'block') {
+            visibleModes.push(mode);
+        }
+    }
+
+    // Check for mismatch
+    if (visibleModes.length !== 1 || visibleModes[0] !== selectedValue) {
+        console.warn(
+            `[WalletV1Guard] Mode/CTA mismatch detected: dropdown=${selectedValue}, visible=${visibleModes.join(',')}`,
+            'Correcting...'
+        );
+
+        // Force correction
+        switchWalletV1Mode();
+        return false; // Mismatch was found
+    }
+
+    return true; // All correct
 }
 
 function updateRestoreMigratedWalletButton(){

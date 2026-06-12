@@ -6381,9 +6381,15 @@ function switchWalletV1Mode(){
         }
     } else {
         // Normal state: allow all applicable modes
+        const isProdModeOpts = document.body.classList.contains('wallet-v1-production-mode');
         if (restoreOption) restoreOption.disabled = !restoreAllowed;
-        if (createOption) createOption.disabled = !createAllowed;
-        if (unlockOption) unlockOption.disabled = !unlockAllowed;
+        // Canonical addresses are born from the pledge (legacy HMAC+SHA256d mirage
+        // or new pledged THR address) -- client-side 'create' is never a production
+        // action. Disable it so the dropdown can never land on Create.
+        if (createOption) createOption.disabled = !createAllowed || isProdModeOpts;
+        // Allow 'unlock' even with no active wallet so a returning user can type
+        // their existing pledged/mirage address and unlock.
+        if (unlockOption) unlockOption.disabled = !(unlockAllowed || modalState === 'no_active_wallet');
         if (migrateOption) migrateOption.disabled = false;
         if (importOption) importOption.disabled = !importAllowed;
         if (adminSignerOption) adminSignerOption.disabled = !adminSignerAllowed;
@@ -6442,15 +6448,22 @@ function switchWalletV1Mode(){
         // Show missing key recovery message
         showMissingSigningKeyRecovery();
     } else if (modalState === 'no_active_wallet') {
-        // No active wallet - show restore/migrate options (if available in production mode)
+        // No active wallet. The canonical address is born from the pledge (legacy
+        // HMAC+SHA256d mirage, or a new pledged THR address) -- NOT from client-side
+        // "create". In production we never default to 'create'; we honor an explicit
+        // unlock (so a returning user can enter their existing THR address), else
+        // restore (Recovery Kit), else unlock as the pledge-native fallback.
         const restoreOpt = document.querySelector('option[value="restore"]');
-        // CRITICAL: Never allow 'create' if canonical exists, even if user tries via devtools
-        const defaultMode = hasCanonical() ? 'unlock' : (restoreOpt ? 'restore' : 'create');
-        displayMode = (mode === 'restore' || mode === 'migrate') ? mode : defaultMode;
-        // Force override if user tried to select 'create' with existing canonical
-        if (hasCanonical() && mode === 'create') {
-            displayMode = 'unlock';
-        }
+        const isProdModeNAW = document.body.classList.contains('wallet-v1-production-mode');
+        let defaultMode;
+        if (hasCanonical()) defaultMode = 'unlock';
+        else if (restoreOpt) defaultMode = 'restore';
+        else if (isProdModeNAW) defaultMode = 'unlock';   // pledge-native: never 'create' in production
+        else defaultMode = 'create';                       // dev/admin builds only
+        displayMode = (mode === 'restore' || mode === 'migrate' || mode === 'unlock') ? mode : defaultMode;
+        // Immutability + production guard: never display 'create'
+        if (hasCanonical() && mode === 'create') displayMode = 'unlock';
+        if (isProdModeNAW && displayMode === 'create') displayMode = 'unlock';
         if (modeSelect && !mode) modeSelect.value = defaultMode;
     } else if (unlockAllowed && mode === 'unlock') {
         displayMode = 'unlock';
@@ -6475,7 +6488,9 @@ function switchWalletV1Mode(){
         restoreEl.style.display = 'block';
     } else if (displayMode === 'create' && createAllowed && createEl) {
         createEl.style.display = 'block';
-    } else if (displayMode === 'unlock' && unlockAllowed && unlockEl) {
+    } else if (displayMode === 'unlock' && (unlockAllowed || modalState === 'no_active_wallet') && unlockEl) {
+        // Allow the unlock form even with no active wallet so returning users can
+        // enter their pledged/mirage THR address and unlock (legacy + new addresses).
         unlockEl.style.display = 'block';
     } else if (displayMode === 'migrate' && migrateEl) {
         migrateEl.style.display = 'block';
@@ -6561,6 +6576,60 @@ function switchWalletV1Mode(){
     } else if (modeLabel) {
         modeLabel.textContent = 'Mode';
     }
+
+    // FINAL AUTHORITY: deterministically reconcile dropdown <-> visible CTA.
+    // This guarantees the user never sees a mode/CTA mismatch (e.g. dropdown=Unlock
+    // while the Create button is visible), regardless of upstream branch decisions.
+    reconcileWalletV1ModeCTA();
+}
+
+// ===== DETERMINISTIC MODE/CTA RECONCILIATION =====
+// Invariant: the dropdown value MUST equal the single visible mode div, and no
+// other mode div may be visible. This is the final guard that eliminates the
+// dropdown/CTA mismatch at its source instead of papering over it.
+function reconcileWalletV1ModeCTA() {
+    const modeSelect = document.getElementById('walletWidgetMode');
+    if (!modeSelect) return;
+
+    const modeMap = {
+        'unlock': 'walletV1UnlockMode',
+        'create': 'walletV1CreateMode',
+        'import_signing_key': 'walletV1ImportMode',
+        'restore': 'walletV1RestoreMode',
+        'migrate': 'walletV1MigrateMode',
+        'admin_generate_signer': 'walletV1AdminGenerateSignerMode',
+    };
+
+    // Find which mode div(s) are currently visible
+    const visible = [];
+    for (const [mode, id] of Object.entries(modeMap)) {
+        const el = document.getElementById(id);
+        if (el && el.style.display === 'block') visible.push(mode);
+    }
+
+    // If nothing is visible (e.g. the pledge activation panel is showing instead),
+    // there is no CTA to reconcile.
+    if (visible.length === 0) return;
+
+    // Pick the authoritative mode: prefer the dropdown's current value if it is
+    // among the visible set, otherwise the first visible div.
+    let target = visible.includes(modeSelect.value) ? modeSelect.value : visible[0];
+
+    // Enforce single-visibility: hide every mode div except the target.
+    for (const [mode, id] of Object.entries(modeMap)) {
+        if (mode === target) continue;
+        const el = document.getElementById(id);
+        if (el && el.style.display === 'block') el.style.display = 'none';
+    }
+
+    // Force the dropdown to match the visible CTA (enabling the option if a
+    // production/disabled rule had blocked the sync). The dropdown and the
+    // button now always agree.
+    const opt = Array.from(modeSelect.options).find(o => o.value === target);
+    if (opt) {
+        if (opt.disabled) opt.disabled = false;
+        modeSelect.value = target;
+    }
 }
 
 function validateWalletV1ModeCTAMatch() {
@@ -6601,9 +6670,11 @@ function validateWalletV1ModeCTAMatch() {
             'Correcting...'
         );
 
-        // Force correction
-        switchWalletV1Mode();
-        return false; // Mismatch was found
+        // Deterministically reconcile so the dropdown matches the single visible
+        // mode div. Re-running switchWalletV1Mode alone could reproduce the same
+        // mismatch; reconciliation converges.
+        reconcileWalletV1ModeCTA();
+        return false; // Mismatch was found and corrected
     }
 
     return true; // All correct

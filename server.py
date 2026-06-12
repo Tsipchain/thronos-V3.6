@@ -36325,7 +36325,30 @@ def api_v1_wallet_bind_public_key():
     store = load_json(WALLET_V1_PUBLIC_KEY_BINDINGS_FILE, {"bindings": {}})
     if not isinstance(store, dict):
         store = {"bindings": {}}
-    store.setdefault("bindings", {})[address] = {
+    store.setdefault("bindings", {})
+
+    # First-binding-wins: a canonical address can only ever be bound to one
+    # public key. Re-binding the SAME key is idempotent (legacy users who
+    # re-import their existing key after pledge land here). Attempting to bind
+    # a DIFFERENT key over an existing binding is rejected to prevent silent
+    # account takeover of the on-chain identity. The server only stores the
+    # public key (a commitment) -- protecting it from overwrite protects the
+    # signer that already controls the address.
+    existing = store["bindings"].get(address)
+    if existing:
+        existing_pub = (existing.get("public_key") or "").strip().lower()
+        if existing_pub and existing_pub == public_key.strip().lower():
+            # Idempotent re-bind of the same key: return current binding as-is.
+            return jsonify({"ok": True, "binding": existing, "rebind": "idempotent"}), 200
+        # Different key trying to overwrite an established binding -> deny.
+        return jsonify({
+            "ok": False,
+            "error": "binding_already_exists",
+            "detail": "This address is already bound to a different signing key.",
+            "bound_key_address": existing.get("public_key_address"),
+        }), 409
+
+    store["bindings"][address] = {
         "address": address,
         "credential_lookup_address": credential_lookup_address,
         "public_key": public_key,

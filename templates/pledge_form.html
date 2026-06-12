@@ -77,7 +77,7 @@
 
 {% block scripts %}
 <script>
-function activateWallet(addr, secret) {
+async function activateWallet(addr, secret) {
   // Connect via the base.html wallet widget (walletSession from wallet_session.js)
   if (typeof walletSession !== 'undefined' && walletSession.saveSession) {
     walletSession.saveSession({ address: addr, sendSeed: secret || '', bound: true });
@@ -86,6 +86,24 @@ function activateWallet(addr, secret) {
   if (typeof updateHeaderWalletUi === 'function') updateHeaderWalletUi();
   if (typeof updateWalletUI === 'function') updateWalletUI();
   if (typeof loadWalletBalances === 'function') loadWalletBalances(true);
+
+  // CRITICAL: Refresh authoritative wallet state from server
+  // After pledge, wallet transitions from no_active_wallet → active_wallet_no_key
+  // This refresh ensures UI shows IMPORT mode to prompt key restoration
+  if (typeof refreshWalletStateFromServer === 'function') {
+    try {
+      await refreshWalletStateFromServer(addr);
+      console.log('[PledgeForm] Refreshed wallet state from server after pledge');
+    } catch (err) {
+      console.warn('[PledgeForm] Failed to refresh wallet state:', err.message);
+    }
+  }
+
+  // Update wallet mode UI with refreshed state
+  if (typeof switchWalletV1Mode === 'function') {
+    switchWalletV1Mode();
+  }
+
   // Open the wallet popup
   if (typeof setWalletOpen === 'function') setWalletOpen(true);
   if (typeof showWalletContentSection === 'function') showWalletContentSection();

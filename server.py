@@ -25722,7 +25722,8 @@ def api_wallet_status():
       "address": "THR...",
       "is_whitelisted": bool,
       "pledge_mode": "btc_pledge" | "whitelist" | "none",
-      "has_pledge_access": bool
+      "has_pledge_access": bool,
+      "modal_state": "no_active_wallet" | "active_wallet_no_key" | "active_wallet_with_encrypted_key" | "signing_ready"
     }
     """
     thr_address = request.args.get("address", "").strip()
@@ -25738,6 +25739,37 @@ def api_wallet_status():
     pledge_mode = access_state["pledge_mode"]
     has_access = access_state["effective_pledge_ok"]
 
+    # Calculate modal_state for wallet V1 state machine
+    # This tells the frontend which mode options are available
+    modal_state = "no_active_wallet"  # Default for addresses without canonical
+
+    # Check if this address has a canonical V1 wallet created by pledge
+    pledges = load_json(PLEDGE_CHAIN, [])
+    pledge_entry = next((p for p in pledges if p.get("thr_address") == thr_address), None)
+
+    if pledge_entry:
+        # Canonical wallet exists from pledge
+        # Now check if it has a signing key binding
+        bindings_file = os.path.join(DATA_DIR, "wallet_v1_key_bindings.json")
+        has_key_binding = False
+
+        if os.path.exists(bindings_file):
+            try:
+                with open(bindings_file, 'r') as f:
+                    bindings = json.load(f)
+                    has_key_binding = any(
+                        b.get("canonical_v1_address") == thr_address and
+                        b.get("status") == "active"
+                        for b in bindings
+                    )
+            except Exception as e:
+                logger.warning(f"Failed to check key bindings for {thr_address}: {e}")
+
+        if has_key_binding:
+            modal_state = "active_wallet_with_encrypted_key"
+        else:
+            modal_state = "active_wallet_no_key"
+
     return jsonify(
         ok=True,
         address=thr_address,
@@ -25745,7 +25777,8 @@ def api_wallet_status():
         is_whitelist_legacy=access_state["whitelist_legacy"],
         pledge_mode=pledge_mode,
         has_pledge_access=has_access,
-        effective_pledge_ok=access_state["effective_pledge_ok"]
+        effective_pledge_ok=access_state["effective_pledge_ok"],
+        modal_state=modal_state
     ), 200
 
 

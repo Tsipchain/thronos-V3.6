@@ -6811,16 +6811,15 @@ async function showKeyMismatchRecovery(err) {
 
     // For binding_not_registered error, offer to register derived as bound signer (ADMIN ONLY)
     if (errorType === 'binding_not_registered') {
-        const derivedAddr = diagnostics && diagnostics.derived_address ? diagnostics.derived_address : null;
         const isAdmin = window.WALLET_V1_LEGACY_REPAIR_UI_ENABLED === true || window.WALLET_V1_LEGACY_REPAIR_UI_ENABLED === '1';
 
-        if (derivedAddr && isAdmin) {
+        if (derivedAddr && derivedAddr !== 'unknown' && isAdmin) {
             html += `
                 <button onclick="walletV1RegisterBoundSigner('${derivedAddr}')" style="flex:1; min-width:150px; padding:10px; background:#0066cc; color:#fff; border:1px solid #00aaff; border-radius:8px; cursor:pointer; font-size:0.9em;">
                     🔗 [ADMIN] Register as Bound Signer
                 </button>
             `;
-        } else if (derivedAddr && !isAdmin) {
+        } else if (derivedAddr && derivedAddr !== 'unknown' && !isAdmin) {
             html += `
                 <div style="flex:1; min-width:150px; padding:10px; background:#333; color:#999; border:1px solid #666; border-radius:8px; font-size:0.85em; text-align:center;">
                     ℹ️ Admin feature: Register as Bound Signer

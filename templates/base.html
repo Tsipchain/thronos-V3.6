@@ -6561,9 +6561,6 @@ function switchWalletV1Mode(){
     } else if (modeLabel) {
         modeLabel.textContent = 'Mode';
     }
-
-    // Runtime guard: ensure visible mode matches dropdown (prevents mode/CTA mismatch bug)
-    validateWalletV1ModeCTAMatch();
 }
 
 function validateWalletV1ModeCTAMatch() {

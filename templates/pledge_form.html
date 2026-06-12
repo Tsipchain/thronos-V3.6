@@ -77,15 +77,56 @@
 
 {% block scripts %}
 <script>
-function activateWallet(addr, secret) {
+async function activateWallet(addr, secret) {
   // Connect via the base.html wallet widget (walletSession from wallet_session.js)
   if (typeof walletSession !== 'undefined' && walletSession.saveSession) {
     walletSession.saveSession({ address: addr, sendSeed: secret || '', bound: true });
   }
+
+  // CRITICAL FIX: Recognize the canonical (mirage) address after pledge.
+  // saveSession() only writes the legacy 'thr_address' key, but hasCanonical()
+  // in base.html reads 'wallet_v1_address' / 'wallet_v1_canonical_address'.
+  // Without this, hasCanonical() stays false and the IMPORT signing-key UI never
+  // unlocks — the user can't import their local key or set a PIN after pledge.
+  try {
+    if (typeof walletSession !== 'undefined' && typeof walletSession.persistActiveUserAddress === 'function') {
+      walletSession.persistActiveUserAddress(addr);
+    } else if (addr) {
+      localStorage.setItem('wallet_v1_address', addr);
+      localStorage.setItem('wallet_v1_canonical_address', addr);
+    }
+    console.log('[PledgeForm] Canonical address persisted for post-pledge recognition:', addr);
+  } catch (err) {
+    console.warn('[PledgeForm] Could not persist canonical address:', err.message);
+    // Last-resort fallback so the import UI still unlocks
+    if (addr) {
+      localStorage.setItem('wallet_v1_address', addr);
+      localStorage.setItem('wallet_v1_canonical_address', addr);
+    }
+  }
+
   // Update header wallet UI if available
   if (typeof updateHeaderWalletUi === 'function') updateHeaderWalletUi();
   if (typeof updateWalletUI === 'function') updateWalletUI();
   if (typeof loadWalletBalances === 'function') loadWalletBalances(true);
+
+  // Refresh authoritative wallet state from server (best-effort).
+  // After pledge, wallet transitions from no_active_wallet → active_wallet_no_key.
+  if (typeof refreshWalletStateFromServer === 'function') {
+    try {
+      await refreshWalletStateFromServer(addr);
+      console.log('[PledgeForm] Refreshed wallet state from server after pledge');
+    } catch (err) {
+      console.warn('[PledgeForm] Failed to refresh wallet state:', err.message);
+    }
+  }
+
+  // Render the correct wallet mode (now that canonical is recognized,
+  // switchWalletV1Mode() will surface the import signing-key UI).
+  if (typeof switchWalletV1Mode === 'function') {
+    switchWalletV1Mode();
+  }
+
   // Open the wallet popup
   if (typeof setWalletOpen === 'function') setWalletOpen(true);
   if (typeof showWalletContentSection === 'function') showWalletContentSection();
@@ -172,7 +213,7 @@ document.getElementById("pledgeForm").onsubmit = async (e) => {
         💼 <a class="pdf-link" href="/">${msg.wallet}</a>
       `;
       // Auto-connect wallet for already_verified
-      activateWallet(data.thr_address);
+      await activateWallet(data.thr_address);
       return;
     }
 
@@ -197,7 +238,7 @@ document.getElementById("pledgeForm").onsubmit = async (e) => {
       💼 <a class="pdf-link" href="/">${msg.wallet}</a>
     `;
     // Auto-connect wallet with new credentials
-    if (data.send_secret) activateWallet(data.thr_address, data.send_secret);
+    if (data.send_secret) await activateWallet(data.thr_address, data.send_secret);
   } catch (err) {
     result.classList.add("error");
     const errMsg = lang === 'el' ? "❌ Σφάλμα:" : "❌ Error:";

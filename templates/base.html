@@ -2697,7 +2697,16 @@ function getActiveWalletAddress() {
 }
 
 function hasCanonical() {
-    const canonical = localStorage.getItem('wallet_v1_canonical_address');
+    // Check all known canonical address keys (defensive - handles multiple key naming conventions)
+    let canonical = localStorage.getItem('wallet_v1_canonical_address')
+        || localStorage.getItem('wallet_v1_address')
+        || localStorage.getItem('wallet_v1_active_address');
+
+    // Safety net: If canonical found in legacy key but not in canonical key, promote it
+    if (canonical && !localStorage.getItem('wallet_v1_canonical_address')) {
+        localStorage.setItem('wallet_v1_canonical_address', canonical);  // Heal old sessions
+    }
+
     return !!(canonical && canonical.startsWith('THR') && canonical.length > 10);
 }
 
@@ -3428,6 +3437,7 @@ async function walletV1RestoreFromRecoveryKit(recoveryKitJson, pin) {
         // For now, we trust the kit is valid and just restore
 
         // Step 9: Save to localStorage
+        localStorage.setItem('wallet_v1_canonical_address', canonical);  // CRITICAL: Set canonical key for hasCanonical()
         localStorage.setItem('wallet_v1_address', canonical);
         localStorage.setItem('wallet_v1_encrypted_priv', encryptedKeyBackup);
         localStorage.setItem('wallet_v1_public_key', publicKey);
@@ -7979,6 +7989,7 @@ async function walletAdminGenerateSignerForCanonical() {
 
         // Step 6: On success, save encrypted key and generate recovery kit
         localStorage.setItem('wallet_v1_encrypted_priv', encrypted);
+        localStorage.setItem('wallet_v1_canonical_address', canonicalAddr);  // CRITICAL: Set canonical key for hasCanonical()
         localStorage.setItem('wallet_v1_address', canonicalAddr);
         localStorage.setItem('wallet_v1_public_key', publicKey);
 

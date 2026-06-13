@@ -1693,7 +1693,7 @@
                 </div>
 
                 <!-- CREATE MODE: Optional PIN + Create button only -->
-                <div id="walletV1CreateMode" style="margin-top:10px;">
+                <div id="walletV1CreateMode" style="display:none; margin-top:10px;">
                     <label for="walletWidgetPin">PIN (optional)</label>
                     <input type="password" id="walletWidgetPin" placeholder="4-8 digits" />
                     <div class="wallet-modal-actions" style="margin-top:10px;">
@@ -6461,7 +6461,7 @@ function switchWalletV1Mode(){
         else if (isProdModeNAW) defaultMode = 'unlock';   // pledge-native: never 'create' in production
         else defaultMode = 'create';                       // dev/admin builds only
         displayMode = (mode === 'restore' || mode === 'migrate' || mode === 'unlock') ? mode : defaultMode;
-        // Immutability + production guard: never display 'create'
+        // Immutability + production guard: CRITICAL - never display 'create' in production
         if (hasCanonical() && mode === 'create') displayMode = 'unlock';
         if (isProdModeNAW && displayMode === 'create') displayMode = 'unlock';
         if (modeSelect && !mode) modeSelect.value = defaultMode;
@@ -6484,9 +6484,12 @@ function switchWalletV1Mode(){
     if (adminSignerEl) adminSignerEl.style.display = 'none';
 
     // Now show exactly ONE mode based on final displayMode
+    const isProdMode = document.body.classList.contains('wallet-v1-production-mode');
+
     if (displayMode === 'restore' && restoreAllowed && restoreEl) {
         restoreEl.style.display = 'block';
-    } else if (displayMode === 'create' && createAllowed && createEl) {
+    } else if (displayMode === 'create' && createAllowed && createEl && !isProdMode) {
+        // GUARD: Never show create in production mode (canonical addresses only from pledge)
         createEl.style.display = 'block';
     } else if (displayMode === 'unlock' && (unlockAllowed || modalState === 'no_active_wallet') && unlockEl) {
         // Allow the unlock form even with no active wallet so returning users can

@@ -36910,6 +36910,34 @@ def api_wallet_v1_key_binding(address):
         return jsonify({"ok": False, "error": "binding_lookup_failed"}), 400
 
 
+@app.route("/api/wallet/v1/music/capability", methods=["GET"])
+def api_wallet_v1_music_capability():
+    """
+    Check if a canonical V1 wallet has music platform access.
+    Returns music_level_unlocked and has_active_binding flags.
+    Used by the music tab to decide whether to show locked/unlocked state.
+    """
+    address = (request.args.get("address") or "").strip().upper()
+
+    if not address or not validate_thr_address(address):
+        return jsonify(ok=False, error="invalid_address"), 400
+
+    try:
+        store = load_json(WALLET_V1_PUBLIC_KEY_BINDINGS_FILE, {"bindings": {}})
+        binding = store.get("bindings", {}).get(address)
+        has_active_binding = binding is not None
+
+        return jsonify(
+            ok=True,
+            address=address,
+            has_active_binding=has_active_binding,
+            music_level_unlocked=has_active_binding,
+        ), 200
+    except Exception as e:
+        logger.error(f"[MusicCapability] Error: {e}")
+        return jsonify(ok=False, error="internal_error"), 500
+
+
 # ─── Startup hooks ────────────────────────────────────────────────────────────
 # PR-XXX: Role-based initialization with clear logging
 print(f"\n[STARTUP] Initializing {NODE_ROLE.upper()} node...")

@@ -2393,8 +2393,7 @@
 // These will be overwritten by the real definitions later in the script
 if (typeof showWalletLoginForm === 'undefined') {
     window.showWalletLoginForm = function() {
-        console.warn('[REGRESSION] showWalletLoginForm called before definition - using fallback');
-        // Fallback: try to show the login form by looking for DOM elements
+        // Stub - real definition loads later. Silently handle DOM if possible.
         const loginSection = document.getElementById('walletLoginSection');
         if (loginSection) loginSection.style.display = 'block';
         const contentSection = document.getElementById('walletContentSection');
@@ -6767,13 +6766,21 @@ async function showKeyMismatchRecovery(err) {
     let message = 'PIN was accepted, but this signing key is not authorized for your wallet.';
     let recoveryOptions = 'clear_or_import';
 
-    if (errorType === 'binding_not_registered') {
+    if (errorType === 'binding_not_registered_and_legacy_unavailable') {
+        // Key belongs to completely unrelated address - needs full re-key ceremony
+        title = '🔑 Wrong Signing Key - Re-Key Required';
+        message = `❌ <strong>The stored signing key does not belong to your wallet.</strong><br><br>
+                   Your wallet: <strong>${shortActive}</strong><br>
+                   This key derives to: <strong>${shortDerived}</strong><br><br>
+                   This key was generated for a different address. You need to clear it and generate a new correct signing key through the re-key ceremony.`;
+        recoveryOptions = 'clear_and_rekey';
+    } else if (errorType === 'binding_not_registered') {
         // Binding not found - this key belongs to a different address
         title = '⚠️ Bound Signer Not Registered';
         message = `❌ <strong>This signing key belongs to a different address.</strong><br><br>
                    Your wallet: <strong>${shortActive}</strong><br>
                    This key derives to: <strong>${shortDerived}</strong><br><br>
-                   You can either import the correct key for your wallet, or register this key as a bound signer (admin only).`;
+                   You can either import the correct key for your wallet, or use the re-key ceremony.`;
         recoveryOptions = 'clear_or_rekey';
     } else if (errorType === 'binding_hash_mismatch') {
         // Binding exists but derived doesn't match it
@@ -6821,23 +6828,12 @@ async function showKeyMismatchRecovery(err) {
         `;
     }
 
-    // For binding_not_registered error, offer to register derived as bound signer (ADMIN ONLY)
-    if (errorType === 'binding_not_registered') {
-        const isAdmin = window.WALLET_V1_LEGACY_REPAIR_UI_ENABLED === true || window.WALLET_V1_LEGACY_REPAIR_UI_ENABLED === '1';
-
-        if (derivedAddr && derivedAddr !== 'unknown' && isAdmin) {
-            html += `
-                <button onclick="walletV1RegisterBoundSigner('${derivedAddr}')" style="flex:1; min-width:150px; padding:10px; background:#0066cc; color:#fff; border:1px solid #00aaff; border-radius:8px; cursor:pointer; font-size:0.9em;">
-                    🔗 [ADMIN] Register as Bound Signer
-                </button>
-            `;
-        } else if (derivedAddr && derivedAddr !== 'unknown' && !isAdmin) {
-            html += `
-                <div style="flex:1; min-width:150px; padding:10px; background:#333; color:#999; border:1px solid #666; border-radius:8px; font-size:0.85em; text-align:center;">
-                    ℹ️ Admin feature: Register as Bound Signer
-                </div>
-            `;
-        }
+    if (recoveryOptions === 'clear_and_rekey' || recoveryOptions === 'clear_or_rekey') {
+        html += `
+            <button onclick="clearAndStartRekeyCeremony()" style="flex:1; min-width:150px; padding:10px; background:#0055aa; color:#fff; border:1px solid #0099ff; border-radius:8px; cursor:pointer; font-size:0.9em;">
+                🔑 Re-Key Ceremony
+            </button>
+        `;
     }
 
     html += `
@@ -6871,6 +6867,47 @@ async function clearMismatchedSigningKey() {
         }
     } catch(err) {
         alert('Error clearing key: ' + (err.message || 'Unknown'));
+    }
+}
+
+async function clearAndStartRekeyCeremony() {
+    const confirmed = confirm(
+        'This will:\n' +
+        '1. Clear the wrong signing key\n' +
+        '2. Open the Re-Key Ceremony to generate a new correct key\n\n' +
+        'Your wallet address and balances are preserved.\nContinue?'
+    );
+    if (!confirmed) return;
+
+    try {
+        // Step 1: Clear the wrong key
+        if (window.WalletAuth && typeof window.WalletAuth.clearLocalSigningKey === 'function') {
+            window.WalletAuth.clearLocalSigningKey();
+        } else {
+            // Manual clear
+            localStorage.removeItem('wallet_v1_encrypted_priv');
+            localStorage.removeItem('wallet_v1_public_key');
+        }
+
+        // Step 2: Remove the recovery dialog
+        const recovery = document.querySelector('[data-mismatch-recovery]');
+        if (recovery) recovery.remove();
+
+        // Step 3: Switch to restore mode which shows re-key ceremony
+        const modeSelect = document.getElementById('walletWidgetMode');
+        if (modeSelect) {
+            modeSelect.value = 'restore';
+            if (typeof switchWalletV1Mode === 'function') switchWalletV1Mode();
+        }
+
+        // Step 4: Show re-key ceremony form if admin mode
+        if (typeof showWalletV1RekeyCeremonyFlow === 'function') {
+            showWalletV1RekeyCeremonyFlow();
+        }
+
+        alert('Wrong key cleared. Use "Verify Ownership & Re-Key" to generate a new signing key for your wallet.');
+    } catch(err) {
+        alert('Error: ' + (err.message || 'Failed to start re-key ceremony'));
     }
 }
 

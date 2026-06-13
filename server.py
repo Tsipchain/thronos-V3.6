@@ -37030,6 +37030,77 @@ def api_v1_wallet_bind_public_key():
     return jsonify({"ok": True, "binding": store["bindings"][address]}), 200
 
 
+@app.route("/api/wallet/v1/key-binding/register", methods=["POST"])
+def api_wallet_v1_key_binding_register():
+    """
+    Register a new signing key binding for a canonical V1 wallet.
+    Requires repair token when WALLET_V1_REPAIR_TOKEN is configured.
+    Used by the re-key ceremony UI after ownership verification.
+    """
+    data = request.get_json() or {}
+    canonical_v1_address = (data.get("canonical_v1_address") or "").strip().upper()
+    public_key = (data.get("public_key") or "").strip()
+    ownership_verification_id = (data.get("ownership_verification_id") or "").strip()
+
+    if not canonical_v1_address or not public_key:
+        return jsonify({"ok": False, "error": "missing_fields"}), 400
+
+    # Check repair token
+    token_ok = _check_repair_token(request)
+    if token_ok is None:
+        return jsonify({"ok": False, "error": "repair_token_required"}), 401
+    if token_ok is False:
+        return jsonify({"ok": False, "error": "invalid_repair_token"}), 403
+
+    # Validate address format and derive address from public key
+    try:
+        from wallet_v1_address_derivation import derive_thronos_address, validate_thronos_address
+        if not validate_thronos_address(canonical_v1_address):
+            return jsonify({"ok": False, "error": "invalid_address"}), 400
+        public_key_address = derive_thronos_address(public_key)
+    except ValueError as ve:
+        return jsonify({"ok": False, "error": "invalid_public_key", "detail": str(ve)}), 400
+
+    # If ownership_verification_id provided, validate it
+    if ownership_verification_id:
+        session = _ownership_verification_sessions.get(ownership_verification_id)
+        if not session:
+            return jsonify({"ok": False, "error": "invalid_ownership_verification_id"}), 403
+        session_addr = session.get("canonical_v1_address", "").upper()
+        if session_addr != canonical_v1_address:
+            return jsonify({"ok": False, "error": "ownership_address_mismatch"}), 403
+
+    store = load_json(WALLET_V1_PUBLIC_KEY_BINDINGS_FILE, {"bindings": {}})
+    if not isinstance(store, dict):
+        store = {"bindings": {}}
+    store.setdefault("bindings", {})
+
+    existing = store["bindings"].get(canonical_v1_address)
+    if existing:
+        existing_pub = (existing.get("public_key") or "").strip().lower()
+        if existing_pub and existing_pub == public_key.strip().lower():
+            return jsonify({"ok": True, "binding": existing, "rebind": "idempotent"}), 200
+        # Repair token overrides first-binding-wins
+
+    binding = {
+        "address": canonical_v1_address,
+        "credential_lookup_address": canonical_v1_address,
+        "public_key": public_key,
+        "public_key_address": public_key_address,
+        "bound_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "proof": "rekey_ceremony",
+        "ownership_verification_id": ownership_verification_id or None,
+    }
+    store["bindings"][canonical_v1_address] = binding
+    save_json(WALLET_V1_PUBLIC_KEY_BINDINGS_FILE, store)
+
+    # Consume ownership verification session (one-use)
+    if ownership_verification_id and ownership_verification_id in _ownership_verification_sessions:
+        del _ownership_verification_sessions[ownership_verification_id]
+
+    return jsonify({"ok": True, "binding": binding}), 200
+
+
 @app.route("/api/wallet/v1/key-binding/<address>", methods=["GET"])
 def api_wallet_v1_key_binding(address):
     """
@@ -37065,6 +37136,34 @@ def api_wallet_v1_key_binding(address):
             }), 200
     except Exception as err:
         return jsonify({"ok": False, "error": "binding_lookup_failed"}), 400
+
+
+@app.route("/api/wallet/v1/music/capability", methods=["GET"])
+def api_wallet_v1_music_capability():
+    """
+    Check if a canonical V1 wallet has music platform access.
+    Returns music_level_unlocked and has_active_binding flags.
+    Used by the music tab to decide whether to show locked/unlocked state.
+    """
+    address = (request.args.get("address") or "").strip().upper()
+
+    if not address or not validate_thr_address(address):
+        return jsonify(ok=False, error="invalid_address"), 400
+
+    try:
+        store = load_json(WALLET_V1_PUBLIC_KEY_BINDINGS_FILE, {"bindings": {}})
+        binding = store.get("bindings", {}).get(address)
+        has_active_binding = binding is not None
+
+        return jsonify(
+            ok=True,
+            address=address,
+            has_active_binding=has_active_binding,
+            music_level_unlocked=has_active_binding,
+        ), 200
+    except Exception as e:
+        logger.error(f"[MusicCapability] Error: {e}")
+        return jsonify(ok=False, error="internal_error"), 500
 
 
 # ─── Startup hooks ────────────────────────────────────────────────────────────

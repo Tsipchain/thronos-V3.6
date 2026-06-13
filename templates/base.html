@@ -301,12 +301,13 @@
     /* Wallet Balance Popup Widget */
     .wallet-balance-popup {
         display: none;
-        position: fixed;
+        position: absolute;
+        top: calc(100% + 6px);
+        right: 0;
         width: min(360px, calc(100vw - 24px));
         max-width: calc(100vw - 24px);
         background: linear-gradient(135deg, #000000 0%, #071810 50%, #000000 100%);
-        border: 2px solid;
-        border-image: linear-gradient(135deg, #d4af37 0%, #00ff66 50%, #ffd700 100%) 1;
+        border: 2px solid rgba(0, 255, 102, 0.5);
         border-radius: 12px;
         padding: 15px;
         box-shadow: 0 0 30px rgba(0, 255, 102, 0.3), 0 0 15px rgba(255, 215, 0, 0.2);
@@ -316,8 +317,6 @@
         color: #e6ffe5;
         backdrop-filter: blur(10px);
         pointer-events: auto;
-        top: 48px;
-        right: 12px;
         max-height: calc(100vh - 60px);
         box-sizing: border-box;
     }

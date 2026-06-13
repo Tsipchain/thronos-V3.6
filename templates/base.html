@@ -8393,13 +8393,14 @@ function updateHeaderWalletUi(){
         if (!hasLoadedThisPage) {
             window.__walletBalanceLoadedThisPage = true;
             setTimeout(() => {
-                // Load balance in the background — don't force-open the popup.
-                // Only open the popup if the user has it pinned.
+                // Always switch to content section and load balance.
+                // Only open the popup if the user has it pinned; otherwise
+                // balance loads silently so the popup doesn't pop up on every page.
                 walletBalancesLoaded = false;
+                showWalletContentSection();  // ensure login section is hidden before loading
                 loadWalletBalances();
                 if (isPinned) {
                     setWalletOpen(true);
-                    showWalletContentSection();
                 }
             }, 500);
         }

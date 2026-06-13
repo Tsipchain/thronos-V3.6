@@ -1779,6 +1779,53 @@
                         </div>
                     </details>
 
+                    <!-- Ownership Verification Form (Step 1 of Re-Key Ceremony) -->
+                    <div id="walletV1LegacyRecoveryForm" data-wallet-legacy-repair="1" style="display:none; background:#1a2a1a; border:1px solid #00ff66; border-radius:8px; padding:15px; margin:12px 0;">
+                        <h5 style="color:#00ff66; margin-top:0;">🔐 Verify Wallet Ownership</h5>
+                        <p style="font-size:0.85em; color:#9f9; margin-bottom:12px;">
+                            Verify that you own this wallet before generating a new signing key.
+                            Your canonical address will be auto-filled.
+                        </p>
+
+                        <div style="margin-bottom:10px;">
+                            <label style="display:block; font-size:0.85em; color:#0f0; margin-bottom:4px;">Canonical Wallet Address</label>
+                            <div style="font-family:monospace; font-size:0.78em; color:#0ff; padding:8px; background:#000; border:1px solid #00ff66; border-radius:4px; word-break:break-all; min-height:32px;">
+                                <span id="walletV1CanonicalAddr">loading...</span>
+                            </div>
+                        </div>
+
+                        <div style="margin-bottom:10px;">
+                            <label style="display:block; font-size:0.85em; color:#0f0; margin-bottom:4px;">Legacy Address <span style="color:#9f9; font-weight:normal;">(auto-filled if known)</span></label>
+                            <input type="text" id="walletV1LegacyAddr" placeholder="THR... legacy pledge address" style="width:100%; padding:8px; background:#000; color:#0f0; border:1px solid #00ff66; border-radius:4px; font-size:0.82em; font-family:monospace;" />
+                        </div>
+
+                        <details style="margin:8px 0;">
+                            <summary style="padding:8px; background:#222; color:#9f9; border:1px solid #555; border-radius:4px; cursor:pointer; font-size:0.85em;">
+                                Additional credentials (optional)
+                            </summary>
+                            <div style="padding:10px; background:#111; border:1px solid #555; border-radius:4px; margin-top:6px;">
+                                <div style="margin-bottom:8px;">
+                                    <label style="display:block; font-size:0.8em; color:#9f9; margin-bottom:4px;">Auth Secret</label>
+                                    <input type="password" id="walletV1AuthSecret" placeholder="Optional auth secret" style="width:100%; padding:6px; background:#000; color:#0f0; border:1px solid #555; border-radius:4px; font-size:0.85em;" />
+                                </div>
+                                <div style="margin-bottom:8px;">
+                                    <label style="display:block; font-size:0.8em; color:#9f9; margin-bottom:4px;">Send Secret</label>
+                                    <input type="password" id="walletV1SendSecret" placeholder="Optional send secret" style="width:100%; padding:6px; background:#000; color:#0f0; border:1px solid #555; border-radius:4px; font-size:0.85em;" />
+                                </div>
+                                <div>
+                                    <label style="display:block; font-size:0.8em; color:#9f9; margin-bottom:4px;">Pledge Hash</label>
+                                    <input type="text" id="walletV1PledgeHash" placeholder="Optional pledge hash" style="width:100%; padding:6px; background:#000; color:#0f0; border:1px solid #555; border-radius:4px; font-size:0.82em; font-family:monospace;" />
+                                </div>
+                            </div>
+                        </details>
+
+                        <div style="margin-top:12px;">
+                            <button onclick="performLegacyOwnershipVerification()" style="width:100%; padding:10px; background:#00aa66; color:#000; border:1px solid #00ff66; border-radius:6px; cursor:pointer; font-weight:bold; font-size:0.95em;">
+                                ✓ Verify Ownership
+                            </button>
+                        </div>
+                    </div>
+
                     <!-- Re-Key Ceremony Section (shown after ownership verification) -->
                     <div id="walletV1RekeyCeremonyForm" data-wallet-legacy-repair="1" style="display:none; background:#1a2a2a; border:1px solid #00aaff; border-radius:8px; padding:15px; margin:12px 0;">
                         <h5 style="color:#00aaff; margin-top:0;">✓ Ownership Verified - Re-Key Ceremony</h5>
@@ -6893,19 +6940,18 @@ async function clearAndStartRekeyCeremony() {
         const recovery = document.querySelector('[data-mismatch-recovery]');
         if (recovery) recovery.remove();
 
-        // Step 3: Switch to restore mode which shows re-key ceremony
-        const modeSelect = document.getElementById('walletWidgetMode');
-        if (modeSelect) {
-            modeSelect.value = 'restore';
-            if (typeof switchWalletV1Mode === 'function') switchWalletV1Mode();
-        }
+        // Step 3: Show the import/rekey panel (walletV1ImportMode contains the re-key ceremony form)
+        const importEl = document.getElementById('walletV1ImportMode');
+        if (importEl) importEl.style.display = 'block';
+        const unlockEl2 = document.getElementById('walletV1UnlockMode');
+        if (unlockEl2) unlockEl2.style.display = 'none';
 
-        // Step 4: Show re-key ceremony form if admin mode
+        // Step 4: Show ownership verification form (Step 1 of re-key ceremony)
         if (typeof showWalletV1RekeyCeremonyFlow === 'function') {
             showWalletV1RekeyCeremonyFlow();
         }
 
-        alert('Wrong key cleared. Use "Verify Ownership & Re-Key" to generate a new signing key for your wallet.');
+        alert('Wrong key cleared.\n\nNext: Click "Verify Ownership" to confirm your wallet identity,\nthen generate a new signing key.');
     } catch(err) {
         alert('Error: ' + (err.message || 'Failed to start re-key ceremony'));
     }
@@ -7475,50 +7521,13 @@ async function walletV1SubmitRekeyRequest() {
             headers: headers,
             body: JSON.stringify({
                 canonical_v1_address: canonicalAddr,
-                ownership_verification_id: ownershipVerificationId,  // Link to verified ownership
+                ownership_verification_id: ownershipVerificationId,
                 new_public_key: publicKey,
-                new_key_address: signerAddress  // Address derived from new key (different from canonical)
+                new_key_address: signerAddress
             })
         });
 
-function detectMissingSigningKeyState(){
-    /**
-     * Detect if wallet has encrypted key but no runtime material.
-     * This is the "missing signing key" state that should show Recovery Kit as primary.
-     */
-    if(!walletSession || !walletSession.getWalletAuthDiagnostics) return false;
-    try {
-        const diag = walletSession.getWalletAuthDiagnostics();
-        // Missing signing key = has encrypted key but no runtime material
-        return diag.has_encrypted_send_seed && !diag.has_runtime_signing_material;
-    } catch(_) {
-        return false;
-    }
-}
-
-function showWalletLoginForm(){
-    const loginSection = document.getElementById('walletLoginSection');
-    const contentSection = document.getElementById('walletContentSection');
-    if(loginSection){
-        loginSection.style.display = 'block';
-        const addrInput = document.getElementById('walletWidgetThrAddress');
-                const pinInput = document.getElementById('walletWidgetPin');
-        if(addrInput) addrInput.value = walletSession.getAddress();
-                if(pinInput) pinInput.value = walletSession.getPin();
-
-        // AUTO-DETECT: If missing signing key → force "unlock" mode as primary
-        const modeSelect = document.getElementById('walletWidgetMode');
-        const hasMissingKey = detectMissingSigningKeyState();
-        if(hasMissingKey && modeSelect) {
-            modeSelect.value = 'unlock';
-            console.info('[RecoveryKit] Auto-detected missing signing key state, forcing unlock mode');
-        }
-
-        switchWalletV1Mode();
-        setTimeout(()=>{ if(pinInput) pinInput.focus(); }, 50);
-    }
-    if(contentSection) contentSection.style.display = 'none';
-}
+        const result = await response.json();
 
         if (!result.ok) {
             console.warn('[RekeyCeremony] Rekey request failed:', result.error);
@@ -7561,6 +7570,39 @@ function showWalletLoginForm(){
     }
 }
 
+function detectMissingSigningKeyState(){
+    if(!walletSession || !walletSession.getWalletAuthDiagnostics) return false;
+    try {
+        const diag = walletSession.getWalletAuthDiagnostics();
+        return diag.has_encrypted_send_seed && !diag.has_runtime_signing_material;
+    } catch(_) {
+        return false;
+    }
+}
+
+function showWalletLoginForm(){
+    const loginSection = document.getElementById('walletLoginSection');
+    const contentSection = document.getElementById('walletContentSection');
+    if(loginSection){
+        loginSection.style.display = 'block';
+        const addrInput = document.getElementById('walletWidgetThrAddress');
+        const pinInput = document.getElementById('walletWidgetPin');
+        if(addrInput) addrInput.value = walletSession.getAddress();
+        if(pinInput) pinInput.value = walletSession.getPin();
+
+        const modeSelect = document.getElementById('walletWidgetMode');
+        const hasMissingKey = detectMissingSigningKeyState();
+        if(hasMissingKey && modeSelect) {
+            modeSelect.value = 'unlock';
+            console.info('[RecoveryKit] Auto-detected missing signing key state, forcing unlock mode');
+        }
+
+        switchWalletV1Mode();
+        setTimeout(()=>{ if(pinInput) pinInput.focus(); }, 50);
+    }
+    if(contentSection) contentSection.style.display = 'none';
+}
+
 // ========== Pledge-Native Key Setup Functions ==========
 
 async function walletV1ConfirmAndEncryptKey() {
@@ -7569,13 +7611,18 @@ async function walletV1ConfirmAndEncryptKey() {
     const privateKey = window.walletV1GeneratedPrivateKey;
     const publicKey = window.walletV1CurrentPublicKey;
     const boundAddr = window.walletV1CurrentAddress;
-    const canonicalAddr = (document.getElementById('walletV1CanonicalAddr')?.value || '').trim();
+    const canonAddrEl = document.getElementById('walletV1CanonicalAddr');
+    const canonicalAddr = ((canonAddrEl?.textContent || canonAddrEl?.value) || '').trim()
+        || (localStorage.getItem('wallet_v1_canonical_address') || localStorage.getItem('wallet_v1_address') || '').trim();
 
     // Validation
     if (!pin || !pinConfirm) return alert('PIN is required');
     if (pin !== pinConfirm) return alert('PINs do not match');
     if (!pin.match(/^\d{4,8}$/)) return alert('PIN must be 4-8 digits');
     if (!privateKey || !publicKey || !boundAddr) return alert('Key not generated - please try again');
+    if (!canonicalAddr || canonicalAddr === 'loading...' || canonicalAddr === 'Error') {
+        return alert('Canonical wallet address not loaded. Please wait and try again.');
+    }
 
     try {
         console.log('[KeySetup] Encrypting private key with PIN...');
@@ -7598,15 +7645,28 @@ async function walletV1ConfirmAndEncryptKey() {
         // Now register the binding with backend (public key + bound address, NO private key)
         console.log('[KeySetup] Registering key binding with backend...');
 
+        // Get repair token (cached in memory or prompt user)
+        let repairToken = window.walletV1RepairToken || localStorage.getItem('wallet_v1_repair_token') || '';
+        if (!repairToken) {
+            repairToken = prompt('Enter the WALLET_V1_REPAIR_TOKEN (admin authentication):') || '';
+        }
+        if (!repairToken) {
+            localStorage.removeItem('wallet_v1_encrypted_priv');
+            return alert('Admin repair token required to register key binding.\nKey has not been saved.');
+        }
+        window.walletV1RepairToken = repairToken;  // cache for session
+
+        const bindHeaders = { 'Content-Type': 'application/json', 'X-Wallet-V1-Repair-Token': repairToken };
+        const ownershipVerificationId = window.walletV1OwnershipVerificationId || '';
+
         const response = await fetch('/api/wallet/v1/key-binding/register', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
+            headers: bindHeaders,
             body: JSON.stringify({
                 canonical_v1_address: canonicalAddr,
                 public_key: publicKey,
-                bound_key_address: boundAddr
+                bound_key_address: boundAddr,
+                ownership_verification_id: ownershipVerificationId || undefined
             })
         });
 

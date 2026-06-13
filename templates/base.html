@@ -8422,6 +8422,8 @@ function updateHeaderWalletUi(){
 document.addEventListener('DOMContentLoaded', () => {
     const savedLang = getCurrentLang();
     setLanguage(savedLang);
+    // Reset idle timer on page load so cross-page navigation doesn't trigger idle-lock prompt
+    markWalletActive();
     updateHeaderWalletUi();
 
     // Update token prices every 30 seconds

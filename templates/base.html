@@ -2548,6 +2548,15 @@ document.addEventListener('DOMContentLoaded', () => {
     updateLangDropdownUI(currentLang);
 });
 
+// Prevent "called before definition" regressions
+// Shim to handle forward-reference calls
+if (typeof window.showWalletLoginForm === 'undefined') {
+    window.showWalletLoginForm = function() {
+        // Stub until real definition loads
+        setTimeout(() => window.showWalletLoginForm?.call?.(), 100);
+    };
+}
+
 // Disconnect Wallet Function
 function disconnectWallet() {
     // Disconnect only clears bound flag, keeps credentials for PIN unlock
@@ -2556,7 +2565,7 @@ function disconnectWallet() {
     const disconnectBtn = document.getElementById('disconnectBtn');
     if (statusEl) statusEl.classList.remove('open');
     if (disconnectBtn) disconnectBtn.style.display = 'none';
-    showWalletLoginForm();
+    if (typeof showWalletLoginForm === 'function') showWalletLoginForm();
     updateWalletUI();
     walletBalancesLoaded = false;
     window.tokenBalances = {};

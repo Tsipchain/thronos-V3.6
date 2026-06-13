@@ -298,19 +298,18 @@
         cursor: pointer;
     }
 
-    /* Wallet Balance Popup Widget */
+    /* Wallet Balance Popup Widget — fixed to viewport so position never depends on parent layout */
     .wallet-balance-popup {
         display: none;
-        position: absolute;
-        top: calc(100% + 6px);
-        right: 0;
+        position: fixed;
+        top: 48px;
+        right: 12px;
         width: min(360px, calc(100vw - 24px));
-        max-width: calc(100vw - 24px);
         background: linear-gradient(135deg, #000000 0%, #071810 50%, #000000 100%);
         border: 2px solid rgba(0, 255, 102, 0.5);
         border-radius: 12px;
         padding: 15px;
-        box-shadow: 0 0 30px rgba(0, 255, 102, 0.3), 0 0 15px rgba(255, 215, 0, 0.2);
+        box-shadow: 0 8px 32px rgba(0, 255, 102, 0.25), 0 2px 8px rgba(0,0,0,0.6);
         z-index: 3900;
         overflow-y: auto;
         overflow-x: hidden;
@@ -3117,11 +3116,6 @@ function renderWalletBalances(data) {
     const musicTabLabel = isGreek ? 'Μουσική' : 'Music';
 
     const html = `
-        <div class="wallet-popup-header">
-            <span class="lang-el">Thronos Wallet</span>
-            <span class="lang-en">Thronos Wallet</span>
-        </div>
-
         <!-- Address Section -->
         <div class="wallet-popup-address">
             <div class="wallet-popup-address-text" title="${escapeHtml(wallet)}">${escapeHtml(shortAddr)}</div>
@@ -8380,9 +8374,12 @@ function updateHeaderWalletUi(){
       buttonText = 'Unlock Wallet V1';
     }
 
+    // Show walletStatus whenever a v1 wallet exists (locked OR unlocked).
+    // Hide walletLoginBtn whenever walletStatus is shown — never show both.
+    const hasStoredWallet = hasWallet || hasV1Address || walletV1Capable;
     if(statusEl){
         document.getElementById('walletAddrShort').textContent = buttonText;
-        statusEl.style.display = 'flex';
+        statusEl.style.display = hasStoredWallet ? 'flex' : 'none';
         if(!statusEl.dataset.init){
             initWalletUiControls();
             statusEl.dataset.init = '1';
@@ -8390,8 +8387,8 @@ function updateHeaderWalletUi(){
     }
 
     if(disconnectEl) disconnectEl.style.display = hasWallet ? 'block' : 'none';
-    // Hide login button when wallet is connected
-    if(loginBtn) loginBtn.style.display = hasWallet ? 'none' : 'inline-block';
+    // Login button only shows when no wallet exists at all
+    if(loginBtn) loginBtn.style.display = hasStoredWallet ? 'none' : 'inline-block';
 
     if(hasWallet){
         const isPinned = getWalletUiPinned();

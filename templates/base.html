@@ -6156,20 +6156,11 @@ function applyWalletV1ProductionMode(status) {
             removedLegacyOptions: removedLegacyOptions
         });
     } else {
-        // Admin mode: remove production mode class and show legacy UI
+        // Admin mode: remove production mode class to enable legacy options in dropdown.
+        // IMPORTANT: Do NOT force-show mode panels here — switchWalletV1Mode owns panel
+        // visibility atomically. Showing panels here causes WalletV1Guard mismatches.
         document.body.classList.remove('wallet-v1-production-mode');
-
-        const restoreForm = document.getElementById('walletV1RestoreMode');
-        const migrateForm = document.getElementById('walletV1MigrateMode');
-        const legacyRecoveryForm = document.getElementById('walletV1LegacyRecoveryForm');
-        const recoverySection = document.getElementById('walletRecoverySection');
-
-        if (restoreForm) restoreForm.style.display = 'block';
-        if (migrateForm) migrateForm.style.display = 'block';
-        if (legacyRecoveryForm) legacyRecoveryForm.style.display = 'block';
-        if (recoverySection) recoverySection.style.display = 'block';
-
-        console.log('[WalletV1] admin mode active: legacy repair UI visible');
+        console.log('[WalletV1] admin mode: legacy repair options enabled (panels managed by switchWalletV1Mode)');
     }
 }
 
@@ -6182,7 +6173,6 @@ function sanitizeWalletV1ProductionState(status) {
 
     if (legacyRepairEnabled) {
         // Admin mode: don't sanitize, allow legacy state
-        console.log('[WalletV1] Admin mode - legacy state retained');
         return {keysRemoved: 0, encryptedKeyPreserved: true};
     }
 
@@ -8395,10 +8385,16 @@ function updateHeaderWalletUi(){
 
     if(hasWallet){
         const isPinned = getWalletUiPinned();
-        const hasOpenedBefore = sessionStorage.getItem('wallet_opened_once');
-        if (isPinned || !hasOpenedBefore) {
+        // Use a page-scoped flag (not sessionStorage) so every page navigation
+        // triggers a fresh balance load. sessionStorage persists across navigations
+        // within the same tab, which would suppress auto-load on pages like /music.
+        const hasOpenedThisPage = window.__walletOpenedThisPage;
+        if (isPinned || !hasOpenedThisPage) {
+            window.__walletOpenedThisPage = true;
             setTimeout(() => {
                 setWalletOpen(true);
+                // Force balance reload on every page navigation
+                walletBalancesLoaded = false;
                 loadWalletBalances();
                 sessionStorage.setItem('wallet_opened_once', '1');
             }, 500);
@@ -10104,21 +10100,29 @@ if (originalOpenModal) {
     };
 }
 
-// Enforce after mode switch
+// Enforce after mode switch — sanitize only; do NOT re-apply production mode UI
+// because switchWalletV1Mode already owns panel visibility atomically.
+// Re-applying applyWalletV1ProductionMode here in admin mode would force-show
+// legacy panels AFTER switchWalletV1Mode has hidden them, causing WalletV1Guard
+// mismatches and the repeated "admin mode active" console loop.
 const originalSwitchMode = window.switchWalletV1Mode;
 if (originalSwitchMode) {
     window.switchWalletV1Mode = function() {
         const result = originalSwitchMode.apply(this, arguments);
-        // Re-apply production mode and sanitize after mode switch
+        // Only sanitize stale state; skip applyWalletV1ProductionMode here to avoid
+        // conflicting with switchWalletV1Mode's atomic panel visibility.
         fetchWalletStatusWithAddress()
             .then(status => {
                 if (status.ok) {
-                    // Set global flag for admin mode check in switchWalletV1Mode
                     window.WALLET_V1_LEGACY_REPAIR_UI_ENABLED = status.legacy_repair_ui_enabled || false;
                     sanitizeWalletV1ProductionState(status);
-                    applyWalletV1ProductionMode(status);
+                    // Only re-enforce in production mode (not admin).
+                    // Admin mode panel visibility is fully handled by switchWalletV1Mode
+                    // via the adminModeEnabled flag — re-running here causes mismatch loops.
+                    if (!status.legacy_repair_ui_enabled) {
+                        applyWalletV1ProductionMode(status);
+                    }
                 } else {
-                    // Safe default
                     const safeStatus = {legacy_repair_ui_enabled: false};
                     window.WALLET_V1_LEGACY_REPAIR_UI_ENABLED = false;
                     sanitizeWalletV1ProductionState(safeStatus);

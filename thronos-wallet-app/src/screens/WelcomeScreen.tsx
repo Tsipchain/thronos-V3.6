@@ -10,32 +10,41 @@ import type { RootStackParamList } from '../../App';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'Welcome'>;
 
+const FEATURES = [
+  { icon: 'shield-checkmark', text: 'Secure & Self-Custodial', color: COLORS.success },
+  { icon: 'swap-horizontal', text: 'Send, Receive & Swap THR', color: COLORS.info },
+  { icon: 'layers', text: 'Multi-Token & Multi-Chain', color: COLORS.primary },
+  { icon: 'flash', text: 'ACIC — Instant Finality', color: COLORS.gold },
+] as const;
+
 export default function WelcomeScreen() {
   const navigation = useNavigation<Nav>();
 
   return (
     <SafeAreaView style={styles.container}>
-      <LinearGradient colors={[COLORS.background, COLORS.backgroundLight]} style={styles.gradient}>
+      <LinearGradient colors={['#0D0D1A', '#0D0A00', '#0D0D1A']} style={styles.gradient}>
         <View style={styles.content}>
           {/* Logo area */}
           <View style={styles.logoArea}>
-            <View style={styles.logoCircle}>
-              <Ionicons name="planet" size={64} color={COLORS.gold} />
+            {/* Outer glow ring */}
+            <View style={styles.logoOuter}>
+              <View style={styles.logoMiddle}>
+                <View style={styles.logoCircle}>
+                  <Ionicons name="planet" size={64} color={COLORS.gold} />
+                </View>
+              </View>
             </View>
-            <Text style={styles.title}>Thronos</Text>
-            <Text style={styles.subtitle}>Wallet</Text>
+            <Text style={styles.title}>THRONOS</Text>
+            <Text style={styles.subtitle}>Secure · Fast · Decentralized</Text>
           </View>
 
           {/* Features */}
           <View style={styles.features}>
-            {[
-              { icon: 'shield-checkmark', text: 'Secure & Self-Custodial' },
-              { icon: 'swap-horizontal', text: 'Send, Receive & Swap THR' },
-              { icon: 'layers', text: 'Multi-Token Support' },
-              { icon: 'flash', text: 'Fast Transactions' },
-            ].map((f, i) => (
+            {FEATURES.map((f, i) => (
               <View key={i} style={styles.featureRow}>
-                <Ionicons name={f.icon as any} size={20} color={COLORS.gold} />
+                <View style={[styles.featureIconWrap, { backgroundColor: f.color + '20' }]}>
+                  <Ionicons name={f.icon} size={18} color={f.color} />
+                </View>
                 <Text style={styles.featureText}>{f.text}</Text>
               </View>
             ))}
@@ -62,7 +71,7 @@ export default function WelcomeScreen() {
             </TouchableOpacity>
           </View>
 
-          <Text style={styles.version}>Thronos Wallet v1.0.0</Text>
+          <Text style={styles.version}>Thronos Wallet v1.1.0 · Mainnet</Text>
         </View>
       </LinearGradient>
     </SafeAreaView>
@@ -73,31 +82,52 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.background },
   gradient: { flex: 1 },
   content: { flex: 1, paddingHorizontal: SPACING.lg, justifyContent: 'space-between', paddingBottom: SPACING.xl },
+
+  // Logo
   logoArea: { alignItems: 'center', marginTop: SPACING.xxl },
-  logoCircle: {
-    width: 120, height: 120, borderRadius: 60,
-    backgroundColor: COLORS.gold + '15',
+  logoOuter: {
+    width: 152, height: 152, borderRadius: 76,
+    borderWidth: 1, borderColor: COLORS.gold + '18',
     justifyContent: 'center', alignItems: 'center',
-    borderWidth: 2, borderColor: COLORS.gold + '30',
     marginBottom: SPACING.md,
   },
-  title: { fontSize: FONT_SIZES.display, fontWeight: '700', color: COLORS.gold },
-  subtitle: { fontSize: FONT_SIZES.xxl, fontWeight: '300', color: COLORS.textSecondary, marginTop: -4 },
+  logoMiddle: {
+    width: 136, height: 136, borderRadius: 68,
+    borderWidth: 1.5, borderColor: COLORS.gold + '30',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  logoCircle: {
+    width: 116, height: 116, borderRadius: 58,
+    backgroundColor: COLORS.gold + '15',
+    justifyContent: 'center', alignItems: 'center',
+    borderWidth: 2, borderColor: COLORS.gold + '50',
+  },
+  title: { fontSize: FONT_SIZES.display, fontWeight: '800', color: COLORS.gold, letterSpacing: 6 },
+  subtitle: { fontSize: FONT_SIZES.sm, fontWeight: '400', color: COLORS.textMuted, marginTop: SPACING.xs, letterSpacing: 1 },
+
+  // Features
   features: { gap: SPACING.md },
   featureRow: { flexDirection: 'row', alignItems: 'center', gap: SPACING.md },
-  featureText: { fontSize: FONT_SIZES.lg, color: COLORS.textSecondary },
+  featureIconWrap: {
+    width: 36, height: 36, borderRadius: BORDER_RADIUS.md,
+    justifyContent: 'center', alignItems: 'center',
+  },
+  featureText: { fontSize: FONT_SIZES.md, color: COLORS.textSecondary, fontWeight: '500' },
+
+  // Actions
   actions: { gap: SPACING.md },
-  createButton: { borderRadius: BORDER_RADIUS.lg, overflow: 'hidden' },
+  createButton: { borderRadius: BORDER_RADIUS.xl, overflow: 'hidden' },
   buttonGradient: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    paddingVertical: SPACING.md, gap: SPACING.sm,
+    paddingVertical: SPACING.md + 2, gap: SPACING.sm,
   },
   createButtonText: { fontSize: FONT_SIZES.lg, fontWeight: '700', color: COLORS.background },
   importButton: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
     paddingVertical: SPACING.md, gap: SPACING.sm,
-    borderWidth: 1, borderColor: COLORS.gold + '40', borderRadius: BORDER_RADIUS.lg,
+    borderWidth: 1, borderColor: COLORS.gold + '40', borderRadius: BORDER_RADIUS.xl,
+    backgroundColor: COLORS.gold + '05',
   },
   importButtonText: { fontSize: FONT_SIZES.lg, fontWeight: '600', color: COLORS.gold },
-  version: { textAlign: 'center', fontSize: FONT_SIZES.xs, color: COLORS.textMuted },
+  version: { textAlign: 'center', fontSize: FONT_SIZES.xs, color: COLORS.textMuted, letterSpacing: 1 },
 });

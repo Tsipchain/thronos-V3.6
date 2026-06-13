@@ -207,9 +207,10 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: FONT_SIZES.xl, fontWeight: '600', color: COLORS.text },
   centerContent: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: SPACING.lg },
   iconCircle: {
-    width: 100, height: 100, borderRadius: 50,
+    width: 110, height: 110, borderRadius: 55,
     backgroundColor: COLORS.gold + '15', justifyContent: 'center', alignItems: 'center',
-    borderWidth: 2, borderColor: COLORS.gold + '30', marginBottom: SPACING.lg,
+    borderWidth: 2, borderColor: COLORS.gold + '50', marginBottom: SPACING.lg,
+    shadowColor: COLORS.gold, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.2, shadowRadius: 20,
   },
   title: { fontSize: FONT_SIZES.xxl, fontWeight: '700', color: COLORS.text, textAlign: 'center' },
   desc: { fontSize: FONT_SIZES.md, color: COLORS.textSecondary, textAlign: 'center', marginTop: SPACING.md, lineHeight: 22 },
@@ -223,7 +224,7 @@ const styles = StyleSheet.create({
   successIcon: { alignItems: 'center', marginTop: SPACING.lg, marginBottom: SPACING.sm },
   successText: { fontSize: FONT_SIZES.xxl, fontWeight: '700', color: COLORS.success, textAlign: 'center', marginBottom: SPACING.xl },
   credBox: {
-    backgroundColor: COLORS.surface, borderRadius: BORDER_RADIUS.lg,
+    backgroundColor: COLORS.surface, borderRadius: BORDER_RADIUS.xl,
     padding: SPACING.md, marginBottom: SPACING.md,
     borderWidth: 1, borderColor: COLORS.border,
   },

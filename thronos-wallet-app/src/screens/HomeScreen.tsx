@@ -42,6 +42,20 @@ const TOKEN_COLORS: Record<string, string> = {
   CRYPT: '#10B981',
 };
 
+const QUICK_ACTIONS: Array<{
+  label: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  color: string;
+  screen: keyof RootStackParamList;
+}> = [
+  { label: 'Send', icon: 'arrow-up-circle', color: COLORS.primary, screen: 'Send' },
+  { label: 'Receive', icon: 'arrow-down-circle', color: COLORS.success, screen: 'Receive' },
+  { label: 'Swap', icon: 'swap-horizontal', color: COLORS.info, screen: 'Swap' },
+  { label: 'Bridge', icon: 'git-compare', color: COLORS.warning, screen: 'Bridge' },
+  { label: 'Stake', icon: 'layers', color: COLORS.gold, screen: 'Stake' },
+  { label: 'Pledge', icon: 'shield-checkmark', color: '#FF6B6B', screen: 'Pledge' },
+];
+
 // USD price per THR (derived from 1 THR = 0.0001 BTC)
 const THR_USD_RATE = 7.14; // approximate, updated from chain
 
@@ -146,27 +160,39 @@ export default function HomeScreen() {
           </TouchableOpacity>
         </TouchableOpacity>
 
-        {/* Total Value Card — matches mainchain ΣΥΝΟΛΙΚΗ ΑΞΙΑ */}
+        {/* Total Value Card */}
         <LinearGradient
-          colors={['#1A1A0A', '#0D0D00']}
+          colors={['#221600', '#140F00', '#0D0D1A']}
           style={styles.totalCard}
         >
-          <Text style={styles.totalLabel}>TOTAL VALUE</Text>
-          {loading ? (
-            <ActivityIndicator color={COLORS.gold} size="large" style={{ marginVertical: SPACING.lg }} />
-          ) : (
-            <>
-              <Text style={styles.totalThr}>
-                {totalThr.toLocaleString(undefined, { maximumFractionDigits: 4 })} THR
-              </Text>
-              <Text style={styles.totalUsd}>
-                ≈ ${totalUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })} USD
-              </Text>
-              <Text style={styles.totalBtc}>
-                ₿ {totalBtc.toFixed(8)} BTC
-              </Text>
-            </>
-          )}
+          <View style={styles.totalCardInner}>
+            <Text style={styles.totalLabel}>PORTFOLIO VALUE</Text>
+            {loading ? (
+              <ActivityIndicator color={COLORS.gold} size="large" style={{ marginVertical: SPACING.lg }} />
+            ) : (
+              <>
+                <Text style={styles.totalThr}>
+                  {totalThr.toLocaleString(undefined, { maximumFractionDigits: 4 })}
+                  <Text style={styles.totalThrUnit}> THR</Text>
+                </Text>
+                <View style={styles.totalConversions}>
+                  <View style={styles.totalConversionItem}>
+                    <Text style={styles.totalUsd}>
+                      ${totalUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                    </Text>
+                    <Text style={styles.totalConversionLabel}>USD</Text>
+                  </View>
+                  <View style={styles.totalConversionDivider} />
+                  <View style={styles.totalConversionItem}>
+                    <Text style={styles.totalBtc}>
+                      {totalBtc.toFixed(8)}
+                    </Text>
+                    <Text style={styles.totalConversionLabel}>BTC</Text>
+                  </View>
+                </View>
+              </>
+            )}
+          </View>
         </LinearGradient>
 
         {/* Network Status */}
@@ -265,34 +291,22 @@ export default function HomeScreen() {
           )}
         </View>
 
-        {/* Quick Actions Grid — matches mainchain 6-button layout */}
+        {/* Quick Actions Grid */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>ACTIONS</Text>
+          <Text style={styles.sectionTitle}>QUICK ACTIONS</Text>
           <View style={styles.actionsGrid}>
-            <TouchableOpacity style={styles.actionCard} onPress={() => navigation.navigate('Send')}>
-              <Ionicons name="arrow-up-circle" size={28} color={COLORS.primary} />
-              <Text style={styles.actionText}>Send</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.actionCard} onPress={() => navigation.navigate('Receive')}>
-              <Ionicons name="arrow-down-circle" size={28} color={COLORS.success} />
-              <Text style={styles.actionText}>Receive</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.actionCard} onPress={() => navigation.navigate('Swap')}>
-              <Ionicons name="swap-horizontal" size={28} color={COLORS.info} />
-              <Text style={styles.actionText}>Swap</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.actionCard} onPress={() => navigation.navigate('Bridge')}>
-              <Ionicons name="git-compare" size={28} color={COLORS.warning} />
-              <Text style={styles.actionText}>Bridge</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.actionCard} onPress={() => navigation.navigate('Stake')}>
-              <Ionicons name="layers" size={28} color={COLORS.gold} />
-              <Text style={styles.actionText}>Stake</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.actionCard} onPress={() => navigation.navigate('Pledge')}>
-              <Ionicons name="shield-checkmark" size={28} color="#FF6B6B" />
-              <Text style={styles.actionText}>Pledge</Text>
-            </TouchableOpacity>
+            {QUICK_ACTIONS.map((action) => (
+              <TouchableOpacity
+                key={action.label}
+                style={[styles.actionCard, { borderColor: action.color + '45', backgroundColor: action.color + '12' }]}
+                onPress={() => navigation.navigate(action.screen)}
+              >
+                <View style={[styles.actionIconWrap, { backgroundColor: action.color + '25' }]}>
+                  <Ionicons name={action.icon} size={26} color={action.color} />
+                </View>
+                <Text style={[styles.actionText, { color: action.color }]}>{action.label}</Text>
+              </TouchableOpacity>
+            ))}
           </View>
         </View>
 
@@ -316,33 +330,48 @@ const styles = StyleSheet.create({
 
   // Header
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: SPACING.md },
-  title: { fontSize: FONT_SIZES.xl, fontWeight: '700', color: COLORS.gold, letterSpacing: 2 },
-  scanBtn: { width: 44, height: 44, borderRadius: BORDER_RADIUS.md, backgroundColor: COLORS.surface, justifyContent: 'center', alignItems: 'center' },
+  title: { fontSize: FONT_SIZES.xl, fontWeight: '800', color: COLORS.gold, letterSpacing: 3 },
+  scanBtn: {
+    width: 44, height: 44, borderRadius: BORDER_RADIUS.md,
+    backgroundColor: COLORS.surface, justifyContent: 'center', alignItems: 'center',
+    borderWidth: 1, borderColor: COLORS.border,
+  },
 
   // Address
   addressBar: {
     flexDirection: 'row', alignItems: 'center', gap: SPACING.sm,
-    backgroundColor: COLORS.surface, borderRadius: BORDER_RADIUS.md,
+    backgroundColor: COLORS.surface, borderRadius: BORDER_RADIUS.lg,
     paddingHorizontal: SPACING.md, paddingVertical: SPACING.sm,
-    marginBottom: SPACING.md, borderWidth: 1, borderColor: COLORS.border,
+    marginBottom: SPACING.md, borderWidth: 1, borderColor: COLORS.gold + '20',
   },
-  addressText: { flex: 1, fontSize: FONT_SIZES.sm, color: COLORS.text, fontFamily: 'monospace' },
+  addressText: { flex: 1, fontSize: FONT_SIZES.sm, color: COLORS.textSecondary, fontFamily: 'monospace' },
   copyBtn: {
-    backgroundColor: COLORS.gold + '20', paddingHorizontal: SPACING.sm,
-    paddingVertical: 4, borderRadius: BORDER_RADIUS.sm,
+    backgroundColor: COLORS.gold + '25', paddingHorizontal: SPACING.sm,
+    paddingVertical: 4, borderRadius: BORDER_RADIUS.sm, borderWidth: 1, borderColor: COLORS.gold + '40',
   },
   copyBtnText: { fontSize: FONT_SIZES.xs, color: COLORS.gold, fontWeight: '700' },
 
   // Total Value Card
   totalCard: {
-    borderRadius: BORDER_RADIUS.xl, padding: SPACING.lg,
-    marginBottom: SPACING.md, borderWidth: 1, borderColor: COLORS.gold + '30',
+    borderRadius: BORDER_RADIUS.xxl, padding: 2,
+    marginBottom: SPACING.md, borderWidth: 1, borderColor: COLORS.gold + '50',
+  },
+  totalCardInner: {
+    borderRadius: BORDER_RADIUS.xxl - 2, padding: SPACING.lg,
     alignItems: 'center',
   },
-  totalLabel: { fontSize: FONT_SIZES.xs, color: COLORS.textMuted, letterSpacing: 2, fontWeight: '600' },
-  totalThr: { fontSize: 28, fontWeight: '800', color: COLORS.gold, marginTop: SPACING.sm },
-  totalUsd: { fontSize: FONT_SIZES.md, color: COLORS.textSecondary, marginTop: 4 },
-  totalBtc: { fontSize: FONT_SIZES.sm, color: '#F7931A', marginTop: 2, fontWeight: '600' },
+  totalLabel: { fontSize: FONT_SIZES.xs, color: COLORS.gold + 'AA', letterSpacing: 3, fontWeight: '700' },
+  totalThr: { fontSize: 40, fontWeight: '800', color: COLORS.gold, marginTop: SPACING.sm, letterSpacing: -1 },
+  totalThrUnit: { fontSize: 22, fontWeight: '600', color: COLORS.gold + 'BB' },
+  totalConversions: {
+    flexDirection: 'row', alignItems: 'center', marginTop: SPACING.md,
+    gap: SPACING.lg,
+  },
+  totalConversionItem: { alignItems: 'center' },
+  totalConversionDivider: { width: 1, height: 28, backgroundColor: COLORS.gold + '30' },
+  totalUsd: { fontSize: FONT_SIZES.lg, color: COLORS.textSecondary, fontWeight: '600' },
+  totalBtc: { fontSize: FONT_SIZES.lg, color: '#F7931A', fontWeight: '600' },
+  totalConversionLabel: { fontSize: FONT_SIZES.xs, color: COLORS.textMuted, marginTop: 2, fontWeight: '600', letterSpacing: 1 },
 
   // Network
   networkBar: {
@@ -375,20 +404,20 @@ const styles = StyleSheet.create({
   // Sections
   section: { marginBottom: SPACING.lg },
   sectionTitle: {
-    fontSize: FONT_SIZES.sm, fontWeight: '700', color: COLORS.textMuted,
-    letterSpacing: 1.5, marginBottom: SPACING.sm,
+    fontSize: FONT_SIZES.xs, fontWeight: '700', color: COLORS.textMuted,
+    letterSpacing: 2, marginBottom: SPACING.sm, textTransform: 'uppercase',
   },
 
   // Token rows
-  emptyBox: { alignItems: 'center', padding: SPACING.xl, backgroundColor: COLORS.surface, borderRadius: BORDER_RADIUS.lg, gap: SPACING.sm },
+  emptyBox: { alignItems: 'center', padding: SPACING.xl, backgroundColor: COLORS.surface, borderRadius: BORDER_RADIUS.xl, gap: SPACING.sm },
   emptyText: { fontSize: FONT_SIZES.md, color: COLORS.textMuted },
   tokenRow: {
     flexDirection: 'row', alignItems: 'center',
-    backgroundColor: COLORS.surface, borderRadius: BORDER_RADIUS.lg,
+    backgroundColor: COLORS.surface, borderRadius: BORDER_RADIUS.xl,
     padding: SPACING.md, marginBottom: SPACING.sm,
     borderWidth: 1, borderColor: COLORS.border,
   },
-  tokenIcon: { width: 44, height: 44, borderRadius: BORDER_RADIUS.md, justifyContent: 'center', alignItems: 'center', marginRight: SPACING.md },
+  tokenIcon: { width: 46, height: 46, borderRadius: BORDER_RADIUS.lg, justifyContent: 'center', alignItems: 'center', marginRight: SPACING.md },
   tokenInfo: { flex: 1 },
   tokenNameRow: { flexDirection: 'row', alignItems: 'center', gap: SPACING.xs },
   tokenName: { fontSize: FONT_SIZES.md, fontWeight: '600', color: COLORS.text },
@@ -399,15 +428,19 @@ const styles = StyleSheet.create({
   tokenBalance: { fontSize: FONT_SIZES.md, fontWeight: '600', color: COLORS.text },
   tokenUsdVal: { fontSize: FONT_SIZES.xs, color: COLORS.textMuted, marginTop: 2 },
 
-  // Actions Grid — 3x2 like mainchain
+  // Actions Grid — 3x2
   actionsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: SPACING.sm },
   actionCard: {
     width: '31%' as any, aspectRatio: 1,
-    backgroundColor: COLORS.surface, borderRadius: BORDER_RADIUS.lg,
-    justifyContent: 'center', alignItems: 'center', gap: SPACING.xs,
-    borderWidth: 1, borderColor: COLORS.border,
+    borderRadius: BORDER_RADIUS.xl,
+    justifyContent: 'center', alignItems: 'center', gap: 6,
+    borderWidth: 1,
   },
-  actionText: { fontSize: FONT_SIZES.sm, color: COLORS.textSecondary, fontWeight: '600' },
+  actionIconWrap: {
+    width: 48, height: 48, borderRadius: BORDER_RADIUS.lg,
+    justifyContent: 'center', alignItems: 'center',
+  },
+  actionText: { fontSize: FONT_SIZES.xs, fontWeight: '700', letterSpacing: 0.5 },
 
   // Rate Bar
   rateBar: {

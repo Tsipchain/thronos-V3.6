@@ -22594,6 +22594,69 @@ def api_wallet_v1_restore_migration():
         return jsonify(ok=False, error="internal_error", detail=str(e)), 500
 
 
+@app.route("/api/wallet/v1/resolve-address", methods=["POST"])
+def api_wallet_v1_resolve_address():
+    """
+    Bidirectional address resolution: given canonical or legacy address, find the other.
+
+    Called by: wallet UI unlock flow to find signing key stored under legacy address
+    when canonical address doesn't have direct binding.
+
+    Input:
+    {
+      "address": "THR683318ACF083723B3EDFE6C0A30AD62670F00353 or THR79ca94a7eb70a6aa99d12d7fdb01446ef246301a"
+    }
+
+    Output (success):
+    {
+      "ok": true,
+      "canonical_v1_address": "THR683318ACF083723B3EDFE6C0A30AD62670F00353",
+      "legacy_address": "THR79ca94a7eb70a6aa99d12d7fdb01446ef246301a",
+      "migration_status": "confirmed",
+      "has_signing_material": true
+    }
+
+    Output (error):
+    {
+      "ok": false,
+      "error": "address_not_found"
+    }
+    """
+    try:
+        data = request.get_json() or {}
+        address = (data.get("address") or "").strip().upper()
+
+        # Validate address format
+        if not address or not address.startswith("THR") or len(address) != 43:
+            return jsonify(ok=False, error="invalid_address"), 400
+
+        # Import migration utilities
+        from wallet_v1_migration import search_all_migration_sources
+
+        # Try searching as legacy address first, then as canonical
+        migration = search_all_migration_sources(legacy_address=address)
+        if not migration:
+            migration = search_all_migration_sources(canonical_v1_address=address)
+
+        if not migration:
+            return jsonify(ok=False, error="address_not_found"), 404
+
+        return jsonify(
+            ok=True,
+            canonical_v1_address=migration.get("canonical_v1_address"),
+            legacy_address=migration.get("legacy_address"),
+            migration_status=migration.get("migration_status", "confirmed"),
+            has_signing_material=migration.get("has_signing_material", False)
+        ), 200
+
+    except ImportError:
+        logger.error("[ResolveAddress] wallet_v1_migration module not available")
+        return jsonify(ok=False, error="migration_system_unavailable"), 500
+    except Exception as e:
+        logger.error(f"[ResolveAddress] Error: {e}")
+        return jsonify(ok=False, error="internal_error", detail=str(e)), 500
+
+
 def verify_swap_wallet_v1_or_legacy(payload, expected_action=SWAP_EXPECTED_ACTION):
     """Verify swap auth before any swap state mutation."""
     # Extract addresses from payload - normalize them

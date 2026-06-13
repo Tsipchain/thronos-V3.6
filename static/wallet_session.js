@@ -722,18 +722,79 @@
             throw err;
           }
 
-          // No matching binding exists - true key mismatch
-          console.warn('[UnlockWallet] No binding registered - key mismatch');
+          // No direct binding - try address resolution fallback
+          // This handles the case where signing key was created under legacy address
+          // but user is trying to unlock with canonical address
+          console.info('[UnlockWallet] No direct binding - attempting address resolution fallback');
+
+          let legacyResolutionSucceeded = false;
+          try {
+            const resolveRes = await fetch('/api/wallet/v1/resolve-address', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ address: activeAddr })
+            });
+
+            if (resolveRes.ok) {
+              const resolveData = await resolveRes.json();
+              const legacyAddr = resolveData.legacy_address;
+
+              if (legacyAddr) {
+                const legacyNormalized = normalizeAddress(legacyAddr);
+
+                // Check if the derived address matches the legacy address
+                if (derivedNormalized === legacyNormalized) {
+                  console.info('[UnlockWallet] ✓ Signing key matches legacy address - creating binding');
+                  legacyResolutionSucceeded = true;
+
+                  // Create binding so canonical address knows to use this legacy key
+                  try {
+                    await fetch('/api/wallet/v1/bind-public-key', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        canonical_v1_address: activeAddr,
+                        public_key: derivedPublicKey,
+                        bound_key_address: legacyAddr,
+                        address_resolution_context: 'legacy_to_canonical_migration'
+                      })
+                    });
+                    console.info('[UnlockWallet] ✓ Binding created: canonical address now uses legacy signing key');
+                  } catch (bindErr) {
+                    console.warn('[UnlockWallet] Failed to create binding, but unlock succeeds with legacy key');
+                  }
+
+                  // Unlock with the legacy signing key
+                  unlockedPrivateKeyHex = decryptedPrivKeyHex;
+                  unlockedForAddress = activeAddr;
+                  setBound(true);
+                  localStorage.setItem(LOCK_KEY, '0');
+                  return true;
+                } else {
+                  console.warn('[UnlockWallet] Derived address does not match legacy address either');
+                }
+              } else {
+                console.warn('[UnlockWallet] Could not resolve canonical to legacy address');
+              }
+            } else {
+              console.warn('[UnlockWallet] Address resolution endpoint returned:', resolveRes.status);
+            }
+          } catch (resolveErr) {
+            console.warn('[UnlockWallet] Address resolution failed:', resolveErr.message);
+          }
+
+          // Address resolution fallback also failed - true key mismatch
+          console.warn('[UnlockWallet] Address resolution fallback exhausted - key mismatch');
           const err = new Error('wallet_signing_key_does_not_match_active_address');
           err.code = 'KEY_MISMATCH';
-          err.error_type = 'binding_not_registered';
+          err.error_type = legacyResolutionSucceeded ? 'legacy_binding_created' : 'binding_not_registered_and_legacy_unavailable';
           err.derived_address = derivedAddress;
           err.active_address = activeAddr;
           err.decrypt_succeeded = true;
           lastSigningKeyMismatch = {
             derived_address: derivedAddress,
             active_address: activeAddr,
-            error_type: 'binding_not_registered',
+            error_type: legacyResolutionSucceeded ? 'legacy_binding_created' : 'binding_not_registered_and_legacy_unavailable',
             decrypt_succeeded: true,
             timestamp: Date.now()
           };

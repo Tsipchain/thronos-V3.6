@@ -1345,8 +1345,8 @@
     }
     @keyframes spin { to { transform: rotate(360deg); } }
 
-    .wallet-popup-topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid rgba(0,255,102,0.12);}
-    .wallet-popup-title{font-size:13px;font-weight:600;color:#e6ffe5;letter-spacing:0.5px;}
+    .wallet-popup-topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid rgba(0,255,102,0.10);}
+    .wallet-popup-title{font-size:11px;color:rgba(150,200,150,0.6);letter-spacing:0.3px;}
     .wallet-popup-actions{display:flex;gap:6px;margin-top:0;padding-top:0;border-top:none;}
     .wallet-mini-btn{background:rgba(0,255,102,0.05);border:1px solid rgba(0,255,102,.2);color:rgba(0,255,102,0.75);border-radius:6px;padding:3px 9px;font-size:11px;cursor:pointer;transition:all 0.15s;}
     .wallet-mini-btn:hover{background:rgba(0,255,102,0.12);border-color:rgba(0,255,102,.45);color:#00ff66;}
@@ -1586,10 +1586,11 @@
         <!-- Wallet Balance Popup Widget -->
         <div class="wallet-balance-popup" id="walletBalancePopup" onclick="event.stopPropagation();">
             <div class="wallet-popup-topbar">
-                <div class="wallet-popup-title">💼 Thronos Wallet</div>
+                <div class="wallet-popup-title">💼 Wallet</div>
                 <div class="wallet-popup-actions">
-                    <button id="walletPinBtn" class="wallet-mini-btn" title="Pin to page">📌</button>
+                    <button id="walletPinBtn" class="wallet-mini-btn" title="Keep popup open">📌</button>
                     <button id="walletLockBtn" class="wallet-mini-btn" title="Lock wallet">🔒</button>
+                    <button class="wallet-mini-btn" title="Close" onclick="setWalletOpen(false); event.stopPropagation();">✕</button>
                 </div>
             </div>
 
@@ -8388,18 +8389,18 @@ function updateHeaderWalletUi(){
 
     if(hasWallet){
         const isPinned = getWalletUiPinned();
-        // Use a page-scoped flag (not sessionStorage) so every page navigation
-        // triggers a fresh balance load. sessionStorage persists across navigations
-        // within the same tab, which would suppress auto-load on pages like /music.
-        const hasOpenedThisPage = window.__walletOpenedThisPage;
-        if (isPinned || !hasOpenedThisPage) {
-            window.__walletOpenedThisPage = true;
+        const hasLoadedThisPage = window.__walletBalanceLoadedThisPage;
+        if (!hasLoadedThisPage) {
+            window.__walletBalanceLoadedThisPage = true;
             setTimeout(() => {
-                setWalletOpen(true);
-                // Force balance reload on every page navigation
+                // Load balance in the background — don't force-open the popup.
+                // Only open the popup if the user has it pinned.
                 walletBalancesLoaded = false;
                 loadWalletBalances();
-                sessionStorage.setItem('wallet_opened_once', '1');
+                if (isPinned) {
+                    setWalletOpen(true);
+                    showWalletContentSection();
+                }
             }, 500);
         }
     } else {

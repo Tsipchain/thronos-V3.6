@@ -187,27 +187,26 @@
       display: block;
     }
     
-    /* Top Bar Controls - Constrain to viewport */
+    /* Top Bar Controls - Fixed to viewport so it stays on scroll */
     .top-controls {
-        position: absolute;
+        position: fixed;
         top: 8px;
         right: 12px;
         display: flex;
         gap: 10px;
         z-index: 3700;
         flex-wrap: wrap;
-        max-width: 360px;
-        justify-content: flex-end;
         max-width: calc(100vw - 40px);
+        justify-content: flex-end;
         overflow: visible;
     }
     
-    /* Wallet Status Indicator */
+    /* Wallet Status Indicator — styled as a compact button, not a box */
     .wallet-status {
-        background: #002200;
-        color: #0f0;
-        border: 1px solid #004400;
-        padding: 5px 10px;
+        background: rgba(0, 20, 10, 0.9);
+        color: #00ff66;
+        border: 1px solid rgba(0, 255, 102, 0.4);
+        padding: 6px 12px;
         font-size: 0.8em;
         cursor: pointer;
         display: none;
@@ -216,9 +215,20 @@
         position: relative;
         white-space: nowrap;
         flex-shrink: 0;
+        border-radius: 10px;
+        font-weight: bold;
+        box-shadow: 0 0 8px rgba(0, 255, 102, 0.2);
+        transition: all 0.2s ease;
+        user-select: none;
     }
     .wallet-status:hover {
-        background: #004400;
+        background: rgba(0, 50, 25, 0.95);
+        border-color: rgba(0, 255, 102, 0.7);
+        box-shadow: 0 0 14px rgba(0, 255, 102, 0.35);
+    }
+    .wallet-status.open {
+        border-color: rgba(0, 255, 102, 0.75);
+        box-shadow: 0 0 16px rgba(0, 255, 102, 0.4);
     }
     .wallet-status.open .wallet-balance-popup {
         display: block;
@@ -291,10 +301,9 @@
     /* Wallet Balance Popup Widget */
     .wallet-balance-popup {
         display: none;
-        position: absolute;
-        bottom: auto;
-        width: min(360px, calc(100vw - 48px));
-        max-width: calc(100vw - 48px);
+        position: fixed;
+        width: min(360px, calc(100vw - 24px));
+        max-width: calc(100vw - 24px);
         background: linear-gradient(135deg, #000000 0%, #071810 50%, #000000 100%);
         border: 2px solid;
         border-image: linear-gradient(135deg, #d4af37 0%, #00ff66 50%, #ffd700 100%) 1;
@@ -307,12 +316,10 @@
         color: #e6ffe5;
         backdrop-filter: blur(10px);
         pointer-events: auto;
-        top: 100%;
-        right: 0;
-        margin-top: 8px;
-        max-height: 70vh;
+        top: 48px;
+        right: 12px;
+        max-height: calc(100vh - 60px);
         box-sizing: border-box;
-        transform: translateX(0);
     }
     .music-modal.open {
         display: flex;
@@ -8415,6 +8422,8 @@ function updateHeaderWalletUi(){
 document.addEventListener('DOMContentLoaded', () => {
     const savedLang = getCurrentLang();
     setLanguage(savedLang);
+    // Reset idle timer on page load so cross-page navigation doesn't trigger idle-lock prompt
+    markWalletActive();
     updateHeaderWalletUi();
 
     // Update token prices every 30 seconds

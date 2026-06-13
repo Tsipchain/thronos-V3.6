@@ -26400,9 +26400,13 @@ def api_wallet_status():
     pledge_mode = access_state["pledge_mode"]
     has_access = access_state["effective_pledge_ok"]
 
-    # legacy_repair_ui_enabled: true if the WALLET_V1_REPAIR_TOKEN env var is set
-    # (signals that admin has configured a repair token and repair UI should show)
+    # legacy_repair_ui_enabled: true if WALLET_V1_REPAIR_TOKEN is set.
+    # Can be explicitly disabled by setting WALLET_V1_LEGACY_REPAIR_UI=0
+    # (WALLET_V1_LEGACY_REPAIR_UI=0 overrides even if repair token is present).
     repair_token_configured = bool(os.environ.get('WALLET_V1_REPAIR_TOKEN', '').strip())
+    legacy_ui_override = os.environ.get('WALLET_V1_LEGACY_REPAIR_UI', '').strip().lower()
+    if legacy_ui_override in ('0', 'false', 'no', 'off'):
+        repair_token_configured = False
 
     return jsonify(
         ok=True,

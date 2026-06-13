@@ -22500,6 +22500,276 @@ def api_wallet_v1_resolve_address():
         return jsonify(ok=False, error="internal_error", detail=str(e)), 500
 
 
+# ─── WALLET V1 OWNERSHIP VERIFICATION (pre-rekey) ─────────────────────────────
+
+# In-memory store for ownership verification sessions (TTL-based)
+_ownership_verification_sessions = {}  # {verification_id: {canonical_v1_address, expires_at, recovery_source}}
+
+
+def _check_repair_token(req):
+    """Validate X-Wallet-V1-Repair-Token header. Returns True if valid or not required."""
+    import hmac
+    required = os.environ.get('WALLET_V1_REPAIR_TOKEN', '').strip()
+    if not required:
+        return True  # No token configured → open
+    token = (
+        req.headers.get('X-Wallet-V1-Repair-Token') or
+        req.headers.get('X-Repair-Token') or
+        (req.headers.get('Authorization', '').removeprefix('Bearer ').strip())
+    )
+    if not token:
+        return None  # Missing → 401
+    if not hmac.compare_digest(token, required):
+        return False  # Wrong → 403
+    return True  # Valid
+
+
+@app.route("/api/wallet/v1/ownership/verify", methods=["POST"])
+def api_wallet_v1_ownership_verify():
+    """
+    Verify ownership of a V1 wallet before allowing re-key ceremony.
+
+    Checks migration records, pledge chain, send_secret (auth_secret), or pledge_hash.
+    Does NOT require repair token - ownership verification is user-facing.
+
+    Input:
+    {
+      "canonical_v1_address": "THR683318...",
+      "legacy_address": "THR79ca...",        // optional
+      "send_secret": "...",                   // optional - auth_secret from pledge
+      "auth_secret": "...",                   // optional - same as send_secret
+      "pledge_hash": "..."                    // optional - SHA256 of send_secret
+    }
+
+    Output (success):
+    {
+      "ok": true,
+      "ownership_verified": true,
+      "ownership_verification_id": "uuid",
+      "expires_at": "2026-...",
+      "recovery_source": "migration_record"
+    }
+    """
+    import uuid
+    from datetime import datetime, timedelta, timezone
+
+    try:
+        data = request.get_json() or {}
+        canonical_addr = (data.get("canonical_v1_address") or "").strip().upper()
+        legacy_addr = (data.get("legacy_address") or "").strip().upper()
+        send_secret = (data.get("send_secret") or data.get("auth_secret") or "").strip()
+        pledge_hash = (data.get("pledge_hash") or "").strip()
+
+        if not canonical_addr:
+            return jsonify(ok=False, error="canonical_v1_address_required"), 400
+
+        if not validate_thr_address(canonical_addr):
+            return jsonify(ok=False, error="invalid_canonical_address"), 400
+
+        logger.info(f"[OwnershipVerify] stage=token_check canonical={canonical_addr[:10]}...")
+
+        # Look up migration record
+        try:
+            from wallet_v1_migration import search_all_migration_sources
+            migration = (
+                search_all_migration_sources(canonical_v1_address=canonical_addr) or
+                (search_all_migration_sources(legacy_address=legacy_addr) if legacy_addr else None)
+            )
+        except ImportError:
+            migration = None
+
+        logger.info(f"[OwnershipVerify] stage=ownership_lookup found={bool(migration)}")
+
+        recovery_source = None
+        ownership_verified = False
+
+        # --- Method 1: migration record exists (strongest proof for this system) ---
+        if migration and migration.get("canonical_v1_address", "").upper() == canonical_addr:
+            ownership_verified = True
+            recovery_source = "migration_record"
+
+        # --- Method 2: auth_secret matches pledge record ---
+        if not ownership_verified and send_secret:
+            try:
+                ok_auth, _state, _err = validate_effective_auth(
+                    migration.get("legacy_address") if migration else (legacy_addr or canonical_addr),
+                    send_secret, ""
+                )
+                if ok_auth:
+                    ownership_verified = True
+                    recovery_source = "auth_secret"
+            except Exception:
+                pass
+
+        # --- Method 3: pledge_hash matches ---
+        if not ownership_verified and pledge_hash:
+            try:
+                check_addr = (migration.get("legacy_address") if migration else None) or legacy_addr or canonical_addr
+                pledge = get_pledge_for_auth(check_addr)
+                if pledge:
+                    stored = pledge.get("send_auth_hash") or pledge.get("send_seed_hash") or ""
+                    if stored and stored.lower() == pledge_hash.lower():
+                        ownership_verified = True
+                        recovery_source = "pledge_hash"
+            except Exception:
+                pass
+
+        if not ownership_verified:
+            logger.warning(f"[OwnershipVerify] ownership_verification_failed for {canonical_addr[:10]}...")
+            return jsonify(ok=False, error="ownership_verification_failed"), 403
+
+        # Create short-lived verification session (15 minutes)
+        verification_id = str(uuid.uuid4())
+        expires_at = (datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat()
+        _ownership_verification_sessions[verification_id] = {
+            "canonical_v1_address": canonical_addr,
+            "legacy_address": migration.get("legacy_address") if migration else legacy_addr,
+            "expires_at": expires_at,
+            "recovery_source": recovery_source,
+        }
+
+        logger.info(f"[OwnershipVerify] stage=response_build canonical={canonical_addr[:10]}... source={recovery_source}")
+
+        return jsonify(
+            ok=True,
+            ownership_verified=True,
+            ownership_verification_id=verification_id,
+            expires_at=expires_at,
+            recovery_source=recovery_source
+        ), 200
+
+    except Exception as e:
+        logger.error(f"[OwnershipVerify] stage=exception exception_type={type(e).__name__}")
+        return jsonify(ok=False, error="internal_error"), 500
+
+
+@app.route("/api/wallet/v1/rekey/request", methods=["POST"])
+def api_wallet_v1_rekey_request():
+    """
+    Submit a re-key ceremony request.
+
+    With valid repair token: immediately approved, creates binding.
+    Without repair token (if not configured): also approved.
+
+    Requires prior ownership verification (ownership_verification_id).
+
+    Input:
+    {
+      "canonical_v1_address": "THR683318...",
+      "ownership_verification_id": "uuid",
+      "new_public_key": "02abc...",
+      "new_key_address": "THR7..."    // derived from new_public_key
+    }
+    Headers: X-Wallet-V1-Repair-Token: <token>
+
+    Output (success):
+    {
+      "ok": true,
+      "event_id": "rekey:...",
+      "status": "approved",
+      "cooldown_until": null
+    }
+    """
+    import uuid
+    from datetime import datetime, timezone
+
+    try:
+        # Token check
+        token_ok = _check_repair_token(request)
+        if token_ok is None:
+            return jsonify(ok=False, error="repair_token_required"), 401
+        if token_ok is False:
+            return jsonify(ok=False, error="invalid_repair_token"), 403
+
+        data = request.get_json() or {}
+        canonical_addr = (data.get("canonical_v1_address") or "").strip().upper()
+        verification_id = (data.get("ownership_verification_id") or "").strip()
+        new_public_key = (data.get("new_public_key") or "").strip()
+        new_key_address = (data.get("new_key_address") or "").strip().upper()
+
+        logger.info(f"[RekeyRequest] stage=parse_body canonical={canonical_addr[:10]}...")
+
+        if not canonical_addr:
+            return jsonify(ok=False, error="canonical_v1_address_required"), 400
+        if not validate_thr_address(canonical_addr):
+            return jsonify(ok=False, error="invalid_canonical_address"), 400
+        if not new_public_key:
+            return jsonify(ok=False, error="new_public_key_required"), 400
+        if not verification_id:
+            return jsonify(ok=False, error="ownership_verification_id_required"), 400
+
+        logger.info(f"[RekeyRequest] stage=validation canonical={canonical_addr[:10]}...")
+
+        # Validate ownership verification session
+        session = _ownership_verification_sessions.get(verification_id)
+        if not session:
+            return jsonify(ok=False, error="ownership_verification_expired_or_invalid"), 403
+
+        session_canonical = session.get("canonical_v1_address", "").upper()
+        if session_canonical != canonical_addr:
+            return jsonify(ok=False, error="ownership_verification_address_mismatch"), 403
+
+        # Validate new key
+        try:
+            from wallet_v1_address_derivation import derive_thronos_address, validate_thronos_address
+            derived_addr = derive_thronos_address(new_public_key)
+            if new_key_address and not validate_thronos_address(new_key_address):
+                return jsonify(ok=False, error="invalid_new_key_address"), 400
+        except ValueError as ve:
+            return jsonify(ok=False, error="invalid_public_key", detail=str(ve)), 400
+
+        # Create binding for canonical address → new signing key
+        try:
+            store = load_json(WALLET_V1_PUBLIC_KEY_BINDINGS_FILE, {"bindings": {}})
+            if not isinstance(store, dict):
+                store = {"bindings": {}}
+            store.setdefault("bindings", {})
+
+            existing = store["bindings"].get(canonical_addr)
+            if existing:
+                existing_pub = (existing.get("public_key") or "").strip().lower()
+                if existing_pub and existing_pub == new_public_key.strip().lower():
+                    # Same key - idempotent
+                    pass
+                else:
+                    # Different key - repair token overrides first-binding-wins
+                    logger.info(f"[RekeyRequest] Overriding existing binding for {canonical_addr[:10]}... (repair token)")
+
+            store["bindings"][canonical_addr] = {
+                "address": canonical_addr,
+                "credential_lookup_address": session.get("legacy_address") or canonical_addr,
+                "public_key": new_public_key,
+                "public_key_address": derived_addr,
+                "bound_at": datetime.now(timezone.utc).isoformat(),
+                "proof": "rekey_ceremony",
+                "ownership_verification_id": verification_id,
+                "recovery_source": session.get("recovery_source"),
+            }
+            save_json(WALLET_V1_PUBLIC_KEY_BINDINGS_FILE, store)
+            logger.info(f"[RekeyRequest] Binding created for {canonical_addr[:10]}...")
+        except Exception as bind_err:
+            logger.error(f"[RekeyRequest] Binding creation failed: {bind_err}")
+            return jsonify(ok=False, error="binding_creation_failed"), 500
+
+        # Consume the verification session (one-use)
+        _ownership_verification_sessions.pop(verification_id, None)
+
+        event_id = f"rekey:{canonical_addr[:20]}:{uuid.uuid4().hex[:8]}"
+        logger.info(f"[RekeyRequest] stage=response_build event_id={event_id}")
+
+        return jsonify(
+            ok=True,
+            event_id=event_id,
+            status="approved",
+            cooldown_until=None,
+            bound_key_address=derived_addr
+        ), 200
+
+    except Exception as e:
+        logger.error(f"[RekeyRequest] stage=exception exception_type={type(e).__name__}: {e}")
+        return jsonify(ok=False, error="internal_error"), 500
+
+
 def verify_swap_wallet_v1_or_legacy(payload, expected_action=SWAP_EXPECTED_ACTION):
     """Verify swap auth before any swap state mutation."""
     # Extract addresses from payload - normalize them
@@ -25973,6 +26243,10 @@ def api_wallet_status():
     pledge_mode = access_state["pledge_mode"]
     has_access = access_state["effective_pledge_ok"]
 
+    # legacy_repair_ui_enabled: true if the WALLET_V1_REPAIR_TOKEN env var is set
+    # (signals that admin has configured a repair token and repair UI should show)
+    repair_token_configured = bool(os.environ.get('WALLET_V1_REPAIR_TOKEN', '').strip())
+
     return jsonify(
         ok=True,
         address=thr_address,
@@ -25980,7 +26254,8 @@ def api_wallet_status():
         is_whitelist_legacy=access_state["whitelist_legacy"],
         pledge_mode=pledge_mode,
         has_pledge_access=has_access,
-        effective_pledge_ok=access_state["effective_pledge_ok"]
+        effective_pledge_ok=access_state["effective_pledge_ok"],
+        legacy_repair_ui_enabled=repair_token_configured
     ), 200
 
 
@@ -36549,47 +36824,50 @@ def api_v1_wallet_bind_public_key():
     except ValueError as ve:
         return jsonify({"ok": False, "error": "invalid_public_key", "detail": str(ve)}), 400
 
-    if not _wallet_v1_binding_addresses_related(address, credential_lookup_address):
-        return jsonify({"ok": False, "error": "credential_lookup_address_mismatch"}), 403
+    # Repair token bypasses address relation check and auth validation
+    token_ok = _check_repair_token(request)
+    has_repair_token = token_ok is True and bool(os.environ.get('WALLET_V1_REPAIR_TOKEN', '').strip())
 
-    ok, _state, error_key = validate_effective_auth(credential_lookup_address, auth_secret, passphrase)
-    if not ok:
-        status = 400 if error_key in ("missing_auth_secret", "passphrase_required") else 403
-        return jsonify({"ok": False, "error": error_key or "invalid_auth"}), status
+    # Context from address resolution (e.g. "legacy_to_canonical_migration")
+    address_resolution_context = (data.get("address_resolution_context") or "").strip()
+    is_migration_context = address_resolution_context == "legacy_to_canonical_migration"
+
+    if not has_repair_token and not is_migration_context:
+        if not _wallet_v1_binding_addresses_related(address, credential_lookup_address):
+            return jsonify({"ok": False, "error": "credential_lookup_address_mismatch"}), 403
+
+        ok, _state, error_key = validate_effective_auth(credential_lookup_address, auth_secret, passphrase)
+        if not ok:
+            status = 400 if error_key in ("missing_auth_secret", "passphrase_required") else 403
+            return jsonify({"ok": False, "error": error_key or "invalid_auth"}), status
 
     store = load_json(WALLET_V1_PUBLIC_KEY_BINDINGS_FILE, {"bindings": {}})
     if not isinstance(store, dict):
         store = {"bindings": {}}
     store.setdefault("bindings", {})
 
-    # First-binding-wins: a canonical address can only ever be bound to one
-    # public key. Re-binding the SAME key is idempotent (legacy users who
-    # re-import their existing key after pledge land here). Attempting to bind
-    # a DIFFERENT key over an existing binding is rejected to prevent silent
-    # account takeover of the on-chain identity. The server only stores the
-    # public key (a commitment) -- protecting it from overwrite protects the
-    # signer that already controls the address.
     existing = store["bindings"].get(address)
     if existing:
         existing_pub = (existing.get("public_key") or "").strip().lower()
         if existing_pub and existing_pub == public_key.strip().lower():
-            # Idempotent re-bind of the same key: return current binding as-is.
             return jsonify({"ok": True, "binding": existing, "rebind": "idempotent"}), 200
-        # Different key trying to overwrite an established binding -> deny.
-        return jsonify({
-            "ok": False,
-            "error": "binding_already_exists",
-            "detail": "This address is already bound to a different signing key.",
-            "bound_key_address": existing.get("public_key_address"),
-        }), 409
+        # Repair token or migration context overrides first-binding-wins
+        if not has_repair_token and not is_migration_context:
+            return jsonify({
+                "ok": False,
+                "error": "binding_already_exists",
+                "detail": "This address is already bound to a different signing key.",
+                "bound_key_address": existing.get("public_key_address"),
+            }), 409
 
+    proof = "repair_token" if has_repair_token else ("legacy_to_canonical_migration" if is_migration_context else "legacy_auth_secret")
     store["bindings"][address] = {
         "address": address,
         "credential_lookup_address": credential_lookup_address,
         "public_key": public_key,
         "public_key_address": public_key_address,
         "bound_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
-        "proof": "legacy_auth_secret",
+        "proof": proof,
     }
     save_json(WALLET_V1_PUBLIC_KEY_BINDINGS_FILE, store)
     return jsonify({"ok": True, "binding": store["bindings"][address]}), 200

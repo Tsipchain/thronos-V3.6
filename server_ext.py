@@ -42,6 +42,145 @@ try:
 except Exception as exc:  # pragma: no cover
     app.logger.warning("[L2E-EDU] Blueprint NOT loaded: %s", exc)
 
+# ── Pledge-based v0 wallet migration ──────────────────────────────────────────
+# Lets pledge/HMAC users find their old THR address via send_secret only,
+# then migrate to a V1 wallet and set up PIN + passkey.
+import hashlib as _hashlib
+from flask import jsonify as _jsonify, request as _request
+
+import server as _srv
+
+@app.route('/api/wallet/v1/pledge-lookup', methods=['POST'])
+def pledge_wallet_lookup():
+    """
+    Find a pledge record by send_secret (the HMAC token the user received when pledging).
+    SHA256(send_secret) is matched against stored send_seed_hash / send_auth_hash.
+    Also tries double-SHA256 for v0 wallets that used SHA256d derivation.
+
+    Input:  { "send_secret": "..." }
+    Output: { "ok": true, "thr_address": "THR...", "btc_address": "3...", "pledge_hash": "..." }
+    """
+    try:
+        data = _request.get_json() or {}
+        send_secret = (data.get('send_secret') or '').strip()
+        if not send_secret:
+            return _jsonify(ok=False, error='send_secret_required'), 400
+
+        # Compute SHA256 and SHA256d of the secret
+        h1 = _hashlib.sha256(send_secret.encode()).hexdigest()          # standard
+        h2 = _hashlib.sha256(h1.encode()).hexdigest()                   # SHA256d (v0 wallets)
+        h3 = _hashlib.sha256(f'{send_secret}:auth'.encode()).hexdigest()  # pledge_submit variant
+
+        load_json = getattr(_srv, 'load_json', None)
+        pledge_chain_path = getattr(_srv, 'PLEDGE_CHAIN', None)
+        if not callable(load_json) or not pledge_chain_path:
+            return _jsonify(ok=False, error='pledge_system_unavailable'), 503
+
+        pledges = load_json(pledge_chain_path, []) or []
+        match = None
+        for p in pledges:
+            stored = (p.get('send_seed_hash') or p.get('send_auth_hash') or '').lower()
+            if stored and stored in (h1, h2, h3):
+                match = p
+                break
+
+        if not match:
+            return _jsonify(ok=False, error='pledge_not_found'), 404
+
+        return _jsonify(
+            ok=True,
+            thr_address=match.get('thr_address', ''),
+            btc_address=match.get('btc_address', ''),
+            pledge_hash=match.get('pledge_hash', ''),
+        ), 200
+
+    except Exception as exc:
+        app.logger.error('[PledgeLookup] %s', exc)
+        return _jsonify(ok=False, error='internal_error'), 500
+
+
+@app.route('/api/wallet/v1/pledge-migrate', methods=['POST'])
+def pledge_wallet_migrate():
+    """
+    Full pledge→V1 migration in one call:
+    1. Verify send_secret ownership (same lookup as pledge-lookup)
+    2. Call existing wallet_v1_migration.migrate_legacy_address
+    3. Return new canonical V1 address + a fresh recovery session token
+
+    Input:  { "send_secret": "...", "pin": "1234" }
+    Output: { "ok": true, "canonical_v1_address": "THR...", "legacy_address": "THR..." }
+    """
+    try:
+        data = _request.get_json() or {}
+        send_secret = (data.get('send_secret') or '').strip()
+        pin = (data.get('pin') or '').strip()
+
+        if not send_secret:
+            return _jsonify(ok=False, error='send_secret_required'), 400
+
+        # Find pledge record
+        h1 = _hashlib.sha256(send_secret.encode()).hexdigest()
+        h2 = _hashlib.sha256(h1.encode()).hexdigest()
+        h3 = _hashlib.sha256(f'{send_secret}:auth'.encode()).hexdigest()
+
+        load_json = getattr(_srv, 'load_json', None)
+        pledge_chain_path = getattr(_srv, 'PLEDGE_CHAIN', None)
+        if not callable(load_json) or not pledge_chain_path:
+            return _jsonify(ok=False, error='pledge_system_unavailable'), 503
+
+        pledges = load_json(pledge_chain_path, []) or []
+        match = None
+        for p in pledges:
+            stored = (p.get('send_seed_hash') or p.get('send_auth_hash') or '').lower()
+            if stored and stored in (h1, h2, h3):
+                match = p
+                break
+
+        if not match:
+            return _jsonify(ok=False, error='pledge_not_found'), 404
+
+        old_address = match.get('thr_address', '')
+        if not old_address:
+            return _jsonify(ok=False, error='pledge_missing_address'), 500
+
+        # Check if already migrated
+        try:
+            from wallet_v1_migration import search_all_migration_sources
+            existing = search_all_migration_sources(legacy_address=old_address)
+            if existing and existing.get('canonical_v1_address'):
+                return _jsonify(
+                    ok=True,
+                    canonical_v1_address=existing['canonical_v1_address'],
+                    legacy_address=old_address,
+                    already_migrated=True,
+                ), 200
+        except ImportError:
+            pass
+
+        # Execute migration
+        try:
+            from wallet_v1_migration import migrate_legacy_address
+            result = migrate_legacy_address(
+                old_address=old_address,
+                legacy_secret=send_secret,
+                pin=pin or None,
+            )
+            canonical = result.get('new_v1_address') or result.get('canonical_v1_address', '')
+            return _jsonify(
+                ok=True,
+                canonical_v1_address=canonical,
+                legacy_address=old_address,
+                already_migrated=False,
+            ), 200
+        except Exception as mig_exc:
+            app.logger.error('[PledgeMigrate] migration error: %s', mig_exc)
+            return _jsonify(ok=False, error='migration_failed', detail=str(mig_exc)), 500
+
+    except Exception as exc:
+        app.logger.error('[PledgeMigrate] %s', exc)
+        return _jsonify(ok=False, error='internal_error'), 500
+
+
 # THR Wallet PWA — served from public/wallet-pwa/
 import os as _os
 from flask import send_from_directory as _send

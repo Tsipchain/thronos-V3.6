@@ -1624,6 +1624,7 @@
                     <option value="create">Create Wallet V1</option>
                     <option value="import_signing_key">Import Matching Signing Key</option>
                     <option value="admin_generate_signer" data-wallet-legacy-repair="1">🔐 [ADMIN] Generate Signer for Canonical Wallet</option>
+                    <option value="pledge_migrate">🔑 Pledge Wallet Migration (HMAC/v0)</option>
                 </select>
 
                 <!-- UNLOCK MODE: Only PIN + Unlock button -->
@@ -1665,6 +1666,51 @@
                     <input type="password" id="walletWidgetMigratePin" placeholder="4-8 digits" />
                     <div class="wallet-modal-actions" style="margin-top:10px;">
                         <button class="primary" onclick="migrateLegacyWalletFromHeader()">Migrate Legacy Wallet</button>
+                    </div>
+                </div>
+
+                <!-- PLEDGE MIGRATION: For pledge/HMAC v0 wallet holders who only know their send_secret -->
+                <!-- Always visible — does not require legacy_repair_ui_enabled -->
+                <div id="walletV1PledgeMigratePanel" style="display:none; margin-top:12px; border-top:1px solid #5533aa; padding-top:12px;">
+                    <div style="background:#0d0a1a; border:1px solid #7c5cbf; border-radius:8px; padding:14px; margin-bottom:12px;">
+                        <h5 style="color:#b08cf8; margin:0 0 8px 0; font-size:0.95em;">🔑 Pledge Wallet Migration</h5>
+                        <p style="font-size:0.82em; color:#bbb; margin:0 0 10px 0; line-height:1.5;">
+                            If you created a wallet via the pledge/HMAC system and only have your <strong style="color:#b08cf8;">send secret</strong>, enter it below.
+                            The system will find your address and migrate it to a V1 wallet.
+                        </p>
+                        <div id="walletPledgeMigrateStep1">
+                            <label style="font-size:0.85em; color:#b08cf8; display:block; margin-bottom:4px;">Send Secret (from your original pledge)</label>
+                            <input type="password" id="walletPledgeSendSecret" placeholder="your pledge send_secret / auth token"
+                                   style="width:100%; padding:9px; background:#0a0014; color:#d8c0ff; border:1px solid #7c5cbf; border-radius:6px; font-size:0.9em; box-sizing:border-box; font-family:monospace;" />
+                            <button onclick="pledgeLookupStep()" style="margin-top:8px; width:100%; padding:10px; background:#4a2a8a; color:#fff; border:1px solid #7c5cbf; border-radius:6px; cursor:pointer; font-weight:bold;">
+                                🔍 Find My Wallet
+                            </button>
+                        </div>
+                        <div id="walletPledgeMigrateStep2" style="display:none; margin-top:10px;">
+                            <div id="walletPledgeFoundInfo" style="background:#0a1400; border:1px solid #4a8a2a; border-radius:6px; padding:10px; margin-bottom:10px; font-size:0.85em; color:#9f9; font-family:monospace; word-break:break-all;"></div>
+                            <label style="font-size:0.85em; color:#b08cf8; display:block; margin-bottom:4px;">New PIN for V1 Wallet</label>
+                            <input type="password" id="walletPledgeMigratePin" placeholder="4-8 digit PIN"
+                                   style="width:100%; padding:9px; background:#0a0014; color:#d8c0ff; border:1px solid #7c5cbf; border-radius:6px; font-size:0.9em; box-sizing:border-box;" />
+                            <div style="display:flex; gap:8px; margin-top:8px;">
+                                <button onclick="pledgeMigrateExecute()" style="flex:2; padding:10px; background:#5a0aaa; color:#fff; border:1px solid #b08cf8; border-radius:6px; cursor:pointer; font-weight:bold;">
+                                    ✅ Migrate to V1 Wallet
+                                </button>
+                                <button onclick="pledgeMigrateReset()" style="flex:1; padding:10px; background:#333; color:#ccc; border:1px solid #666; border-radius:6px; cursor:pointer;">
+                                    Back
+                                </button>
+                            </div>
+                        </div>
+                        <div id="walletPledgeMigrateStep3" style="display:none; margin-top:10px; text-align:center;">
+                            <div style="color:#b08cf8; font-size:1.2em; margin-bottom:10px;">✅ Migration Complete</div>
+                            <div id="walletPledgeNewAddress" style="background:#0a1400; border:1px solid #4a8a2a; border-radius:6px; padding:10px; font-size:0.82em; color:#9f9; font-family:monospace; word-break:break-all; margin-bottom:10px;"></div>
+                            <button id="walletPledgePasskeyBtn" onclick="pledgeSetupPasskey()" style="width:100%; padding:10px; background:#2a2a6a; color:#fff; border:1px solid #7c7cf8; border-radius:6px; cursor:pointer; font-weight:bold; margin-bottom:6px;">
+                                🔐 Set Up Face ID / Fingerprint
+                            </button>
+                            <button onclick="pledgeMigrateDone()" style="width:100%; padding:8px; background:#1a3a1a; color:#9f9; border:1px solid #4a8a2a; border-radius:6px; cursor:pointer;">
+                                Done (use PIN only)
+                            </button>
+                        </div>
+                        <div id="walletPledgeMigrateError" style="display:none; margin-top:8px; padding:8px; background:#1a0000; border:1px solid #aa0000; border-radius:6px; color:#ff6666; font-size:0.82em;"></div>
                     </div>
                 </div>
 
@@ -6583,12 +6629,14 @@ function switchWalletV1Mode(){
 
     // ATOMIC VISIBILITY UPDATE: Hide all first, then show exactly one
     // This prevents race conditions where create div stays visible when unlock should be shown
+    const pledgeMigrateEl = document.getElementById('walletV1PledgeMigratePanel');
     if (restoreEl) restoreEl.style.display = 'none';
     if (createEl) createEl.style.display = 'none';
     if (unlockEl) unlockEl.style.display = 'none';
     if (migrateEl) migrateEl.style.display = 'none';
     if (importEl) importEl.style.display = 'none';
     if (adminSignerEl) adminSignerEl.style.display = 'none';
+    if (pledgeMigrateEl) pledgeMigrateEl.style.display = 'none';
 
     // Now show exactly ONE mode based on final displayMode
     const isProdMode = document.body.classList.contains('wallet-v1-production-mode');
@@ -6608,6 +6656,9 @@ function switchWalletV1Mode(){
         importEl.style.display = 'block';
     } else if (displayMode === 'admin_generate_signer' && adminSignerAllowed && adminSignerEl) {
         adminSignerEl.style.display = 'block';
+    } else if (mode === 'pledge_migrate' && pledgeMigrateEl) {
+        pledgeMigrateEl.style.display = 'block';
+        pledgeMigrateReset();
     }
 
     // Ensure modeSelect.value matches what's displayed (Fix #3: Deterministic mode/CTA)
@@ -6708,6 +6759,7 @@ function reconcileWalletV1ModeCTA() {
         'restore': 'walletV1RestoreMode',
         'migrate': 'walletV1MigrateMode',
         'admin_generate_signer': 'walletV1AdminGenerateSignerMode',
+        'pledge_migrate': 'walletV1PledgeMigratePanel',
     };
 
     // Find which mode div(s) are currently visible
@@ -8158,6 +8210,130 @@ async function migrateLegacyWalletFromHeader(){
         // walletSession.migrateLegacyWallet handles rollback on failure
     } finally {
         sendSecret = '';
+    }
+}
+
+// ── Pledge / HMAC v0 wallet migration ─────────────────────────────────────────
+// Users who only know their send_secret can find & migrate their pledge wallet.
+let _pledgeFoundAddress = null;
+let _pledgeNewCanonical = null;
+
+function showPledgeMigratePanel() {
+    const panel = document.getElementById('walletV1PledgeMigratePanel');
+    if (panel) { panel.style.display = 'block'; panel.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+}
+
+function pledgeMigrateReset() {
+    _pledgeFoundAddress = null;
+    document.getElementById('walletPledgeMigrateStep1').style.display = '';
+    document.getElementById('walletPledgeMigrateStep2').style.display = 'none';
+    document.getElementById('walletPledgeMigrateStep3').style.display = 'none';
+    document.getElementById('walletPledgeMigrateError').style.display = 'none';
+    const inp = document.getElementById('walletPledgeSendSecret');
+    if (inp) inp.value = '';
+}
+
+async function pledgeLookupStep() {
+    const secret = (document.getElementById('walletPledgeSendSecret')?.value || '').trim();
+    const errEl = document.getElementById('walletPledgeMigrateError');
+    if (!secret) { errEl.textContent = 'Enter your send secret first.'; errEl.style.display = ''; return; }
+    errEl.style.display = 'none';
+    try {
+        const r = await fetch('/api/wallet/v1/pledge-lookup', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ send_secret: secret })
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || !d.ok) {
+            errEl.textContent = d.error === 'pledge_not_found'
+                ? 'No pledge found for this secret. Check your send_secret and try again.'
+                : ('Error: ' + (d.error || 'lookup failed'));
+            errEl.style.display = '';
+            return;
+        }
+        _pledgeFoundAddress = d.thr_address;
+        document.getElementById('walletPledgeFoundInfo').innerHTML =
+            '✅ Found wallet:<br>' +
+            '<b>THR address:</b> ' + (d.thr_address || '—') + '<br>' +
+            (d.btc_address ? '<b>BTC pledge:</b> ' + d.btc_address : '');
+        document.getElementById('walletPledgeMigrateStep1').style.display = 'none';
+        document.getElementById('walletPledgeMigrateStep2').style.display = '';
+    } catch(err) {
+        errEl.textContent = 'Network error: ' + err.message;
+        errEl.style.display = '';
+    }
+}
+
+async function pledgeMigrateExecute() {
+    const secret = (document.getElementById('walletPledgeSendSecret')?.value || '').trim();
+    const pin = (document.getElementById('walletPledgeMigratePin')?.value || '').trim();
+    const errEl = document.getElementById('walletPledgeMigrateError');
+    errEl.style.display = 'none';
+    if (!pin || pin.length < 4) { errEl.textContent = 'PIN must be 4-8 digits.'; errEl.style.display = ''; return; }
+    try {
+        const r = await fetch('/api/wallet/v1/pledge-migrate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ send_secret: secret, pin })
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || !d.ok) {
+            errEl.textContent = 'Migration failed: ' + (d.error || d.detail || 'unknown');
+            errEl.style.display = '';
+            return;
+        }
+        _pledgeNewCanonical = d.canonical_v1_address;
+        const addrEl = document.getElementById('walletPledgeNewAddress');
+        addrEl.innerHTML = (d.already_migrated ? '⚠️ Already migrated — ' : '✅ New V1 address:<br>') +
+            '<b>' + (d.canonical_v1_address || '—') + '</b><br>' +
+            '<small style="color:#777">Legacy: ' + (d.legacy_address || _pledgeFoundAddress || '—') + '</small>';
+        // Store the new canonical address locally
+        if (d.canonical_v1_address) {
+            localStorage.setItem('thr_address', d.canonical_v1_address);
+            if (window.walletSession?.setActiveAddress) walletSession.setActiveAddress(d.canonical_v1_address);
+        }
+        document.getElementById('walletPledgeMigrateStep2').style.display = 'none';
+        document.getElementById('walletPledgeMigrateStep3').style.display = '';
+    } catch(err) {
+        errEl.textContent = 'Network error: ' + err.message;
+        errEl.style.display = '';
+    }
+}
+
+async function pledgeSetupPasskey() {
+    const addr = _pledgeNewCanonical || localStorage.getItem('thr_address');
+    if (!addr) { alert('No wallet address available for passkey setup.'); return; }
+    // WebAuthn passkey registration (Face ID / fingerprint)
+    try {
+        const challenge = new Uint8Array(32);
+        crypto.getRandomValues(challenge);
+        const cred = await navigator.credentials.create({
+            publicKey: {
+                challenge,
+                rp: { name: 'Thronos Network', id: location.hostname },
+                user: { id: new TextEncoder().encode(addr), name: addr, displayName: 'THR Wallet' },
+                pubKeyCredParams: [{ alg: -7, type: 'public-key' }],
+                authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required' },
+                timeout: 60000,
+            }
+        });
+        if (cred) {
+            localStorage.setItem('thr_passkey_credential_id', btoa(String.fromCharCode(...new Uint8Array(cred.rawId))));
+            document.getElementById('walletPledgePasskeyBtn').textContent = '✅ Passkey Set Up!';
+            document.getElementById('walletPledgePasskeyBtn').disabled = true;
+        }
+    } catch(err) {
+        if (err.name !== 'NotAllowedError') alert('Passkey setup failed: ' + err.message);
+    }
+}
+
+function pledgeMigrateDone() {
+    document.getElementById('walletV1PledgeMigratePanel').style.display = 'none';
+    pledgeMigrateReset();
+    if (_pledgeNewCanonical) {
+        updateHeaderWalletUi();
+        loadWalletBalances(true);
     }
 }
 

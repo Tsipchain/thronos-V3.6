@@ -228,9 +228,16 @@ async function showImport(addingExtra = false) {
     <div class="screen">
       <div class="logo">⬡ THR</div>
       <p class="tagline">Thronos Chain Wallet</p>
-      <div class="card">
-        <h2 style="font-size:1.15rem">${title}</h2>
-        <p style="color:var(--muted);font-size:.88rem">${sub}</p>
+
+      <div style="display:flex;gap:6px;margin-bottom:10px">
+        <button class="btn" id="tabKit" style="flex:1;padding:8px;font-size:.82rem;background:var(--accent);color:#fff;border-radius:10px">Recovery Kit</button>
+        <button class="btn btn--ghost" id="tabPledge" style="flex:1;padding:8px;font-size:.82rem;border-radius:10px">Pledge Secret</button>
+      </div>
+
+      <!-- Recovery Kit tab -->
+      <div id="paneKit" class="card">
+        <h2 style="font-size:1.1rem">${title}</h2>
+        <p style="color:var(--muted);font-size:.85rem">${sub}</p>
         <button class="btn btn--primary" id="pickFile">Select Recovery Kit</button>
         <div id="filePill" class="file-pill hidden"></div>
         <div id="labelRow" class="hidden" style="display:flex;flex-direction:column;gap:8px">
@@ -242,9 +249,113 @@ async function showImport(addingExtra = false) {
         </div>
         <div id="err" class="banner banner--error hidden"></div>
       </div>
+
+      <!-- Pledge Secret tab (HMAC/v0 wallet migration) -->
+      <div id="panePledge" class="card" style="display:none">
+        <h2 style="font-size:1.1rem">Pledge Wallet Migration</h2>
+        <p style="color:var(--muted);font-size:.85rem">Enter the <strong>send secret</strong> from your original pledge. The system will find your address and create a V1 wallet.</p>
+        <div id="pledgeStep1">
+          <input type="password" id="pledgeSecret" class="input" placeholder="Pledge send secret / auth token" autocomplete="off">
+          <button class="btn btn--primary mt8" id="pledgeLookupBtn">🔍 Find My Wallet</button>
+        </div>
+        <div id="pledgeStep2" style="display:none;margin-top:12px">
+          <div id="pledgeInfo" style="background:#0d0a1a;border:1px solid var(--accent);border-radius:8px;padding:10px;font-size:.82rem;color:var(--accent);word-break:break-all;margin-bottom:10px"></div>
+          <input type="password" id="pledgeMigratePin" class="input" placeholder="New PIN (4-8 digits)" autocomplete="new-password">
+          <div style="display:flex;gap:8px;margin-top:8px">
+            <button class="btn btn--primary" id="pledgeMigrateBtn" style="flex:2">✅ Migrate to V1</button>
+            <button class="btn btn--ghost" id="pledgeBackBtn" style="flex:1">Back</button>
+          </div>
+        </div>
+        <div id="pledgeErr" class="banner banner--error hidden"></div>
+      </div>
+
       ${addingExtra ? '<button class="btn btn--ghost mt16" id="cancelBtn">Cancel</button>' : '<p class="mt24" style="color:var(--muted);font-size:.8rem;text-align:center">Your keys never leave this device.</p>'}
     </div>
   `);
+
+  // Tab switching
+  document.getElementById('tabKit').addEventListener('click', () => {
+    document.getElementById('paneKit').style.display = '';
+    document.getElementById('panePledge').style.display = 'none';
+    document.getElementById('tabKit').style.background = 'var(--accent)';
+    document.getElementById('tabKit').style.color = '#fff';
+    document.getElementById('tabPledge').style.background = '';
+    document.getElementById('tabPledge').style.color = '';
+  });
+  document.getElementById('tabPledge').addEventListener('click', () => {
+    document.getElementById('paneKit').style.display = 'none';
+    document.getElementById('panePledge').style.display = '';
+    document.getElementById('tabPledge').style.background = 'var(--accent)';
+    document.getElementById('tabPledge').style.color = '#fff';
+    document.getElementById('tabKit').style.background = '';
+    document.getElementById('tabKit').style.color = '';
+  });
+
+  // Pledge lookup
+  let pledgeFoundAddr = null;
+  document.getElementById('pledgeLookupBtn').addEventListener('click', async () => {
+    const secret = document.getElementById('pledgeSecret')?.value?.trim();
+    const errEl = document.getElementById('pledgeErr');
+    errEl.classList.add('hidden');
+    if (!secret) { errEl.textContent = 'Enter your send secret first'; errEl.classList.remove('hidden'); return; }
+    const btn = document.getElementById('pledgeLookupBtn');
+    btn.disabled = true; btn.textContent = 'Searching…';
+    try {
+      const r = await fetch(`${API_WRITE}/api/wallet/v1/pledge-lookup`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ send_secret: secret })
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok) {
+        errEl.textContent = d.error === 'pledge_not_found' ? 'No pledge found. Check your send secret.' : ('Error: ' + (d.error || 'lookup failed'));
+        errEl.classList.remove('hidden'); return;
+      }
+      pledgeFoundAddr = d.thr_address;
+      document.getElementById('pledgeInfo').innerHTML =
+        '✅ Found:<br><b>' + (d.thr_address || '—') + '</b>' +
+        (d.btc_address ? '<br><small style="color:var(--muted)">BTC: ' + d.btc_address + '</small>' : '');
+      document.getElementById('pledgeStep1').style.display = 'none';
+      document.getElementById('pledgeStep2').style.display = '';
+    } catch(e) {
+      errEl.textContent = 'Network error: ' + e.message; errEl.classList.remove('hidden');
+    } finally { btn.disabled = false; btn.textContent = '🔍 Find My Wallet'; }
+  });
+
+  document.getElementById('pledgeBackBtn')?.addEventListener('click', () => {
+    pledgeFoundAddr = null;
+    document.getElementById('pledgeStep1').style.display = '';
+    document.getElementById('pledgeStep2').style.display = 'none';
+    document.getElementById('pledgeErr').classList.add('hidden');
+  });
+
+  document.getElementById('pledgeMigrateBtn').addEventListener('click', async () => {
+    const secret = document.getElementById('pledgeSecret')?.value?.trim();
+    const pin = document.getElementById('pledgeMigratePin')?.value?.trim();
+    const errEl = document.getElementById('pledgeErr');
+    errEl.classList.add('hidden');
+    if (!pin || pin.length < 4) { errEl.textContent = 'PIN must be 4-8 digits'; errEl.classList.remove('hidden'); return; }
+    const btn = document.getElementById('pledgeMigrateBtn');
+    btn.disabled = true; btn.textContent = 'Migrating…';
+    try {
+      const r = await fetch(`${API_WRITE}/api/wallet/v1/pledge-migrate`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ send_secret: secret, pin })
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok) {
+        errEl.textContent = 'Migration failed: ' + (d.error || d.detail || 'unknown');
+        errEl.classList.remove('hidden'); return;
+      }
+      const canonical = d.canonical_v1_address;
+      upsertAccount(canonical, { canonical_v1_address: canonical }, shortAddr(canonical));
+      setActiveAddr(canonical);
+      // Offer Face ID / fingerprint
+      await promptFaceID(canonical, null);
+      showWallet();
+    } catch(e) {
+      errEl.textContent = 'Network error: ' + e.message; errEl.classList.remove('hidden');
+    } finally { btn.disabled = false; btn.textContent = '✅ Migrate to V1'; }
+  });
 
   document.getElementById('cancelBtn')?.addEventListener('click', () => {
     const addr = getActiveAddr();

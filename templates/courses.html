@@ -1058,7 +1058,9 @@ function showTab(name) {
 function syncWalletFromSession(showToast = true) {
     const addr = (window.walletSession?.getAddress && window.walletSession.getAddress()) || '';
     const secret = (window.walletSession?.getSendSecret && window.walletSession.getSendSecret()) || '';
-    if (!addr || !secret) {
+    // V1 wallet users don't have a send_secret — accept wallet if addr exists and V1 is bound
+    const isV1Bound = window.walletSession?.isBound && window.walletSession.isBound();
+    if (!addr || (!secret && !isV1Bound)) {
         $("walletWarning").style.display = "block";
         $("walletStatus").style.display = "none";
         if (showToast) log("Please connect via wallet widget", true);

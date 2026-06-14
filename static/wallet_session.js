@@ -22,6 +22,44 @@
   let lastUnusableKeyDiagnostics = null; // Track unusable/legacy format key diagnostics
 
   const SESSION_TTL_MS = 15 * 60 * 1000; // 15 minutes in milliseconds
+  const SESSION_PRIV_KEY = 'thr_wallet_v1_session_priv';  // sessionStorage: cleared on tab close
+
+  // Persist the unlocked private key for the browser tab session (cleared on tab/window close).
+  function _saveKeyToSession(privHex, address) {
+    try {
+      sessionStorage.setItem(SESSION_PRIV_KEY, JSON.stringify({ priv: privHex, addr: address, at: Date.now() }));
+    } catch(_) {}
+  }
+
+  // Clear session key (called on lock/disconnect)
+  function _clearSessionKey() {
+    try { sessionStorage.removeItem(SESSION_PRIV_KEY); } catch(_) {}
+  }
+
+  // On page load, restore private key from sessionStorage if wallet is still bound.
+  // This allows the wallet to stay unlocked across page navigations within the same tab.
+  async function _restoreSessionKey() {
+    try {
+      const raw = sessionStorage.getItem(SESSION_PRIV_KEY);
+      if (!raw || !isBound()) return;
+      const saved = JSON.parse(raw);
+      if (!saved || !saved.priv || !saved.addr) return;
+      // Respect the 15-min TTL
+      if (saved.at && (Date.now() - saved.at) > SESSION_TTL_MS) {
+        _clearSessionKey();
+        return;
+      }
+      const activeAddr = getActiveAddress ? getActiveAddress() : localStorage.getItem('thr_address') || '';
+      if (activeAddr && saved.addr !== activeAddr) {
+        _clearSessionKey();
+        return;
+      }
+      unlockedPrivateKeyHex = saved.priv;
+      unlockedForAddress = saved.addr;
+      unlockedAtTime = saved.at;
+      localStorage.setItem('wallet_locked', '0');
+    } catch(_) {}
+  }
 
   const SYSTEM_WALLETS = {
     'THR5DF27A86C477F381594E896F0E55357DEC5942BA': 'ai_game_wallet',
@@ -315,7 +353,7 @@
   function getPin(){ return localStorage.getItem(PIN_KEY) || ''; }
   function setPin(pin){ setItem(PIN_KEY, pin ? pin.trim() : ''); }
 
-  function lockWallet(){ unlockedPrivateKeyHex = null; unlockedForAddress = null; unlockedAtTime = null; localStorage.setItem(LOCK_KEY, '1'); }
+  function lockWallet(){ unlockedPrivateKeyHex = null; unlockedForAddress = null; unlockedAtTime = null; localStorage.setItem(LOCK_KEY, '1'); _clearSessionKey(); }
   function lock(){ return lockWallet(); }
   function setCustomUnlockHandler(fn){ customUnlockHandler = typeof fn === 'function' ? fn : null; }
 
@@ -512,7 +550,9 @@
     setBound(true);
     localStorage.setItem(LOCK_KEY, '0');
     unlockedPrivateKeyHex = priv;
+    unlockedForAddress = address;
     unlockedAtTime = Date.now(); // Start 15-min TTL
+    _saveKeyToSession(priv, address);
     return { address, publicKey: pub };
   }
 
@@ -646,6 +686,7 @@
           unlockedForAddress = activeAddr;
           setBound(true);
           localStorage.setItem(LOCK_KEY, '0');
+          _saveKeyToSession(decryptedPrivKeyHex, activeAddr);
           return true;
         }
 
@@ -681,6 +722,7 @@
               unlockedForAddress = activeAddr;
               setBound(true);
               localStorage.setItem(LOCK_KEY, '0');
+              _saveKeyToSession(decryptedPrivKeyHex, activeAddr);
               return true;
             } else {
               // Binding exists but derived address doesn't match it
@@ -769,6 +811,7 @@
                   unlockedForAddress = activeAddr;
                   setBound(true);
                   localStorage.setItem(LOCK_KEY, '0');
+                  _saveKeyToSession(decryptedPrivKeyHex, activeAddr);
                   return true;
                 } else {
                   console.warn('[UnlockWallet] Derived address does not match legacy address either');
@@ -806,6 +849,7 @@
         unlockedAtTime = Date.now(); // Start 15-min TTL
         setBound(true);
         localStorage.setItem(LOCK_KEY, '0');
+        _saveKeyToSession(decryptedPrivKeyHex, activeAddr);
         return true;
       }
       catch(err) {
@@ -1272,8 +1316,8 @@
     }
   }
 
-  function disconnect(){ setBound(false); localStorage.setItem(LOCK_KEY, '1'); unlockedPrivateKeyHex = null; unlockedForAddress = null; unlockedAtTime = null; }
-  function forgetDevice(){ [ADDRESS_KEY,SEND_SECRET_KEY,SEND_SEED_KEY,SEND_SEED_COMPAT_KEY,PIN_KEY,BOUND_KEY,LOCK_KEY,V1_ENCRYPTED_KEY,V1_PUBLIC_KEY,V1_ADDRESS_KEY,MIGRATION_META_KEY].forEach(k => localStorage.removeItem(k)); unlockedPrivateKeyHex = null; unlockedForAddress = null; unlockedAtTime = null; }
+  function disconnect(){ setBound(false); localStorage.setItem(LOCK_KEY, '1'); unlockedPrivateKeyHex = null; unlockedForAddress = null; unlockedAtTime = null; _clearSessionKey(); }
+  function forgetDevice(){ [ADDRESS_KEY,SEND_SECRET_KEY,SEND_SEED_KEY,SEND_SEED_COMPAT_KEY,PIN_KEY,BOUND_KEY,LOCK_KEY,V1_ENCRYPTED_KEY,V1_PUBLIC_KEY,V1_ADDRESS_KEY,MIGRATION_META_KEY].forEach(k => localStorage.removeItem(k)); unlockedPrivateKeyHex = null; unlockedForAddress = null; unlockedAtTime = null; _clearSessionKey(); }
   function clearSession(){ forgetDevice(); }
   function saveSession({address, sendSeed, pin, bound} = {}){ setAddress(address || ''); setSendSeed(sendSeed || ''); setPin(pin || ''); setBound(bound !== undefined ? !!bound : !!(address && sendSeed)); if (address || sendSeed) localStorage.setItem(LOCK_KEY, '0'); }
   function requirePin(actionLabel = 'continue'){ const stored = getPin(); if(!stored) return true; const entered = prompt(`Enter wallet PIN to ${actionLabel}`); if(entered === null) return false; if(entered !== stored){ alert('Wrong PIN.'); return false; } return true; }
@@ -1383,6 +1427,9 @@
       error: 'canonical_address_not_found'
     };
   }
+
+  // Auto-restore from sessionStorage on page load (keeps wallet unlocked across navigation)
+  _restoreSessionKey();
 
   window.walletSession = {
     version: VERSION,

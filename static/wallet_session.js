@@ -926,6 +926,35 @@
     }
   }
 
+  // Sign an arbitrary message string — returns compact secp256k1 signature (128 hex chars = 64 bytes r+s).
+  // Used by walletV1BuildSignedRequest for swap, liquidity, send, etc.
+  async function signMessage(message){
+    if (isLocked() || !isBound()) throw new Error('wallet_locked');
+    if (!unlockedPrivateKeyHex) throw new Error('wallet_locked');
+    const secp = await _ensureSecpLoaded();
+    if (!secp) throw new Error('secp256k1_library_missing');
+    const digestHex = await sha256Hex(message);
+    let sig;
+    try {
+      if (typeof secp.signAsync === 'function') {
+        sig = await secp.signAsync(digestHex, unlockedPrivateKeyHex);
+      } else if (typeof secp.sign === 'function') {
+        sig = secp.sign(digestHex, unlockedPrivateKeyHex);
+      } else {
+        throw new Error('secp256k1_sign_unavailable');
+      }
+    } catch (err) {
+      throw new Error('wallet_crypto_not_ready');
+    }
+    // Get compact hex (r+s, 64 bytes = 128 hex chars)
+    if (sig && typeof sig.toCompactHex === 'function') return sig.toCompactHex();
+    if (sig && typeof sig.toCompactRawBytes === 'function') return bytesToHex(sig.toCompactRawBytes());
+    if (sig && sig.r !== undefined && sig.s !== undefined) {
+      return sig.r.toString(16).padStart(64, '0') + sig.s.toString(16).padStart(64, '0');
+    }
+    throw new Error('wallet_sign_format_unknown');
+  }
+
   async function enrollSigningMaterial({address, credentialLookupAddress, pin, authSecret} = {}){
     const activeAddress = normalizeAddress(address || getActiveAddress());
     const lookupAddress = normalizeAddress(credentialLookupAddress || getCredentialLookupAddress(activeAddress));
@@ -1362,7 +1391,7 @@
     getAddress, getActiveAddress, setAddress,
     getMigrationInfo, isMigrated, isVerifiedMigrationInfo, getCanonicalMigrationAddress, getLegacySourceAddress,
     getWalletOrigin, getWalletIdentityStatus, isWalletV1,
-    createWalletV1, getPublicKey, canonicalTxMessage, signTransaction,
+    createWalletV1, getPublicKey, canonicalTxMessage, signTransaction, signMessage,
     migrateLegacyWallet, restoreMigratedWallet, encryptPrivateKeyHex, decryptPrivateKeyHex,
     getCredentialLookupAddress, getSendSeed, setSendSeed, getSendSecret, setSendSecret,
     hasSigningMaterial, hasRuntimeSigningMaterial, getWalletAuthDiagnostics, logWalletAuthDiagnostics,

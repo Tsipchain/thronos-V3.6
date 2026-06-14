@@ -23282,6 +23282,182 @@ def api_v1_wallet_fee_estimate():
         return jsonify(status="error", error="fee_estimate_failed", fee=0), 400
 
 
+# ─── Digital Legacy / Inheritance System ───────────────────────────────────
+
+LEGACY_FILE = os.path.join(DATA_DIR, "digital_legacies.json")
+
+def _load_legacies() -> dict:
+    return load_json(LEGACY_FILE, {})
+
+def _save_legacies(data: dict):
+    save_json(LEGACY_FILE, data)
+
+@app.route("/api/legacy/create", methods=["POST"])
+def api_legacy_create():
+    """Create or update a digital legacy (last-will) for a THR wallet."""
+    data = request.get_json() or {}
+    if data.get("canonical_v1_address") and data.get("signature") and not data.get("signed_tx"):
+        ok, err, owner = _verify_walletv1_new_format(data, "create_legacy")
+        if not ok:
+            return jsonify(status="error", message=err.get("message", "Auth failed")), 403
+    else:
+        return jsonify(status="error", message="V1 wallet signature required"), 403
+
+    heirs = data.get("heirs", [])
+    total_pct = sum(float(h.get("percentage", 0)) for h in heirs)
+    if heirs and abs(total_pct - 100.0) > 0.01:
+        return jsonify(status="error", message=f"Heir percentages must sum to 100 (got {total_pct})"), 400
+
+    legacies = _load_legacies()
+    now = int(time.time())
+    entry = legacies.get(owner, {})
+    entry.update({
+        "owner": owner,
+        "title": (data.get("title") or "").strip() or "My Digital Legacy",
+        "description": (data.get("description") or "").strip(),
+        "heirs": [
+            {
+                "address": h.get("address", "").strip(),
+                "name": h.get("name", "").strip(),
+                "percentage": float(h.get("percentage", 0)),
+                "relationship": h.get("relationship", "").strip(),
+            }
+            for h in heirs if h.get("address")
+        ],
+        "inactivity_days": int(data.get("inactivity_days") or 365),
+        "status": entry.get("status", "active"),
+        "created_at": entry.get("created_at", now),
+        "updated_at": now,
+        "last_owner_activity": now,
+    })
+    legacies[owner] = entry
+    _save_legacies(legacies)
+    return jsonify(status="success", legacy=entry), 200
+
+@app.route("/api/legacy/<owner_address>", methods=["GET"])
+def api_legacy_get(owner_address):
+    """Get legacy info for a THR address (public)."""
+    legacies = _load_legacies()
+    entry = legacies.get(owner_address)
+    if not entry:
+        return jsonify(status="error", message="No legacy found"), 404
+    safe = {k: v for k, v in entry.items() if k != "heirs"}
+    safe["heir_count"] = len(entry.get("heirs", []))
+    viewer = (request.args.get("viewer") or "").strip()
+    is_owner = viewer == owner_address
+    heir_addrs = [h["address"] for h in entry.get("heirs", [])]
+    is_heir = viewer in heir_addrs
+    if is_owner or is_heir:
+        safe["heirs"] = entry.get("heirs", [])
+    return jsonify(status="success", legacy=safe), 200
+
+@app.route("/api/legacy/ping", methods=["POST"])
+def api_legacy_ping():
+    """Owner pings to prove they're still alive (resets inactivity timer)."""
+    data = request.get_json() or {}
+    if data.get("canonical_v1_address") and data.get("signature") and not data.get("signed_tx"):
+        ok, err, owner = _verify_walletv1_new_format(data, "legacy_ping")
+        if not ok:
+            return jsonify(status="error", message=err.get("message", "Auth failed")), 403
+    else:
+        return jsonify(status="error", message="V1 signature required"), 403
+
+    legacies = _load_legacies()
+    if owner not in legacies:
+        return jsonify(status="error", message="No legacy found"), 404
+    legacies[owner]["last_owner_activity"] = int(time.time())
+    _save_legacies(legacies)
+    return jsonify(status="success", message="Activity recorded — inheritance clock reset"), 200
+
+@app.route("/api/legacy/claim", methods=["POST"])
+def api_legacy_claim():
+    """Heir claims their portion of an owner's legacy after inactivity period."""
+    data = request.get_json() or {}
+    if data.get("canonical_v1_address") and data.get("signature") and not data.get("signed_tx"):
+        ok, err, heir_addr = _verify_walletv1_new_format(data, "claim_legacy")
+        if not ok:
+            return jsonify(status="error", message=err.get("message", "Auth failed")), 403
+    else:
+        return jsonify(status="error", message="V1 signature required"), 403
+
+    owner_address = (data.get("owner_address") or "").strip()
+    if not owner_address:
+        return jsonify(status="error", message="owner_address required"), 400
+
+    legacies = _load_legacies()
+    legacy = legacies.get(owner_address)
+    if not legacy:
+        return jsonify(status="error", message="No legacy found for that address"), 404
+
+    heir_entry = next((h for h in legacy.get("heirs", []) if h["address"] == heir_addr), None)
+    if not heir_entry:
+        return jsonify(status="error", message="You are not a registered heir"), 403
+
+    last_activity = legacy.get("last_owner_activity", legacy.get("created_at", 0))
+    inactivity_days = legacy.get("inactivity_days", 365)
+    elapsed_days = (int(time.time()) - last_activity) / 86400
+    if elapsed_days < inactivity_days:
+        days_left = inactivity_days - elapsed_days
+        return jsonify(status="error", message=f"Owner still active. Inheritance unlocks in {days_left:.1f} days"), 403
+
+    pct = float(heir_entry.get("percentage", 0)) / 100.0
+    ledger = load_json(LEDGER_FILE, {})
+    owner_bal = float(ledger.get(owner_address, 0))
+    if owner_bal <= 0:
+        return jsonify(status="error", message="Owner has no THR balance to inherit"), 400
+
+    transfer_amount = round(owner_bal * pct, 6)
+    ledger[owner_address] = round(owner_bal - transfer_amount, 6)
+    ledger[heir_addr] = round(float(ledger.get(heir_addr, 0)) + transfer_amount, 6)
+    save_json(LEDGER_FILE, ledger)
+
+    tx_id = f"LEGACY-{int(time.time())}-{secrets.token_hex(4)}"
+    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    tx = {
+        "type": "legacy_claim", "kind": "legacy_claim",
+        "from": owner_address, "to": heir_addr,
+        "amount": transfer_amount, "symbol": "THR",
+        "percentage": heir_entry.get("percentage"),
+        "heir_name": heir_entry.get("name", ""),
+        "relationship": heir_entry.get("relationship", ""),
+        "tx_id": tx_id, "timestamp": ts, "status": "confirmed",
+    }
+    chain = load_json(CHAIN_FILE, [])
+    chain.append(tx)
+    save_json(CHAIN_FILE, chain)
+    persist_normalized_tx(tx)
+    update_last_block(tx, is_block=False)
+
+    legacy["status"] = "claimed"
+    legacies[owner_address] = legacy
+    _save_legacies(legacies)
+
+    return jsonify(
+        status="success",
+        message=f"Inherited {transfer_amount} THR ({heir_entry['percentage']}%)",
+        tx_id=tx_id, amount=transfer_amount, symbol="THR"
+    ), 200
+
+@app.route("/api/legacy/list", methods=["GET"])
+def api_legacy_list():
+    """List legacies where the caller is an heir (by address param)."""
+    viewer = (request.args.get("address") or "").strip()
+    if not viewer:
+        return jsonify(status="error", message="address required"), 400
+    legacies = _load_legacies()
+    result = []
+    for owner, leg in legacies.items():
+        if any(h["address"] == viewer for h in leg.get("heirs", [])):
+            result.append({
+                "owner": owner,
+                "title": leg.get("title", ""),
+                "status": leg.get("status", "active"),
+                "inactivity_days": leg.get("inactivity_days", 365),
+                "last_owner_activity": leg.get("last_owner_activity"),
+            })
+    return jsonify(status="success", legacies=result, count=len(result)), 200
+
+
 # ─── BTC Address Derivation from secp256k1 Public Key ──────────────────────
 
 _BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"

@@ -124,13 +124,17 @@ const LS = {
 };
 
 // ─── API ──────────────────────────────────────────────────────────────────────
+// thronoschain.org runs on Railway/nginx — use the backends directly.
+// CORS is already enabled on these origins (wallet_sdk.js uses them in-browser).
+
+const API_READ  = 'https://node-2.up.railway.app';
+const API_WRITE = 'https://api.thronoschain.org';
 
 async function fetchBalance(address) {
   try {
-    const r = await fetch(`/pwa-api/read/balances?address=${encodeURIComponent(address)}`);
+    const r = await fetch(`${API_READ}/balances?address=${encodeURIComponent(address)}`);
     if (!r.ok) return null;
     const d = await r.json();
-    // Try common field names
     const raw = d.thr_balance ?? d.THR ?? d.balance ?? d.available ?? null;
     return raw !== null ? String(raw) : null;
   } catch {
@@ -140,7 +144,7 @@ async function fetchBalance(address) {
 
 async function fetchHistory(address) {
   try {
-    const r = await fetch(`/pwa-api/read/wallet_data/${encodeURIComponent(address)}`);
+    const r = await fetch(`${API_READ}/wallet_data/${encodeURIComponent(address)}`);
     if (!r.ok) return [];
     const d = await r.json();
     return Array.isArray(d.transactions) ? d.transactions : [];
@@ -150,7 +154,7 @@ async function fetchHistory(address) {
 }
 
 async function sendTHR(from, to, amount, privHex) {
-  const r = await fetch('/pwa-api/write/wallet/send', {
+  const r = await fetch(`${API_WRITE}/wallet/send`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({

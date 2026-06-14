@@ -349,6 +349,7 @@
 
   <div class="type-tabs">
     <div class="type-tab active" onclick="showMinerType('stratum')">⚡ ASIC / Stratum</div>
+    <div class="type-tab" onclick="showMinerType('usb')">🔌 USB ASIC (Erupter)</div>
     <div class="type-tab" onclick="showMinerType('http')">💻 CPU / GPU (HTTP)</div>
     <div class="type-tab" onclick="showMinerType('solo')">🎯 Solo Mining</div>
   </div>
@@ -422,6 +423,96 @@
         --algo sha256d</pre>
       </div>
       <button class="copy-btn" style="margin-top:10px;" onclick="copyCGMiner()">📋 Copy Command</button>
+    </div>
+  </div>
+
+  <!-- USB ASIC Panel -->
+  <div id="panel-usb" class="type-panel">
+    <div class="cards-grid">
+      <div class="card">
+        <h3>🔌 Block Erupter & USB ASICs</h3>
+        <p>Connect your USB ASIC (Block Erupter, Red Fury, GekkoScience, Antminer U1/U3) via cgminer with your V1 Thronos address as the username.</p>
+
+        <h3 style="margin-top:16px;">Step 1 — Start stratum_proxy.py</h3>
+        <div class="config-box">
+          <pre style="color:#00ff99; margin:0; font-size:0.82em; white-space:pre-wrap;">python stratum_proxy.py
+# Proxy listens on localhost:3334
+# Connects to thrchain.up.railway.app</pre>
+        </div>
+
+        <h3 style="margin-top:14px;">Step 2 — Edit cgminer.conf</h3>
+        <div class="config-box">
+          <div class="config-row">
+            <span class="config-key">url:</span>
+            <span class="config-val">stratum+tcp://127.0.0.1:3334</span>
+          </div>
+          <div class="config-row">
+            <span class="config-key">user:</span>
+            <span class="config-val" id="usbStratumUser">YOUR_V1_ADDRESS</span>
+          </div>
+          <div class="config-row">
+            <span class="config-key">pass:</span>
+            <span class="config-val">x</span>
+          </div>
+          <div class="config-row">
+            <span class="config-key">icarus-options:</span>
+            <span class="config-val">115200:1:1</span>
+          </div>
+          <div class="config-row">
+            <span class="config-key">hotplug:</span>
+            <span class="config-val">5</span>
+          </div>
+        </div>
+
+        <h3 style="margin-top:14px;">Step 3 — Run cgminer</h3>
+        <div class="config-box">
+          <pre style="color:#00ff99; margin:0; font-size:0.82em; white-space:pre-wrap;">cgminer.exe -c cgminer.conf
+# cgminer auto-detects the USB ASIC via hotplug
+# Rewards go to your V1 THR address</pre>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>⚡ Supported USB ASICs</h3>
+        <table class="miner-stats-table" style="font-size:0.8em;">
+          <tr><td>BTC Block Erupter</td><td>333 GH/s</td></tr>
+          <tr><td>Antminer U1</td><td>1.6 GH/s</td></tr>
+          <tr><td>Antminer U3</td><td>6.3 GH/s</td></tr>
+          <tr><td>Bitfury Red Fury</td><td>0.85 GH/s</td></tr>
+          <tr><td>GekkoScience Compac</td><td>8.25 GH/s</td></tr>
+          <tr><td>GekkoScience 2Pac</td><td>11-22 GH/s</td></tr>
+        </table>
+
+        <h3 style="margin-top:16px;">⚙️ cgminer Command Line (alternative)</h3>
+        <div class="config-box">
+          <pre style="color:#00ff99; margin:0; font-size:0.78em; white-space:pre-wrap;">cgminer.exe \
+  -o stratum+tcp://127.0.0.1:3334 \
+  -u <span id="usbCmdAddr">YOUR_V1_ADDRESS</span> \
+  -p x \
+  --icarus-options 115200:1:1 \
+  --hotplug 5</pre>
+        </div>
+        <button class="copy-btn" style="margin-top:8px;" onclick="copyUsbCmd()">📋 Copy Command</button>
+
+        <div class="alert alert-green" style="margin-top:14px;">
+          ✅ <strong>V1 address works directly.</strong> Use your THR V1 canonical address as the username. Rewards are credited to that address automatically.
+        </div>
+
+        <div style="margin-top:14px;">
+          <a href="/miner-kit" class="btn btn-orange" style="font-size:0.82em; padding:8px 16px;">📦 Download Miner Kit</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:20px;">
+      <h3>🔧 Troubleshooting USB ASICs</h3>
+      <table class="miner-stats-table">
+        <tr><td>Device not detected</td><td>Install CP210x or CH340 USB driver; check Device Manager</td></tr>
+        <tr><td>Low hashrate</td><td>Check USB power — use powered hub for Block Erupter</td></tr>
+        <tr><td>"Stratum connection refused"</td><td>Start stratum_proxy.py first, then cgminer</td></tr>
+        <tr><td>High reject rate</td><td>Lower icarus baud rate: try <code>57600:1:1</code></td></tr>
+        <tr><td>No reward in wallet</td><td>Make sure username = exact V1 canonical address (THR...)</td></tr>
+      </table>
     </div>
   </div>
 
@@ -618,6 +709,12 @@ function copyCGMiner() {
   copyText(cmd);
 }
 
+function copyUsbCmd() {
+  const addr = document.getElementById('usbCmdAddr').textContent;
+  const cmd = `cgminer.exe -o stratum+tcp://127.0.0.1:3334 -u ${addr} -p x --icarus-options 115200:1:1 --hotplug 5`;
+  copyText(cmd);
+}
+
 // ---- Load network stats ----
 async function loadMiningStats() {
   try {
@@ -670,6 +767,10 @@ async function loadMyStats() {
   }
 
   document.getElementById('stratumUser').textContent = addr;
+  const usbUser = document.getElementById('usbStratumUser');
+  if (usbUser) usbUser.textContent = addr;
+  const usbCmd = document.getElementById('usbCmdAddr');
+  if (usbCmd) usbCmd.textContent = addr;
   document.getElementById('minerWalletPrompt').style.display = 'none';
   document.getElementById('minerStatsPanel').style.display = 'block';
   document.getElementById('msAddr').textContent = addr;

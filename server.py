@@ -19429,6 +19429,13 @@ def api_miner_kit():
         return jsonify(status="error", error=str(e)), 500
 
 
+@app.route("/mining", methods=["GET"])
+@app.route("/mining-center", methods=["GET"])
+def mining_center_page():
+    """Mining operations center — ASIC/GPU/CPU miners, stratum config, stats"""
+    return render_template("mining_center.html")
+
+
 @app.route("/miner-kit", methods=["GET"])
 @app.route("/miner-kit-download", methods=["GET"])
 def miner_kit_page():

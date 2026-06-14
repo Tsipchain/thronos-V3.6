@@ -9495,6 +9495,27 @@ def downloads_page():
     """Mobile wallet downloads page - Android APK, iOS, Web PWA, Chrome Extension"""
     return render_template("downloads.html")
 
+
+@app.route("/download/apk")
+@app.route("/download/android")
+def download_apk_redirect():
+    """Redirect to latest Android APK — checks GitHub Releases, falls back to static."""
+    import urllib.request as _ur
+    try:
+        req = _ur.Request(
+            "https://api.github.com/repos/Tsipchain/thronos-V3.6/releases/latest",
+            headers={"Accept": "application/vnd.github+json", "User-Agent": "ThronosServer"}
+        )
+        with _ur.urlopen(req, timeout=4) as resp:
+            rel = json.loads(resp.read())
+        apk = next((a for a in rel.get("assets", []) if a["name"].endswith(".apk")), None)
+        if apk:
+            return redirect(apk["browser_download_url"], 302)
+    except Exception:
+        pass
+    # Fall back to static file
+    return redirect("/static/thronos-wallet.apk", 302)
+
 @app.route("/token_chart")
 def token_chart_page():
     return render_template("token_chart.html")

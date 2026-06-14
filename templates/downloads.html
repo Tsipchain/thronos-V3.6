@@ -327,10 +327,30 @@
                 <li><span class="lang-el">Android Auto για T2E rewards</span><span class="lang-en">Android Auto for T2E rewards</span></li>
                 <li><span class="lang-el">QR scan για πληρωμές</span><span class="lang-en">QR scan for payments</span></li>
             </ul>
-            <a href="/static/thronos-wallet.apk" class="download-btn" download>
+            <a id="androidApkBtn" href="/static/thronos-wallet.apk" class="download-btn" download>
                 <span class="lang-el">⬇️ Λήψη APK (Android)</span>
                 <span class="lang-en">⬇️ Download APK (Android)</span>
             </a>
+            <script>
+            // Try to get the latest APK from GitHub Releases
+            (async function() {
+                try {
+                    const r = await fetch('https://api.github.com/repos/Tsipchain/thronos-V3.6/releases/latest', {
+                        headers: { 'Accept': 'application/vnd.github+json' }
+                    });
+                    if (!r.ok) return;
+                    const rel = await r.json();
+                    const apkAsset = (rel.assets || []).find(a => a.name && a.name.endsWith('.apk'));
+                    const btn = document.getElementById('androidApkBtn');
+                    if (apkAsset && btn) {
+                        btn.href = apkAsset.browser_download_url;
+                        // Add version label
+                        const badge = btn.closest('.platform-card')?.querySelector('.version-badge');
+                        if (badge) badge.textContent = rel.tag_name || badge.textContent;
+                    }
+                } catch(e) {}
+            })();
+            </script>
             <p style="font-size:0.75em; color:#888; margin-top:8px; text-align:center;">
                 <span class="lang-el">Ενεργοποίησε "Άγνωστες Πηγές" στις ρυθμίσεις Android</span>
                 <span class="lang-en">Enable "Unknown Sources" in Android Settings to install</span>

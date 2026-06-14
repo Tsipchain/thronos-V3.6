@@ -2405,6 +2405,16 @@
       </div>
     </li>
 
+    <!-- Mining Dropdown -->
+    <li class="nav-item">
+      <span class="nav-link">⛏️ <span class="lang-el">Mining</span><span class="lang-en">Mining</span><span class="lang-ja">マイニング</span><span class="lang-ru">Майнинг</span><span class="lang-es">Minería</span> ▼</span>
+      <div class="dropdown-content">
+        <a href="/mining">⛏️ <span class="lang-el">Κέντρο Mining</span><span class="lang-en">Mining Center</span><span class="lang-ja">マイニングセンター</span><span class="lang-ru">Центр майнинга</span><span class="lang-es">Centro de Minería</span></a>
+        <a href="/heat-dashboard">🔥 <span class="lang-el">Heat Dashboard</span><span class="lang-en">Heat Dashboard</span><span class="lang-ja">熱ダッシュボード</span><span class="lang-ru">Тепловая панель</span><span class="lang-es">Panel de Calor</span></a>
+        <a href="/miner-kit">📦 <span class="lang-el">Miner Kit</span><span class="lang-en">Miner Kit</span><span class="lang-ja">マイナーキット</span><span class="lang-ru">Набор майнера</span><span class="lang-es">Kit de Minero</span></a>
+      </div>
+    </li>
+
     <!-- Services Dropdown -->
     <li class="nav-item">
       <span class="nav-link">🌐 <span class="lang-el">Υπηρεσίες</span><span class="lang-en">Services</span><span class="lang-ja">サービス</span><span class="lang-ru">Услуги</span><span class="lang-es">Servicios</span> ▼</span>
@@ -3217,6 +3227,43 @@ function renderWalletBalances(data) {
     // Apply language after render
     const savedLang = getCurrentLang();
     setLanguage(savedLang);
+
+    // Load BTC address derived from V1 public key (non-blocking)
+    _loadWalletBtcAddressSection(wallet);
+}
+
+async function _loadWalletBtcAddressSection(thrAddress) {
+    try {
+        // Only show if wallet is unlocked (has runtime signing material = has public key)
+        if (!walletSession || !walletSession.getPublicKey) return;
+        const pubkey = walletSession.getPublicKey();
+        if (!pubkey) return;
+
+        const res = await fetch(`/api/wallet/v1/btc-address?pubkey=${encodeURIComponent(pubkey)}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!data.ok || !data.btc_address) return;
+
+        const btcAddr = data.btc_address;
+        const shortBtc = `${btcAddr.slice(0, 8)}...${btcAddr.slice(-6)}`;
+
+        // Inject BTC address row after the THR address row
+        const addrSection = document.querySelector('#walletContentSection .wallet-popup-address');
+        if (!addrSection) return;
+        const btcRow = document.createElement('div');
+        btcRow.id = 'walletBtcAddressRow';
+        btcRow.style.cssText = 'display:flex;align-items:center;gap:8px;background:rgba(0,0,0,0.3);border:1px solid rgba(247,147,26,0.3);border-radius:8px;padding:8px 12px;margin-bottom:6px;';
+        btcRow.innerHTML = `
+            <span style="color:#f7931a;font-size:14px;">₿</span>
+            <div style="flex:1;min-width:0;">
+                <div style="font-size:9px;color:rgba(247,147,26,0.7);text-transform:uppercase;letter-spacing:0.5px;">Bitcoin Address (P2PKH)</div>
+                <div style="font-size:11px;color:#f7931a;font-family:monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${btcAddr}">${shortBtc}</div>
+            </div>
+            <button onclick="copyToClipboard('${btcAddr}'); this.textContent='✓'; setTimeout(()=>this.textContent='Copy',1500);"
+                    style="font-size:10px;padding:3px 8px;background:rgba(247,147,26,0.1);border:1px solid rgba(247,147,26,0.4);color:#f7931a;border-radius:4px;cursor:pointer;white-space:nowrap;">Copy</button>
+        `;
+        addrSection.insertAdjacentElement('afterend', btcRow);
+    } catch (_) {}
 }
 
 // PR-5: Wallet Tab Switching

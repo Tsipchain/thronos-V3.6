@@ -1,0 +1,864 @@
+{% extends "base.html" %}
+
+{% block title %}⛏️ Mining Center - Thronos{% endblock %}
+
+{% block styles %}
+<style>
+  .mining-center {
+    max-width: 1200px;
+    margin: 30px auto;
+    padding: 0 20px 60px;
+  }
+
+  .mining-header {
+    text-align: center;
+    margin-bottom: 40px;
+  }
+
+  .mining-header h1 {
+    color: #ff6600;
+    font-size: 2.2em;
+    margin-bottom: 8px;
+  }
+
+  .mining-header p {
+    color: #aaa;
+    font-size: 1em;
+  }
+
+  /* Stats bar */
+  .stats-bar {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 14px;
+    margin-bottom: 36px;
+  }
+
+  .stat-card {
+    background: linear-gradient(135deg, #1a1a1a, #120a00);
+    border: 1px solid #ff6600;
+    border-radius: 8px;
+    padding: 16px;
+    text-align: center;
+  }
+
+  .stat-card .stat-label {
+    color: #888;
+    font-size: 0.75em;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 6px;
+  }
+
+  .stat-card .stat-value {
+    color: #ff9900;
+    font-size: 1.5em;
+    font-family: monospace;
+    font-weight: bold;
+  }
+
+  .stat-card .stat-sub {
+    color: #666;
+    font-size: 0.75em;
+    margin-top: 4px;
+  }
+
+  /* Section headers */
+  .section-title {
+    color: #ff6600;
+    font-size: 1.2em;
+    font-weight: bold;
+    margin: 30px 0 14px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid #2a1a00;
+  }
+
+  /* Cards grid */
+  .cards-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 20px;
+    margin-bottom: 30px;
+  }
+
+  .card {
+    background: #111;
+    border: 1px solid #2a2a2a;
+    border-radius: 8px;
+    padding: 22px;
+  }
+
+  .card h3 {
+    color: #ff9900;
+    margin: 0 0 12px;
+    font-size: 1em;
+  }
+
+  .card p, .card li {
+    color: #aaa;
+    font-size: 0.88em;
+    line-height: 1.6;
+  }
+
+  /* Connection config box */
+  .config-box {
+    background: #0a0a0a;
+    border: 1px solid #ff6600;
+    border-radius: 6px;
+    padding: 16px;
+    font-family: monospace;
+    font-size: 0.85em;
+    margin: 10px 0;
+  }
+
+  .config-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 0;
+    border-bottom: 1px solid #1a1a1a;
+  }
+
+  .config-row:last-child {
+    border-bottom: none;
+  }
+
+  .config-key {
+    color: #888;
+    min-width: 120px;
+  }
+
+  .config-val {
+    color: #00ff99;
+    font-weight: bold;
+    word-break: break-all;
+  }
+
+  .copy-btn {
+    background: transparent;
+    border: 1px solid #ff6600;
+    color: #ff9900;
+    padding: 2px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.75em;
+    margin-left: 8px;
+    transition: background 0.2s;
+    white-space: nowrap;
+  }
+
+  .copy-btn:hover { background: rgba(255,102,0,0.15); }
+
+  /* Buttons */
+  .btn {
+    display: inline-block;
+    padding: 10px 20px;
+    border-radius: 6px;
+    font-size: 0.9em;
+    font-weight: bold;
+    cursor: pointer;
+    border: none;
+    transition: opacity 0.2s, transform 0.15s;
+    text-decoration: none;
+  }
+
+  .btn:hover { opacity: 0.85; transform: translateY(-1px); }
+
+  .btn-orange {
+    background: linear-gradient(135deg, #ff6600, #ff9900);
+    color: #000;
+  }
+
+  .btn-outline {
+    background: transparent;
+    border: 1px solid #ff6600;
+    color: #ff9900;
+  }
+
+  .btn-green {
+    background: linear-gradient(135deg, #00aa44, #00ff66);
+    color: #000;
+  }
+
+  /* Status badge */
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 0.75em;
+    font-weight: bold;
+    margin-left: 6px;
+  }
+
+  .badge-green { background: #004422; color: #00ff66; border: 1px solid #00ff66; }
+  .badge-orange { background: #2a1000; color: #ff9900; border: 1px solid #ff9900; }
+
+  /* Miner type tabs */
+  .type-tabs {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 18px;
+    flex-wrap: wrap;
+  }
+
+  .type-tab {
+    padding: 8px 18px;
+    background: #1a1a1a;
+    border: 1px solid #333;
+    border-radius: 6px;
+    color: #888;
+    cursor: pointer;
+    font-size: 0.85em;
+    transition: all 0.2s;
+  }
+
+  .type-tab.active, .type-tab:hover {
+    border-color: #ff6600;
+    color: #ff9900;
+    background: rgba(255,102,0,0.08);
+  }
+
+  .type-panel { display: none; }
+  .type-panel.active { display: block; }
+
+  /* My miner section */
+  .miner-stats-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85em;
+  }
+
+  .miner-stats-table td {
+    padding: 8px 10px;
+    border-bottom: 1px solid #1a1a1a;
+    color: #aaa;
+  }
+
+  .miner-stats-table td:first-child {
+    color: #666;
+    width: 180px;
+  }
+
+  .miner-stats-table td:last-child {
+    color: #ff9900;
+    font-family: monospace;
+  }
+
+  .wallet-required {
+    text-align: center;
+    padding: 30px;
+    color: #666;
+    font-size: 0.9em;
+  }
+
+  /* Heat tier indicators */
+  .tier-bar {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin: 10px 0;
+  }
+
+  .tier-chip {
+    padding: 5px 12px;
+    border-radius: 20px;
+    font-size: 0.78em;
+    font-weight: bold;
+  }
+
+  .tier-1 { background: #111; border: 1px solid #555; color: #999; }
+  .tier-2 { background: #1a1200; border: 1px solid #ff9900; color: #ff9900; }
+  .tier-3 { background: #1a0800; border: 1px solid #ff6600; color: #ff6600; }
+  .tier-4 { background: #0a2000; border: 1px solid #00ff66; color: #00ff66; }
+
+  /* Alert */
+  .alert {
+    padding: 12px 16px;
+    border-radius: 6px;
+    font-size: 0.85em;
+    margin: 14px 0;
+  }
+  .alert-green { background: #001a0a; border: 1px solid #00ff66; color: #00ff66; }
+  .alert-orange { background: #1a0a00; border: 1px solid #ff9900; color: #ff9900; }
+
+  #miningStatusDot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #555;
+    display: inline-block;
+    margin-right: 6px;
+  }
+  #miningStatusDot.live { background: #00ff66; box-shadow: 0 0 8px #00ff66; }
+
+  @media (max-width: 600px) {
+    .stats-bar { grid-template-columns: repeat(2, 1fr); }
+    .cards-grid { grid-template-columns: 1fr; }
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="mining-center">
+
+  <!-- Header -->
+  <div class="mining-header">
+    <h1>⛏️ Mining Center</h1>
+    <p>
+      <span id="miningStatusDot"></span>
+      <span id="miningStatusText" style="color:#888;">Loading network status...</span>
+    </p>
+  </div>
+
+  <!-- Live Stats Bar -->
+  <div class="stats-bar">
+    <div class="stat-card">
+      <div class="stat-label">Block Height</div>
+      <div class="stat-value" id="statHeight">—</div>
+      <div class="stat-sub">current tip</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Difficulty</div>
+      <div class="stat-value" id="statDiff">—</div>
+      <div class="stat-sub">network diff</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Block Reward</div>
+      <div class="stat-value" id="statReward">—</div>
+      <div class="stat-sub">THR / block</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Mempool</div>
+      <div class="stat-value" id="statMempool">—</div>
+      <div class="stat-sub">pending txs</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Epoch</div>
+      <div class="stat-value" id="statEpoch">—</div>
+      <div class="stat-sub" id="statHalving">next halving</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Target</div>
+      <div class="stat-value" id="statNbits">—</div>
+      <div class="stat-sub">compact bits</div>
+    </div>
+  </div>
+
+  <!-- Connection Info -->
+  <div class="section-title">🔌 Connect Your Miner / ASIC</div>
+
+  <div class="type-tabs">
+    <div class="type-tab active" onclick="showMinerType('stratum')">⚡ ASIC / Stratum</div>
+    <div class="type-tab" onclick="showMinerType('usb')">🔌 USB ASIC (Erupter)</div>
+    <div class="type-tab" onclick="showMinerType('http')">💻 CPU / GPU (HTTP)</div>
+    <div class="type-tab" onclick="showMinerType('solo')">🎯 Solo Mining</div>
+  </div>
+
+  <!-- Stratum Panel -->
+  <div id="panel-stratum" class="type-panel active">
+    <div class="cards-grid">
+      <div class="card">
+        <h3>⚡ Stratum Pool Connection</h3>
+        <p>Point your ASIC miner (Antminer S19/S21, Whatsminer, Avalon, etc.) to the Thronos Stratum proxy.</p>
+        <div class="config-box">
+          <div class="config-row">
+            <span class="config-key">Pool URL:</span>
+            <span class="config-val" id="stratumHost">stratum+tcp://thrchain.up.railway.app:3334</span>
+            <button class="copy-btn" onclick="copyText(document.getElementById('stratumHost').textContent)">Copy</button>
+          </div>
+          <div class="config-row">
+            <span class="config-key">Port:</span>
+            <span class="config-val">3334</span>
+          </div>
+          <div class="config-row">
+            <span class="config-key">Username:</span>
+            <span class="config-val" id="stratumUser">YOUR_THR_ADDRESS</span>
+            <button class="copy-btn" onclick="copyText(document.getElementById('stratumUser').textContent)">Copy</button>
+          </div>
+          <div class="config-row">
+            <span class="config-key">Password:</span>
+            <span class="config-val">x</span>
+          </div>
+          <div class="config-row">
+            <span class="config-key">Algorithm:</span>
+            <span class="config-val">SHA-256d</span>
+          </div>
+          <div class="config-row">
+            <span class="config-key">Protocol:</span>
+            <span class="config-val">Stratum v1</span>
+          </div>
+        </div>
+        <p style="margin-top:12px; font-size:0.8em; color:#666;">
+          Your THR address is your username. Rewards go directly to that wallet.
+        </p>
+      </div>
+
+      <div class="card">
+        <h3>🔥 Heat Recovery Bonus</h3>
+        <p>Register your ASIC farm's heat recovery system and earn up to <strong style="color:#ff9900;">+40% bonus</strong> on every block reward.</p>
+        <div class="tier-bar">
+          <span class="tier-chip tier-1">TIER 1: +5%</span>
+          <span class="tier-chip tier-2">TIER 2: +15%</span>
+          <span class="tier-chip tier-3">TIER 3: +25%</span>
+          <span class="tier-chip tier-4">TIER 4: +40%</span>
+        </div>
+        <p style="font-size:0.82em; margin-top:10px;">TIER 4 requires 25%+ heat recovery (heat exchanger, ORC turbine, or heat pump). Most ASICs qualify for TIER 2–3 with proper equipment.</p>
+        <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap;">
+          <a href="/heat-dashboard" class="btn btn-outline" style="font-size:0.82em; padding:8px 14px;">📊 Heat Dashboard</a>
+          <button class="btn btn-orange" style="font-size:0.82em; padding:8px 14px;" onclick="showRegisterEquipment()">Register Farm</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="alert alert-green">
+      ✅ Stratum proxy is active and accepting connections. ASIC miners can connect immediately using the credentials above.
+    </div>
+
+    <!-- cgminer / BFGMiner config -->
+    <div class="card" style="margin-bottom:20px;">
+      <h3>⚙️ cgminer / BFGMiner Config</h3>
+      <div class="config-box">
+        <pre style="color:#00ff99; margin:0; font-size:0.82em; white-space:pre-wrap;">cgminer --url stratum+tcp://thrchain.up.railway.app:3334 \
+        --userpass YOUR_THR_ADDRESS:x \
+        --algo sha256d</pre>
+      </div>
+      <button class="copy-btn" style="margin-top:10px;" onclick="copyCGMiner()">📋 Copy Command</button>
+    </div>
+  </div>
+
+  <!-- USB ASIC Panel -->
+  <div id="panel-usb" class="type-panel">
+    <div class="cards-grid">
+      <div class="card">
+        <h3>🔌 Block Erupter & USB ASICs</h3>
+        <p>Connect your USB ASIC (Block Erupter, Red Fury, GekkoScience, Antminer U1/U3) via cgminer with your V1 Thronos address as the username.</p>
+
+        <h3 style="margin-top:16px;">Step 1 — Start stratum_proxy.py</h3>
+        <div class="config-box">
+          <pre style="color:#00ff99; margin:0; font-size:0.82em; white-space:pre-wrap;">python stratum_proxy.py
+# Proxy listens on localhost:3334
+# Connects to thrchain.up.railway.app</pre>
+        </div>
+
+        <h3 style="margin-top:14px;">Step 2 — Edit cgminer.conf</h3>
+        <div class="config-box">
+          <div class="config-row">
+            <span class="config-key">url:</span>
+            <span class="config-val">stratum+tcp://127.0.0.1:3334</span>
+          </div>
+          <div class="config-row">
+            <span class="config-key">user:</span>
+            <span class="config-val" id="usbStratumUser">YOUR_V1_ADDRESS</span>
+          </div>
+          <div class="config-row">
+            <span class="config-key">pass:</span>
+            <span class="config-val">x</span>
+          </div>
+          <div class="config-row">
+            <span class="config-key">icarus-options:</span>
+            <span class="config-val">115200:1:1</span>
+          </div>
+          <div class="config-row">
+            <span class="config-key">hotplug:</span>
+            <span class="config-val">5</span>
+          </div>
+        </div>
+
+        <h3 style="margin-top:14px;">Step 3 — Run cgminer</h3>
+        <div class="config-box">
+          <pre style="color:#00ff99; margin:0; font-size:0.82em; white-space:pre-wrap;">cgminer.exe -c cgminer.conf
+# cgminer auto-detects the USB ASIC via hotplug
+# Rewards go to your V1 THR address</pre>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>⚡ Supported USB ASICs</h3>
+        <table class="miner-stats-table" style="font-size:0.8em;">
+          <tr><td>BTC Block Erupter</td><td>333 GH/s</td></tr>
+          <tr><td>Antminer U1</td><td>1.6 GH/s</td></tr>
+          <tr><td>Antminer U3</td><td>6.3 GH/s</td></tr>
+          <tr><td>Bitfury Red Fury</td><td>0.85 GH/s</td></tr>
+          <tr><td>GekkoScience Compac</td><td>8.25 GH/s</td></tr>
+          <tr><td>GekkoScience 2Pac</td><td>11-22 GH/s</td></tr>
+        </table>
+
+        <h3 style="margin-top:16px;">⚙️ cgminer Command Line (alternative)</h3>
+        <div class="config-box">
+          <pre style="color:#00ff99; margin:0; font-size:0.78em; white-space:pre-wrap;">cgminer.exe \
+  -o stratum+tcp://127.0.0.1:3334 \
+  -u <span id="usbCmdAddr">YOUR_V1_ADDRESS</span> \
+  -p x \
+  --icarus-options 115200:1:1 \
+  --hotplug 5</pre>
+        </div>
+        <button class="copy-btn" style="margin-top:8px;" onclick="copyUsbCmd()">📋 Copy Command</button>
+
+        <div class="alert alert-green" style="margin-top:14px;">
+          ✅ <strong>V1 address works directly.</strong> Use your THR V1 canonical address as the username. Rewards are credited to that address automatically.
+        </div>
+
+        <div style="margin-top:14px;">
+          <a href="/miner-kit" class="btn btn-orange" style="font-size:0.82em; padding:8px 16px;">📦 Download Miner Kit</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:20px;">
+      <h3>🔧 Troubleshooting USB ASICs</h3>
+      <table class="miner-stats-table">
+        <tr><td>Device not detected</td><td>Install CP210x or CH340 USB driver; check Device Manager</td></tr>
+        <tr><td>Low hashrate</td><td>Check USB power — use powered hub for Block Erupter</td></tr>
+        <tr><td>"Stratum connection refused"</td><td>Start stratum_proxy.py first, then cgminer</td></tr>
+        <tr><td>High reject rate</td><td>Lower icarus baud rate: try <code>57600:1:1</code></td></tr>
+        <tr><td>No reward in wallet</td><td>Make sure username = exact V1 canonical address (THR...)</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <!-- HTTP Panel -->
+  <div id="panel-http" class="type-panel">
+    <div class="cards-grid">
+      <div class="card">
+        <h3>💻 HTTP Mining API (CPU/GPU)</h3>
+        <p>CPU and GPU miners can poll the work API directly without running the Stratum proxy.</p>
+        <div class="config-box">
+          <div class="config-row">
+            <span class="config-key">GET Work:</span>
+            <span class="config-val">/api/miner/work?address=THR_ADDR</span>
+          </div>
+          <div class="config-row">
+            <span class="config-key">POST Submit:</span>
+            <span class="config-val">/api/miner/submit</span>
+          </div>
+          <div class="config-row">
+            <span class="config-key">Algorithm:</span>
+            <span class="config-val">SHA-256d (double SHA-256)</span>
+          </div>
+        </div>
+
+        <h3 style="margin-top:16px;">📦 Work Response Fields</h3>
+        <div class="config-box">
+          <div class="config-row"><span class="config-key">target</span><span class="config-val">hex — mining target (find hash below this)</span></div>
+          <div class="config-row"><span class="config-key">prev_hash</span><span class="config-val">hex — previous block hash</span></div>
+          <div class="config-row"><span class="config-key">height</span><span class="config-val">int — block height to mine</span></div>
+          <div class="config-row"><span class="config-key">reward</span><span class="config-val">float — THR reward for solving</span></div>
+          <div class="config-row"><span class="config-key">nbits</span><span class="config-val">hex — compact difficulty bits</span></div>
+          <div class="config-row"><span class="config-key">job_id</span><span class="config-val">str — unique job identifier</span></div>
+        </div>
+
+        <h3 style="margin-top:16px;">📤 Submit Payload</h3>
+        <div class="config-box">
+          <pre style="color:#00ff99; margin:0; font-size:0.82em; white-space:pre-wrap;">{
+  "thr_address": "YOUR_THR_ADDRESS",
+  "nonce": 12345678,
+  "job_id": "job_id_from_work",
+  "merkle_root": "hex_string",
+  "prev_hash": "hex_string",
+  "time": 1718000000,
+  "nbits": 486604799,
+  "pow_hash": "hex_string"
+}</pre>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>📥 Download Miner Kit</h3>
+        <p>Get the complete Phase 6B miner kit with hardware specs, config templates, and setup scripts for all hardware types.</p>
+        <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:14px;">
+          <a href="/miner-kit" class="btn btn-orange">📦 Miner Kit Page</a>
+          <button class="btn btn-outline" onclick="downloadCGMinerKit()">⬇️ Download</button>
+        </div>
+        <div style="margin-top:16px;">
+          <p><strong style="color:#ff9900;">Supported Hardware:</strong></p>
+          <ul style="padding-left:16px; margin:6px 0;">
+            <li>ASIC: Antminer S19/S21, Whatsminer M50/M60, Avalon A14</li>
+            <li>GPU: NVIDIA RTX series, AMD RX series</li>
+            <li>CPU: Any multi-core processor</li>
+            <li>USB: Block Erupter, Red Fury, GekkoScience</li>
+            <li>IoT: Raspberry Pi, ESP32 nodes</li>
+            <li>Hybrid: Multi-algorithm rigs</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Solo Panel -->
+  <div id="panel-solo" class="type-panel">
+    <div class="card" style="margin-bottom:20px;">
+      <h3>🎯 Solo Mining (Full Block Reward)</h3>
+      <p>Solo miners submit blocks directly to the network and keep 100% of the block reward when they find a block. Higher variance, higher reward.</p>
+      <div class="alert alert-orange" style="margin:14px 0;">
+        ⚠️ Solo mining is only practical at high hashrates. With the current network difficulty, a single ASIC S19 (84 TH/s) finds a block on average every few days.
+      </div>
+      <div class="config-box">
+        <div class="config-row"><span class="config-key">Work endpoint:</span><span class="config-val">GET /api/mining/work</span></div>
+        <div class="config-row"><span class="config-key">Submit endpoint:</span><span class="config-val">POST /api/mining/submit</span></div>
+        <div class="config-row"><span class="config-key">Same payload as HTTP pool mining</span><span class="config-val"></span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- My Mining Stats -->
+  <div class="section-title" style="margin-top:36px;">📊 My Mining Stats</div>
+
+  <div id="myMinerSection">
+    <div class="wallet-required" id="minerWalletPrompt">
+      <p>🔒 Connect your wallet to view your mining statistics and rewards.</p>
+    </div>
+    <div id="minerStatsPanel" style="display:none;">
+      <div class="cards-grid">
+        <div class="card">
+          <h3>💰 Mining Rewards</h3>
+          <table class="miner-stats-table">
+            <tr><td>Confirmed Rewards</td><td id="msConfirmed">—</td></tr>
+            <tr><td>Pending Rewards</td><td id="msPending">—</td></tr>
+            <tr><td>Wallet Balance</td><td id="msBalance">—</td></tr>
+            <tr><td>Pool Rewards</td><td id="msPool">—</td></tr>
+          </table>
+        </div>
+        <div class="card">
+          <h3>⚙️ Equipment Status</h3>
+          <table class="miner-stats-table">
+            <tr><td>Miner Address</td><td id="msAddr" style="font-size:0.75em; word-break:break-all;">—</td></tr>
+            <tr><td>Equipment</td><td id="msEquip">—</td></tr>
+            <tr><td>Heat Tier</td><td id="msTier">—</td></tr>
+            <tr><td>Reputation</td><td id="msRep">—</td></tr>
+          </table>
+          <button class="btn btn-outline" style="margin-top:14px; font-size:0.82em; width:100%;" onclick="refreshMyStats()">🔄 Refresh Stats</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Equipment Registration Modal -->
+  <div id="equipmentModal" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.85); z-index:1000; overflow-y:auto;">
+    <div style="max-width:500px; margin:40px auto; background:#111; border:1px solid #ff6600; border-radius:10px; padding:28px;">
+      <h2 style="color:#ff9900; margin:0 0 20px;">🔥 Register Heat Recovery Equipment</h2>
+      <label style="color:#aaa; font-size:0.85em; display:block; margin-bottom:4px;">Equipment Type</label>
+      <select id="eqType" style="width:100%; padding:9px; background:#0a0a0a; border:1px solid #333; color:#fff; border-radius:6px; margin-bottom:14px;">
+        <option value="heat_exchanger">Heat Exchanger (TIER 3)</option>
+        <option value="orc_turbine">ORC Turbine (TIER 4)</option>
+        <option value="stirling_engine">Stirling Engine (TIER 4)</option>
+        <option value="heat_pump">Heat Pump (TIER 3)</option>
+        <option value="hybrid_system">Hybrid System (TIER 4)</option>
+      </select>
+      <label style="color:#aaa; font-size:0.85em; display:block; margin-bottom:4px;">Location (e.g. EU-GR-01)</label>
+      <input id="eqLocation" type="text" placeholder="EU-GR-01" style="width:100%; padding:9px; background:#0a0a0a; border:1px solid #333; color:#fff; border-radius:6px; margin-bottom:14px; box-sizing:border-box;" />
+      <label style="color:#aaa; font-size:0.85em; display:block; margin-bottom:4px;">Capacity (kW)</label>
+      <input id="eqCapacity" type="number" placeholder="50" min="0.1" step="0.1" style="width:100%; padding:9px; background:#0a0a0a; border:1px solid #333; color:#fff; border-radius:6px; margin-bottom:14px; box-sizing:border-box;" />
+      <label style="color:#aaa; font-size:0.85em; display:block; margin-bottom:4px;">Efficiency (%)</label>
+      <input id="eqEfficiency" type="number" placeholder="85" min="1" max="100" style="width:100%; padding:9px; background:#0a0a0a; border:1px solid #333; color:#fff; border-radius:6px; margin-bottom:20px; box-sizing:border-box;" />
+      <div id="eqError" style="color:#ff4444; font-size:0.82em; margin-bottom:10px; display:none;"></div>
+      <div style="display:flex; gap:10px;">
+        <button class="btn btn-orange" style="flex:1;" onclick="submitEquipmentReg()">Register</button>
+        <button class="btn btn-outline" style="flex:1;" onclick="document.getElementById('equipmentModal').style.display='none'">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Links -->
+  <div class="section-title" style="margin-top:36px;">🔗 Mining Resources</div>
+  <div class="cards-grid">
+    <div class="card" style="display:flex; flex-direction:column; gap:10px;">
+      <a href="/heat-dashboard" class="btn btn-outline" style="text-align:center;">🔥 Heat Recovery Dashboard</a>
+      <a href="/miner-kit" class="btn btn-outline" style="text-align:center;">📦 Miner Kit Download</a>
+      <a href="/api/mining/info" target="_blank" class="btn btn-outline" style="text-align:center;">📡 Mining Info API</a>
+      <a href="/api/mining/halving-schedule" target="_blank" class="btn btn-outline" style="text-align:center;">📅 Halving Schedule</a>
+    </div>
+    <div class="card">
+      <h3>ℹ️ Quick Facts</h3>
+      <ul style="padding-left:16px; color:#aaa; font-size:0.85em; line-height:2;">
+        <li>Algorithm: <strong style="color:#ff9900;">Double SHA-256 (SHA-256d)</strong></li>
+        <li>Block time: ~10 minutes target</li>
+        <li>Halving: every 210,000 blocks</li>
+        <li>Max supply: 21,000,000 THR</li>
+        <li>Heat bonus: up to +40% per block</li>
+        <li>Stratum port: <strong style="color:#ff9900;">3334</strong></li>
+      </ul>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ---- Tab switching ----
+function showMinerType(type) {
+  document.querySelectorAll('.type-tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.type-panel').forEach(p => p.classList.remove('active'));
+  event.currentTarget.classList.add('active');
+  document.getElementById('panel-' + type).classList.add('active');
+}
+
+// ---- Copy helpers ----
+function copyText(text) {
+  navigator.clipboard.writeText(text).catch(() => {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+  });
+}
+
+function copyCGMiner() {
+  const user = document.getElementById('stratumUser').textContent;
+  const cmd = `cgminer --url stratum+tcp://thrchain.up.railway.app:3334 --userpass ${user}:x --algo sha256d`;
+  copyText(cmd);
+}
+
+function copyUsbCmd() {
+  const addr = document.getElementById('usbCmdAddr').textContent;
+  const cmd = `cgminer.exe -o stratum+tcp://127.0.0.1:3334 -u ${addr} -p x --icarus-options 115200:1:1 --hotplug 5`;
+  copyText(cmd);
+}
+
+// ---- Load network stats ----
+async function loadMiningStats() {
+  try {
+    const res = await fetch('/api/mining/info');
+    const d = await res.json();
+    document.getElementById('statHeight').textContent = d.height ? d.height.toLocaleString() : '—';
+    document.getElementById('statDiff').textContent = d.difficulty_int ? fmtNum(d.difficulty_int) : '—';
+    document.getElementById('statReward').textContent = d.reward ? d.reward.toFixed(4) : '—';
+    document.getElementById('statMempool').textContent = d.mempool !== undefined ? d.mempool : '—';
+    document.getElementById('statNbits').textContent = d.nbits || '—';
+
+    const dot = document.getElementById('miningStatusDot');
+    const txt = document.getElementById('miningStatusText');
+    dot.className = 'live';
+    txt.textContent = 'Network active — block #' + (d.height || '?');
+    txt.style.color = '#00ff66';
+  } catch(e) {
+    document.getElementById('miningStatusText').textContent = 'Unable to fetch network status';
+  }
+
+  // Load epoch info
+  try {
+    const ep = await fetch('/api/mining/current-epoch');
+    const ed = await ep.json();
+    if (ed.epoch !== undefined) {
+      document.getElementById('statEpoch').textContent = ed.epoch;
+    }
+    if (ed.blocks_until_halving !== undefined) {
+      document.getElementById('statHalving').textContent = ed.blocks_until_halving.toLocaleString() + ' blocks';
+    }
+  } catch(e) {}
+}
+
+function fmtNum(n) {
+  if (n >= 1e12) return (n/1e12).toFixed(2) + 'T';
+  if (n >= 1e9) return (n/1e9).toFixed(2) + 'G';
+  if (n >= 1e6) return (n/1e6).toFixed(2) + 'M';
+  if (n >= 1e3) return (n/1e3).toFixed(1) + 'K';
+  return n.toString();
+}
+
+// ---- My miner stats ----
+async function loadMyStats() {
+  const addr = (window.walletSession && walletSession.getAddress) ? walletSession.getAddress() : null;
+  if (!addr) {
+    document.getElementById('minerWalletPrompt').style.display = 'block';
+    document.getElementById('minerStatsPanel').style.display = 'none';
+    // Pre-fill stratum username with hint
+    return;
+  }
+
+  document.getElementById('stratumUser').textContent = addr;
+  const usbUser = document.getElementById('usbStratumUser');
+  if (usbUser) usbUser.textContent = addr;
+  const usbCmd = document.getElementById('usbCmdAddr');
+  if (usbCmd) usbCmd.textContent = addr;
+  document.getElementById('minerWalletPrompt').style.display = 'none';
+  document.getElementById('minerStatsPanel').style.display = 'block';
+  document.getElementById('msAddr').textContent = addr;
+
+  try {
+    const res = await fetch('/api/wallet/mining_stats?address=' + encodeURIComponent(addr));
+    const d = await res.json();
+    if (d.mining_rewards_confirmed !== undefined) {
+      document.getElementById('msConfirmed').textContent = d.mining_rewards_confirmed.toFixed(6) + ' THR';
+      document.getElementById('msPending').textContent = d.mining_rewards_pending.toFixed(6) + ' THR';
+      document.getElementById('msBalance').textContent = d.confirmed_thr_balance.toFixed(6) + ' THR';
+      document.getElementById('msPool').textContent = (d.pool_rewards_confirmed || 0).toFixed(6) + ' THR';
+    }
+  } catch(e) {}
+
+  try {
+    const res = await fetch('/api/miner/status/' + encodeURIComponent(addr));
+    const d = await res.json();
+    if (d && !d.error) {
+      document.getElementById('msEquip').textContent = d.equipment_type || 'Not registered';
+      document.getElementById('msTier').textContent = d.heat_tier || 'TIER_1';
+      document.getElementById('msRep').textContent = (d.reputation_score !== undefined ? d.reputation_score : '—') + '/100';
+    } else {
+      document.getElementById('msEquip').textContent = 'Not registered';
+      document.getElementById('msTier').textContent = 'TIER_1 (no equipment)';
+      document.getElementById('msRep').textContent = '100/100';
+    }
+  } catch(e) {
+    document.getElementById('msEquip').textContent = 'Not registered';
+    document.getElementById('msTier').textContent = '—';
+  }
+}
+
+function refreshMyStats() { loadMyStats(); }
+
+// ---- Equipment registration ----
+function showRegisterEquipment() {
+  const addr = (window.walletSession && walletSession.getAddress) ? walletSession.getAddress() : null;
+  if (!addr) { alert('Connect your wallet first.'); return; }
+  document.getElementById('equipmentModal').style.display = 'block';
+}
+
+async function submitEquipmentReg() {
+  const addr = (window.walletSession && walletSession.getAddress) ? walletSession.getAddress() : null;
+  if (!addr) return;
+
+  const eqType = document.getElementById('eqType').value;
+  const location = document.getElementById('eqLocation').value.trim() || 'UNKNOWN';
+  const capacity = parseFloat(document.getElementById('eqCapacity').value) || 10;
+  const efficiency = parseFloat(document.getElementById('eqEfficiency').value) || 80;
+  const errDiv = document.getElementById('eqError');
+
+  try {
+    const res = await fetch('/api/miner/equipment/register', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        miner_address: addr,
+        equipment_type: eqType,
+        location: location,
+        capacity_kw: capacity,
+        efficiency_percent: efficiency,
+        gps_latitude: 0,
+        gps_longitude: 0
+      })
+    });
+    const d = await res.json();
+    if (res.ok) {
+      document.getElementById('equipmentModal').style.display = 'none';
+      alert('✅ Equipment registered! Your heat recovery bonus will apply to future blocks.');
+      loadMyStats();
+    } else {
+      errDiv.textContent = d.error || 'Registration failed';
+      errDiv.style.display = 'block';
+    }
+  } catch(e) {
+    errDiv.textContent = 'Network error: ' + e.message;
+    errDiv.style.display = 'block';
+  }
+}
+
+// ---- Init ----
+document.addEventListener('DOMContentLoaded', () => {
+  loadMiningStats();
+  // Wait for wallet session to be ready
+  setTimeout(loadMyStats, 600);
+  // Refresh stats every 60s
+  setInterval(loadMiningStats, 60000);
+});
+</script>
+{% endblock %}

@@ -61,9 +61,10 @@ async function unwrapFromSession(envelope) {
 
 // ─── WebAuthn ─────────────────────────────────────────────────────────────────
 
+// Works for api.thronoschain.org and thronoschain.org (both share the same eTLD+1)
 const RP_ID = (location.hostname === 'localhost' || location.hostname === '127.0.0.1')
   ? 'localhost'
-  : 'thronoschain.org';
+  : location.hostname.endsWith('thronoschain.org') ? 'thronoschain.org' : location.hostname;
 
 const PRF_LABEL = new TextEncoder().encode('thronos-wallet-v1');
 

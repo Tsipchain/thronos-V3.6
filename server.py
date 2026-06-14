@@ -23159,12 +23159,13 @@ def api_swap_execute():
             pool["last_swap_time"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
             return amt_out, fee_amount, price_impact
 
-        # Execute swap across route
+        # Execute swap across route — quote["legs"] holds the pool-level leg dicts;
+        # quote["route"] is just a list of token symbol strings.
         swap_trace = []
         running_in = amount_in
         total_fee = 0.0
         total_price_impact = 0.0
-        for leg in quote["route"]:
+        for leg in quote["legs"]:
             out_amount, fee_amount, price_impact = apply_pool_swap(leg["pool_id"], leg["in_token"], leg["out_token"], running_in)
             if out_amount <= 0:
                 return jsonify(status="error", error="swap_execution_failed", message="Swap failed due to liquidity"), 400

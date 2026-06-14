@@ -23282,6 +23282,46 @@ def api_v1_wallet_fee_estimate():
         return jsonify(status="error", error="fee_estimate_failed", fee=0), 400
 
 
+# ─── BTC Address Derivation from secp256k1 Public Key ──────────────────────
+
+_BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+
+def _base58check_encode(payload: bytes) -> str:
+    checksum = hashlib.sha256(hashlib.sha256(payload).digest()).digest()[:4]
+    data = payload + checksum
+    count = 0
+    for b in data:
+        if b == 0:
+            count += 1
+        else:
+            break
+    num = int.from_bytes(data, "big")
+    result = ""
+    while num:
+        num, rem = divmod(num, 58)
+        result = _BASE58_ALPHABET[rem] + result
+    return "1" * count + result
+
+def pubkey_hex_to_btc_address(pubkey_hex: str) -> str:
+    """Derive Bitcoin P2PKH mainnet address from compressed/uncompressed secp256k1 public key."""
+    pub = bytes.fromhex(pubkey_hex)
+    sha256_hash = hashlib.sha256(pub).digest()
+    ripemd160 = hashlib.new("ripemd160", sha256_hash).digest()
+    return _base58check_encode(b"\x00" + ripemd160)
+
+@app.route("/api/wallet/v1/btc-address", methods=["GET"])
+def api_wallet_v1_btc_address():
+    """Return Bitcoin P2PKH address derived from a secp256k1 public key."""
+    pubkey_hex = (request.args.get("pubkey") or "").strip().lower()
+    if not pubkey_hex or len(pubkey_hex) not in (66, 130):
+        return jsonify(ok=False, error="Provide compressed (66-char) or uncompressed (130-char) public key"), 400
+    try:
+        btc_addr = pubkey_hex_to_btc_address(pubkey_hex)
+        return jsonify(ok=True, btc_address=btc_addr, pubkey=pubkey_hex, network="mainnet", type="P2PKH")
+    except Exception as exc:
+        return jsonify(ok=False, error=str(exc)), 400
+
+
 # ─── Token Balances API (NEW) ─────────────────────────────────────
 #
 # This endpoint returns all balances for custom tokens held by the

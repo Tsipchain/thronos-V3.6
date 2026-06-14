@@ -22929,6 +22929,10 @@ def api_wallet_v1_rekey_request():
 
 def verify_swap_wallet_v1_or_legacy(payload, expected_action=SWAP_EXPECTED_ACTION):
     """Verify swap auth before any swap state mutation."""
+    # New walletV1BuildSignedRequest format: canonical_v1_address + signature at top level, no signed_tx
+    if payload.get("canonical_v1_address") and payload.get("signature") and not payload.get("signed_tx"):
+        return _verify_walletv1_new_format(payload, expected_action)
+
     # Extract addresses from payload - normalize them
     trader_raw = (payload.get("trader_thr") or payload.get("from") or "").strip()
     credential_lookup_raw = (payload.get("credential_lookup_address") or trader_raw).strip()
@@ -23044,18 +23048,20 @@ def api_swap_execute():
     """Execute swap with comprehensive error handling. All user input errors return 400, never 500."""
     try:
         data = request.get_json() or {}
+        # Support walletV1BuildSignedRequest format where swap params are nested under "payload"
+        inner = data.get("payload") or {}
 
-        # Safe extraction: strip strings, handle missing values
-        token_in = (data.get("token_in") or "").upper().strip()
-        token_out = (data.get("token_out") or "").upper().strip()
-        trader = (data.get("trader_thr") or "").strip()
+        # Safe extraction: check top-level first, fall back to nested payload
+        token_in = (data.get("token_in") or inner.get("token_in") or "").upper().strip()
+        token_out = (data.get("token_out") or inner.get("token_out") or "").upper().strip()
+        trader = (data.get("trader_thr") or data.get("canonical_v1_address") or data.get("from") or inner.get("trader_thr") or "").strip()
         auth_secret = (data.get("auth_secret") or "").strip()
         passphrase = (data.get("passphrase") or "").strip()
-        min_amount_out_raw = data.get("min_amount_out", 0)
+        min_amount_out_raw = data.get("min_amount_out") or inner.get("min_amount_out") or 0
 
         # Safe amount parsing - any TypeError/ValueError is 400
         try:
-            amount_in = float(data.get("amount_in", 0))
+            amount_in = float(data.get("amount_in") or inner.get("amount_in") or 0)
             min_amount_out = float(min_amount_out_raw)
         except (TypeError, ValueError) as e:
             return jsonify(status="error", error="invalid_amounts", message=f"Invalid amount values: {str(e)}"), 400
@@ -25877,6 +25883,54 @@ def _verify_ai_sig(pubkey_hex: str, signing_bytes: bytes, sig_hex: str) -> bool:
 
 
 _load_ai_registry()
+
+
+def _verify_walletv1_new_format(data, expected_action):
+    """
+    Verify the new walletV1BuildSignedRequest format where signature/public_key are
+    at the top level (not inside signed_tx). Returns (ok, error_dict, wallet_address).
+
+    JS signing payload (with array replacer, inner payload keys filtered to {}):
+      {"action":"...","canonical_v1_address":"...","nonce":"...","payload":{},"timestamp":"..."}
+    Signature = secp256k1_compact_sign(sha256(signing_json_utf8), private_key)
+    """
+    import hashlib as _hl
+    canonical_addr = (data.get("canonical_v1_address") or data.get("from") or "").strip()
+    public_key = (data.get("public_key") or "").strip()
+    signature = (data.get("signature") or "").strip()
+    action = (data.get("action") or "").lower().strip()
+    timestamp = (data.get("timestamp") or "").strip()
+    nonce = (data.get("nonce") or "").strip()
+
+    if not canonical_addr:
+        return False, {"ok": False, "error": "missing_address", "message": "Missing canonical_v1_address"}, None
+    if not public_key:
+        return False, {"ok": False, "error": "missing_public_key", "message": "Missing public_key"}, None
+    if not signature or len(signature) != 128:
+        return False, {"ok": False, "error": "invalid_signature", "message": "Invalid or missing signature (expected 128 hex chars)"}, None
+
+    action_normalized = action.replace("-", "_").replace(" ", "_")
+    expected_normalized = expected_action.replace("-", "_").replace(" ", "_")
+    if action_normalized != expected_normalized:
+        return False, {"ok": False, "error": "action_mismatch", "message": f"Expected {expected_action}, got {action}"}, None
+
+    # Reconstruct the signing JSON exactly as JS produced it.
+    # JS uses Object.keys(signingPayload).sort() as replacer array — this filters nested payload
+    # keys to {}, so the signing JSON always has payload:{} regardless of actual payload.
+    signing_payload = {
+        "action": action_normalized,
+        "canonical_v1_address": canonical_addr,
+        "nonce": nonce,
+        "payload": {},
+        "timestamp": timestamp,
+    }
+    signing_json = json.dumps(signing_payload, sort_keys=True, separators=(',', ':'))
+
+    if not _verify_ai_sig(public_key, signing_json.encode('utf-8'), signature):
+        return False, {"ok": False, "error": "invalid_signature", "message": "Signature verification failed"}, None
+
+    return True, {}, canonical_addr
+
 
 
 @app.route("/tx/submit", methods=["POST"])
@@ -30319,6 +30373,10 @@ def verify_pool_wallet_v1_or_legacy(payload, expected_action, wallet_field='prov
         - error_dict: dict with status/error/message for JSON response if auth failed
         - wallet_address: the authenticated wallet address (only if ok=True)
     """
+    # New walletV1BuildSignedRequest format: canonical_v1_address + signature at top level, no signed_tx
+    if payload.get("canonical_v1_address") and payload.get("signature") and not payload.get("signed_tx"):
+        return _verify_walletv1_new_format(payload, expected_action)
+
     wallet_addr = (payload.get(wallet_field) or "").strip()
     credential_lookup = (payload.get("credential_lookup_address") or wallet_addr).strip()
     auth_secret = (payload.get("auth_secret") or "").strip()
@@ -30693,13 +30751,16 @@ def api_v1_add_liquidity():
     }
     """
     data = request.get_json() or {}
-    pool_id = (data.get("pool_id") or "").strip()
-    amt_a_raw = data.get("amount_a", 0)
-    amt_b_raw = data.get("amount_b", 0)
-    provider = (data.get("provider_thr") or "").strip()
+    # Support walletV1BuildSignedRequest format where pool params are nested under "payload"
+    inner = data.get("payload") or {}
+
+    pool_id = (data.get("pool_id") or inner.get("pool_id") or "").strip()
+    amt_a_raw = data.get("amount_a") or inner.get("amount_a") or 0
+    amt_b_raw = data.get("amount_b") or inner.get("amount_b") or 0
+    provider = (data.get("provider_thr") or data.get("canonical_v1_address") or data.get("from") or inner.get("provider_thr") or "").strip()
     auth_secret = (data.get("auth_secret") or "").strip()
     passphrase = (data.get("passphrase") or "").strip()
-    referrer = (data.get("referrer") or "").strip()  # Optional referral address
+    referrer = (data.get("referrer") or inner.get("referrer") or "").strip()
 
     # Validate inputs
     try:

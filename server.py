@@ -33852,8 +33852,8 @@ def _api_v1_music_tip_impl():
         new_balance = wbtc_ledger[from_address]
     else:
         token_balances = load_token_balances()
-        token_registry = load_json(CUSTOM_TOKENS_FILE, {}).get("tokens", [])
-        token_meta = next((t for t in token_registry if str(t.get("symbol") or "").upper() == token_symbol), None)
+        # Use get_all_tokens() (base + custom catalog) instead of CUSTOM_TOKENS_FILE directly
+        token_meta = next((t for t in get_all_tokens() if (t.get("symbol") or "").upper() == token_symbol), None)
         if not token_meta:
             return jsonify({"status": "error", "message": f"Unknown token: {token_symbol}"}), 400
         if not token_meta.get("transferable", True):

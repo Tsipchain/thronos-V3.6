@@ -23252,7 +23252,7 @@ def api_swap_execute():
         import traceback
         tb = traceback.format_exc()
         logger.error(f"[api_swap_execute] Unhandled exception: {exc}\n{tb}")
-        return jsonify(status="error", error="swap_execution_failed", message="Swap execution error"), 400
+        return jsonify(status="error", error="swap_execution_failed", message=f"Swap execution error: {type(exc).__name__}: {exc}"), 400
 
 @app.route("/api/v1/wallet/fee-estimate", methods=["POST"])
 def api_v1_wallet_fee_estimate():
@@ -33781,20 +33781,28 @@ def api_v1_music_tip():
 
     artist_address = track["artist_address"]
 
-    ok, _, error_key = validate_effective_auth(from_address, auth_secret, passphrase)
-    if not ok:
-        if error_key == "no_effective_pledge":
-            return jsonify({"status": "error", "message": "Sender has no effective pledge access"}), 403
-        if error_key == "missing_auth_secret":
-            return jsonify({"status": "error", "message": "Missing auth_secret"}), 400
-        if error_key == "missing_pledge":
-            return jsonify({"status": "error", "message": "Sender has not pledged"}), 400
-        if error_key == "send_not_enabled":
-            return jsonify({"status": "error", "message": "Send not enabled"}), 400
-        if error_key == "passphrase_required":
-            return jsonify({"status": "error", "message": "Passphrase required"}), 400
-        if error_key == "invalid_auth":
-            return jsonify({"status": "error", "message": "Invalid auth"}), 403
+    # Support walletV1BuildSignedRequest format (canonical_v1_address + signature at top level)
+    if data.get("canonical_v1_address") and data.get("signature") and not data.get("signed_tx"):
+        tip_auth_ok, tip_auth_err, tip_addr = _verify_walletv1_new_format(data, "tip")
+        if not tip_auth_ok:
+            return jsonify({"status": "error", "message": tip_auth_err.get("message", "Signature verification failed")}), 403
+        # Override from_address with verified canonical address
+        from_address = tip_addr or from_address
+    else:
+        ok, _, error_key = validate_effective_auth(from_address, auth_secret, passphrase)
+        if not ok:
+            if error_key == "no_effective_pledge":
+                return jsonify({"status": "error", "message": "Sender has no effective pledge access"}), 403
+            if error_key == "missing_auth_secret":
+                return jsonify({"status": "error", "message": "Missing auth_secret"}), 400
+            if error_key == "missing_pledge":
+                return jsonify({"status": "error", "message": "Sender has not pledged"}), 400
+            if error_key == "send_not_enabled":
+                return jsonify({"status": "error", "message": "Send not enabled"}), 400
+            if error_key == "passphrase_required":
+                return jsonify({"status": "error", "message": "Passphrase required"}), 400
+            if error_key == "invalid_auth":
+                return jsonify({"status": "error", "message": "Invalid auth"}), 403
 
     # New tip philosophy: Artist gets 100% of tip.  Sender pays network fee ON TOP.
     # Fee split: 50% burned, 50% → AI Agent wallet (funds IoT miner rewards).

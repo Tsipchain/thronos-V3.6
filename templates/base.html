@@ -10008,23 +10008,33 @@ async function submitGlobalTip() {
     if (hint) hint.textContent = `Sending ${amount} ${asset}...`;
 
     try {
-        const auth = _globalTipAuth || await window.WalletAuth.requireUnlockedWallet();
-        _globalTipAuth = auth;
-        const { address, authSecret } = auth;
         const tipUrl = typeof buildWalletMusicApiUrl === 'function'
             ? buildWalletMusicApiUrl('/api/v1/music/tip')
             : '/api/v1/music/tip';
+
+        let tipBody;
+        // Use wallet V1 signed request when available
+        const v1Addr = walletSession ? walletSession.getAddress() : null;
+        const v1Unlocked = walletSession && walletSession.isUnlockedFor ? walletSession.isUnlockedFor(v1Addr) : false;
+        if (v1Addr && v1Unlocked) {
+            try {
+                const tipPayload = { track_id: track.id || track.track_id, amount, token_symbol: asset };
+                const signedReq = await walletV1BuildSignedRequest('tip', tipPayload);
+                tipBody = { ...signedReq, track_id: track.id || track.track_id, from_address: v1Addr, amount, token_symbol: asset };
+            } catch (signErr) {
+                throw new Error('Wallet V1 signing failed: ' + (signErr.message || signErr));
+            }
+        } else {
+            const auth = _globalTipAuth || await window.WalletAuth.requireUnlockedWallet();
+            _globalTipAuth = auth;
+            const { address, authSecret } = auth;
+            tipBody = { track_id: track.id || track.track_id, from_address: address, amount, token_symbol: asset, auth_secret: authSecret, passphrase: '' };
+        }
+
         const res = await fetch(tipUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                track_id: track.id || track.track_id,
-                from_address: address,
-                amount,
-                token_symbol: asset,
-                auth_secret: authSecret,
-                passphrase: ''
-            })
+            body: JSON.stringify(tipBody)
         });
         const data = await res.json();
         if (data.status !== 'success') {

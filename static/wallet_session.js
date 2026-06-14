@@ -56,8 +56,10 @@
       }
       unlockedPrivateKeyHex = saved.priv;
       unlockedForAddress = saved.addr;
-      unlockedAtTime = saved.at;
+      unlockedAtTime = Date.now(); // Reset TTL from now, not original unlock time
       localStorage.setItem('wallet_locked', '0');
+      // Refresh sessionStorage timestamp so next page navigation also gets a fresh TTL
+      _saveKeyToSession(saved.priv, saved.addr);
     } catch(_) {}
   }
 

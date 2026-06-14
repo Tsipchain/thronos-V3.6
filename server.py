@@ -33390,6 +33390,98 @@ def api_v1_music_register_artist():
     }), 200
 
 
+@app.route("/api/v1/music/transfer_artist_address", methods=["POST"])
+def api_v1_music_transfer_artist_address():
+    """Transfer artist profile and tracks from old (legacy) address to new (migrated) wallet.
+    Requires proof of migration: old and new addresses must exist in the wallet_v1_migration map.
+    The caller must authenticate as the NEW address using the Wallet V1 signed-request format."""
+    data = request.get_json() or {}
+    old_address = (data.get("old_address") or "").strip()
+    new_address = (data.get("new_address") or "").strip()
+
+    if not old_address or not validate_thr_address(old_address):
+        return jsonify({"status": "error", "message": "Invalid old_address"}), 400
+    if not new_address or not validate_thr_address(new_address):
+        return jsonify({"status": "error", "message": "Invalid new_address"}), 400
+    if old_address == new_address:
+        return jsonify({"status": "error", "message": "Addresses are the same"}), 400
+
+    # Verify migration record links these two addresses
+    migration_rec = _load_wallet_v1_migration_record(old_address, new_address)
+    if not migration_rec:
+        return jsonify({"status": "error", "message": "No verified migration record found for these addresses"}), 403
+
+    registry = load_music_registry()
+    artists = registry.get("artists", {})
+    tracks = registry.get("tracks", [])
+
+    if old_address not in artists:
+        return jsonify({"status": "error", "message": "Old address has no artist profile"}), 404
+
+    if new_address in artists:
+        # Merge: keep new address profile but add old earnings
+        old_earnings = float(artists[old_address].get("total_earnings", 0))
+        artists[new_address]["total_earnings"] = float(artists[new_address].get("total_earnings", 0)) + old_earnings
+        del artists[old_address]
+    else:
+        # Move artist profile to new address
+        profile = artists.pop(old_address)
+        profile["address"] = new_address
+        profile["migrated_from"] = old_address
+        artists[new_address] = profile
+
+    # Update all tracks
+    updated_tracks = 0
+    for track in tracks:
+        if track.get("artist_address") == old_address:
+            track["artist_address"] = new_address
+            updated_tracks += 1
+
+    registry["artists"] = artists
+    registry["tracks"] = tracks
+    save_music_registry(registry)
+
+    # Transfer L2E courses teacher ownership
+    courses_updated = _transfer_course_teacher(old_address, new_address)
+
+    logger.info(f"Artist address transferred: {old_address} -> {new_address} ({updated_tracks} tracks, {courses_updated} courses)")
+    return jsonify({
+        "status": "success",
+        "tracks_updated": updated_tracks,
+        "courses_updated": courses_updated
+    }), 200
+
+
+def _transfer_course_teacher(old_address: str, new_address: str) -> int:
+    """Update teacher/creator field in all L2E courses from old to new address. Returns count updated."""
+    try:
+        courses_file = os.path.join(DATA_DIR, "courses.json")
+        if not os.path.exists(courses_file):
+            return 0
+        with open(courses_file, "r", encoding="utf-8") as f:
+            courses_data = json.load(f)
+        updated = 0
+        courses_list = courses_data if isinstance(courses_data, list) else courses_data.get("courses", [])
+        for course in courses_list:
+            if course.get("teacher") == old_address:
+                course["teacher"] = new_address
+                updated += 1
+            if course.get("created_by") == old_address:
+                course["created_by"] = new_address
+        if updated:
+            if isinstance(courses_data, list):
+                with open(courses_file, "w", encoding="utf-8") as f:
+                    json.dump(courses_list, f, indent=2, ensure_ascii=False)
+            else:
+                courses_data["courses"] = courses_list
+                with open(courses_file, "w", encoding="utf-8") as f:
+                    json.dump(courses_data, f, indent=2, ensure_ascii=False)
+        return updated
+    except Exception as e:
+        logger.warning(f"[TransferCourseTeacher] {e}")
+        return 0
+
+
 @app.route("/api/v1/music/upload", methods=["POST"])
 @app.route("/api/music/upload", methods=["POST"])
 def api_v1_music_upload():

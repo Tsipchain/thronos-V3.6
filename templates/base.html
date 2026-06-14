@@ -3110,6 +3110,17 @@ function renderWalletBalances(data) {
 
     const shortAddr = wallet ? `${wallet.slice(0, 8)}...${wallet.slice(-6)}` : '';
 
+    // Show migration banner if wallet was migrated and has a legacy source
+    const legacySrc = walletSession.getLegacySourceAddress ? walletSession.getLegacySourceAddress() : null;
+    const migrationBanner = (walletSession.isMigrated && walletSession.isMigrated() && legacySrc)
+        ? `<div style="background:#1a2a1a;border:1px solid #ffaa00;border-radius:6px;padding:8px 10px;margin-bottom:10px;font-size:11px;color:#ffcc66;">
+            ⚠️ ${isGreek ? 'Το wallet μεταφέρθηκε. Μεταφέρατε τα δικαιώματα καλλιτέχνη/μαθήματα;' : 'Wallet migrated. Transfer artist profile & courses?'}
+            <button onclick="transferArtistAfterMigration('${escapeHtml(legacySrc)}','${escapeHtml(wallet)}')" style="margin-left:8px;background:#2a4a1a;border:1px solid #ffaa00;color:#ffcc66;padding:3px 8px;border-radius:4px;cursor:pointer;font-size:11px;">
+                ${isGreek ? 'Μεταφορά' : 'Transfer'}
+            </button>
+           </div>`
+        : '';
+
     // PR-5: Tab labels
     const balancesTabLabel = isGreek ? 'Υπόλοιπα' : 'Balances';
     const musicTabLabel = isGreek ? 'Μουσική' : 'Music';
@@ -3120,6 +3131,7 @@ function renderWalletBalances(data) {
             <div class="wallet-popup-address-text" title="${escapeHtml(wallet)}">${escapeHtml(shortAddr)}</div>
             <button class="wallet-popup-copy-btn" onclick="copyToClipboard('${escapeHtml(wallet)}'); this.textContent='✓'; setTimeout(()=>this.textContent='Copy', 1500);">Copy</button>
         </div>
+        ${migrationBanner}
 
         <!-- PR-5: Tabs -->
         <div class="wallet-tabs">
@@ -8099,6 +8111,34 @@ async function migrateLegacyWalletFromHeader(){
         // walletSession.migrateLegacyWallet handles rollback on failure
     } finally {
         sendSecret = '';
+    }
+}
+
+async function transferArtistAfterMigration(oldAddress, newAddress){
+    if (!oldAddress || !newAddress) return;
+    const lang = getCurrentLang();
+    const confirmMsg = lang === 'gr'
+        ? `Μεταφορά προφίλ καλλιτέχνη και μαθημάτων από:\n${oldAddress}\nσε:\n${newAddress}\n\nΣυνέχεια;`
+        : `Transfer artist profile and courses from:\n${oldAddress}\nto:\n${newAddress}\n\nContinue?`;
+    if (!confirm(confirmMsg)) return;
+    try {
+        const res = await fetch('/api/v1/music/transfer_artist_address', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({old_address: oldAddress, new_address: newAddress})
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.status === 'success') {
+            const msg = lang === 'gr'
+                ? `✅ Μεταφορά ολοκληρώθηκε!\nTracks: ${data.tracks_updated}\nCourses: ${data.courses_updated}`
+                : `✅ Transfer complete!\nTracks: ${data.tracks_updated}\nCourses: ${data.courses_updated}`;
+            alert(msg);
+            loadWalletBalances(true);
+        } else {
+            alert('❌ ' + (data.message || data.error || 'Transfer failed'));
+        }
+    } catch(e) {
+        alert('❌ Transfer failed: ' + e.message);
     }
 }
 

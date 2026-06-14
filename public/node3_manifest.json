@@ -1,16 +1,18 @@
 {
   "version": 2,
   "rewrites": [
-    { 
-      "source": "/api/v1/write/:path*", 
-      "destination": "https://thrchain.up.railway.app/api/:path*" 
+    {
+      "source": "/api/v1/write/:path*",
+      "destination": "https://thrchain.up.railway.app/api/:path*"
     },
-    { 
-      "source": "/api/v1/read/:path*", 
-      "destination": "https://node-2.up.railway.app/api/:path*" 
+    {
+      "source": "/api/v1/read/:path*",
+      "destination": "https://node-2.up.railway.app/api/:path*"
     },
     { "source": "/api/:path*", "destination": "https://node-2.up.railway.app/api/:path*" },
     { "source": "/viewer", "destination": "https://node-2.up.railway.app/viewer" },
-    { "source": "/wallet", "destination": "https://thrchain.up.railway.app/wallet" }
+    { "source": "/wallet", "destination": "https://thrchain.up.railway.app/wallet" },
+    { "source": "/pwa-api/read/:path*", "destination": "https://node-2.up.railway.app/:path*" },
+    { "source": "/pwa-api/write/:path*", "destination": "https://api.thronoschain.org/:path*" }
   ]
 }

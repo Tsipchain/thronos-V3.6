@@ -1,0 +1,21 @@
+{
+  "id": "/wallet-pwa/",
+  "name": "Thronos Wallet",
+  "short_name": "THR Wallet",
+  "description": "Thronos Chain native wallet — import, send and receive THR",
+  "start_url": "/wallet-pwa/",
+  "scope": "/wallet-pwa/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0a0a0f",
+  "theme_color": "#0a0a0f",
+  "lang": "en",
+  "icons": [
+    {
+      "src": "/static/img/thronos-token.png",
+      "sizes": "any",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

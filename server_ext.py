@@ -41,3 +41,20 @@ try:
     app.logger.info("[L2E-EDU] Blueprint registered at /api/l2e/edu")
 except Exception as exc:  # pragma: no cover
     app.logger.warning("[L2E-EDU] Blueprint NOT loaded: %s", exc)
+
+# THR Wallet PWA — served from public/wallet-pwa/
+import os as _os
+from flask import send_from_directory as _send
+
+_PUBLIC_DIR = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), 'public')
+
+@app.route('/wallet-pwa/')
+@app.route('/wallet-pwa/<path:filename>')
+def wallet_pwa(filename='index.html'):
+    """Serve the THR Wallet PWA static files."""
+    pwa_dir = _os.path.join(_PUBLIC_DIR, 'wallet-pwa')
+    # Default to index.html for directory requests
+    if not filename or filename.endswith('/'):
+        filename = 'index.html'
+    return _send(pwa_dir, filename)
+

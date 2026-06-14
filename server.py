@@ -33759,6 +33759,14 @@ def api_music_play(track_id):
 @app.route("/tip", methods=["POST"])
 def api_v1_music_tip():
     """Tip an artist for a track with THR/WBTC/custom tokens."""
+    try:
+        return _api_v1_music_tip_impl()
+    except Exception as _tip_exc:
+        import traceback as _tb
+        logger.error(f"[api_v1_music_tip] Unhandled: {_tip_exc}\n{_tb.format_exc()}")
+        return jsonify({"status": "error", "message": f"Tip error: {type(_tip_exc).__name__}: {_tip_exc}"}), 500
+
+def _api_v1_music_tip_impl():
     data = request.get_json() or {}
     track_id = (data.get("track_id") or "").strip()
     from_address = (data.get("from_address") or "").strip()

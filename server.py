@@ -23166,14 +23166,17 @@ def api_swap_execute():
         total_fee = 0.0
         total_price_impact = 0.0
         for leg in quote["legs"]:
-            out_amount, fee_amount, price_impact = apply_pool_swap(leg["pool_id"], leg["in_token"], leg["out_token"], running_in)
+            # _pool_quote_leg returns token_in/token_out (not in_token/out_token)
+            leg_token_in = leg["token_in"]
+            leg_token_out = leg["token_out"]
+            out_amount, fee_amount, price_impact = apply_pool_swap(leg["pool_id"], leg_token_in, leg_token_out, running_in)
             if out_amount <= 0:
                 return jsonify(status="error", error="swap_execution_failed", message="Swap failed due to liquidity"), 400
             swap_trace.append({
                 "pool_id": leg["pool_id"],
-                "in_token": leg["in_token"],
+                "in_token": leg_token_in,
                 "in_amount": running_in,
-                "out_token": leg["out_token"],
+                "out_token": leg_token_out,
                 "out_amount": out_amount,
                 "fee": fee_amount,
                 "price_impact": round(price_impact, 4),
@@ -33756,6 +33759,14 @@ def api_music_play(track_id):
 @app.route("/tip", methods=["POST"])
 def api_v1_music_tip():
     """Tip an artist for a track with THR/WBTC/custom tokens."""
+    try:
+        return _api_v1_music_tip_impl()
+    except Exception as _tip_exc:
+        import traceback as _tb
+        logger.error(f"[api_v1_music_tip] Unhandled: {_tip_exc}\n{_tb.format_exc()}")
+        return jsonify({"status": "error", "message": f"Tip error: {type(_tip_exc).__name__}: {_tip_exc}"}), 500
+
+def _api_v1_music_tip_impl():
     data = request.get_json() or {}
     track_id = (data.get("track_id") or "").strip()
     from_address = (data.get("from_address") or "").strip()

@@ -5910,6 +5910,10 @@ async function submitSend() {
     const resultDiv = document.getElementById('sendResult');
     const clientTxId = generateClientTxId();
 
+    // V1 ECDSA wallet (private key unlocked) OR legacy HMAC wallet (send seed stored)
+    const hasV1Signing = !!(walletSession.signTransaction && walletSession.getPublicKey && walletSession.getPublicKey());
+    const hasLegacySeed = !!(secret);
+
     if (!walletSession.isBound()) {
         resultDiv.className = 'send-result error';
         resultDiv.textContent = 'Wallet not connected';
@@ -5924,9 +5928,9 @@ async function submitSend() {
         return;
     }
 
-    if (!from || !secret) {
+    if (!from || (!hasV1Signing && !hasLegacySeed)) {
         resultDiv.className = 'send-result error';
-        resultDiv.textContent = 'Wallet not connected';
+        resultDiv.textContent = 'Wallet locked — please unlock your V1 wallet first';
         resultDiv.style.display = 'block';
         return;
     }
@@ -5958,8 +5962,25 @@ async function submitSend() {
 
         let response;
 
-        if (token === 'THR') {
-            // Native THR send
+        if (hasV1Signing) {
+            // V1 ECDSA wallet — sign the transaction client-side, send to /api/v1/tx/send
+            const txCore = {
+                from: from, to: to,
+                amount: Number(amount), token: token,
+                nonce: clientTxId || String(Date.now()),
+                timestamp: Math.floor(Date.now() / 1000),
+                speed: selectedSpeed,
+            };
+            const publicKey = walletSession.getPublicKey();
+            const signature = await walletSession.signTransaction(txCore);
+            const signed = { ...txCore, publicKey, signature };
+            response = await fetch(resolveMasterUrl('/api/v1/tx/send'), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ tx: signed })
+            });
+        } else if (token === 'THR') {
+            // Legacy HMAC wallet — native THR send
             const payload = {
                 from_thr: from,
                 to_thr: to,
@@ -5975,14 +5996,14 @@ async function submitSend() {
                 body: JSON.stringify(payload)
             });
         } else {
-            // Custom token transfer - backend expects: from, to, symbol, amount
+            // Legacy HMAC wallet — custom token transfer
             const payload = {
                 symbol: token,
                 from: from,
                 to: to,
                 amount: amount,
                 auth_secret: secret,
-                speed: selectedSpeed // optional fee tier hint
+                speed: selectedSpeed
             };
             response = await fetch(resolveMasterUrl('/api/tokens/transfer'), {
                 method: 'POST',

@@ -228,9 +228,16 @@ async function showImport(addingExtra = false) {
     <div class="screen">
       <div class="logo">⬡ THR</div>
       <p class="tagline">Thronos Chain Wallet</p>
-      <div class="card">
-        <h2 style="font-size:1.15rem">${title}</h2>
-        <p style="color:var(--muted);font-size:.88rem">${sub}</p>
+
+      <div style="display:flex;gap:6px;margin-bottom:10px">
+        <button class="btn" id="tabKit" style="flex:1;padding:8px;font-size:.82rem;background:var(--accent);color:#fff;border-radius:10px">Recovery Kit</button>
+        <button class="btn btn--ghost" id="tabPledge" style="flex:1;padding:8px;font-size:.82rem;border-radius:10px">Pledge Secret</button>
+      </div>
+
+      <!-- Recovery Kit tab -->
+      <div id="paneKit" class="card">
+        <h2 style="font-size:1.1rem">${title}</h2>
+        <p style="color:var(--muted);font-size:.85rem">${sub}</p>
         <button class="btn btn--primary" id="pickFile">Select Recovery Kit</button>
         <div id="filePill" class="file-pill hidden"></div>
         <div id="labelRow" class="hidden" style="display:flex;flex-direction:column;gap:8px">
@@ -242,9 +249,135 @@ async function showImport(addingExtra = false) {
         </div>
         <div id="err" class="banner banner--error hidden"></div>
       </div>
+
+      <!-- Pledge Secret tab (HMAC/v0 wallet migration) -->
+      <div id="panePledge" class="card" style="display:none">
+        <h2 style="font-size:1.1rem">Pledge Wallet Migration</h2>
+        <p style="color:var(--muted);font-size:.85rem">Enter the <strong>send secret</strong> from your original pledge. The system will find your address and create a V1 wallet.</p>
+        <div id="pledgeStep1">
+          <input type="password" id="pledgeSecret" class="input" placeholder="Pledge send secret / auth token" autocomplete="off">
+          <button class="btn btn--primary mt8" id="pledgeLookupBtn">🔍 Find My Wallet</button>
+        </div>
+        <div id="pledgeStep2" style="display:none;margin-top:12px">
+          <div id="pledgeInfo" style="background:#0d0a1a;border:1px solid var(--accent);border-radius:8px;padding:10px;font-size:.82rem;color:var(--accent);word-break:break-all;margin-bottom:10px"></div>
+          <input type="password" id="pledgeMigratePin" class="input" placeholder="New PIN (4-8 digits)" autocomplete="new-password">
+          <div style="display:flex;gap:8px;margin-top:8px">
+            <button class="btn btn--primary" id="pledgeMigrateBtn" style="flex:2">✅ Migrate to V1</button>
+            <button class="btn btn--ghost" id="pledgeBackBtn" style="flex:1">Back</button>
+          </div>
+        </div>
+        <div id="pledgeErr" class="banner banner--error hidden"></div>
+      </div>
+
       ${addingExtra ? '<button class="btn btn--ghost mt16" id="cancelBtn">Cancel</button>' : '<p class="mt24" style="color:var(--muted);font-size:.8rem;text-align:center">Your keys never leave this device.</p>'}
     </div>
   `);
+
+  // Tab switching
+  document.getElementById('tabKit').addEventListener('click', () => {
+    document.getElementById('paneKit').style.display = '';
+    document.getElementById('panePledge').style.display = 'none';
+    document.getElementById('tabKit').style.background = 'var(--accent)';
+    document.getElementById('tabKit').style.color = '#fff';
+    document.getElementById('tabPledge').style.background = '';
+    document.getElementById('tabPledge').style.color = '';
+  });
+  document.getElementById('tabPledge').addEventListener('click', () => {
+    document.getElementById('paneKit').style.display = 'none';
+    document.getElementById('panePledge').style.display = '';
+    document.getElementById('tabPledge').style.background = 'var(--accent)';
+    document.getElementById('tabPledge').style.color = '#fff';
+    document.getElementById('tabKit').style.background = '';
+    document.getElementById('tabKit').style.color = '';
+  });
+
+  // Pledge lookup
+  let pledgeFoundAddr = null;
+  document.getElementById('pledgeLookupBtn').addEventListener('click', async () => {
+    const secret = document.getElementById('pledgeSecret')?.value?.trim();
+    const errEl = document.getElementById('pledgeErr');
+    errEl.classList.add('hidden');
+    if (!secret) { errEl.textContent = 'Enter your send secret first'; errEl.classList.remove('hidden'); return; }
+    const btn = document.getElementById('pledgeLookupBtn');
+    btn.disabled = true; btn.textContent = 'Searching…';
+    try {
+      const r = await fetch(`${API_WRITE}/api/wallet/v1/pledge-lookup`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ send_secret: secret })
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok) {
+        errEl.textContent = d.error === 'pledge_not_found' ? 'No pledge found. Check your send secret.' : ('Error: ' + (d.error || 'lookup failed'));
+        errEl.classList.remove('hidden'); return;
+      }
+      pledgeFoundAddr = d.thr_address;
+      document.getElementById('pledgeInfo').innerHTML =
+        '✅ Found:<br><b>' + (d.thr_address || '—') + '</b>' +
+        (d.btc_address ? '<br><small style="color:var(--muted)">BTC: ' + d.btc_address + '</small>' : '');
+      document.getElementById('pledgeStep1').style.display = 'none';
+      document.getElementById('pledgeStep2').style.display = '';
+    } catch(e) {
+      errEl.textContent = 'Network error: ' + e.message; errEl.classList.remove('hidden');
+    } finally { btn.disabled = false; btn.textContent = '🔍 Find My Wallet'; }
+  });
+
+  document.getElementById('pledgeBackBtn')?.addEventListener('click', () => {
+    pledgeFoundAddr = null;
+    document.getElementById('pledgeStep1').style.display = '';
+    document.getElementById('pledgeStep2').style.display = 'none';
+    document.getElementById('pledgeErr').classList.add('hidden');
+  });
+
+  document.getElementById('pledgeMigrateBtn').addEventListener('click', async () => {
+    const secret = document.getElementById('pledgeSecret')?.value?.trim();
+    const pin = document.getElementById('pledgeMigratePin')?.value?.trim();
+    const errEl = document.getElementById('pledgeErr');
+    errEl.classList.add('hidden');
+    if (!pin || pin.length < 4) { errEl.textContent = 'PIN must be 4-8 digits'; errEl.classList.remove('hidden'); return; }
+    const btn = document.getElementById('pledgeMigrateBtn');
+    btn.disabled = true; btn.textContent = 'Migrating…';
+    try {
+      const r = await fetch(`${API_WRITE}/api/wallet/v1/pledge-migrate`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ send_secret: secret, pin })
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok) {
+        errEl.textContent = 'Migration failed: ' + (d.error || d.detail || 'unknown');
+        errEl.classList.remove('hidden'); return;
+      }
+      const canonical = d.canonical_v1_address;
+
+      // Store account — include kit if server returned Recovery Kit
+      const kitObj = d.recovery_kit ? (() => { try { return JSON.parse(d.recovery_kit); } catch { return { canonical_v1_address: canonical }; } })() : { canonical_v1_address: canonical };
+      upsertAccount(canonical, kitObj, shortAddr(canonical));
+      setActiveAddr(canonical);
+
+      // Auto-download Recovery Kit if server generated it
+      if (d.recovery_kit) {
+        const blob = new Blob([d.recovery_kit], { type: 'application/json' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `thr-recovery-kit-${canonical.slice(0,10)}.json`;
+        a.click();
+        URL.revokeObjectURL(a.href);
+      }
+
+      // Show PDF link if available
+      if (d.pdf_url) {
+        const pdfMsg = document.createElement('div');
+        pdfMsg.style.cssText = 'margin:8px 0;padding:8px;background:#0d0a1a;border:1px solid var(--accent);border-radius:6px;font-size:.82rem;text-align:center';
+        pdfMsg.innerHTML = `📄 <a href="${API_WRITE}${d.pdf_url}" target="_blank" style="color:var(--accent)">Download Pledge Contract PDF (LSB)</a>`;
+        document.getElementById('pledgeErr')?.parentNode?.insertBefore(pdfMsg, document.getElementById('pledgeErr'));
+      }
+
+      // Offer Face ID / fingerprint
+      await promptFaceID(canonical, null);
+      showWallet();
+    } catch(e) {
+      errEl.textContent = 'Network error: ' + e.message; errEl.classList.remove('hidden');
+    } finally { btn.disabled = false; btn.textContent = '✅ Migrate to V1'; }
+  });
 
   document.getElementById('cancelBtn')?.addEventListener('click', () => {
     const addr = getActiveAddr();
@@ -547,6 +680,9 @@ async function showWallet() {
         <button class="action-btn" id="tokensBtn">
           <span class="action-btn__icon">◈</span>Tokens
         </button>
+        <button class="action-btn" id="connectBtn">
+          <span class="action-btn__icon">⬡</span>Connect
+        </button>
       </div>
 
       <div class="tx-feed">
@@ -573,6 +709,7 @@ async function showWallet() {
   document.getElementById('sendBtn').addEventListener('click', showSend);
   document.getElementById('receiveBtn').addEventListener('click', showReceive);
   document.getElementById('tokensBtn').addEventListener('click', showTokens);
+  document.getElementById('connectBtn').addEventListener('click', showWalletConnect);
 
   // Load balances
   fetchBalances(address).then(data => {
@@ -634,6 +771,196 @@ async function showTokens() {
 }
 
 // ─── Send screen ──────────────────────────────────────────────────────────────
+
+// ── WalletConnect — sign from mobile without re-importing Recovery Kit ─────────
+// Architecture: lightweight custom relay (no WalletConnect server needed).
+// ThronosBuilder posts a sign request to /api/wallet/wc/request keyed by address.
+// PWA polls for pending requests, shows Face ID prompt, signs, posts signature back.
+// For full WalletConnect v2 URI support (wc://...), we parse the pairing topic
+// and connect to the Thronos relay endpoint.
+
+const WC_POLL_INTERVAL = 4000; // ms
+let _wcPollTimer = null;
+
+function showWalletConnect() {
+  const address = getActiveAddr();
+  render(`
+    <div class="screen">
+      <div class="card">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+          <h2 style="font-size:1.1rem;margin:0">⬡ Connect dApp</h2>
+          <button class="btn btn--ghost" id="wcBackBtn" style="padding:6px 12px;font-size:.85rem">← Back</button>
+        </div>
+        <p style="color:var(--muted);font-size:.85rem;margin-bottom:14px">
+          Scan a QR code or paste a <b>wc://</b> URI from ThronosBuilder or any compatible dApp to sign transactions from this wallet.
+        </p>
+
+        <div style="margin-bottom:12px">
+          <label style="font-size:.85rem;color:var(--accent);display:block;margin-bottom:6px">Paste WC URI or connection code</label>
+          <textarea id="wcUri" class="input" rows="3" placeholder="wc:// or thrconnect://..." style="font-family:monospace;font-size:.78rem;resize:none"></textarea>
+          <button class="btn btn--primary mt8" id="wcConnectBtn" style="width:100%">🔗 Connect</button>
+        </div>
+
+        <div style="text-align:center;color:var(--muted);font-size:.82rem;margin:10px 0">— OR —</div>
+
+        <div style="background:#0d0a1a;border:1px solid var(--accent);border-radius:8px;padding:12px;text-align:center">
+          <div style="font-size:.82rem;color:var(--muted);margin-bottom:8px">Waiting for sign requests from connected dApps…</div>
+          <div id="wcStatus" style="font-size:.85rem;color:var(--accent)">● Polling for requests…</div>
+          <div id="wcRequestArea" style="margin-top:10px"></div>
+        </div>
+
+        <div style="margin-top:14px;padding:10px;background:#0a0a14;border-radius:6px;font-size:.78rem;color:var(--muted)">
+          <b style="color:var(--accent)">Your wallet address:</b><br>
+          <span style="font-family:monospace;word-break:break-all">${address}</span>
+        </div>
+      </div>
+    </div>
+  `);
+
+  document.getElementById('wcBackBtn').addEventListener('click', showWallet);
+
+  document.getElementById('wcConnectBtn').addEventListener('click', async () => {
+    const uri = document.getElementById('wcUri')?.value?.trim();
+    if (!uri) { alert('Paste a WC URI first'); return; }
+    const statusEl = document.getElementById('wcStatus');
+
+    // Handle thrconnect:// (our custom relay protocol)
+    if (uri.startsWith('thrconnect://') || uri.startsWith('thr://')) {
+      const sessionId = uri.replace(/^(thrconnect|thr):\/\//, '');
+      statusEl.textContent = `✅ Connected (session: ${sessionId.slice(0,8)}…)`;
+      sessionStorage.setItem('thr_wc_session', sessionId);
+      _startWcPoll(address, sessionId);
+      return;
+    }
+
+    // Handle wc:// URI — extract topic and relay server
+    if (uri.startsWith('wc:')) {
+      try {
+        // wc:<topic>@<version>?relay-protocol=...&symKey=...
+        const topic = uri.split('@')[0].replace('wc:', '');
+        statusEl.textContent = `🔗 WC pairing: ${topic.slice(0,8)}…`;
+        // Register with our relay
+        const r = await fetch(`${API_WRITE}/api/wallet/wc/pair`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ address, wc_uri: uri, topic })
+        });
+        const d = await r.json().catch(() => ({}));
+        if (d.ok) {
+          statusEl.textContent = `✅ Paired — waiting for sign requests`;
+          _startWcPoll(address, d.session_id || topic);
+        } else {
+          statusEl.textContent = `⚠️ Pair failed: ${d.error || 'unknown'}`;
+        }
+      } catch(e) {
+        statusEl.textContent = `⚠️ Error: ${e.message}`;
+      }
+      return;
+    }
+
+    alert('Unknown URI format. Expected wc:// or thrconnect://');
+  });
+
+  // Start polling immediately
+  _startWcPoll(address, sessionStorage.getItem('thr_wc_session') || null);
+}
+
+function _startWcPoll(address, sessionId) {
+  if (_wcPollTimer) clearInterval(_wcPollTimer);
+  _wcPollTimer = setInterval(() => _checkWcRequests(address, sessionId), WC_POLL_INTERVAL);
+  _checkWcRequests(address, sessionId); // immediate first check
+}
+
+async function _checkWcRequests(address, sessionId) {
+  const reqArea = document.getElementById('wcRequestArea');
+  const statusEl = document.getElementById('wcStatus');
+  if (!reqArea) { clearInterval(_wcPollTimer); return; }
+  try {
+    const url = sessionId
+      ? `${API_WRITE}/api/wallet/wc/requests?address=${encodeURIComponent(address)}&session=${encodeURIComponent(sessionId)}`
+      : `${API_WRITE}/api/wallet/wc/requests?address=${encodeURIComponent(address)}`;
+    const r = await fetch(url);
+    if (!r.ok) return;
+    const d = await r.json().catch(() => ({}));
+    const requests = d.requests || [];
+    if (!requests.length) {
+      statusEl.textContent = '● Polling — no pending requests';
+      reqArea.innerHTML = '';
+      return;
+    }
+    statusEl.textContent = `🔔 ${requests.length} sign request(s) pending`;
+    reqArea.innerHTML = requests.map(req => `
+      <div style="background:#0a0014;border:1px solid var(--accent);border-radius:8px;padding:10px;margin-bottom:8px">
+        <div style="font-size:.82rem;color:#ccc;margin-bottom:6px">
+          <b style="color:var(--accent)">${req.action || 'Sign Request'}</b>
+          ${req.dapp ? `— from <b>${req.dapp}</b>` : ''}
+        </div>
+        <div style="font-size:.78rem;color:var(--muted);font-family:monospace;word-break:break-all;margin-bottom:8px">
+          ${(req.payload_preview || JSON.stringify(req.payload || {})).slice(0,120)}…
+        </div>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn--primary" style="flex:2;padding:8px;font-size:.82rem" onclick="_approveWcRequest('${req.id}', '${address}')">
+            🔐 Approve (Face ID)
+          </button>
+          <button class="btn btn--ghost" style="flex:1;padding:8px;font-size:.82rem" onclick="_rejectWcRequest('${req.id}', '${address}')">
+            ✗ Reject
+          </button>
+        </div>
+      </div>
+    `).join('');
+  } catch { /* network error — try again next tick */ }
+}
+
+async function _approveWcRequest(requestId, address) {
+  // Get session key (Face ID unlocks it)
+  const sessionKey = sessionStorage.getItem(`thr_sk_${address}`);
+  if (!sessionKey) {
+    // Try Face ID unlock first
+    const fidData = localStorage.getItem(`thr_fid_${address}`);
+    if (fidData) {
+      try {
+        const parsed = JSON.parse(fidData);
+        const cred = await navigator.credentials.get({
+          publicKey: {
+            challenge: crypto.getRandomValues(new Uint8Array(32)),
+            rpId: location.hostname === 'localhost' ? 'localhost' : 'thronoschain.org',
+            allowCredentials: [{ type: 'public-key', id: Uint8Array.from(atob(parsed.credId), c => c.charCodeAt(0)) }],
+            userVerification: 'required',
+            timeout: 60000,
+          }
+        });
+        if (!cred) { alert('Face ID failed. Please unlock wallet first.'); return; }
+        alert('Face ID verified — fetching signing key…');
+      } catch(e) { alert('Face ID error: ' + e.message); return; }
+    } else {
+      alert('Wallet locked. Please unlock with PIN or Face ID first.'); return;
+    }
+  }
+
+  try {
+    const r = await fetch(`${API_WRITE}/api/wallet/wc/approve`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ request_id: requestId, address, session_key: sessionKey })
+    });
+    const d = await r.json().catch(() => ({}));
+    if (d.ok) {
+      const reqArea = document.getElementById('wcRequestArea');
+      if (reqArea) {
+        const el = reqArea.querySelector(`[onclick*="${requestId}"]`)?.closest('div[style]');
+        if (el) { el.style.border = '1px solid #4a8a2a'; el.querySelector('div:last-child').innerHTML = '✅ Approved & signed'; }
+      }
+    } else {
+      alert('Approval failed: ' + (d.error || 'unknown'));
+    }
+  } catch(e) { alert('Network error: ' + e.message); }
+}
+
+async function _rejectWcRequest(requestId, address) {
+  await fetch(`${API_WRITE}/api/wallet/wc/reject`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ request_id: requestId, address })
+  }).catch(() => {});
+  _checkWcRequests(address, sessionStorage.getItem('thr_wc_session'));
+}
 
 function showSend() {
   const address = getActiveAddr();

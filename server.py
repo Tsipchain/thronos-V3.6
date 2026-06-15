@@ -17125,35 +17125,78 @@ def pledge_submit():
         return jsonify(status="pending",message="Waiting for BTC payment",txns=txns),200
 
     try:
-        # Generate proper THR address (THR + 40 hex chars)
-        timestamp = str(int(time.time() * 1000))
-        thr_addr = generate_thr_address(btc_address, timestamp)
-        phash = hashlib.sha256((btc_address+pledge_text).encode()).hexdigest()
-        send_seed=secrets.token_hex(16)
-        send_seed_hash=hashlib.sha256(send_seed.encode()).hexdigest()
-        auth_string=f"{send_seed}:{passphrase}:auth" if passphrase else f"{send_seed}:auth"
-        send_auth_hash=hashlib.sha256(auth_string.encode()).hexdigest()
-        pledge_entry={
-            "btc_address":btc_address,
-            "pledge_text":pledge_text,
-            "timestamp":time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
-            "pledge_hash":phash,
-            "thr_address":thr_addr,
-            "send_seed_hash":send_seed_hash,
-            "send_auth_hash":send_auth_hash,
-            "has_passphrase":bool(passphrase),
-            "pending_confirmation":pending_confirmation
-        }
-        chain=load_json(CHAIN_FILE,[])
-        height=len(chain)
+        # ── Generate secp256k1 V1 address (pure Python, no external deps) ──────
+        # New pledgers receive a canonical V1 address directly, no migration needed.
+        _P  = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F
+        _N  = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
+        _Gx = 0x79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798
+        _Gy = 0x483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8
+
+        def _pt_add_ps(P1, P2):
+            if P1 is None: return P2
+            if P2 is None: return P1
+            x1,y1=P1; x2,y2=P2
+            if x1==x2:
+                if y1!=y2: return None
+                m=(3*x1*x1*pow(2*y1,_P-2,_P))%_P
+            else:
+                m=((y2-y1)*pow(x2-x1,_P-2,_P))%_P
+            x3=(m*m-x1-x2)%_P; y3=(m*(x1-x3)-y1)%_P
+            return x3,y3
+
+        def _pt_mul_ps(k, G):
+            R=None; A=G
+            while k:
+                if k&1: R=_pt_add_ps(R,A)
+                A=_pt_add_ps(A,A); k>>=1
+            return R
+
+        priv_int = int.from_bytes(secrets.token_bytes(32), 'big') % (_N - 1) + 1
+        priv_hex = priv_int.to_bytes(32, 'big').hex()
+        _x, _y = _pt_mul_ps(priv_int, (_Gx, _Gy))
+        compressed_pub = ('02' if _y%2==0 else '03') + hex(_x)[2:].zfill(64)
+
         try:
-            pdf_name=create_secure_pdf_contract(
+            from wallet_v1_address_derivation import derive_thronos_address
+            thr_addr = derive_thronos_address(compressed_pub)
+        except Exception:
+            # Fallback: SHA256+RIPEMD160 inline
+            _h1 = hashlib.sha256(bytes.fromhex(compressed_pub)).digest()
+            try:
+                _rmd = hashlib.new('ripemd160', _h1).hexdigest()
+            except Exception:
+                _rmd = hashlib.sha256(_h1).hexdigest()
+            thr_addr = 'THR' + _rmd[:40].upper()
+
+        phash = hashlib.sha256((btc_address+pledge_text).encode()).hexdigest()
+        send_seed = secrets.token_hex(16)  # kept for pledge-lookup / legacy auth
+        send_seed_hash = hashlib.sha256(send_seed.encode()).hexdigest()
+        auth_string = f"{send_seed}:{passphrase}:auth" if passphrase else f"{send_seed}:auth"
+        send_auth_hash = hashlib.sha256(auth_string.encode()).hexdigest()
+
+        pledge_entry = {
+            "btc_address": btc_address,
+            "pledge_text": pledge_text,
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+            "pledge_hash": phash,
+            "thr_address": thr_addr,
+            "send_seed_hash": send_seed_hash,
+            "send_auth_hash": send_auth_hash,
+            "has_passphrase": bool(passphrase),
+            "pending_confirmation": pending_confirmation,
+            "wallet_v1": True,
+            "compressed_public_key": compressed_pub,
+        }
+        chain = load_json(CHAIN_FILE, [])
+        height = len(chain)
+        try:
+            pdf_name = create_secure_pdf_contract(
                 btc_address, pledge_text, thr_addr, phash, height, send_seed, CONTRACTS_DIR, passphrase
             )
         except Exception as pdf_err:
             app.logger.error(f"PDF generation failed: {pdf_err}")
-            pdf_name=f"pledge_{thr_addr}.pdf"
-        pledge_entry["pdf_filename"]=pdf_name
+            pdf_name = f"pledge_{thr_addr}.pdf"
+        pledge_entry["pdf_filename"] = pdf_name
         pledges.append(pledge_entry)
         save_json(PLEDGE_CHAIN, pledges)
 
@@ -17186,6 +17229,33 @@ def pledge_submit():
                 pass
         pdf_url = f"/contracts/{pdf_name}" if os.path.isfile(pdf_path) else None
 
+        # ── Build Recovery Kit (encrypted private key backup) ──────────────────
+        # Encrypt private key with passphrase (or send_seed as fallback key).
+        recovery_kit_str = None
+        try:
+            from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+            from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+            from cryptography.hazmat.primitives import hashes as _hashes
+            _enc_pass = (passphrase or send_seed).encode()
+            _salt = secrets.token_bytes(16)
+            _iv   = secrets.token_bytes(12)
+            _kdf  = PBKDF2HMAC(algorithm=_hashes.SHA256(), length=32, salt=_salt, iterations=250000)
+            _key  = _kdf.derive(_enc_pass)
+            _ct   = AESGCM(_key).encrypt(_iv, bytes.fromhex(priv_hex), None)
+            _enc_blob = json.dumps({'v':1,'alg':'aes256gcm','kdf':'pbkdf2-sha256-250k',
+                                    'salt':_salt.hex(),'iv':_iv.hex(),'ct':_ct.hex()})
+            recovery_kit_str = json.dumps({
+                'canonical_v1_address': thr_addr,
+                'address': thr_addr,
+                'compressed_public_key': compressed_pub,
+                'encrypted_private_key_backup': _enc_blob,
+                'wallet_v1_encrypted_priv': _enc_blob,
+                'migration_source': 'pledge_v1_direct',
+                'version': 2,
+            })
+        except Exception as enc_err:
+            app.logger.warning(f"Recovery Kit encryption unavailable: {enc_err}")
+
         return jsonify(
             ok=True,
             canonical_v1_address=thr_addr,
@@ -17194,11 +17264,12 @@ def pledge_submit():
             status="newly_created",
             pledge_hash=phash,
             pdf_url=pdf_url,
-            send_secret=send_seed
-        ),200
+            send_secret=send_seed,
+            recovery_kit=recovery_kit_str,
+        ), 200
     except Exception as exc:
         app.logger.error(f"Pledge creation failed: {exc}")
-        return jsonify(error=f"Pledge creation failed: {str(exc)}"),500
+        return jsonify(error=f"Pledge creation failed: {str(exc)}"), 500
 
 
 # ─── PLEDGE STATUS & QUOTE APIs ────────────────────

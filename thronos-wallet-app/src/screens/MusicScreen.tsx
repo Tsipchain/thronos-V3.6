@@ -8,6 +8,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Location from 'expo-location';
+import { Audio } from 'expo-av';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS } from '../constants/theme';
 import { useStore } from '../store/useStore';
 import { CONFIG } from '../constants/config';
@@ -102,6 +103,7 @@ export default function MusicScreen({ navigation }: any) {
   const [refreshing, setRefreshing] = useState(false);
   const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
   const [tipModalVisible, setTipModalVisible] = useState(false);
   const [tipAmount, setTipAmount] = useState(1);
   const [tipTarget, setTipTarget] = useState<Track | null>(null);
@@ -115,10 +117,16 @@ export default function MusicScreen({ navigation }: any) {
   const [isCarMode, setIsCarMode] = useState(false);
   const gpsIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const progressAnim = useRef(new Animated.Value(0)).current;
-  const pulseAnim = useRef(new Animated.Value(1)).current;
+  // Real audio state
+  const soundRef = useRef<Audio.Sound | null>(null);
+  const [trackQueue, setTrackQueue] = useState<Track[]>([]);
+  const [queueIdx, setQueueIdx] = useState(-1);
+  const [position, setPosition] = useState(0);   // ms
+  const [duration, setDuration] = useState(0);   // ms
 
   // Pulse animation for now-playing indicator
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+
   useEffect(() => {
     if (isPlaying) {
       Animated.loop(
@@ -131,6 +139,24 @@ export default function MusicScreen({ navigation }: any) {
       pulseAnim.setValue(1);
     }
   }, [isPlaying]);
+
+  // Audio mode + cleanup on unmount
+  useEffect(() => {
+    Audio.setAudioModeAsync({
+      staysActiveInBackground: true,
+      playsInSilentModeIOS: true,
+      shouldDuckAndroid: true,
+      playThroughEarpieceAndroid: false,
+    });
+    return () => { stopTrack(); };
+  }, []);
+
+  // GPS cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (gpsIntervalRef.current) clearInterval(gpsIntervalRef.current);
+    };
+  }, []);
 
   // Start music session with GPS when playing begins
   const startSession = useCallback(async () => {
@@ -181,13 +207,6 @@ export default function MusicScreen({ navigation }: any) {
     }
   }, [sessionId, wallet.address]);
 
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (gpsIntervalRef.current) clearInterval(gpsIntervalRef.current);
-    };
-  }, []);
-
   const loadData = useCallback(async () => {
     if (!wallet.address) return;
     setLoading(true);
@@ -200,6 +219,7 @@ export default function MusicScreen({ navigation }: any) {
       ]);
       if (trackRes.status === 'fulfilled' && trackRes.value?.tracks) {
         setTracks(trackRes.value.tracks);
+        setTrackQueue(trackRes.value.tracks);
       }
       if (playlistRes.status === 'fulfilled' && playlistRes.value?.playlists) {
         setPlaylists(playlistRes.value.playlists);
@@ -228,23 +248,90 @@ export default function MusicScreen({ navigation }: any) {
     setRefreshing(false);
   }, [loadData]);
 
-  const playTrack = (track: Track) => {
-    const wasPlaying = currentTrack != null;
-    setCurrentTrack(track);
-    setIsPlaying(true);
-    progressAnim.setValue(0);
-    Animated.timing(progressAnim, {
-      toValue: 1,
-      duration: 180000, // 3 min default since API tracks don't have duration
-      useNativeDriver: false,
-    }).start();
-    // Record play
-    postJSON('/api/v1/music/play/' + track.id, { address: wallet.address }).catch(() => {});
-    // Start GPS session on first play
-    if (!wasPlaying) startSession();
+  // ── Audio Playback ───────────────────────────────────────────────────────────
+
+  const stopTrack = async () => {
+    if (soundRef.current) {
+      await soundRef.current.stopAsync().catch(() => {});
+      await soundRef.current.unloadAsync().catch(() => {});
+      soundRef.current = null;
+    }
+    setIsPlaying(false);
+    setCurrentTrack(null);
+    setPosition(0);
+    setDuration(0);
+    await endSession();
   };
 
-  const togglePlayPause = () => setIsPlaying(!isPlaying);
+  const playTrack = async (track: Track, queue?: Track[], idx?: number) => {
+    setIsLoading(true);
+    setCurrentTrack(track);
+    setIsPlaying(false);
+    if (queue) {
+      setTrackQueue(queue);
+      setQueueIdx(idx ?? 0);
+    }
+
+    // Unload previous sound
+    if (soundRef.current) {
+      await soundRef.current.unloadAsync().catch(() => {});
+      soundRef.current = null;
+    }
+    setPosition(0);
+    setDuration(0);
+
+    const url = resolveMediaUrl(track.audio_url);
+    if (!url) {
+      setIsLoading(false);
+      return;
+    }
+
+    try {
+      const { sound } = await Audio.Sound.createAsync(
+        { uri: url },
+        { shouldPlay: true },
+        (status) => {
+          if (!status.isLoaded) return;
+          setPosition(status.positionMillis ?? 0);
+          setDuration(status.durationMillis ?? 0);
+          setIsPlaying(status.isPlaying ?? false);
+          if (status.didJustFinish) playNext();
+        }
+      );
+      soundRef.current = sound;
+      setIsPlaying(true);
+      // Record play
+      postJSON('/api/v1/music/play/' + track.id, { address: wallet?.address }).catch(() => {});
+      if (!sessionId) startSession();
+    } catch {
+      // silent
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const togglePlayPause = async () => {
+    if (!soundRef.current) return;
+    if (isPlaying) {
+      await soundRef.current.pauseAsync().catch(() => {});
+    } else {
+      await soundRef.current.playAsync().catch(() => {});
+    }
+  };
+
+  const playNext = () => {
+    if (!trackQueue.length) return;
+    const next = (queueIdx + 1) % trackQueue.length;
+    setQueueIdx(next);
+    playTrack(trackQueue[next], trackQueue, next);
+  };
+
+  const playPrev = () => {
+    if (!trackQueue.length) return;
+    const prev = (queueIdx - 1 + trackQueue.length) % trackQueue.length;
+    setQueueIdx(prev);
+    playTrack(trackQueue[prev], trackQueue, prev);
+  };
 
   const openTipModal = (track: Track) => {
     setTipTarget(track);
@@ -275,7 +362,7 @@ export default function MusicScreen({ navigation }: any) {
     return (
       <TouchableOpacity
         style={[styles.trackRow, isCurrent && styles.trackRowActive]}
-        onPress={() => playTrack(item)}
+        onPress={() => playTrack(item, tracks, index)}
         activeOpacity={0.7}
       >
         <View style={styles.trackNumber}>
@@ -417,6 +504,11 @@ export default function MusicScreen({ navigation }: any) {
     { key: 'offline', label: 'Offline', icon: 'cloud-download-outline' },
   ];
 
+  // Compute real progress percentage
+  const progressPercent = duration > 0
+    ? `${((position / duration) * 100).toFixed(1)}%` as any
+    : '0%';
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       {/* Header */}
@@ -518,16 +610,16 @@ export default function MusicScreen({ navigation }: any) {
       {/* Now Playing Bar */}
       {currentTrack && (
         <View style={styles.nowPlaying}>
-          <Animated.View
-            style={[styles.progressBar, {
-              width: progressAnim.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] }),
-            }]}
-          />
-          <View style={styles.nowPlayingContent}>
+          {/* Real progress bar */}
+          <View style={[styles.progressBar, { width: progressPercent }]} />
+          <Animated.View style={[styles.nowPlayingContent, { transform: [{ scale: pulseAnim }] }]}>
             <View style={styles.nowPlayingInfo}>
               <Text style={styles.nowPlayingTitle} numberOfLines={1}>{currentTrack.title}</Text>
               <Text style={styles.nowPlayingArtist} numberOfLines={1}>
                 {currentTrack.artist_name ?? 'Unknown'}
+              </Text>
+              <Text style={styles.timeText}>
+                {formatDuration(Math.floor(position / 1000))} / {formatDuration(Math.floor(duration / 1000))}
               </Text>
             </View>
             <View style={styles.nowPlayingControls}>
@@ -536,17 +628,21 @@ export default function MusicScreen({ navigation }: any) {
                   <Ionicons name="navigate" size={12} color={COLORS.success} />
                 </View>
               )}
-              <TouchableOpacity onPress={() => { /* prev */ }}>
+              <TouchableOpacity onPress={playPrev}>
                 <Ionicons name="play-skip-back" size={20} color={COLORS.text} />
               </TouchableOpacity>
               <TouchableOpacity onPress={togglePlayPause} style={styles.playPauseBtn}>
-                <Ionicons name={isPlaying ? 'pause' : 'play'} size={22} color={COLORS.background} />
+                {isLoading ? (
+                  <ActivityIndicator size="small" color={COLORS.background} />
+                ) : (
+                  <Ionicons name={isPlaying ? 'pause' : 'play'} size={22} color={COLORS.background} />
+                )}
               </TouchableOpacity>
-              <TouchableOpacity onPress={() => { /* next */ }}>
+              <TouchableOpacity onPress={playNext}>
                 <Ionicons name="play-skip-forward" size={20} color={COLORS.text} />
               </TouchableOpacity>
             </View>
-          </View>
+          </Animated.View>
         </View>
       )}
 
@@ -704,6 +800,7 @@ const styles = StyleSheet.create({
     width: 36, height: 36, borderRadius: BORDER_RADIUS.full,
     backgroundColor: COLORS.gold, justifyContent: 'center', alignItems: 'center',
   },
+  timeText: { fontSize: FONT_SIZES.xs, color: COLORS.textMuted, fontFamily: 'monospace' },
 
   // Tip Modal
   modalOverlay: {

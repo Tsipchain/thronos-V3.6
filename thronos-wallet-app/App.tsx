@@ -34,7 +34,7 @@ export type RootStackParamList = {
   CreateWallet: undefined;
   ImportWallet: undefined;
   MainTabs: undefined;
-  Send: undefined;
+  Send: { toAddress?: string } | undefined;
   Receive: undefined;
   Swap: undefined;
   Stake: undefined;

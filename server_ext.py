@@ -586,6 +586,366 @@ def wallet_v1_transfer():
         return _jsonify(ok=False, error='transfer_failed', detail=str(_e)), 500
 
 
+@app.route('/api/wallet/v1/swap', methods=['POST'])
+def wallet_v1_swap():
+    """
+    PWA swap: caller provides private_key_hex, server derives address and verifies
+    ownership, then executes the swap via the same logic as api_swap_execute.
+    """
+    import server as _srv
+    import secrets as _secrets_mod
+    import time as _time_mod
+
+    data = _request.get_json() or {}
+    from_addr      = (data.get('from')            or '').strip().upper()
+    token_in_raw   = (data.get('token_in')        or '').strip()
+    token_out_raw  = (data.get('token_out')       or '').strip()
+    amount_in_raw  = data.get('amount_in', 0)
+    min_amount_out = float(data.get('min_amount_out', 0) or 0)
+    priv_hex       = (data.get('private_key_hex') or '').strip()
+
+    if not from_addr or not token_in_raw or not token_out_raw or not priv_hex:
+        return _jsonify(ok=False, error='missing_required_fields'), 400
+
+    try:
+        amount_in = float(amount_in_raw)
+        if amount_in <= 0:
+            raise ValueError('non_positive')
+    except (TypeError, ValueError):
+        return _jsonify(ok=False, error='invalid_amount'), 400
+
+    # ── Verify ownership: derive THR address from private key ─────────────────
+    try:
+        from cryptography.hazmat.primitives.asymmetric import ec as _ec
+        from cryptography.hazmat.primitives.serialization import Encoding as _Enc, PublicFormat as _PF
+        from cryptography.hazmat.backends import default_backend as _backend
+        from wallet_v1_address_derivation import derive_thronos_address as _derive
+        _priv_int = int(priv_hex, 16)
+        _priv_key = _ec.derive_private_key(_priv_int, _ec.SECP256K1(), _backend())
+        _pub_bytes = _priv_key.public_key().public_bytes(_Enc.X962, _PF.CompressedPoint)
+        derived_addr = _derive(_pub_bytes.hex())
+        if derived_addr.upper() != from_addr.upper():
+            app.logger.warning('[V1Swap] address_mismatch derived=%s from=%s', derived_addr, from_addr)
+            return _jsonify(ok=False, error='address_mismatch'), 403
+    except Exception as _e:
+        app.logger.warning('[V1Swap] key_error: %s', _e)
+        return _jsonify(ok=False, error='invalid_private_key', detail=str(_e)), 400
+
+    trader = from_addr.upper()
+
+    # ── Sanitize token symbols ────────────────────────────────────────────────
+    try:
+        token_in  = _srv._sanitize_asset_symbol(token_in_raw)
+        token_out = _srv._sanitize_asset_symbol(token_out_raw)
+    except Exception as _e:
+        return _jsonify(ok=False, error='invalid_token_symbol', detail=str(_e)), 400
+
+    if token_in == token_out:
+        return _jsonify(ok=False, error='same_token'), 400
+
+    # ── Get quote / route ─────────────────────────────────────────────────────
+    try:
+        quote, err = _srv.quote_swap_route(token_in, token_out, amount_in)
+    except Exception as _e:
+        app.logger.error('[V1Swap] quote_error: %s', _e)
+        return _jsonify(ok=False, error='quote_failed', detail=str(_e)), 500
+
+    if err or not quote:
+        return _jsonify(ok=False, error=err or 'no_route_found'), 400
+
+    # ── Load ledgers / balances / pools ──────────────────────────────────────
+    try:
+        thr_ledger     = _srv.load_json(_srv.LEDGER_FILE, {})
+        wbtc_ledger    = _srv.load_json(_srv.WBTC_LEDGER_FILE, {})
+        token_balances = _srv.load_token_balances()
+        pools          = _srv.load_pools()
+    except Exception as _e:
+        app.logger.error('[V1Swap] load_error: %s', _e)
+        return _jsonify(ok=False, error='state_load_failed', detail=str(_e)), 500
+
+    def get_balance(sym):
+        if sym == 'THR':  return float(thr_ledger.get(trader, 0.0))
+        if sym == 'WBTC': return float(wbtc_ledger.get(trader, 0.0))
+        return float(token_balances.get(sym, {}).get(trader, 0.0))
+
+    if get_balance(token_in) < amount_in:
+        return _jsonify(ok=False, error='insufficient_balance',
+                        balance=get_balance(token_in), required=amount_in), 400
+
+    def deduct(sym, amt):
+        if sym == 'THR':
+            thr_ledger[trader] = round(float(thr_ledger.get(trader, 0.0)) - amt, 8)
+        elif sym == 'WBTC':
+            wbtc_ledger[trader] = round(float(wbtc_ledger.get(trader, 0.0)) - amt, 8)
+        else:
+            bucket = token_balances.setdefault(sym, {})
+            bucket[trader] = round(float(bucket.get(trader, 0.0)) - amt, 8)
+
+    def credit(sym, amt):
+        if sym == 'THR':
+            thr_ledger[trader] = round(float(thr_ledger.get(trader, 0.0)) + amt, 8)
+        elif sym == 'WBTC':
+            wbtc_ledger[trader] = round(float(wbtc_ledger.get(trader, 0.0)) + amt, 8)
+        else:
+            bucket = token_balances.setdefault(sym, {})
+            bucket[trader] = round(float(bucket.get(trader, 0.0)) + amt, 8)
+
+    # ── Execute swap legs ─────────────────────────────────────────────────────
+    swap_trace        = []
+    running_in        = amount_in
+    total_fee         = 0.0
+    total_price_impact = 0.0
+
+    try:
+        for leg in quote.get('legs', []):
+            leg_token_in  = leg['token_in']
+            leg_token_out = leg['token_out']
+            pool = next((p for p in pools if p.get('id') == leg['pool_id']), None)
+            if pool is None:
+                return _jsonify(ok=False, error='pool_not_found', pool_id=leg.get('pool_id')), 400
+
+            a = _srv._sanitize_asset_symbol(pool.get('token_a', ''))
+            b = _srv._sanitize_asset_symbol(pool.get('token_b', ''))
+            reserves_a = float(pool.get('reserves_a', 0))
+            reserves_b = float(pool.get('reserves_b', 0))
+            fee_bps    = _srv.pool_fee_bps(pool)
+
+            if leg_token_in == a and leg_token_out == b:
+                reserve_in, reserve_out = reserves_a, reserves_b
+                is_a_to_b = True
+            else:
+                reserve_in, reserve_out = reserves_b, reserves_a
+                is_a_to_b = False
+
+            out_amount, fee_amount, price_impact = _srv.compute_swap_out(
+                running_in, reserve_in, reserve_out, fee_bps)
+
+            if out_amount <= 0:
+                return _jsonify(ok=False, error='zero_output_amount',
+                                leg=leg.get('pool_id')), 400
+
+            if is_a_to_b:
+                pool['reserves_a'] = round(reserves_a + running_in, 6)
+                pool['reserves_b'] = round(reserves_b - out_amount, 6)
+            else:
+                pool['reserves_b'] = round(reserves_b + running_in, 6)
+                pool['reserves_a'] = round(reserves_a - out_amount, 6)
+
+            pool['volume_24h']      = float(pool.get('volume_24h',      0.0)) + running_in
+            pool['fees_collected']  = float(pool.get('fees_collected',  0.0)) + fee_amount
+
+            swap_trace.append({
+                'pool_id':    leg['pool_id'],
+                'in_token':   leg_token_in,
+                'in_amount':  running_in,
+                'out_token':  leg_token_out,
+                'out_amount': out_amount,
+                'fee':        fee_amount,
+            })
+            total_fee          += fee_amount
+            total_price_impact += price_impact
+            running_in          = out_amount
+    except Exception as _e:
+        app.logger.error('[V1Swap] execution_error: %s', _e)
+        return _jsonify(ok=False, error='swap_execution_failed', detail=str(_e)), 500
+
+    amount_out = running_in
+
+    # ── Slippage check ────────────────────────────────────────────────────────
+    if min_amount_out > 0 and amount_out < min_amount_out:
+        return _jsonify(ok=False, error='slippage_exceeded',
+                        amount_out=amount_out, min_amount_out=min_amount_out), 400
+
+    # ── Apply balance changes ─────────────────────────────────────────────────
+    try:
+        deduct(token_in, amount_in)
+        credit(token_out, amount_out)
+        _srv.save_json(_srv.LEDGER_FILE,      thr_ledger)
+        _srv.save_json(_srv.WBTC_LEDGER_FILE, wbtc_ledger)
+        _srv.save_token_balances(token_balances)
+        _srv.save_pools(pools)
+    except Exception as _e:
+        app.logger.error('[V1Swap] save_error: %s', _e)
+        return _jsonify(ok=False, error='state_save_failed', detail=str(_e)), 500
+
+    # ── Build transaction record ──────────────────────────────────────────────
+    try:
+        tx_id        = 'swap_' + _secrets_mod.token_hex(16)
+        now_ts       = int(_time_mod.time())
+        chain_data   = _srv.load_json(_srv.CHAIN_FILE, {'blocks': [], 'height': 0})
+        block_height = int(chain_data.get('height', 0)) + 1
+
+        tx = {
+            'id':            tx_id,
+            'type':          'swap',
+            'from':          trader,
+            'token_in':      token_in,
+            'token_out':     token_out,
+            'amount_in':     amount_in,
+            'amount_out':    amount_out,
+            'fee':           round(total_fee, 8),
+            'price_impact':  round(total_price_impact, 6),
+            'legs':          swap_trace,
+            'timestamp':     now_ts,
+            'block':         block_height,
+            'source':        'wallet_pwa_v1',
+        }
+
+        _srv.update_last_block(tx)
+        _srv.persist_normalized_tx(tx)
+    except Exception as _e:
+        app.logger.warning('[V1Swap] tx_record_error (swap already applied): %s', _e)
+        tx_id = 'swap_unrecorded'
+
+    app.logger.info('[V1Swap] success trader=%s %s->%s in=%.6f out=%.6f fee=%.6f',
+                    trader, token_in, token_out, amount_in, amount_out, total_fee)
+
+    return _jsonify(
+        status       = 'success',
+        ok           = True,
+        tx_id        = tx_id,
+        from_addr    = trader,
+        token_in     = token_in,
+        token_out    = token_out,
+        amount_in    = amount_in,
+        amount_out   = amount_out,
+        fee          = round(total_fee, 8),
+        price_impact = round(total_price_impact, 6),
+        legs         = swap_trace,
+    ), 200
+
+
+@app.route('/api/wallet/v1/add_liquidity', methods=['POST'])
+def wallet_v1_add_liquidity():
+    """
+    PWA add liquidity: verifies ownership via private_key_hex then adds liquidity
+    to the specified pool using the existing server-side logic.
+    """
+    import server as _srv2
+    import secrets as _sec2
+    import time as _t2
+
+    data = _request.get_json() or {}
+    from_addr  = (data.get('from')            or '').strip().upper()
+    pool_id    = (data.get('pool_id')          or '').strip()
+    amt_a_raw  = data.get('amount_a', 0)
+    amt_b_raw  = data.get('amount_b', 0)
+    priv_hex   = (data.get('private_key_hex') or '').strip()
+
+    if not from_addr or not pool_id or not priv_hex:
+        return _jsonify(ok=False, error='missing_required_fields'), 400
+
+    # ── Verify ownership ──────────────────────────────────────────────────────
+    try:
+        from cryptography.hazmat.primitives.asymmetric import ec as _ec2
+        from cryptography.hazmat.primitives.serialization import Encoding as _Enc2, PublicFormat as _PF2
+        from cryptography.hazmat.backends import default_backend as _backend2
+        from wallet_v1_address_derivation import derive_thronos_address as _derive2
+        _priv_key2 = _ec2.derive_private_key(int(priv_hex, 16), _ec2.SECP256K1(), _backend2())
+        _pub_bytes2 = _priv_key2.public_key().public_bytes(_Enc2.X962, _PF2.CompressedPoint)
+        derived = _derive2(_pub_bytes2.hex())
+        if derived.upper() != from_addr:
+            return _jsonify(ok=False, error='address_mismatch'), 403
+    except Exception as _e2:
+        return _jsonify(ok=False, error='invalid_private_key', detail=str(_e2)), 400
+
+    provider = from_addr
+
+    # ── Validate amounts ──────────────────────────────────────────────────────
+    try:
+        amt_a = float(amt_a_raw)
+        amt_b = float(amt_b_raw)
+    except (TypeError, ValueError):
+        return _jsonify(ok=False, error='invalid_amounts'), 400
+    if amt_a <= 0 or amt_b <= 0:
+        return _jsonify(ok=False, error='amounts_must_be_positive'), 400
+
+    # ── Load pool ─────────────────────────────────────────────────────────────
+    pools = _srv2.load_pools()
+    pool = next((p for p in pools if p.get('id') == pool_id), None)
+    if not pool:
+        return _jsonify(ok=False, error='pool_not_found'), 404
+
+    token_a    = pool['token_a']
+    token_b    = pool['token_b']
+    reserves_a = float(pool['reserves_a'])
+    reserves_b = float(pool['reserves_b'])
+    total_shares = float(pool['total_shares'])
+
+    # Ratio check (2% tolerance)
+    if reserves_b > 0:
+        expected = reserves_a / reserves_b
+        provided = amt_a / amt_b if amt_b > 0 else 0
+        if abs(expected - provided) / max(expected, 1e-9) > 0.02:
+            return _jsonify(ok=False, error='ratio_mismatch',
+                            expected_ratio=expected, provided_ratio=provided), 400
+
+    # ── Balance check ─────────────────────────────────────────────────────────
+    thr_ledger   = _srv2.load_json(_srv2.LEDGER_FILE, {})
+    wbtc_ledger  = _srv2.load_json(_srv2.WBTC_LEDGER_FILE, {})
+    token_bals   = _srv2.load_token_balances()
+
+    def _avail(sym):
+        if sym == 'THR': return float(thr_ledger.get(provider, 0.0))
+        if sym == 'WBTC': return float(wbtc_ledger.get(provider, 0.0))
+        return float(token_bals.get(sym, {}).get(provider, 0.0))
+
+    if _avail(token_a) < amt_a or _avail(token_b) < amt_b:
+        return _jsonify(ok=False, error='insufficient_balance'), 400
+
+    # ── Deduct balances ───────────────────────────────────────────────────────
+    def _deduct(sym, amt):
+        if sym == 'THR':
+            thr_ledger[provider] = round(float(thr_ledger.get(provider, 0.0)) - amt, 6)
+        elif sym == 'WBTC':
+            wbtc_ledger[provider] = round(float(wbtc_ledger.get(provider, 0.0)) - amt, 6)
+        else:
+            token_bals.setdefault(sym, {})
+            token_bals[sym][provider] = round(float(token_bals[sym].get(provider, 0.0)) - amt, 6)
+
+    _deduct(token_a, amt_a)
+    _deduct(token_b, amt_b)
+    _srv2.save_json(_srv2.LEDGER_FILE, thr_ledger)
+    _srv2.save_json(_srv2.WBTC_LEDGER_FILE, wbtc_ledger)
+    _srv2.save_token_balances(token_bals)
+
+    # ── Mint shares ───────────────────────────────────────────────────────────
+    shares_minted = (amt_a / reserves_a) * total_shares if reserves_a > 0 else (amt_a * amt_b) ** 0.5
+    pool['reserves_a']  = round(reserves_a + amt_a, 6)
+    pool['reserves_b']  = round(reserves_b + amt_b, 6)
+    pool['total_shares'] = round(total_shares + shares_minted, 6)
+    pool.setdefault('providers', {})[provider] = round(
+        float(pool['providers'].get(provider, 0.0)) + shares_minted, 6)
+    _srv2.save_pools(pools)
+
+    # ── Record tx ─────────────────────────────────────────────────────────────
+    ts    = _t2.strftime('%Y-%m-%d %H:%M:%S UTC', _t2.gmtime())
+    tx_id = f"POOL-ADD-{int(_t2.time())}-{_sec2.token_hex(4)}"
+    tx = {
+        'kind': 'liquidity_add', 'type': 'liquidity_add',
+        'pool_id': pool_id, 'token_a': token_a, 'token_b': token_b,
+        'added_a': amt_a, 'added_b': amt_b,
+        'shares_minted': shares_minted,
+        'from': provider, 'provider': provider,
+        'timestamp': ts, 'tx_id': tx_id, 'status': 'confirmed',
+        'event_type': 'ADD_LIQ', 'subtype': 'add_liq',
+        'pool_event': {'tokenA': token_a, 'amountA': amt_a, 'tokenB': token_b,
+                       'amountB': amt_b, 'lp_minted': shares_minted},
+    }
+    chain = _srv2.load_json(_srv2.CHAIN_FILE, [])
+    chain.append(tx)
+    _srv2.save_json(_srv2.CHAIN_FILE, chain)
+    try: _srv2.update_last_block(tx, is_block=False)
+    except Exception: pass
+    try: _srv2.persist_normalized_tx(tx)
+    except Exception: pass
+
+    return _jsonify(ok=True, status='success', tx_id=tx_id,
+                    shares_minted=round(shares_minted, 6),
+                    pool_id=pool_id, token_a=token_a, token_b=token_b,
+                    added_a=amt_a, added_b=amt_b), 200
+
+
 # ── THR Wallet PWA — served from public/wallet-pwa/ ───────────────────────────
 import os as _os
 from flask import send_from_directory as _send

@@ -5,7 +5,8 @@ import {
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
+import type { RootStackParamList } from '../../App';
 import { Ionicons } from '@expo/vector-icons';
 import { Audio } from 'expo-av';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS } from '../constants/theme';
@@ -61,9 +62,10 @@ const NETWORK_PLACEHOLDERS: Record<Network, string> = {
 
 export default function SendScreen() {
   const navigation = useNavigation();
+  const route = useRoute<RouteProp<RootStackParamList, 'Send'>>();
   const { wallet, tokens } = useStore();
   const [selectedNetwork, setSelectedNetwork] = useState<Network>('thronos');
-  const [recipient, setRecipient] = useState('');
+  const [recipient, setRecipient] = useState((route.params as any)?.toAddress ?? '');
   const [amount, setAmount] = useState('');
   const [selectedToken, setSelectedToken] = useState('THR');
   const [speed, setSpeed] = useState<Speed>('fast');
@@ -255,15 +257,23 @@ export default function SendScreen() {
 
           {/* Recipient */}
           <Text style={styles.label}>Recipient Address</Text>
-          <TextInput
-            style={styles.input}
-            placeholder={NETWORK_PLACEHOLDERS[selectedNetwork]}
-            placeholderTextColor={COLORS.textMuted}
-            value={recipient}
-            onChangeText={setRecipient}
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
+          <View style={styles.recipientRow}>
+            <TextInput
+              style={[styles.input, { flex: 1 }]}
+              placeholder={NETWORK_PLACEHOLDERS[selectedNetwork]}
+              placeholderTextColor={COLORS.textMuted}
+              value={recipient}
+              onChangeText={setRecipient}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <TouchableOpacity
+              style={styles.scanAddrBtn}
+              onPress={() => navigation.navigate('Scan')}
+            >
+              <Ionicons name="qr-code-outline" size={22} color={COLORS.gold} />
+            </TouchableOpacity>
+          </View>
 
           {/* Amount */}
           <Text style={styles.label}>Amount</Text>
@@ -471,6 +481,12 @@ const styles = StyleSheet.create({
   input: {
     backgroundColor: COLORS.surface, borderRadius: BORDER_RADIUS.lg, padding: SPACING.md,
     fontSize: FONT_SIZES.md, color: COLORS.text, borderWidth: 1, borderColor: COLORS.border,
+  },
+  recipientRow: { flexDirection: 'row', gap: SPACING.sm, alignItems: 'center', marginBottom: SPACING.md },
+  scanAddrBtn: {
+    width: 44, height: 44, borderRadius: BORDER_RADIUS.md,
+    backgroundColor: COLORS.gold + '15', borderWidth: 1, borderColor: COLORS.gold + '40',
+    justifyContent: 'center', alignItems: 'center',
   },
   amountRow: { flexDirection: 'row', gap: SPACING.sm, alignItems: 'center' },
   maxBtn: {

@@ -801,7 +801,7 @@ async function showWallet() {
       const logoHtml = logo
         ? `<img src="${logo}" alt="${sym}" style="width:28px;height:28px;border-radius:50%;object-fit:cover" onerror="this.style.display='none'">`
         : `<div style="width:28px;height:28px;border-radius:50%;background:${color}33;border:1px solid ${color};display:flex;align-items:center;justify-content:center;font-size:.75rem;font-weight:bold;color:${color}">${sym[0]}</div>`;
-      return `<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid #ffffff10">
+      return `<div class="token-tap-row" style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid #ffffff10;cursor:pointer" data-token="${escHtml(JSON.stringify(t))}">
         ${logoHtml}
         <div style="flex:1;min-width:0">
           <div style="font-size:.88rem;font-weight:600;color:#fff">${escHtml(t.name || sym)} <span style="color:var(--muted);font-size:.75rem">${sym}</span></div>
@@ -824,8 +824,67 @@ async function showWallet() {
       <div style="font-size:.7rem;text-transform:uppercase;letter-spacing:1px;color:var(--accent);margin-bottom:4px">Assets</div>
       ${tokenRows || '<div style="color:var(--muted);font-size:.85rem;padding:8px 0">No tokens found</div>'}
     `;
+
+    // Token row tap → detail modal
+    el.querySelectorAll('.token-tap-row').forEach(row => {
+      row.addEventListener('click', () => {
+        try { showTokenDetail(JSON.parse(row.dataset.token)); } catch {}
+      });
+    });
   });
 
+}
+
+// ─── Token detail modal ────────────────────────────────────────────────────────
+
+function showTokenDetail(t) {
+  const sym   = t.symbol || '?';
+  const name  = t.name || sym;
+  const bal   = Number(t.balance || 0);
+  const color = t.color || '#00ff66';
+  const logo  = t.logo_url || t.logo || '';
+  const valThr = t.value_in_thr != null ? `${Number(t.value_in_thr).toFixed(4)} THR` : '—';
+  const valUsd = t.value_usd != null    ? `$${Number(t.value_usd).toFixed(2)}`        : '—';
+  const valBtc = t.value_wbtc != null   ? `₿ ${Number(t.value_wbtc).toFixed(8)}`      : '';
+  const logoHtml = logo
+    ? `<img src="${logo}" alt="${sym}" style="width:56px;height:56px;border-radius:50%;object-fit:cover" onerror="this.style.display='none'">`
+    : `<div style="width:56px;height:56px;border-radius:50%;background:${color}33;border:2px solid ${color};display:flex;align-items:center;justify-content:center;font-size:1.3rem;font-weight:bold;color:${color}">${sym[0]}</div>`;
+  const explorerUrl = `https://thronoschain.org/token/${encodeURIComponent(sym)}`;
+
+  // Overlay modal
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:#000000aa;z-index:999;display:flex;align-items:flex-end;justify-content:center;';
+  overlay.innerHTML = `
+    <div style="background:#13112a;border-radius:16px 16px 0 0;width:100%;max-width:480px;padding:20px 20px 32px;box-shadow:0 -4px 24px #00000088">
+      <div style="display:flex;align-items:center;gap:14px;margin-bottom:18px">
+        ${logoHtml}
+        <div>
+          <div style="font-size:1.15rem;font-weight:700;color:#fff">${escHtml(name)}</div>
+          <div style="color:var(--muted);font-size:.85rem">${sym} · Thronos</div>
+        </div>
+        <button id="tdClose" style="margin-left:auto;background:none;border:none;color:var(--muted);font-size:1.4rem;cursor:pointer;padding:4px 8px">✕</button>
+      </div>
+
+      <div style="background:#0d0a1a;border-radius:10px;padding:14px;margin-bottom:16px">
+        <div style="font-size:1.6rem;font-weight:700;color:#fff;margin-bottom:4px">${bal.toFixed(t.decimals ?? 6)} ${sym}</div>
+        <div style="color:var(--muted);font-size:.82rem">≈ ${valUsd} · ${valThr}${valBtc ? ' · ' + valBtc : ''}</div>
+      </div>
+
+      ${t.description ? `<div style="font-size:.82rem;color:var(--muted);margin-bottom:14px;line-height:1.5">${escHtml(t.description)}</div>` : ''}
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <button id="tdSend" class="btn btn--primary" style="padding:12px">💸 Send</button>
+        <a href="${explorerUrl}" target="_blank" id="tdExplore" style="display:flex;align-items:center;justify-content:center;padding:12px;background:var(--card);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:.88rem;text-decoration:none;font-weight:600">⬡ Explore</a>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+  overlay.querySelector('#tdClose').addEventListener('click', () => overlay.remove());
+  overlay.querySelector('#tdSend').addEventListener('click', () => {
+    overlay.remove();
+    showSend(sym);
+  });
 }
 
 // ─── Tokens screen ────────────────────────────────────────────────────────────
@@ -854,96 +913,221 @@ async function showTokens() {
 
 // ─── Send screen ──────────────────────────────────────────────────────────────
 
-// ── WalletConnect — sign from mobile without re-importing Recovery Kit ─────────
-// Architecture: lightweight custom relay (no WalletConnect server needed).
-// ThronosBuilder posts a sign request to /api/wallet/wc/request keyed by address.
-// PWA polls for pending requests, shows Face ID prompt, signs, posts signature back.
-// For full WalletConnect v2 URI support (wc://...), we parse the pairing topic
-// and connect to the Thronos relay endpoint.
+// ── WalletConnect — scan QR from ThronosBuilder or paste URI ──────────────────
+// Architecture: lightweight custom relay.
+// ThronosBuilder generates thrconnect:// URI + QR code → PWA scans → paired.
+// Builder posts sign requests → PWA polls, shows approval → user approves.
 
-const WC_POLL_INTERVAL = 4000; // ms
+const WC_POLL_INTERVAL = 4000;
 let _wcPollTimer = null;
 
 function showWalletConnect() {
   const address = getActiveAddr();
+  const hasBarcodeDetector = 'BarcodeDetector' in window;
+  const hasCamera = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+  const canScan = hasBarcodeDetector || hasCamera;
+
   render(`
     <div class="screen">
-      <div class="card">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
-          <h2 style="font-size:1.1rem;margin:0">⬡ Connect dApp</h2>
-          <button class="btn btn--ghost" id="wcBackBtn" style="padding:6px 12px;font-size:.85rem">← Back</button>
-        </div>
-        <p style="color:var(--muted);font-size:.85rem;margin-bottom:14px">
-          Scan a QR code or paste a <b>wc://</b> URI from ThronosBuilder or any compatible dApp to sign transactions from this wallet.
-        </p>
+      <div class="header">
+        <button class="btn--icon" id="wcBackBtn">←</button>
+        <span class="header__title">⬡ Connect dApp</span>
+      </div>
 
-        <div style="margin-bottom:12px">
-          <label style="font-size:.85rem;color:var(--accent);display:block;margin-bottom:6px">Paste WC URI or connection code</label>
-          <textarea id="wcUri" class="input" rows="3" placeholder="wc:// or thrconnect://..." style="font-family:monospace;font-size:.78rem;resize:none"></textarea>
-          <button class="btn btn--primary mt8" id="wcConnectBtn" style="width:100%">🔗 Connect</button>
-        </div>
+      <!-- Camera scan -->
+      ${canScan ? `
+      <button class="btn btn--primary" id="scanQrBtn" style="width:100%;padding:14px;font-size:1rem;margin-bottom:14px;display:flex;align-items:center;justify-content:center;gap:8px">
+        📷 Scan QR Code
+      </button>
+      <div style="text-align:center;color:var(--muted);font-size:.82rem;margin-bottom:12px">— or paste URI manually —</div>
+      ` : `
+      <div style="background:#1a1040;border:1px solid #7c5cbf;border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:.78rem;color:#b08cf8">
+        Camera not available on this browser. Paste the URI from ThronosBuilder below.
+      </div>
+      `}
 
-        <div style="text-align:center;color:var(--muted);font-size:.82rem;margin:10px 0">— OR —</div>
+      <!-- Manual paste -->
+      <div class="card" style="padding:12px;margin-bottom:12px">
+        <label style="font-size:.82rem;color:var(--accent);display:block;margin-bottom:6px">Paste connection URI</label>
+        <textarea id="wcUri" class="input" rows="3" placeholder="thrconnect://… or wc://…" style="font-family:monospace;font-size:.75rem;resize:none"></textarea>
+        <button class="btn btn--primary mt8" id="wcConnectBtn" style="width:100%">🔗 Connect</button>
+      </div>
 
-        <div style="background:#0d0a1a;border:1px solid var(--accent);border-radius:8px;padding:12px;text-align:center">
-          <div style="font-size:.82rem;color:var(--muted);margin-bottom:8px">Waiting for sign requests from connected dApps…</div>
-          <div id="wcStatus" style="font-size:.85rem;color:var(--accent)">● Polling for requests…</div>
-          <div id="wcRequestArea" style="margin-top:10px"></div>
-        </div>
+      <!-- Status + pending requests -->
+      <div style="background:#0d0a1a;border:1px solid var(--accent);border-radius:8px;padding:12px">
+        <div id="wcStatus" style="font-size:.82rem;color:var(--accent);margin-bottom:8px">● Ready to connect</div>
+        <div id="wcRequestArea"></div>
+      </div>
 
-        <div style="margin-top:14px;padding:10px;background:#0a0a14;border-radius:6px;font-size:.78rem;color:var(--muted)">
-          <b style="color:var(--accent)">Your wallet address:</b><br>
-          <span style="font-family:monospace;word-break:break-all">${address}</span>
-        </div>
+      <div style="margin-top:12px;padding:10px;background:#0a0a14;border-radius:6px;font-size:.72rem;color:var(--muted)">
+        <b style="color:var(--accent)">Wallet:</b><br>
+        <span style="font-family:monospace;word-break:break-all">${address}</span>
       </div>
     </div>
   `);
 
-  document.getElementById('wcBackBtn').addEventListener('click', showWallet);
+  document.getElementById('wcBackBtn').addEventListener('click', () => {
+    if (_wcPollTimer) { clearInterval(_wcPollTimer); _wcPollTimer = null; }
+    showWallet();
+  });
+
+  if (canScan) {
+    document.getElementById('scanQrBtn').addEventListener('click', () => _openQrScanner(address));
+  }
 
   document.getElementById('wcConnectBtn').addEventListener('click', async () => {
     const uri = document.getElementById('wcUri')?.value?.trim();
-    if (!uri) { alert('Paste a WC URI first'); return; }
-    const statusEl = document.getElementById('wcStatus');
-
-    // Handle thrconnect:// (our custom relay protocol)
-    if (uri.startsWith('thrconnect://') || uri.startsWith('thr://')) {
-      const sessionId = uri.replace(/^(thrconnect|thr):\/\//, '');
-      statusEl.textContent = `✅ Connected (session: ${sessionId.slice(0,8)}…)`;
-      sessionStorage.setItem('thr_wc_session', sessionId);
-      _startWcPoll(address, sessionId);
-      return;
-    }
-
-    // Handle wc:// URI — extract topic and relay server
-    if (uri.startsWith('wc:')) {
-      try {
-        // wc:<topic>@<version>?relay-protocol=...&symKey=...
-        const topic = uri.split('@')[0].replace('wc:', '');
-        statusEl.textContent = `🔗 WC pairing: ${topic.slice(0,8)}…`;
-        // Register with our relay
-        const r = await fetch(`${API_WRITE}/api/wallet/wc/pair`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ address, wc_uri: uri, topic })
-        });
-        const d = await r.json().catch(() => ({}));
-        if (d.ok) {
-          statusEl.textContent = `✅ Paired — waiting for sign requests`;
-          _startWcPoll(address, d.session_id || topic);
-        } else {
-          statusEl.textContent = `⚠️ Pair failed: ${d.error || 'unknown'}`;
-        }
-      } catch(e) {
-        statusEl.textContent = `⚠️ Error: ${e.message}`;
-      }
-      return;
-    }
-
-    alert('Unknown URI format. Expected wc:// or thrconnect://');
+    if (!uri) return;
+    await _handleWcUri(uri, address);
   });
 
-  // Start polling immediately
-  _startWcPoll(address, sessionStorage.getItem('thr_wc_session') || null);
+  // Resume polling if already paired this session
+  const existingSession = sessionStorage.getItem('thr_wc_session');
+  if (existingSession) {
+    const statusEl = document.getElementById('wcStatus');
+    if (statusEl) statusEl.textContent = `● Connected (session: ${existingSession.slice(0,8)}…)`;
+    _startWcPoll(address, existingSession);
+  } else {
+    _startWcPoll(address, null);
+  }
+}
+
+// ─── QR Scanner ───────────────────────────────────────────────────────────────
+
+async function _openQrScanner(address) {
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
+    });
+  } catch (e) {
+    alert('Camera permission denied or unavailable: ' + e.message);
+    return;
+  }
+
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:#000;z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;';
+  overlay.innerHTML = `
+    <div style="position:relative;width:min(100vw,480px);max-height:60vh;overflow:hidden;border-radius:10px">
+      <video id="qrVideo" autoplay playsinline muted style="width:100%;display:block"></video>
+      <!-- Viewfinder overlay -->
+      <div style="position:absolute;inset:0;pointer-events:none">
+        <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:200px;height:200px;
+                    border:3px solid var(--accent,#00ff66);border-radius:12px;
+                    box-shadow:0 0 0 4000px rgba(0,0,0,.55)"></div>
+      </div>
+    </div>
+    <p style="color:#fff;margin:16px 0 8px;font-size:.9rem;text-align:center">
+      Aim the QR code at the box above
+    </p>
+    <button id="cancelScanBtn" style="padding:10px 28px;background:#222;color:#fff;border:1px solid #555;border-radius:8px;font-size:.9rem;cursor:pointer">Cancel</button>
+  `;
+  document.body.appendChild(overlay);
+
+  const video = overlay.querySelector('#qrVideo');
+  video.srcObject = stream;
+
+  const stopScan = () => {
+    stream.getTracks().forEach(t => t.stop());
+    overlay.remove();
+  };
+
+  overlay.querySelector('#cancelScanBtn').addEventListener('click', stopScan);
+
+  const _scanLoop = async () => {
+    if (!overlay.isConnected) return;
+    try {
+      if ('BarcodeDetector' in window) {
+        const detector = new BarcodeDetector({ formats: ['qr_code'] });
+        const codes = await detector.detect(video);
+        for (const code of codes) {
+          if (code.rawValue) {
+            stopScan();
+            await _handleWcUri(code.rawValue, address);
+            return;
+          }
+        }
+      } else {
+        // Canvas-based fallback (without BarcodeDetector)
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth || 640;
+        canvas.height = video.videoHeight || 480;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(video, 0, 0);
+        // Without jsQR we can only prompt the user to paste the URI
+        // Show the video but tell user to use paste mode
+        const statusEl = document.getElementById('wcStatus');
+        if (statusEl && !statusEl._fbShown) {
+          statusEl._fbShown = true;
+          stopScan();
+          alert('QR scanning requires Chrome/Safari 16+. Please copy the URI from ThronosBuilder and paste it.');
+          return;
+        }
+      }
+    } catch {}
+    requestAnimationFrame(_scanLoop);
+  };
+
+  video.addEventListener('loadedmetadata', () => requestAnimationFrame(_scanLoop));
+}
+
+// ─── URI handler ──────────────────────────────────────────────────────────────
+
+async function _handleWcUri(uri, address) {
+  const statusEl = document.getElementById('wcStatus');
+  const setStatus = t => { if (statusEl) statusEl.textContent = t; };
+
+  // thrconnect://SESSION_ID?relay=URL&dapp=NAME
+  if (uri.startsWith('thrconnect://')) {
+    const withoutProto = uri.slice('thrconnect://'.length);
+    const [sessionId, queryStr] = withoutProto.split('?');
+    const params = new URLSearchParams(queryStr || '');
+    const dapp   = params.get('dapp') || 'dApp';
+
+    setStatus(`🔗 Pairing with ${dapp}…`);
+    try {
+      const r = await fetch(`${API_WRITE}/api/wallet/wc/pair`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ address, session_id: sessionId, dapp })
+      });
+      const d = await r.json().catch(() => ({}));
+      if (d.ok) {
+        sessionStorage.setItem('thr_wc_session', sessionId);
+        setStatus(`✅ Connected to ${dapp} — awaiting requests`);
+        _startWcPoll(address, sessionId);
+      } else {
+        setStatus(`⚠️ Pair failed: ${d.error || 'unknown'}`);
+      }
+    } catch (e) {
+      setStatus(`⚠️ Network error: ${e.message}`);
+    }
+    return;
+  }
+
+  // wc:// (standard WalletConnect v2)
+  if (uri.startsWith('wc:')) {
+    const topic = uri.split('@')[0].replace('wc:', '');
+    setStatus(`🔗 WC pairing: ${topic.slice(0,8)}…`);
+    try {
+      const r = await fetch(`${API_WRITE}/api/wallet/wc/pair`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ address, wc_uri: uri, topic })
+      });
+      const d = await r.json().catch(() => ({}));
+      if (d.ok) {
+        sessionStorage.setItem('thr_wc_session', d.session_id || topic);
+        setStatus(`✅ Paired — waiting for sign requests`);
+        _startWcPoll(address, d.session_id || topic);
+      } else {
+        setStatus(`⚠️ Pair failed: ${d.error || 'unknown'}`);
+      }
+    } catch (e) {
+      setStatus(`⚠️ Error: ${e.message}`);
+    }
+    return;
+  }
+
+  alert('Unknown URI format. Expected thrconnect:// or wc://');
 }
 
 function _startWcPoll(address, sessionId) {
@@ -953,43 +1137,47 @@ function _startWcPoll(address, sessionId) {
 }
 
 async function _checkWcRequests(address, sessionId) {
-  const reqArea = document.getElementById('wcRequestArea');
+  const reqArea  = document.getElementById('wcRequestArea');
   const statusEl = document.getElementById('wcStatus');
   if (!reqArea) { clearInterval(_wcPollTimer); return; }
   try {
-    const url = sessionId
-      ? `${API_WRITE}/api/wallet/wc/requests?address=${encodeURIComponent(address)}&session=${encodeURIComponent(sessionId)}`
-      : `${API_WRITE}/api/wallet/wc/requests?address=${encodeURIComponent(address)}`;
+    const url = `${API_WRITE}/api/wallet/wc/requests?address=${encodeURIComponent(address)}`
+              + (sessionId ? `&session=${encodeURIComponent(sessionId)}` : '');
     const r = await fetch(url);
     if (!r.ok) return;
     const d = await r.json().catch(() => ({}));
     const requests = d.requests || [];
     if (!requests.length) {
-      statusEl.textContent = '● Polling — no pending requests';
+      if (statusEl && !statusEl.textContent.includes('Connected') && !statusEl.textContent.includes('Paired')) {
+        statusEl.textContent = '● Ready — no pending requests';
+      }
       reqArea.innerHTML = '';
       return;
     }
-    statusEl.textContent = `🔔 ${requests.length} sign request(s) pending`;
-    reqArea.innerHTML = requests.map(req => `
-      <div style="background:#0a0014;border:1px solid var(--accent);border-radius:8px;padding:10px;margin-bottom:8px">
-        <div style="font-size:.82rem;color:#ccc;margin-bottom:6px">
-          <b style="color:var(--accent)">${req.action || 'Sign Request'}</b>
-          ${req.dapp ? `— from <b>${req.dapp}</b>` : ''}
+    if (statusEl) statusEl.textContent = `🔔 ${requests.length} request(s) need your approval`;
+    reqArea.innerHTML = requests.map(req => {
+      const p = req.payload || {};
+      const toShort = p.to ? p.to.slice(0,12) + '…' : '—';
+      const amtLine = p.amount ? `<div style="font-size:1rem;font-weight:700;color:#fff;margin:6px 0">${p.amount} ${p.token || 'THR'}</div>` : '';
+      const toLine  = p.to    ? `<div style="font-size:.72rem;color:var(--muted)">To: <span style="font-family:monospace">${toShort}</span></div>` : '';
+      return `
+      <div style="background:#0d0a1a;border:2px solid #7c5cbf;border-radius:10px;padding:12px;margin-bottom:8px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+          <div style="font-size:.78rem;color:#b08cf8;font-weight:600">${escHtml(req.dapp || 'dApp')} — ${escHtml(req.action || 'Sign Request')}</div>
+          <div style="font-size:.7rem;color:var(--muted)">${new Date((req.ts || Date.now() / 1000) * 1000).toLocaleTimeString()}</div>
         </div>
-        <div style="font-size:.78rem;color:var(--muted);font-family:monospace;word-break:break-all;margin-bottom:8px">
-          ${(req.payload_preview || JSON.stringify(req.payload || {})).slice(0,120)}…
-        </div>
-        <div style="display:flex;gap:6px">
-          <button class="btn btn--primary" style="flex:2;padding:8px;font-size:.82rem" onclick="_approveWcRequest('${req.id}', '${address}')">
-            🔐 Approve (Face ID)
+        ${amtLine}${toLine}
+        <div style="display:flex;gap:8px;margin-top:10px">
+          <button class="btn btn--primary" style="flex:2;padding:10px;font-size:.85rem" onclick="_approveWcRequest('${escHtml(req.id)}', '${escHtml(address)}')">
+            🔐 Approve
           </button>
-          <button class="btn btn--ghost" style="flex:1;padding:8px;font-size:.82rem" onclick="_rejectWcRequest('${req.id}', '${address}')">
+          <button class="btn btn--ghost" style="flex:1;padding:10px;font-size:.85rem;color:#ff6b6b;border-color:#ff6b6b" onclick="_rejectWcRequest('${escHtml(req.id)}', '${escHtml(address)}')">
             ✗ Reject
           </button>
         </div>
-      </div>
-    `).join('');
-  } catch { /* network error — try again next tick */ }
+      </div>`;
+    }).join('');
+  } catch { /* network error — retry next tick */ }
 }
 
 async function _approveWcRequest(requestId, address) {
@@ -1044,85 +1232,278 @@ async function _rejectWcRequest(requestId, address) {
   _checkWcRequests(address, sessionStorage.getItem('thr_wc_session'));
 }
 
-// ─── Music / T2E screen ───────────────────────────────────────────────────────
-// Music telemetry: start session when track plays, end when stops.
-// L2E (Learn-to-Earn): earned from music listening time, shown in Tokens.
-// T2E (Time-to-Earn): music session tracked server-side; minted by admin.
+// ─── Music screen ─────────────────────────────────────────────────────────────
+// NOTE: L2E (Learn-to-Earn) = earned from Courses, NOT music.
+//        Music listening rewards = T2E (Time-to-Earn) / boost credits.
+//        GPS telemetry: activated during CarPlay/Android Auto sessions.
 
-let _musicSession = null;   // { session_id, track_id, audio }
+let _musicSession = null;   // { session_id, track_id, started, artist_address }
 let _musicAudio   = null;
+let _gpsWatchId   = null;   // navigator.geolocation.watchPosition id
+let _gpsPoints    = [];     // accumulated GPS points for route hash
+
+// Detect CarPlay / Android Auto (audio session on external display)
+function _detectCarPlayOrAuto() {
+  const ua = navigator.userAgent || '';
+  const isIOS     = /iPhone|iPad|iPod/.test(ua);
+  const isAndroid = /Android/.test(ua);
+  // CarPlay: iOS + audio output on external; use MediaDevices if available
+  const hasExternalAudio = typeof AudioContext !== 'undefined';
+  // Heuristic: standalone PWA on iOS = potential CarPlay context
+  const isStandalone = window.matchMedia('(display-mode: standalone)').matches ||
+                       window.navigator.standalone === true;
+  return { isIOS, isAndroid, isStandalone, likelyCar: isStandalone && (isIOS || isAndroid) };
+}
+
+// SHA-256 hash of GPS route string (privacy-preserving)
+async function _hashRoute(points) {
+  if (!points.length) return '';
+  const str = points.map(p => `${p.lat.toFixed(4)},${p.lng.toFixed(4)}`).join(';');
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
+}
+
+function _startGpsTracking() {
+  if (!navigator.geolocation) return;
+  _gpsPoints = [];
+  _gpsWatchId = navigator.geolocation.watchPosition(
+    pos => {
+      _gpsPoints.push({ lat: pos.coords.latitude, lng: pos.coords.longitude, ts: Date.now() });
+      // Keep last 200 points to cap memory
+      if (_gpsPoints.length > 200) _gpsPoints.shift();
+    },
+    () => {}, // permission denied — silent
+    { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
+  );
+}
+
+function _stopGpsTracking() {
+  if (_gpsWatchId !== null) {
+    navigator.geolocation.clearWatch(_gpsWatchId);
+    _gpsWatchId = null;
+  }
+}
 
 async function showMusic() {
   const address = getActiveAddr();
+
   render(`
     <div class="screen">
       <div class="header">
         <button class="btn--icon" id="backBtn">←</button>
-        <span class="header__title">♪ Music · T2E</span>
+        <span class="header__title">♪ Music</span>
+        <button class="btn--icon" id="musicTabBtn" title="Library/Playlists">📚</button>
       </div>
-      <div id="musicL2eBar" style="background:#0d0a1a;border:1px solid var(--accent);border-radius:8px;padding:8px 12px;margin:12px 0;font-size:.82rem;color:var(--accent)">
-        <b>L2E Balance:</b> <span id="l2eAmt">…</span>
-      </div>
-      <div id="nowPlaying" style="display:none;background:#1a1040;border:1px solid #7c5cbf;border-radius:8px;padding:10px 12px;margin-bottom:10px">
-        <div style="font-size:.8rem;color:var(--muted)">Now Playing</div>
-        <div id="npTitle" style="font-weight:bold;color:#fff;margin:4px 0"></div>
-        <div id="npArtist" style="font-size:.8rem;color:var(--muted)"></div>
-        <div style="display:flex;gap:8px;margin-top:8px">
-          <button class="btn btn--ghost" id="stopBtn" style="flex:1;padding:6px">⏹ Stop</button>
-          <div id="sessionTimer" style="color:var(--accent);font-size:.8rem;line-height:32px;min-width:50px;text-align:right"></div>
+
+      <!-- Now Playing (hidden until track selected) -->
+      <div id="nowPlaying" style="display:none;background:#1a1040;border:1px solid #7c5cbf;border-radius:10px;padding:12px;margin:10px 0">
+        <div style="font-size:.75rem;color:var(--muted);margin-bottom:4px">Now Playing</div>
+        <div id="npTitle" style="font-weight:700;color:#fff;font-size:1rem;margin-bottom:2px"></div>
+        <div id="npArtist" style="font-size:.82rem;color:#b08cf8;cursor:pointer" id="npArtistLink"></div>
+        <div style="display:flex;gap:8px;margin-top:10px;align-items:center">
+          <button class="btn btn--ghost" id="stopBtn" style="flex:1;padding:8px">⏹ Stop</button>
+          <button class="btn btn--primary" id="tipBtn" style="padding:8px 14px;font-size:.8rem">💰 Tip</button>
+          <div id="sessionTimer" style="color:var(--accent);font-size:.8rem;min-width:42px;text-align:right"></div>
         </div>
+        <div id="carPlayBadge" style="display:none;margin-top:8px;font-size:.72rem;color:#00ff66">🚗 CarPlay · GPS active · +T2E boost</div>
       </div>
-      <div id="trackList" style="display:flex;flex-direction:column;gap:8px">
-        <p style="color:var(--muted);font-size:.88rem">Loading tracks…</p>
+
+      <!-- Tabs: Library | Playlists -->
+      <div style="display:flex;gap:0;margin-bottom:10px;border:1px solid var(--border);border-radius:8px;overflow:hidden">
+        <button id="tabLibrary" style="flex:1;padding:8px;background:#1a1040;border:none;color:#b08cf8;font-size:.82rem;cursor:pointer;font-weight:600">🎵 Library</button>
+        <button id="tabPlaylists" style="flex:1;padding:8px;background:transparent;border:none;color:var(--muted);font-size:.82rem;cursor:pointer">📋 Playlists</button>
+      </div>
+
+      <div id="musicContent" style="display:flex;flex-direction:column;gap:6px">
+        <p style="color:var(--muted);font-size:.88rem">Loading…</p>
       </div>
     </div>
   `);
 
+  let currentTab = 'library';
+
   document.getElementById('backBtn').addEventListener('click', () => {
-    if (_musicAudio) { _musicAudio.pause(); }
+    if (_musicAudio) _musicAudio.pause();
     showWallet();
   });
-  document.getElementById('stopBtn')?.addEventListener('click', _stopMusic);
+  document.getElementById('stopBtn').addEventListener('click', _stopMusic);
+  document.getElementById('tipBtn').addEventListener('click', _showTipModal);
 
-  // Load L2E balance
-  fetch(`${API_WRITE}/api/v1/l2e/balance/${encodeURIComponent(address)}`)
-    .then(r => r.ok ? r.json() : null)
-    .then(d => {
-      const el = document.getElementById('l2eAmt');
-      if (!el) return;
-      const bal = d?.balance ?? d?.l2e_balance ?? d?.amount ?? 0;
-      el.textContent = `${Number(bal).toFixed(4)} L2E`;
-    }).catch(() => {});
+  const switchTab = (tab) => {
+    currentTab = tab;
+    document.getElementById('tabLibrary').style.background   = tab === 'library'   ? '#1a1040' : 'transparent';
+    document.getElementById('tabLibrary').style.color        = tab === 'library'   ? '#b08cf8' : 'var(--muted)';
+    document.getElementById('tabPlaylists').style.background = tab === 'playlists' ? '#1a1040' : 'transparent';
+    document.getElementById('tabPlaylists').style.color      = tab === 'playlists' ? '#b08cf8' : 'var(--muted)';
+    if (tab === 'library')   _loadMusicLibrary(address);
+    if (tab === 'playlists') _loadPlaylists(address);
+  };
 
-  // Load tracks
-  fetch(`${API_WRITE}/api/v1/music/tracks`)
-    .then(r => r.ok ? r.json() : { tracks: [] })
-    .then(d => {
-      const tracks = Array.isArray(d) ? d : (d.tracks || d.data || []);
-      const el = document.getElementById('trackList');
-      if (!el) return;
-      if (!tracks.length) { el.innerHTML = '<p style="color:var(--muted);font-size:.88rem">No tracks available.</p>'; return; }
-      el.innerHTML = tracks.slice(0, 30).map(t => {
-        const tid = t.id || t.track_id || '';
-        const title = t.title || t.name || tid || '—';
-        const artist = t.artist_name || t.artist || '';
-        const dur = t.duration_seconds ? `${Math.floor(t.duration_seconds/60)}:${String(t.duration_seconds%60).padStart(2,'0')}` : '';
-        return `<div class="tx-item" data-tid="${escHtml(tid)}" data-title="${escHtml(title)}" data-artist="${escHtml(artist)}" data-url="${escHtml(t.stream_url || t.audio_url || '')}">
-          <div class="tx-item__dir" style="background:#1a1040;color:#b08cf8">▶</div>
-          <div class="tx-item__info"><div class="tx-item__label">${escHtml(title)}</div><div class="tx-item__date">${escHtml(artist)}${dur ? ' · '+dur : ''}</div></div>
-          <div class="tx-item__amount" style="color:var(--muted);font-size:.75rem">+L2E</div>
-        </div>`;
-      }).join('');
-      document.getElementById('trackList').addEventListener('click', e => {
-        const row = e.target.closest('[data-tid]');
-        if (!row) return;
-        _playTrack({ id: row.dataset.tid, title: row.dataset.title,
-                     artist: row.dataset.artist, url: row.dataset.url });
-      });
-    }).catch(() => {
-      const el = document.getElementById('trackList');
-      if (el) el.innerHTML = '<p style="color:var(--muted);font-size:.88rem">Could not load tracks.</p>';
+  document.getElementById('tabLibrary').addEventListener('click',   () => switchTab('library'));
+  document.getElementById('tabPlaylists').addEventListener('click', () => switchTab('playlists'));
+
+  // Check CarPlay/car environment on open
+  const carCtx = _detectCarPlayOrAuto();
+  if (carCtx.likelyCar && _musicSession) {
+    const badge = document.getElementById('carPlayBadge');
+    if (badge) badge.style.display = '';
+  }
+
+  switchTab('library');
+}
+
+function _renderTrackRow(t) {
+  const tid    = t.id || t.track_id || '';
+  const title  = t.title || t.name || tid || '—';
+  const artist = t.artist_name || t.artist || '';
+  const dur    = t.duration_seconds
+    ? `${Math.floor(t.duration_seconds / 60)}:${String(t.duration_seconds % 60).padStart(2,'0')}`
+    : '';
+  const artAddr = t.artist_address || '';
+  return `<div class="tx-item music-track-row" style="cursor:pointer"
+      data-tid="${escHtml(tid)}" data-title="${escHtml(title)}" data-artist="${escHtml(artist)}"
+      data-artist-addr="${escHtml(artAddr)}" data-url="${escHtml(t.stream_url || t.audio_url || '')}">
+    <div class="tx-item__dir" style="background:#1a1040;color:#b08cf8;font-size:1rem">▶</div>
+    <div class="tx-item__info">
+      <div class="tx-item__label">${escHtml(title)}</div>
+      <div class="tx-item__date">${escHtml(artist)}${dur ? ' · ' + dur : ''}</div>
+    </div>
+    <div class="tx-item__amount" style="color:#7c5cbf;font-size:.72rem">+T2E</div>
+  </div>`;
+}
+
+async function _loadMusicLibrary(address) {
+  const el = document.getElementById('musicContent');
+  if (!el) return;
+  el.innerHTML = '<p style="color:var(--muted);font-size:.88rem">Loading tracks…</p>';
+  try {
+    const r = await fetch(`${API_WRITE}/api/v1/music/tracks`);
+    const d = r.ok ? await r.json() : { tracks: [] };
+    const tracks = Array.isArray(d) ? d : (d.tracks || d.data || []);
+    if (!tracks.length) { el.innerHTML = '<p style="color:var(--muted);font-size:.88rem">No tracks available.</p>'; return; }
+    el.innerHTML = tracks.slice(0, 50).map(_renderTrackRow).join('');
+    el.querySelectorAll('.music-track-row').forEach(row => {
+      row.addEventListener('click', () => _playTrack({
+        id: row.dataset.tid, title: row.dataset.title,
+        artist: row.dataset.artist, artist_address: row.dataset.artistAddr,
+        url: row.dataset.url
+      }));
     });
+  } catch {
+    el.innerHTML = '<p style="color:var(--muted);font-size:.88rem">Could not load tracks.</p>';
+  }
+}
+
+async function _loadPlaylists(address) {
+  const el = document.getElementById('musicContent');
+  if (!el) return;
+  el.innerHTML = '<p style="color:var(--muted);font-size:.88rem">Loading playlists…</p>';
+  try {
+    const r = await fetch(`${API_WRITE}/api/v1/music/playlists?address=${encodeURIComponent(address)}`);
+    const d = r.ok ? await r.json() : {};
+    const lists = Array.isArray(d) ? d : (d.playlists || []);
+    if (!lists.length) {
+      el.innerHTML = `
+        <p style="color:var(--muted);font-size:.85rem;margin-bottom:12px">No playlists yet.</p>
+        <button class="btn btn--primary" id="newPlaylistBtn">＋ New Playlist</button>`;
+      document.getElementById('newPlaylistBtn')?.addEventListener('click', () => _createPlaylist(address));
+      return;
+    }
+    el.innerHTML = `
+      <button class="btn btn--ghost" id="newPlaylistBtn" style="margin-bottom:8px">＋ New Playlist</button>
+      ${lists.map(pl => `
+        <div class="tx-item" style="cursor:pointer" data-plid="${escHtml(pl.id || pl.playlist_id || '')}">
+          <div class="tx-item__dir" style="background:#1a1040;color:#b08cf8">▶</div>
+          <div class="tx-item__info">
+            <div class="tx-item__label">${escHtml(pl.name || pl.title || 'Playlist')}</div>
+            <div class="tx-item__date">${pl.track_count || pl.tracks?.length || 0} κομμάτια</div>
+          </div>
+        </div>`).join('')}`;
+    document.getElementById('newPlaylistBtn')?.addEventListener('click', () => _createPlaylist(address));
+    el.querySelectorAll('[data-plid]').forEach(row => {
+      row.addEventListener('click', () => _openPlaylist(row.dataset.plid, address));
+    });
+  } catch {
+    el.innerHTML = '<p style="color:var(--muted);font-size:.88rem">Could not load playlists.</p>';
+  }
+}
+
+async function _createPlaylist(address) {
+  const name = prompt('Playlist name:');
+  if (!name) return;
+  try {
+    const r = await fetch(`${API_WRITE}/api/v1/music/playlists`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ address, name })
+    });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok) { _loadPlaylists(address); }
+    else { alert(d.error || 'Could not create playlist'); }
+  } catch { alert('Network error'); }
+}
+
+async function _openPlaylist(playlistId, address) {
+  const el = document.getElementById('musicContent');
+  if (!el) return;
+  el.innerHTML = '<p style="color:var(--muted)">Loading…</p>';
+  try {
+    const r = await fetch(`${API_WRITE}/api/v1/music/playlists/${encodeURIComponent(playlistId)}?address=${encodeURIComponent(address)}`);
+    const d = r.ok ? await r.json() : {};
+    const tracks = d.tracks || [];
+    el.innerHTML = `
+      <button class="btn btn--ghost" id="backToPlaylists" style="margin-bottom:8px">← Back</button>
+      <div style="font-weight:600;color:#fff;margin-bottom:8px">${escHtml(d.name || 'Playlist')}</div>
+      ${tracks.length ? tracks.map(_renderTrackRow).join('') : '<p style="color:var(--muted);font-size:.85rem">Empty playlist</p>'}`;
+    document.getElementById('backToPlaylists')?.addEventListener('click', () => _loadPlaylists(address));
+    el.querySelectorAll('.music-track-row').forEach(row => {
+      row.addEventListener('click', () => _playTrack({
+        id: row.dataset.tid, title: row.dataset.title,
+        artist: row.dataset.artist, artist_address: row.dataset.artistAddr,
+        url: row.dataset.url
+      }));
+    });
+  } catch {
+    el.innerHTML = '<p style="color:var(--muted)">Could not load playlist.</p>';
+  }
+}
+
+function _showTipModal() {
+  if (!_musicSession?.artist_address) {
+    alert('No artist address available for this track.');
+    return;
+  }
+  const artistAddr = _musicSession.artist_address;
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:#000000aa;z-index:999;display:flex;align-items:flex-end;justify-content:center;';
+  overlay.innerHTML = `
+    <div style="background:#13112a;border-radius:16px 16px 0 0;width:100%;max-width:480px;padding:20px 20px 32px">
+      <div style="font-size:1rem;font-weight:700;color:#fff;margin-bottom:16px">💰 Send Tip to Artist</div>
+      <div style="font-size:.8rem;color:var(--muted);margin-bottom:12px;word-break:break-all">${escHtml(artistAddr)}</div>
+      <label style="font-size:.82rem;color:var(--muted)">Amount (THR)</label>
+      <input type="number" id="tipAmount" class="input" placeholder="1.00" min="0.01" step="0.01" inputmode="decimal" style="margin-bottom:14px">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <button id="tipCancel" class="btn btn--ghost" style="padding:12px">Cancel</button>
+        <button id="tipSend" class="btn btn--primary" style="padding:12px">Send Tip</button>
+      </div>
+      <div id="tipErr" style="margin-top:10px;color:#ff6b6b;font-size:.82rem;display:none"></div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#tipCancel').addEventListener('click', () => overlay.remove());
+  overlay.querySelector('#tipSend').addEventListener('click', async () => {
+    const amount = parseFloat(overlay.querySelector('#tipAmount').value);
+    if (!amount || amount <= 0) { overlay.querySelector('#tipErr').textContent = 'Enter a valid amount'; overlay.querySelector('#tipErr').style.display = ''; return; }
+    const address = getActiveAddr();
+    const { privHex } = unlocked.get(address) || {};
+    if (!privHex) { overlay.querySelector('#tipErr').textContent = 'Wallet locked'; overlay.querySelector('#tipErr').style.display = ''; return; }
+    try {
+      const result = await sendToken(address, artistAddr, amount, 'THR', privHex);
+      overlay.innerHTML = `<div style="padding:24px 20px 40px;text-align:center;color:#00ff66;font-size:1rem">✅ Tip sent! TXid: ${result.tx_hash || result.txid || 'ok'}</div>`;
+      setTimeout(() => overlay.remove(), 2500);
+    } catch (e) {
+      overlay.querySelector('#tipErr').textContent = e.message || 'Send failed';
+      overlay.querySelector('#tipErr').style.display = '';
+    }
+  });
 }
 
 function escHtml(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
@@ -1131,18 +1512,44 @@ async function _playTrack(track) {
   const address = getActiveAddr();
   if (_musicSession) await _stopMusic();
 
+  // Detect car environment for GPS + T2E boost
+  const carCtx = _detectCarPlayOrAuto();
+  if (carCtx.likelyCar) _startGpsTracking();
+
+  // Register Media Session API (shows controls on CarPlay / lock screen)
+  if ('mediaSession' in navigator) {
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title:  track.title  || 'Unknown',
+      artist: track.artist || 'Thronos Music',
+      album:  'Thronos Network',
+    });
+    navigator.mediaSession.setActionHandler('stop', _stopMusic);
+    navigator.mediaSession.setActionHandler('pause', _stopMusic);
+  }
+
   // Start server session (telemetry / T2E)
   try {
+    const carPayload = carCtx.likelyCar
+      ? { car_context: true, platform: carCtx.isIOS ? 'carplay' : 'android_auto' }
+      : {};
     const r = await fetch(`${API_WRITE}/api/music/session/start`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ address, track_id: track.id,
-        artist_address: track.artist_address || '', source: 'pwa' })
+        artist_address: track.artist_address || '',
+        source: carCtx.likelyCar ? (carCtx.isIOS ? 'carplay' : 'android_auto') : 'pwa',
+        ...carPayload })
     });
     const d = await r.json().catch(() => ({}));
-    _musicSession = { session_id: d.session_id || '', track_id: track.id, started: Date.now() };
-  } catch { _musicSession = { session_id: '', track_id: track.id, started: Date.now() }; }
+    _musicSession = { session_id: d.session_id || '', track_id: track.id,
+                      artist_address: track.artist_address || '',
+                      started: Date.now(), car: carCtx.likelyCar };
+  } catch {
+    _musicSession = { session_id: '', track_id: track.id,
+                      artist_address: track.artist_address || '',
+                      started: Date.now(), car: carCtx.likelyCar };
+  }
 
-  // Audio playback (if URL available)
+  // Audio playback
   if (track.url) {
     if (_musicAudio) { _musicAudio.pause(); _musicAudio = null; }
     _musicAudio = new Audio(track.url);
@@ -1154,49 +1561,143 @@ async function _playTrack(track) {
   const np = document.getElementById('nowPlaying');
   if (np) {
     np.style.display = '';
-    document.getElementById('npTitle').textContent = track.title;
-    document.getElementById('npArtist').textContent = track.artist || '';
+    const npTitle = document.getElementById('npTitle');
+    if (npTitle) npTitle.textContent = track.title || '—';
+    const npArtist = document.getElementById('npArtist');
+    if (npArtist) {
+      npArtist.textContent = track.artist || '';
+      if (track.artist_address) {
+        npArtist.onclick = () => _showArtistProfile(track.artist_address, track.artist || '');
+        npArtist.style.textDecoration = 'underline';
+      }
+    }
+    const badge = document.getElementById('carPlayBadge');
+    if (badge) badge.style.display = carCtx.likelyCar ? '' : 'none';
   }
 
-  // Session timer
-  const tick = setInterval(() => {
+  // Session timer — also send GPS route snapshot every 60s
+  let gpsInterval = null;
+  const tick = setInterval(async () => {
     const timerEl = document.getElementById('sessionTimer');
-    if (!timerEl || !_musicSession) { clearInterval(tick); return; }
+    if (!timerEl || !_musicSession) { clearInterval(tick); if (gpsInterval) clearInterval(gpsInterval); return; }
     const sec = Math.floor((Date.now() - _musicSession.started) / 1000);
-    timerEl.textContent = `${Math.floor(sec/60)}:${String(sec%60).padStart(2,'0')}`;
+    timerEl.textContent = `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2,'0')}`;
   }, 1000);
+
+  // GPS route telemetry — batch-send every 60s if car context
+  if (carCtx.likelyCar) {
+    gpsInterval = setInterval(async () => {
+      if (!_musicSession || !_gpsPoints.length) return;
+      const routeHash = await _hashRoute(_gpsPoints);
+      fetch(`${API_WRITE}/api/music/telemetry/route`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          address, session_id: _musicSession.session_id,
+          route_hash: routeHash, point_count: _gpsPoints.length,
+          platform: carCtx.isIOS ? 'carplay' : 'android_auto'
+        })
+      }).catch(() => {});
+    }, 60000);
+    _musicSession._gpsInterval = gpsInterval;
+  }
+}
+
+async function _showArtistProfile(artistAddr, artistName) {
+  try {
+    const r = await fetch(`${API_WRITE}/api/v1/music/artist/${encodeURIComponent(artistAddr)}`);
+    const d = r.ok ? await r.json() : {};
+
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:#000000aa;z-index:999;display:flex;align-items:flex-end;justify-content:center;';
+    overlay.innerHTML = `
+      <div style="background:#13112a;border-radius:16px 16px 0 0;width:100%;max-width:480px;padding:20px 20px 32px;max-height:70vh;overflow-y:auto">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+          <div>
+            <div style="font-size:1.1rem;font-weight:700;color:#fff">${escHtml(d.name || artistName || 'Artist')}</div>
+            <div style="font-size:.75rem;color:var(--muted);font-family:monospace">${escHtml(artistAddr.slice(0,18))}…</div>
+          </div>
+          <button id="apClose" style="background:none;border:none;color:var(--muted);font-size:1.4rem;cursor:pointer">✕</button>
+        </div>
+        ${d.bio ? `<p style="font-size:.82rem;color:var(--muted);margin-bottom:14px">${escHtml(d.bio)}</p>` : ''}
+        <div style="font-size:.72rem;color:var(--accent);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Tracks</div>
+        ${(d.tracks || []).slice(0,10).map(_renderTrackRow).join('') || '<p style="color:var(--muted);font-size:.82rem">No tracks</p>'}
+        <button class="btn btn--primary mt8" id="apTip" style="width:100%;padding:12px;margin-top:14px">💰 Send Tip</button>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector('#apClose').addEventListener('click', () => overlay.remove());
+    overlay.querySelector('#apTip').addEventListener('click', () => {
+      if (!_musicSession) _musicSession = { artist_address: artistAddr };
+      else _musicSession.artist_address = artistAddr;
+      overlay.remove();
+      _showTipModal();
+    });
+    overlay.querySelectorAll('.music-track-row').forEach(row => {
+      row.addEventListener('click', () => {
+        overlay.remove();
+        _playTrack({ id: row.dataset.tid, title: row.dataset.title,
+                     artist: row.dataset.artist, artist_address: row.dataset.artistAddr,
+                     url: row.dataset.url });
+      });
+    });
+  } catch {
+    alert('Could not load artist profile');
+  }
 }
 
 async function _stopMusic() {
   if (_musicAudio) { _musicAudio.pause(); _musicAudio = null; }
+  _stopGpsTracking();
+  if (_musicSession?._gpsInterval) clearInterval(_musicSession._gpsInterval);
+
+  // Send final GPS route snapshot
+  if (_musicSession?.car && _gpsPoints.length) {
+    const address = getActiveAddr();
+    const routeHash = await _hashRoute(_gpsPoints).catch(() => '');
+    if (routeHash) {
+      fetch(`${API_WRITE}/api/music/telemetry/route`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          address, session_id: _musicSession.session_id,
+          route_hash: routeHash, point_count: _gpsPoints.length,
+          final: true
+        })
+      }).catch(() => {});
+    }
+    _gpsPoints = [];
+  }
+
   if (_musicSession?.session_id) {
     try {
       await fetch(`${API_WRITE}/api/music/session/end`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: _musicSession.session_id,
-          reason: 'stop', tip_amount: 0 })
+        body: JSON.stringify({ session_id: _musicSession.session_id, reason: 'stop', tip_amount: 0 })
       });
     } catch {}
   }
   _musicSession = null;
+
   const np = document.getElementById('nowPlaying');
   if (np) np.style.display = 'none';
-  // Reload L2E balance after session ends
-  const address = getActiveAddr();
-  if (address) {
-    fetch(`${API_WRITE}/api/v1/l2e/balance/${encodeURIComponent(address)}`)
-      .then(r => r.ok ? r.json() : null)
-      .then(d => {
-        const el = document.getElementById('l2eAmt');
-        if (!el || !d) return;
-        const bal = d.balance ?? d.l2e_balance ?? d.amount ?? 0;
-        el.textContent = `${Number(bal).toFixed(4)} L2E`;
-      }).catch(() => {});
+
+  if ('mediaSession' in navigator) {
+    navigator.mediaSession.setActionHandler('stop',  null);
+    navigator.mediaSession.setActionHandler('pause', null);
   }
 }
 
-function showSend() {
+function showSend(preselectedToken = null) {
   const address = getActiveAddr();
+
+  // Fetch token list for the selector
+  const buildTokenSel = (tokens) => {
+    const defaults = ['THR','WBTC','WETH','USDT','USDC','L2E','JAM','MAR'];
+    const syms = tokens.length
+      ? tokens.filter(t => Number(t.balance) > 0).map(t => t.symbol)
+      : defaults;
+    const unique = [...new Set([...syms, ...defaults])];
+    return unique.map(s => `<option value="${s}" ${s === (preselectedToken || 'THR') ? 'selected' : ''}>${s}</option>`).join('');
+  };
+
   render(`
     <div class="screen">
       <div class="header">
@@ -1207,11 +1708,8 @@ function showSend() {
       <div class="card mt16">
         <label style="color:var(--muted);font-size:.85rem">Token</label>
         <select id="tokenSel" class="input" style="cursor:pointer">
-          <option value="THR">THR — Thronos</option>
-          <option value="WBTC">WBTC — Wrapped Bitcoin</option>
-          <option value="WETH">WETH — Wrapped Ethereum</option>
-          <option value="USDT">USDT</option>
-          <option value="USDC">USDC</option>
+          <option value="THR" ${!preselectedToken || preselectedToken==='THR' ? 'selected' : ''}>THR — Thronos</option>
+          ${preselectedToken && preselectedToken !== 'THR' ? `<option value="${escHtml(preselectedToken)}" selected>${escHtml(preselectedToken)}</option>` : ''}
         </select>
         <label style="color:var(--muted);font-size:.85rem">Recipient address</label>
         <input type="text" id="toAddr" class="input" placeholder="THR…" autocomplete="off" autocorrect="off" spellcheck="false">
@@ -1225,6 +1723,17 @@ function showSend() {
   `);
 
   document.getElementById('backBtn').addEventListener('click', showWallet);
+
+  // Populate token selector from live balances
+  fetchBalances(address).then(data => {
+    const tokens = Array.isArray(data?.tokens) ? data.tokens.filter(t => Number(t.balance) > 0) : [];
+    const sel = document.getElementById('tokenSel');
+    if (!sel || !tokens.length) return;
+    const current = sel.value;
+    sel.innerHTML = tokens.map(t =>
+      `<option value="${escHtml(t.symbol)}" ${t.symbol === (preselectedToken || current) ? 'selected' : ''}>${escHtml(t.symbol)} — ${escHtml(t.name || t.symbol)}</option>`
+    ).join('');
+  }).catch(() => {});
 
   document.getElementById('sendBtn').addEventListener('click', async () => {
     const to = document.getElementById('toAddr').value.trim().toUpperCase();

@@ -334,9 +334,12 @@ def _import_datetime():
 # Stores pending sign requests in-memory (Redis if available, else dict).
 # ThronosBuilder POSTs requests here; PWA polls and approves with Face ID.
 import threading as _threading
+from urllib.parse import quote as _quote
 _wc_store_lock = _threading.Lock()
 _wc_store: dict = {}  # { address: [ {id, action, payload, dapp, ts} ] }
 _wc_sessions: dict = {}  # { session_id: address }
+_wc_pairing_sessions: dict = {}  # { session_id: { status, address, dapp, created_at, paired_at } }
+_wc_approval_results: dict = {}  # { request_id: { approved, signature, address, rejected, ts } }
 
 
 def _wc_store_for(address: str) -> list:
@@ -368,6 +371,14 @@ def wc_pair():
     session_id = str(_uuid.uuid4())
     with _wc_store_lock:
         _wc_sessions[session_id] = address
+        session_id_from_uri = (data.get('session_id') or '').strip()
+        if session_id_from_uri and session_id_from_uri in _wc_pairing_sessions:
+            import time as _time
+            _wc_pairing_sessions[session_id_from_uri].update({
+                'status': 'connected',
+                'address': address,
+                'paired_at': _time.time(),
+            })
     app.logger.info('[WC] Paired address=%s session=%s', address[:10], session_id[:8])
     return _jsonify(ok=True, session_id=session_id, address=address), 200
 
@@ -442,6 +453,15 @@ def wc_approve():
 
     _wc_remove_request(address, request_id)
 
+    with _wc_store_lock:
+        _wc_approval_results[request_id] = {
+            'status': 'approved',
+            'approved': True,
+            'signature': signature,
+            'address': address,
+            'ts': _time.time(),
+        }
+
     app.logger.info('[WC] Approved request_id=%s address=%s', request_id[:8], address[:10])
     return _jsonify(
         ok=True,
@@ -460,7 +480,62 @@ def wc_reject():
     request_id = (data.get('request_id') or '').strip()
     if address and request_id:
         _wc_remove_request(address, request_id)
+    import time as _time
+    if address and request_id:
+        with _wc_store_lock:
+            _wc_approval_results[request_id] = {
+                'status': 'rejected',
+                'approved': False,
+                'address': address,
+                'ts': _time.time(),
+            }
     return _jsonify(ok=True), 200
+
+
+@app.route('/api/wallet/wc/session/create', methods=['POST'])
+def wc_session_create():
+    """
+    ThronosBuilder calls this to start a pairing session.
+    Returns a thrconnect:// URI + QR-ready URL.
+    """
+    import uuid as _uuid, time as _time
+    data = _request.get_json() or {}
+    dapp = str(data.get('dapp') or 'ThronosBuilder')[:64]
+    session_id = str(_uuid.uuid4())
+    relay_base = _request.host_url.rstrip('/')
+    # thrconnect://SESSION_ID?relay=URL&dapp=NAME
+    uri = f"thrconnect://{session_id}?relay={relay_base}&dapp={dapp}"
+    with _wc_store_lock:
+        _wc_pairing_sessions[session_id] = {
+            'status': 'waiting',
+            'address': None,
+            'dapp': dapp,
+            'created_at': _time.time(),
+            'paired_at': None,
+        }
+    qr_url = f"https://api.qrserver.com/v1/create-qr-code/?data={_quote(uri)}&size=220x220&color=ffffff&bgcolor=0d0a1a&margin=8"
+    app.logger.info('[WC] Session created id=%s dapp=%s', session_id[:8], dapp)
+    return _jsonify(ok=True, session_id=session_id, uri=uri, qr_url=qr_url), 200
+
+
+@app.route('/api/wallet/wc/session/<session_id>', methods=['GET'])
+def wc_session_poll(session_id):
+    """Builder polls this to check if mobile wallet has connected."""
+    with _wc_store_lock:
+        session = dict(_wc_pairing_sessions.get(session_id) or {})
+    if not session:
+        return _jsonify(ok=False, error='session_not_found'), 404
+    return _jsonify(ok=True, **session), 200
+
+
+@app.route('/api/wallet/wc/result/<request_id>', methods=['GET'])
+def wc_get_result(request_id):
+    """Builder polls this for mobile approval/rejection of a sign request."""
+    with _wc_store_lock:
+        result = dict(_wc_approval_results.get(request_id) or {})
+    if not result:
+        return _jsonify(ok=True, status='pending'), 200
+    return _jsonify(ok=True, **result), 200
 
 
 # ── THR Wallet PWA — served from public/wallet-pwa/ ───────────────────────────

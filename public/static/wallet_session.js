@@ -14,11 +14,52 @@
   const VERIFIED_LEGACY_SOURCE_ADDRESS = 'THR79ca94a7eb70a6aa99d12d7fdb01446ef246301a';
   const VERIFIED_CANONICAL_V1_ADDRESS = 'THR683318ACF083723B3EDFE6C0A30AD62670F00353';
 
+  const SESSION_UNLOCK_KEY = 'thr_v1_session_unlock';
+  const SESSION_UNLOCK_TTL = 30 * 60 * 1000; // 30 minutes
+
+  function _saveSessionUnlock(address, privHex) {
+    try {
+      const payload = JSON.stringify({ a: address, k: privHex, ts: Date.now() });
+      sessionStorage.setItem(SESSION_UNLOCK_KEY, btoa(payload));
+    } catch (_) {}
+  }
+  function _clearSessionUnlock() {
+    try { sessionStorage.removeItem(SESSION_UNLOCK_KEY); } catch (_) {}
+  }
+  function _loadSessionUnlock() {
+    try {
+      const raw = sessionStorage.getItem(SESSION_UNLOCK_KEY);
+      if (!raw) return null;
+      const o = JSON.parse(atob(raw));
+      if (!o || !o.k || !o.a || !o.ts) { sessionStorage.removeItem(SESSION_UNLOCK_KEY); return null; }
+      if (Date.now() - o.ts > SESSION_UNLOCK_TTL) { sessionStorage.removeItem(SESSION_UNLOCK_KEY); return null; }
+      return o;
+    } catch (_) { return null; }
+  }
+
   let customUnlockHandler = null;
   let unlockedPrivateKeyHex = null;
   let unlockedForAddress = null; // Track which address the current in-memory key belongs to
   let lastSigningKeyMismatch = null; // Track mismatch details for UI recovery flow
   let lastUnusableKeyDiagnostics = null; // Track unusable/legacy format key diagnostics
+
+  // Restore signing material from sessionStorage on page load (survives navigation, clears on tab close)
+  (function _restoreSessionUnlock() {
+    try {
+      const s = _loadSessionUnlock();
+      if (!s) return;
+      // Validate the restored address matches active wallet before restoring key
+      const storedAddr = (s.a || '').trim();
+      const currentAddr = (localStorage.getItem(V1_ADDRESS_KEY) || localStorage.getItem(ADDRESS_KEY) || '').trim();
+      if (storedAddr && currentAddr && storedAddr !== currentAddr) {
+        _clearSessionUnlock();
+        return;
+      }
+      unlockedPrivateKeyHex = s.k;
+      unlockedForAddress = storedAddr || currentAddr;
+      localStorage.setItem(LOCK_KEY, '0');
+    } catch (_) {}
+  })();
 
   const SYSTEM_WALLETS = {
     'THR5DF27A86C477F381594E896F0E55357DEC5942BA': 'ai_game_wallet',
@@ -312,7 +353,7 @@
   function getPin(){ return localStorage.getItem(PIN_KEY) || ''; }
   function setPin(pin){ setItem(PIN_KEY, pin ? pin.trim() : ''); }
 
-  function lockWallet(){ unlockedPrivateKeyHex = null; unlockedForAddress = null; localStorage.setItem(LOCK_KEY, '1'); }
+  function lockWallet(){ unlockedPrivateKeyHex = null; unlockedForAddress = null; localStorage.setItem(LOCK_KEY, '1'); _clearSessionUnlock(); }
   function lock(){ return lockWallet(); }
   function setCustomUnlockHandler(fn){ customUnlockHandler = typeof fn === 'function' ? fn : null; }
 
@@ -509,6 +550,7 @@
     setBound(true);
     localStorage.setItem(LOCK_KEY, '0');
     unlockedPrivateKeyHex = priv;
+    _saveSessionUnlock(address, priv);
     return { address, publicKey: pub };
   }
 
@@ -630,6 +672,7 @@
           unlockedForAddress = activeAddr;
           setBound(true);
           localStorage.setItem(LOCK_KEY, '0');
+          _saveSessionUnlock(activeAddr, decryptedPrivKeyHex);
           return true;
         }
 
@@ -644,6 +687,7 @@
               unlockedForAddress = activeAddr;
               setBound(true);
               localStorage.setItem(LOCK_KEY, '0');
+              _saveSessionUnlock(activeAddr, decryptedPrivKeyHex);
               return true;
             }
           } catch (bindingCheckErr) {
@@ -669,12 +713,14 @@
         unlockedForAddress = activeAddr;
         setBound(true);
         localStorage.setItem(LOCK_KEY, '0');
+        _saveSessionUnlock(activeAddr, decryptedPrivKeyHex);
         return true;
       }
       catch(err) {
         // Clear any partially-cached material on error
         unlockedPrivateKeyHex = null;
         unlockedForAddress = null;
+        _clearSessionUnlock();
         if ((err.message || '').includes('wallet_signing_key_does_not_match_active_address') ||
             (err.message || '').includes('wallet_signing_key_unusable_or_legacy_format')) {
           throw err;
@@ -984,6 +1030,7 @@
       localStorage.removeItem(V1_PUBLIC_KEY);
       unlockedPrivateKeyHex = null;
       unlockedForAddress = null;
+      _clearSessionUnlock();
 
       // Clear mismatch/unusable diagnostics
       lastSigningKeyMismatch = null;

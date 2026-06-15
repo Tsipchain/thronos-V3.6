@@ -146,8 +146,11 @@ const unlocked = new Map();
 
 // ─── API ──────────────────────────────────────────────────────────────────────
 
-const API_READ  = 'https://api.thronoschain.org';  // write node knows migration mapping
-const API_WRITE = 'https://api.thronoschain.org';
+// When running inside the Capacitor native shell, use absolute URL set by index.html
+const _NATIVE_API = (window.__THRONOS_NATIVE__ && window.__THRONOS_API__) ? window.__THRONOS_API__ : null;
+const API_BASE  = _NATIVE_API || (location.hostname === 'localhost' || location.hostname.startsWith('192.') ? '' : '');
+const API_READ  = _NATIVE_API || 'https://api.thronoschain.org';
+const API_WRITE = _NATIVE_API || 'https://api.thronoschain.org';
 
 async function fetchBalances(address) {
   // Use the same endpoint as the web wallet: /api/balances?show_zero=true

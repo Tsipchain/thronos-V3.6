@@ -1000,6 +1000,90 @@ function showWalletConnect() {
 
 // ─── QR Scanner ───────────────────────────────────────────────────────────────
 
+// Generic QR scanner — calls onResult(data) with the raw scanned string
+async function _openQrScannerGeneric(onResult) {
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
+    });
+  } catch (e) {
+    alert('Camera permission denied or unavailable: ' + e.message);
+    return;
+  }
+
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:#000;z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;';
+  overlay.innerHTML = `
+    <div style="position:relative;width:min(100vw,480px);max-height:60vh;overflow:hidden;border-radius:10px">
+      <video id="qrVideo2" autoplay playsinline muted style="width:100%;display:block"></video>
+      <div style="position:absolute;inset:0;pointer-events:none">
+        <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:200px;height:200px;
+                    border:3px solid #f5c842;border-radius:12px;
+                    box-shadow:0 0 0 4000px rgba(0,0,0,.55)"></div>
+      </div>
+    </div>
+    <p style="color:#fff;margin:16px 0 8px;font-size:.9rem;text-align:center">Scan a QR code</p>
+    <button id="cancelScanBtn2" style="padding:10px 28px;background:#222;color:#fff;border:1px solid #555;border-radius:8px;font-size:.9rem;cursor:pointer">Cancel</button>
+  `;
+  document.body.appendChild(overlay);
+
+  const video = overlay.querySelector('#qrVideo2');
+  video.srcObject = stream;
+
+  const stopScan = () => { stream.getTracks().forEach(t => t.stop()); overlay.remove(); };
+  overlay.querySelector('#cancelScanBtn2').addEventListener('click', stopScan);
+
+  let _jsQR = window.jsQR || null;
+  if (!_jsQR) {
+    await new Promise((resolve) => {
+      const s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js';
+      s.onload = () => { _jsQR = window.jsQR; resolve(); };
+      s.onerror = () => resolve();
+      document.head.appendChild(s);
+    });
+  }
+
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+
+  const scanLoop = async () => {
+    if (!overlay.isConnected) return;
+    try {
+      if ('BarcodeDetector' in window) {
+        const codes = await new BarcodeDetector({ formats: ['qr_code'] }).detect(video);
+        for (const c of codes) { if (c.rawValue) { stopScan(); onResult(c.rawValue); return; } }
+      } else if (_jsQR && video.readyState >= 2) {
+        const w = video.videoWidth || 640, h = video.videoHeight || 480;
+        canvas.width = w; canvas.height = h;
+        ctx.drawImage(video, 0, 0, w, h);
+        const img = ctx.getImageData(0, 0, w, h);
+        const res = _jsQR(img.data, img.width, img.height, { inversionAttempts: 'dontInvert' });
+        if (res?.data) { stopScan(); onResult(res.data); return; }
+      }
+    } catch (_) {}
+    requestAnimationFrame(scanLoop);
+  };
+  video.addEventListener('loadedmetadata', () => requestAnimationFrame(scanLoop));
+  if (video.readyState >= 2) requestAnimationFrame(scanLoop);
+}
+
+// Scan a recipient address (THR address or anything) and deliver it to a callback
+function _openQrScannerForAddress(onAddress) {
+  _openQrScannerGeneric((data) => {
+    // If it looks like a THR address, use it directly
+    if (/^THR[A-Za-z0-9]{30,60}$/.test(data.trim())) {
+      onAddress(data.trim());
+    } else {
+      // Ask user if they want to use the scanned value anyway
+      if (confirm(`Scanned: ${data.slice(0, 60)}${data.length > 60 ? '…' : ''}\n\nUse as recipient address?`)) {
+        onAddress(data.trim());
+      }
+    }
+  });
+}
+
 async function _openQrScanner(address) {
   let stream;
   try {
@@ -1260,10 +1344,12 @@ async function _rejectWcRequest(requestId, address) {
 //        Music listening rewards = T2E (Time-to-Earn) / boost credits.
 //        GPS telemetry: activated during CarPlay/Android Auto sessions.
 
-let _musicSession = null;   // { session_id, track_id, started, artist_address }
-let _musicAudio   = null;
-let _gpsWatchId   = null;   // navigator.geolocation.watchPosition id
-let _gpsPoints    = [];     // accumulated GPS points for route hash
+let _musicSession  = null;   // { session_id, track_id, started, artist_address }
+let _musicAudio    = null;
+let _gpsWatchId    = null;   // navigator.geolocation.watchPosition id
+let _gpsPoints     = [];     // accumulated GPS points for route hash
+let _trackQueue    = [];     // ordered list of track objects for prev/next
+let _trackQueueIdx = -1;     // index of currently playing track in _trackQueue
 
 // Detect CarPlay / Android Auto (audio session on external display)
 function _detectCarPlayOrAuto() {
@@ -1319,16 +1405,23 @@ async function showMusic() {
       </div>
 
       <!-- Now Playing (hidden until track selected) -->
-      <div id="nowPlaying" style="display:none;background:#1a1040;border:1px solid #7c5cbf;border-radius:10px;padding:12px;margin:10px 0">
-        <div style="font-size:.75rem;color:var(--muted);margin-bottom:4px">Now Playing</div>
-        <div id="npTitle" style="font-weight:700;color:#fff;font-size:1rem;margin-bottom:2px"></div>
-        <div id="npArtist" style="font-size:.82rem;color:#b08cf8;cursor:pointer" id="npArtistLink"></div>
-        <div style="display:flex;gap:8px;margin-top:10px;align-items:center">
-          <button class="btn btn--ghost" id="stopBtn" style="flex:1;padding:8px">⏹ Stop</button>
-          <button class="btn btn--primary" id="tipBtn" style="padding:8px 14px;font-size:.8rem">💰 Tip</button>
-          <div id="sessionTimer" style="color:var(--accent);font-size:.8rem;min-width:42px;text-align:right"></div>
+      <div id="nowPlaying" style="display:none;background:#1a1040;border:1px solid #7c5cbf;border-radius:12px;padding:12px 14px;margin:10px 0">
+        <div style="font-size:.72rem;color:var(--muted);margin-bottom:4px">NOW PLAYING</div>
+        <div id="npTitle" style="font-weight:700;color:#fff;font-size:.95rem;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></div>
+        <div id="npArtist" style="font-size:.8rem;color:#b08cf8;margin-bottom:8px;cursor:pointer"></div>
+        <!-- Progress bar -->
+        <div style="height:3px;background:#2a2050;border-radius:2px;margin-bottom:10px;position:relative">
+          <div id="npProgress" style="height:100%;background:linear-gradient(90deg,#7c5cbf,#b08cf8);border-radius:2px;width:0%;transition:width .5s linear"></div>
         </div>
-        <div id="carPlayBadge" style="display:none;margin-top:8px;font-size:.72rem;color:#00ff66">🚗 CarPlay · GPS active · +T2E boost</div>
+        <!-- Controls row -->
+        <div style="display:flex;align-items:center;gap:8px">
+          <button class="btn btn--ghost" id="prevBtn" style="padding:7px 10px;font-size:1rem">⏮</button>
+          <button class="btn btn--ghost" id="playPauseBtn" style="padding:7px 14px;font-size:1rem;flex:1">⏸ Pause</button>
+          <button class="btn btn--ghost" id="nextBtn" style="padding:7px 10px;font-size:1rem">⏭</button>
+          <button class="btn btn--primary" id="tipBtn" style="padding:7px 12px;font-size:.8rem">💰 Tip</button>
+          <div id="sessionTimer" style="color:var(--accent);font-size:.78rem;min-width:38px;text-align:right"></div>
+        </div>
+        <div id="carPlayBadge" style="display:none;margin-top:8px;font-size:.72rem;color:#00ff66">🚗 CarPlay · GPS · +T2E</div>
       </div>
 
       <!-- Tabs: Library | Playlists -->
@@ -1349,7 +1442,6 @@ async function showMusic() {
     if (_musicAudio) _musicAudio.pause();
     showWallet();
   });
-  document.getElementById('stopBtn').addEventListener('click', _stopMusic);
   document.getElementById('tipBtn').addEventListener('click', _showTipModal);
 
   const switchTab = (tab) => {
@@ -1375,23 +1467,29 @@ async function showMusic() {
   switchTab('library');
 }
 
-function _renderTrackRow(t) {
-  const tid    = t.id || t.track_id || '';
-  const title  = t.title || t.name || tid || '—';
-  const artist = t.artist_name || t.artist || '';
-  const dur    = t.duration_seconds
+function _renderTrackRow(t, idx) {
+  const tid      = t.id || t.track_id || '';
+  const title    = t.title || t.name || tid || '—';
+  const artist   = t.artist_name || t.artist || '';
+  const dur      = t.duration_seconds
     ? `${Math.floor(t.duration_seconds / 60)}:${String(t.duration_seconds % 60).padStart(2,'0')}`
     : '';
-  const artAddr = t.artist_address || '';
-  return `<div class="tx-item music-track-row" style="cursor:pointer"
+  const artAddr  = t.artist_address || '';
+  const isActive = _musicSession?.track_id === tid;
+  const qidxAttr = idx !== undefined ? `data-qidx="${idx}"` : '';
+  const activeBorder = isActive ? 'border:1px solid #7c5cbf;' : '';
+  const activeIcon   = isActive ? '▶' : '▶';
+  const activeIconBg = isActive ? '#3a1080' : '#1a1040';
+  const activeIconColor = isActive ? '#fff' : '#b08cf8';
+  return `<div class="tx-item music-track-row" style="cursor:pointer;${activeBorder}"
       data-tid="${escHtml(tid)}" data-title="${escHtml(title)}" data-artist="${escHtml(artist)}"
-      data-artist-addr="${escHtml(artAddr)}" data-url="${escHtml(t.stream_url || t.audio_url || '')}">
-    <div class="tx-item__dir" style="background:#1a1040;color:#b08cf8;font-size:1rem">▶</div>
+      data-artist-addr="${escHtml(artAddr)}" data-url="${escHtml(t.stream_url || t.audio_url || '')}" ${qidxAttr}>
+    <div class="tx-item__dir" style="background:${activeIconBg};color:${activeIconColor};font-size:1rem">${isActive ? '🎵' : '▶'}</div>
     <div class="tx-item__info">
-      <div class="tx-item__label">${escHtml(title)}</div>
+      <div class="tx-item__label" style="${isActive ? 'color:#b08cf8;' : ''}">${escHtml(title)}</div>
       <div class="tx-item__date">${escHtml(artist)}${dur ? ' · ' + dur : ''}</div>
     </div>
-    <div class="tx-item__amount" style="color:#7c5cbf;font-size:.72rem">+T2E</div>
+    <div class="tx-item__amount" style="color:#7c5cbf;font-size:.72rem">${isActive ? '▶ Playing' : '+T2E'}</div>
   </div>`;
 }
 
@@ -1404,13 +1502,20 @@ async function _loadMusicLibrary(address) {
     const d = r.ok ? await r.json() : { tracks: [] };
     const tracks = Array.isArray(d) ? d : (d.tracks || d.data || []);
     if (!tracks.length) { el.innerHTML = '<p style="color:var(--muted);font-size:.88rem">No tracks available.</p>'; return; }
-    el.innerHTML = tracks.slice(0, 50).map(_renderTrackRow).join('');
+    const visibleTracks = tracks.slice(0, 50);
+    _trackQueue = visibleTracks;
+    _trackQueueIdx = -1;
+    el.innerHTML = visibleTracks.map((t, i) => _renderTrackRow(t, i)).join('');
     el.querySelectorAll('.music-track-row').forEach(row => {
-      row.addEventListener('click', () => _playTrack({
-        id: row.dataset.tid, title: row.dataset.title,
-        artist: row.dataset.artist, artist_address: row.dataset.artistAddr,
-        url: row.dataset.url
-      }));
+      row.addEventListener('click', () => {
+        const qidx = parseInt(row.dataset.qidx, 10);
+        if (!isNaN(qidx)) _trackQueueIdx = qidx;
+        _playTrack({
+          id: row.dataset.tid, title: row.dataset.title,
+          artist: row.dataset.artist, artist_address: row.dataset.artistAddr,
+          url: row.dataset.url
+        });
+      });
     });
   } catch {
     el.innerHTML = '<p style="color:var(--muted);font-size:.88rem">Could not load tracks.</p>';
@@ -1546,8 +1651,10 @@ async function _playTrack(track) {
       artist: track.artist || 'Thronos Music',
       album:  'Thronos Network',
     });
-    navigator.mediaSession.setActionHandler('stop', _stopMusic);
-    navigator.mediaSession.setActionHandler('pause', _stopMusic);
+    navigator.mediaSession.setActionHandler('stop',          _stopMusic);
+    navigator.mediaSession.setActionHandler('pause',         _stopMusic);
+    navigator.mediaSession.setActionHandler('previoustrack', _playPrev);
+    navigator.mediaSession.setActionHandler('nexttrack',     _playNext);
   }
 
   // Start server session (telemetry / T2E)
@@ -1577,7 +1684,13 @@ async function _playTrack(track) {
     if (_musicAudio) { _musicAudio.pause(); _musicAudio = null; }
     _musicAudio = new Audio(track.url);
     _musicAudio.play().catch(() => {});
-    _musicAudio.addEventListener('ended', _stopMusic);
+    _musicAudio.addEventListener('ended', _playNext);
+    _musicAudio.addEventListener('timeupdate', () => {
+      const progressEl = document.getElementById('npProgress');
+      if (progressEl && _musicAudio && _musicAudio.duration) {
+        progressEl.style.width = (_musicAudio.currentTime / _musicAudio.duration * 100).toFixed(1) + '%';
+      }
+    });
   }
 
   // Update UI
@@ -1596,6 +1709,39 @@ async function _playTrack(track) {
     }
     const badge = document.getElementById('carPlayBadge');
     if (badge) badge.style.display = carCtx.likelyCar ? '' : 'none';
+
+    // Wire play/pause button
+    const ppBtn = document.getElementById('playPauseBtn');
+    if (ppBtn) {
+      ppBtn.textContent = '⏸ Pause';
+      ppBtn.onclick = () => {
+        if (!_musicAudio) return;
+        if (_musicAudio.paused) {
+          _musicAudio.play().catch(() => {});
+          ppBtn.textContent = '⏸ Pause';
+        } else {
+          _musicAudio.pause();
+          ppBtn.textContent = '▶ Resume';
+        }
+      };
+    }
+
+    // Wire prev/next buttons
+    const prevBtn = document.getElementById('prevBtn');
+    if (prevBtn) prevBtn.onclick = _playPrev;
+    const nextBtn = document.getElementById('nextBtn');
+    if (nextBtn) nextBtn.onclick = _playNext;
+
+    // Refresh track list rows to show active state
+    document.querySelectorAll('.music-track-row').forEach(row => {
+      const isActive = row.dataset.tid === (track.id || '');
+      row.querySelector('.tx-item__dir').textContent = isActive ? '🎵' : '▶';
+      row.querySelector('.tx-item__dir').style.background = isActive ? '#3a1080' : '#1a1040';
+      row.querySelector('.tx-item__dir').style.color      = isActive ? '#fff'    : '#b08cf8';
+      row.querySelector('.tx-item__label').style.color    = isActive ? '#b08cf8' : '';
+      row.querySelector('.tx-item__amount').textContent   = isActive ? '▶ Playing' : '+T2E';
+      row.style.border = isActive ? '1px solid #7c5cbf' : '';
+    });
   }
 
   // Session timer — also send GPS route snapshot every 60s
@@ -1623,6 +1769,17 @@ async function _playTrack(track) {
     }, 60000);
     _musicSession._gpsInterval = gpsInterval;
   }
+}
+
+function _playPrev() {
+  if (!_trackQueue.length) return;
+  _trackQueueIdx = (_trackQueueIdx - 1 + _trackQueue.length) % _trackQueue.length;
+  _playTrack(_trackQueue[_trackQueueIdx]);
+}
+function _playNext() {
+  if (!_trackQueue.length) return;
+  _trackQueueIdx = (_trackQueueIdx + 1) % _trackQueue.length;
+  _playTrack(_trackQueue[_trackQueueIdx]);
 }
 
 async function _showArtistProfile(artistAddr, artistName) {
@@ -1703,8 +1860,10 @@ async function _stopMusic() {
   if (np) np.style.display = 'none';
 
   if ('mediaSession' in navigator) {
-    navigator.mediaSession.setActionHandler('stop',  null);
-    navigator.mediaSession.setActionHandler('pause', null);
+    navigator.mediaSession.setActionHandler('stop',          null);
+    navigator.mediaSession.setActionHandler('pause',         null);
+    navigator.mediaSession.setActionHandler('previoustrack', null);
+    navigator.mediaSession.setActionHandler('nexttrack',     null);
   }
 }
 
@@ -1735,7 +1894,10 @@ function showSend(preselectedToken = null) {
           ${preselectedToken && preselectedToken !== 'THR' ? `<option value="${escHtml(preselectedToken)}" selected>${escHtml(preselectedToken)}</option>` : ''}
         </select>
         <label style="color:var(--muted);font-size:.85rem">Recipient address</label>
-        <input type="text" id="toAddr" class="input" placeholder="THR…" autocomplete="off" autocorrect="off" spellcheck="false">
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:4px">
+          <input type="text" id="toAddr" class="input" placeholder="THR…" autocomplete="off" autocorrect="off" spellcheck="false" style="flex:1;margin-bottom:0">
+          <button id="scanAddrBtn" class="btn btn--ghost" style="padding:10px 12px;font-size:1.1rem;white-space:nowrap" title="Scan QR code">📷</button>
+        </div>
         <label style="color:var(--muted);font-size:.85rem">Amount</label>
         <input type="number" id="amount" class="input" placeholder="0.00" min="0.000001" step="any" inputmode="decimal">
         <button class="btn btn--primary mt8" id="sendBtn">Send</button>
@@ -1746,6 +1908,14 @@ function showSend(preselectedToken = null) {
   `);
 
   document.getElementById('backBtn').addEventListener('click', showWallet);
+
+  // QR scan button for recipient address
+  document.getElementById('scanAddrBtn').addEventListener('click', () => {
+    _openQrScannerForAddress((scannedAddr) => {
+      const el = document.getElementById('toAddr');
+      if (el) el.value = scannedAddr;
+    });
+  });
 
   // Populate token selector from live balances
   fetchBalances(address).then(data => {

@@ -257,15 +257,23 @@ export default function SendScreen() {
 
           {/* Recipient */}
           <Text style={styles.label}>Recipient Address</Text>
-          <TextInput
-            style={styles.input}
-            placeholder={NETWORK_PLACEHOLDERS[selectedNetwork]}
-            placeholderTextColor={COLORS.textMuted}
-            value={recipient}
-            onChangeText={setRecipient}
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
+          <View style={styles.recipientRow}>
+            <TextInput
+              style={[styles.input, { flex: 1 }]}
+              placeholder={NETWORK_PLACEHOLDERS[selectedNetwork]}
+              placeholderTextColor={COLORS.textMuted}
+              value={recipient}
+              onChangeText={setRecipient}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <TouchableOpacity
+              style={styles.scanAddrBtn}
+              onPress={() => navigation.navigate('Scan')}
+            >
+              <Ionicons name="qr-code-outline" size={22} color={COLORS.gold} />
+            </TouchableOpacity>
+          </View>
 
           {/* Amount */}
           <Text style={styles.label}>Amount</Text>
@@ -473,6 +481,12 @@ const styles = StyleSheet.create({
   input: {
     backgroundColor: COLORS.surface, borderRadius: BORDER_RADIUS.lg, padding: SPACING.md,
     fontSize: FONT_SIZES.md, color: COLORS.text, borderWidth: 1, borderColor: COLORS.border,
+  },
+  recipientRow: { flexDirection: 'row', gap: SPACING.sm, alignItems: 'center', marginBottom: SPACING.md },
+  scanAddrBtn: {
+    width: 44, height: 44, borderRadius: BORDER_RADIUS.md,
+    backgroundColor: COLORS.gold + '15', borderWidth: 1, borderColor: COLORS.gold + '40',
+    justifyContent: 'center', alignItems: 'center',
   },
   amountRow: { flexDirection: 'row', gap: SPACING.sm, alignItems: 'center' },
   maxBtn: {

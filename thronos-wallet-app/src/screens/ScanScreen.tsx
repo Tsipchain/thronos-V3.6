@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, TextInput, Alert,
-  ActivityIndicator, Linking, Vibration,
+  View, Text, StyleSheet, TouchableOpacity, Alert,
+  ActivityIndicator, Vibration,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
@@ -50,8 +50,6 @@ export default function ScanScreen() {
   const [permission, requestPermission] = useCameraPermissions();
   const [scanned, setScanned] = useState(false);
   const [pairing, setPairing] = useState(false);
-  const [manualInput, setManualInput] = useState('');
-  const [showManual, setShowManual] = useState(false);
   const processingRef = useRef(false);
 
   // Reset scan lock when screen gains focus (so user can scan again after going back)
@@ -132,12 +130,6 @@ export default function ScanScreen() {
     }
   };
 
-  const handleManualSubmit = () => {
-    const val = manualInput.trim();
-    if (!val) return;
-    handleScannedData(val);
-  };
-
   // ── Permission not yet determined ──
   if (!permission) {
     return (
@@ -165,26 +157,6 @@ export default function ScanScreen() {
           <TouchableOpacity style={styles.primaryBtn} onPress={requestPermission}>
             <Text style={styles.primaryBtnText}>Grant Camera Access</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.secondaryBtn} onPress={() => setShowManual(true)}>
-            <Text style={styles.secondaryBtnText}>Paste URI manually</Text>
-          </TouchableOpacity>
-          {showManual && (
-            <View style={styles.manualBox}>
-              <TextInput
-                style={styles.manualInput}
-                value={manualInput}
-                onChangeText={setManualInput}
-                placeholder="thrconnect://… or THR address"
-                placeholderTextColor={COLORS.textMuted}
-                autoCapitalize="none"
-                autoCorrect={false}
-                multiline
-              />
-              <TouchableOpacity style={styles.primaryBtn} onPress={handleManualSubmit}>
-                <Text style={styles.primaryBtnText}>Connect</Text>
-              </TouchableOpacity>
-            </View>
-          )}
         </View>
       </SafeAreaView>
     );
@@ -229,28 +201,7 @@ export default function ScanScreen() {
           <TouchableOpacity style={styles.closeBtn} onPress={() => navigation.goBack()}>
             <Ionicons name="close" size={24} color="#fff" />
           </TouchableOpacity>
-          <TouchableOpacity style={styles.pasteBtn} onPress={() => setShowManual(v => !v)}>
-            <Ionicons name="clipboard-outline" size={18} color="#fff" />
-            <Text style={styles.pasteBtnText}>Paste URI</Text>
-          </TouchableOpacity>
         </View>
-        {showManual && (
-          <View style={styles.manualOverlay}>
-            <TextInput
-              style={styles.manualInput}
-              value={manualInput}
-              onChangeText={setManualInput}
-              placeholder="thrconnect://… or THR address"
-              placeholderTextColor={COLORS.textMuted}
-              autoCapitalize="none"
-              autoCorrect={false}
-              autoFocus
-            />
-            <TouchableOpacity style={styles.primaryBtn} onPress={handleManualSubmit}>
-              <Text style={styles.primaryBtnText}>Connect</Text>
-            </TouchableOpacity>
-          </View>
-        )}
       </SafeAreaView>
 
       {/* Pairing overlay */}
@@ -276,7 +227,6 @@ const styles = StyleSheet.create({
 
   header: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: SPACING.lg,
     paddingVertical: SPACING.md,
@@ -292,17 +242,6 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     padding: 6,
   },
-  pasteBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: 'rgba(0,0,0,0.55)',
-    borderRadius: 20,
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-  },
-  pasteBtnText: { color: '#fff', fontSize: FONT_SIZES.sm, fontWeight: '600' },
-
   overlay: { ...StyleSheet.absoluteFillObject, flexDirection: 'column' },
   overlaySegment: { backgroundColor: 'rgba(0,0,0,0.6)' },
   overlayMiddleRow: { flexDirection: 'row', height: SCAN_WINDOW },
@@ -335,37 +274,6 @@ const styles = StyleSheet.create({
     width: '100%',
   },
   primaryBtnText: { color: '#000', fontWeight: '700', fontSize: FONT_SIZES.md },
-  secondaryBtn: {
-    paddingHorizontal: SPACING.xl,
-    paddingVertical: SPACING.md,
-    borderRadius: BORDER_RADIUS.lg,
-    borderWidth: 1,
-    borderColor: COLORS.textMuted,
-    alignItems: 'center',
-    width: '100%',
-  },
-  secondaryBtnText: { color: COLORS.textMuted, fontSize: FONT_SIZES.md },
-
-  manualBox: { width: '100%', gap: SPACING.md },
-  manualOverlay: {
-    marginHorizontal: SPACING.lg,
-    marginTop: SPACING.sm,
-    backgroundColor: COLORS.background,
-    borderRadius: BORDER_RADIUS.lg,
-    padding: SPACING.md,
-    gap: SPACING.md,
-  },
-  manualInput: {
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    borderRadius: BORDER_RADIUS.md,
-    paddingHorizontal: SPACING.md,
-    paddingVertical: SPACING.sm,
-    color: COLORS.text,
-    fontSize: FONT_SIZES.sm,
-    fontFamily: 'monospace',
-    minHeight: 44,
-  },
-
   pairingOverlay: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(0,0,0,0.75)',

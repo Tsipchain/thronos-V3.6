@@ -146,27 +146,56 @@ const unlocked = new Map();
 
 // ─── API ──────────────────────────────────────────────────────────────────────
 
-const API_READ  = 'https://node-2.up.railway.app';
+const API_READ  = 'https://api.thronoschain.org';  // write node knows migration mapping
 const API_WRITE = 'https://api.thronoschain.org';
 
 async function fetchBalances(address) {
+  // Try main node first (migration-aware). Fall back to reading legacy_address from kit.
   try {
-    const r = await fetch(`${API_READ}/balances?address=${encodeURIComponent(address)}`);
-    if (!r.ok) return null;
-    return await r.json();
-  } catch { return null; }
+    const r = await fetch(`${API_WRITE}/balances?address=${encodeURIComponent(address)}`);
+    if (r.ok) {
+      const d = await r.json();
+      const thr = d.thr_balance ?? d.THR ?? d.balance ?? d.thr ?? 0;
+      if (Number(thr) > 0 || d.balances) return d;
+    }
+  } catch {}
+  // If address has no balance, try legacy_address stored in Recovery Kit
+  try {
+    const acc = getAccount(address);
+    const kitRaw = acc?.kit;
+    const kit = kitRaw ? (typeof kitRaw === 'string' ? JSON.parse(kitRaw) : kitRaw) : null;
+    const legacy = kit?.legacy_address;
+    if (legacy && legacy !== address) {
+      const r2 = await fetch(`${API_WRITE}/balances?address=${encodeURIComponent(legacy)}`);
+      if (r2.ok) return await r2.json();
+    }
+  } catch {}
+  return null;
 }
 
 async function fetchHistory(address) {
   try {
-    const r = await fetch(`${API_READ}/wallet_data/${encodeURIComponent(address)}`);
+    const r = await fetch(`${API_WRITE}/wallet_data/${encodeURIComponent(address)}`);
     if (!r.ok) return [];
     const d = await r.json();
     return Array.isArray(d.transactions) ? d.transactions : [];
   } catch { return []; }
 }
 
+// V1-compatible send: tries wallet_v1 signed transfer, falls back to legacy send_seed
 async function sendToken(from, to, amount, token, privHex) {
+  // Try V1 signed transfer endpoint first
+  try {
+    const r = await fetch(`${API_WRITE}/api/wallet/v1/transfer`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from, to: to.trim(), amount: String(amount),
+        token: (token || 'THR').toUpperCase(), private_key_hex: privHex })
+    });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok && !d.error) return d;
+  } catch {}
+  // Fallback: legacy endpoint (works for old HMAC addresses using privHex as send_seed proxy)
   const r = await fetch(`${API_WRITE}/wallet/send`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -683,6 +712,9 @@ async function showWallet() {
         <button class="action-btn" id="connectBtn">
           <span class="action-btn__icon">⬡</span>Connect
         </button>
+        <button class="action-btn" id="musicBtn">
+          <span class="action-btn__icon">♪</span>Music
+        </button>
       </div>
 
       <div class="tx-feed">
@@ -710,18 +742,23 @@ async function showWallet() {
   document.getElementById('receiveBtn').addEventListener('click', showReceive);
   document.getElementById('tokensBtn').addEventListener('click', showTokens);
   document.getElementById('connectBtn').addEventListener('click', showWalletConnect);
+  document.getElementById('musicBtn').addEventListener('click', showMusic);
 
-  // Load balances
+  // Load balances (migration-aware: also checks legacy_address if new addr has 0)
   fetchBalances(address).then(data => {
     const el = document.getElementById('balancesArea');
     if (!el) return;
-    if (!data) {
-      el.innerHTML = '<div class="balance-amount">— THR</div>';
-      return;
-    }
-    const thr = data.thr_balance ?? data.THR ?? data.balance;
-    const primary = thr !== undefined ? `${Number(thr).toLocaleString()} THR` : '— THR';
-    el.innerHTML = `<div class="balance-amount">${primary}</div>`;
+    if (!data) { el.innerHTML = '<div class="balance-amount">— THR</div>'; return; }
+    const thr = data.thr_balance ?? data.THR ?? data.balance ?? data.thr ?? 0;
+    const wbtc = data.WBTC ?? data.wbtc ?? (data.balances?.WBTC) ?? 0;
+    const l2e = data.L2E ?? data.l2e ?? (data.balances?.L2E) ?? 0;
+    const primary = `${Number(thr).toLocaleString()} THR`;
+    const extras = [
+      wbtc > 0 ? `${Number(wbtc).toFixed(6)} WBTC` : '',
+      l2e > 0 ? `${Number(l2e).toFixed(2)} L2E` : '',
+    ].filter(Boolean).join(' · ');
+    el.innerHTML = `<div class="balance-amount">${primary}</div>` +
+      (extras ? `<div style="color:var(--muted);font-size:.8rem;margin-top:4px">${extras}</div>` : '');
   });
 
   // Load history
@@ -960,6 +997,157 @@ async function _rejectWcRequest(requestId, address) {
     body: JSON.stringify({ request_id: requestId, address })
   }).catch(() => {});
   _checkWcRequests(address, sessionStorage.getItem('thr_wc_session'));
+}
+
+// ─── Music / T2E screen ───────────────────────────────────────────────────────
+// Music telemetry: start session when track plays, end when stops.
+// L2E (Learn-to-Earn): earned from music listening time, shown in Tokens.
+// T2E (Time-to-Earn): music session tracked server-side; minted by admin.
+
+let _musicSession = null;   // { session_id, track_id, audio }
+let _musicAudio   = null;
+
+async function showMusic() {
+  const address = getActiveAddr();
+  render(`
+    <div class="screen">
+      <div class="header">
+        <button class="btn--icon" id="backBtn">←</button>
+        <span class="header__title">♪ Music · T2E</span>
+      </div>
+      <div id="musicL2eBar" style="background:#0d0a1a;border:1px solid var(--accent);border-radius:8px;padding:8px 12px;margin:12px 0;font-size:.82rem;color:var(--accent)">
+        <b>L2E Balance:</b> <span id="l2eAmt">…</span>
+      </div>
+      <div id="nowPlaying" style="display:none;background:#1a1040;border:1px solid #7c5cbf;border-radius:8px;padding:10px 12px;margin-bottom:10px">
+        <div style="font-size:.8rem;color:var(--muted)">Now Playing</div>
+        <div id="npTitle" style="font-weight:bold;color:#fff;margin:4px 0"></div>
+        <div id="npArtist" style="font-size:.8rem;color:var(--muted)"></div>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button class="btn btn--ghost" id="stopBtn" style="flex:1;padding:6px">⏹ Stop</button>
+          <div id="sessionTimer" style="color:var(--accent);font-size:.8rem;line-height:32px;min-width:50px;text-align:right"></div>
+        </div>
+      </div>
+      <div id="trackList" style="display:flex;flex-direction:column;gap:8px">
+        <p style="color:var(--muted);font-size:.88rem">Loading tracks…</p>
+      </div>
+    </div>
+  `);
+
+  document.getElementById('backBtn').addEventListener('click', () => {
+    if (_musicAudio) { _musicAudio.pause(); }
+    showWallet();
+  });
+  document.getElementById('stopBtn')?.addEventListener('click', _stopMusic);
+
+  // Load L2E balance
+  fetch(`${API_WRITE}/api/v1/l2e/balance/${encodeURIComponent(address)}`)
+    .then(r => r.ok ? r.json() : null)
+    .then(d => {
+      const el = document.getElementById('l2eAmt');
+      if (!el) return;
+      const bal = d?.balance ?? d?.l2e_balance ?? d?.amount ?? 0;
+      el.textContent = `${Number(bal).toFixed(4)} L2E`;
+    }).catch(() => {});
+
+  // Load tracks
+  fetch(`${API_WRITE}/api/v1/music/tracks`)
+    .then(r => r.ok ? r.json() : { tracks: [] })
+    .then(d => {
+      const tracks = Array.isArray(d) ? d : (d.tracks || d.data || []);
+      const el = document.getElementById('trackList');
+      if (!el) return;
+      if (!tracks.length) { el.innerHTML = '<p style="color:var(--muted);font-size:.88rem">No tracks available.</p>'; return; }
+      el.innerHTML = tracks.slice(0, 30).map(t => {
+        const tid = t.id || t.track_id || '';
+        const title = t.title || t.name || tid || '—';
+        const artist = t.artist_name || t.artist || '';
+        const dur = t.duration_seconds ? `${Math.floor(t.duration_seconds/60)}:${String(t.duration_seconds%60).padStart(2,'0')}` : '';
+        return `<div class="tx-item" data-tid="${escHtml(tid)}" data-title="${escHtml(title)}" data-artist="${escHtml(artist)}" data-url="${escHtml(t.stream_url || t.audio_url || '')}">
+          <div class="tx-item__dir" style="background:#1a1040;color:#b08cf8">▶</div>
+          <div class="tx-item__info"><div class="tx-item__label">${escHtml(title)}</div><div class="tx-item__date">${escHtml(artist)}${dur ? ' · '+dur : ''}</div></div>
+          <div class="tx-item__amount" style="color:var(--muted);font-size:.75rem">+L2E</div>
+        </div>`;
+      }).join('');
+      document.getElementById('trackList').addEventListener('click', e => {
+        const row = e.target.closest('[data-tid]');
+        if (!row) return;
+        _playTrack({ id: row.dataset.tid, title: row.dataset.title,
+                     artist: row.dataset.artist, url: row.dataset.url });
+      });
+    }).catch(() => {
+      const el = document.getElementById('trackList');
+      if (el) el.innerHTML = '<p style="color:var(--muted);font-size:.88rem">Could not load tracks.</p>';
+    });
+}
+
+function escHtml(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+async function _playTrack(track) {
+  const address = getActiveAddr();
+  if (_musicSession) await _stopMusic();
+
+  // Start server session (telemetry / T2E)
+  try {
+    const r = await fetch(`${API_WRITE}/api/music/session/start`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ address, track_id: track.id,
+        artist_address: track.artist_address || '', source: 'pwa' })
+    });
+    const d = await r.json().catch(() => ({}));
+    _musicSession = { session_id: d.session_id || '', track_id: track.id, started: Date.now() };
+  } catch { _musicSession = { session_id: '', track_id: track.id, started: Date.now() }; }
+
+  // Audio playback (if URL available)
+  if (track.url) {
+    if (_musicAudio) { _musicAudio.pause(); _musicAudio = null; }
+    _musicAudio = new Audio(track.url);
+    _musicAudio.play().catch(() => {});
+    _musicAudio.addEventListener('ended', _stopMusic);
+  }
+
+  // Update UI
+  const np = document.getElementById('nowPlaying');
+  if (np) {
+    np.style.display = '';
+    document.getElementById('npTitle').textContent = track.title;
+    document.getElementById('npArtist').textContent = track.artist || '';
+  }
+
+  // Session timer
+  const tick = setInterval(() => {
+    const timerEl = document.getElementById('sessionTimer');
+    if (!timerEl || !_musicSession) { clearInterval(tick); return; }
+    const sec = Math.floor((Date.now() - _musicSession.started) / 1000);
+    timerEl.textContent = `${Math.floor(sec/60)}:${String(sec%60).padStart(2,'0')}`;
+  }, 1000);
+}
+
+async function _stopMusic() {
+  if (_musicAudio) { _musicAudio.pause(); _musicAudio = null; }
+  if (_musicSession?.session_id) {
+    try {
+      await fetch(`${API_WRITE}/api/music/session/end`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: _musicSession.session_id,
+          reason: 'stop', tip_amount: 0 })
+      });
+    } catch {}
+  }
+  _musicSession = null;
+  const np = document.getElementById('nowPlaying');
+  if (np) np.style.display = 'none';
+  // Reload L2E balance after session ends
+  const address = getActiveAddr();
+  if (address) {
+    fetch(`${API_WRITE}/api/v1/l2e/balance/${encodeURIComponent(address)}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        const el = document.getElementById('l2eAmt');
+        if (!el || !d) return;
+        const bal = d.balance ?? d.l2e_balance ?? d.amount ?? 0;
+        el.textContent = `${Number(bal).toFixed(4)} L2E`;
+      }).catch(() => {});
+  }
 }
 
 function showSend() {

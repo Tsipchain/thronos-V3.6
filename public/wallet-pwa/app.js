@@ -927,9 +927,8 @@ let _wcPollTimer = null;
 
 function showWalletConnect() {
   const address = getActiveAddr();
-  const hasBarcodeDetector = 'BarcodeDetector' in window;
-  const hasCamera = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
-  const canScan = hasBarcodeDetector || hasCamera;
+  // jsQR handles all browsers including iOS Safari — camera access is all we need
+  const canScan = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
 
   render(`
     <div class="screen">
@@ -1038,41 +1037,58 @@ async function _openQrScanner(address) {
 
   overlay.querySelector('#cancelScanBtn').addEventListener('click', stopScan);
 
+  // Load jsQR dynamically as a universal fallback (works on iOS Safari, all browsers)
+  let _jsQR = window.jsQR || null;
+  if (!_jsQR) {
+    await new Promise((resolve) => {
+      const s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js';
+      s.onload = () => { _jsQR = window.jsQR; resolve(); };
+      s.onerror = () => resolve(); // proceed even if CDN fails
+      document.head.appendChild(s);
+    });
+  }
+
+  const _scanCanvas = document.createElement('canvas');
+  const _scanCtx = _scanCanvas.getContext('2d');
+
   const _scanLoop = async () => {
     if (!overlay.isConnected) return;
     try {
       if ('BarcodeDetector' in window) {
+        // Native API (Chrome Android, Chrome desktop)
         const detector = new BarcodeDetector({ formats: ['qr_code'] });
         const codes = await detector.detect(video);
         for (const code of codes) {
-          if (code.rawValue) {
-            stopScan();
-            await _handleWcUri(code.rawValue, address);
-            return;
-          }
+          if (code.rawValue) { stopScan(); await _handleWcUri(code.rawValue, address); return; }
         }
-      } else {
-        // Canvas-based fallback (without BarcodeDetector)
-        const canvas = document.createElement('canvas');
-        canvas.width = video.videoWidth || 640;
-        canvas.height = video.videoHeight || 480;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(video, 0, 0);
-        // Without jsQR we can only prompt the user to paste the URI
-        // Show the video but tell user to use paste mode
-        const statusEl = document.getElementById('wcStatus');
-        if (statusEl && !statusEl._fbShown) {
-          statusEl._fbShown = true;
+      } else if (_jsQR && video.readyState >= 2) {
+        // jsQR canvas decode — works on iOS Safari, Firefox, all browsers
+        const w = video.videoWidth || 640;
+        const h = video.videoHeight || 480;
+        _scanCanvas.width = w;
+        _scanCanvas.height = h;
+        _scanCtx.drawImage(video, 0, 0, w, h);
+        const imgData = _scanCtx.getImageData(0, 0, w, h);
+        const result = _jsQR(imgData.data, imgData.width, imgData.height, { inversionAttempts: 'dontInvert' });
+        if (result && result.data) {
           stopScan();
-          alert('QR scanning requires Chrome/Safari 16+. Please copy the URI from ThronosBuilder and paste it.');
+          await _handleWcUri(result.data, address);
           return;
         }
+      } else if (!_jsQR) {
+        // jsQR failed to load — fall back to paste UI
+        stopScan();
+        alert('Camera QR scan unavailable. Please copy the URI from ThronosBuilder and paste it below.');
+        return;
       }
-    } catch {}
+    } catch (_) {}
     requestAnimationFrame(_scanLoop);
   };
 
   video.addEventListener('loadedmetadata', () => requestAnimationFrame(_scanLoop));
+  // Start scan loop immediately if video is already ready
+  if (video.readyState >= 2) requestAnimationFrame(_scanLoop);
 }
 
 // ─── URI handler ──────────────────────────────────────────────────────────────

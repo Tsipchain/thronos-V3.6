@@ -5,7 +5,8 @@ import {
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
+import type { RootStackParamList } from '../../App';
 import { Ionicons } from '@expo/vector-icons';
 import { Audio } from 'expo-av';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS } from '../constants/theme';
@@ -61,9 +62,10 @@ const NETWORK_PLACEHOLDERS: Record<Network, string> = {
 
 export default function SendScreen() {
   const navigation = useNavigation();
+  const route = useRoute<RouteProp<RootStackParamList, 'Send'>>();
   const { wallet, tokens } = useStore();
   const [selectedNetwork, setSelectedNetwork] = useState<Network>('thronos');
-  const [recipient, setRecipient] = useState('');
+  const [recipient, setRecipient] = useState((route.params as any)?.toAddress ?? '');
   const [amount, setAmount] = useState('');
   const [selectedToken, setSelectedToken] = useState('THR');
   const [speed, setSpeed] = useState<Speed>('fast');

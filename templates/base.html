@@ -6284,8 +6284,7 @@ function sanitizeWalletV1ProductionState(status) {
         return {keysRemoved: 0, encryptedKeyPreserved: true};
     }
 
-    // Production mode: sanitize stale legacy state
-    console.log('[WalletV1] Production mode - sanitizing stale legacy state...');
+    // Production mode: sanitize stale legacy state (logged only if something is removed)
 
     const staleKeys = [
         'wallet_v1_restore_mode',          // Stale restore mode flag
@@ -6332,12 +6331,14 @@ function sanitizeWalletV1ProductionState(status) {
         sanitizedCount += 2;
     }
 
-    console.log('[WalletV1] Sanitized stale legacy state', {
-        keysRemoved: sanitizedCount,
-        encryptedKeyPreserved: !!encryptedKey,
-        canonicalAddrPreserved: !!canonicalAddr,
-        hasKeyBinding: status?.has_key_binding
-    });
+    if (sanitizedCount > 0) {
+        console.log('[WalletV1] Sanitized stale legacy state', {
+            keysRemoved: sanitizedCount,
+            encryptedKeyPreserved: !!encryptedKey,
+            canonicalAddrPreserved: !!canonicalAddr,
+            hasKeyBinding: status?.has_key_binding
+        });
+    }
 
     return {
         keysRemoved: sanitizedCount,
@@ -6370,7 +6371,10 @@ async function fetchWalletStatusWithAddress() {
     }
 }
 
+let _walletV1InitDone = false;
 async function initializeWalletV1LegacyRepairUI() {
+    if (_walletV1InitDone) return;  // run once per page load
+    _walletV1InitDone = true;
     // Fetch wallet status and apply production mode constraints
     const status = await fetchWalletStatusWithAddress();
 

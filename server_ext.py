@@ -285,6 +285,46 @@ def pledge_wallet_migrate():
         return _jsonify(ok=False, error='internal_error', detail=str(exc)), 500
 
 
+@app.route('/api/wallet/v1/migration-status', methods=['GET'])
+def wallet_migration_status():
+    """
+    Check migration status for an address (diagnostic).
+    Works with both old and new address.
+    GET /api/wallet/v1/migration-status?address=THR...
+    Returns: { ok, old_address, new_address, balances, source }
+    """
+    address = (_request.args.get('address') or '').strip().upper()
+    if not address or not address.startswith('THR'):
+        return _jsonify(ok=False, error='address_required'), 400
+    try:
+        from wallet_v1_migration import resolve_migration
+        result = resolve_migration(address)
+        # Also fetch current balances for both addresses
+        load_json = getattr(_srv, 'load_json', None)
+        ledger_path = getattr(_srv, 'LEDGER_FILE', None) or getattr(_srv, 'LEDGER_JSON', None)
+        old_bal = new_bal = None
+        if load_json and ledger_path:
+            try:
+                ledger = load_json(ledger_path, {})
+                old_addr = (result or {}).get('legacy_address', address)
+                new_addr = (result or {}).get('canonical_v1_address', address)
+                old_bal = ledger.get(old_addr, {})
+                new_bal = ledger.get(new_addr, {})
+            except Exception:
+                pass
+        return _jsonify(
+            ok=True,
+            address_queried=address,
+            migration=result,
+            old_address_balance=old_bal,
+            new_address_balance=new_bal,
+        ), 200
+    except ImportError:
+        return _jsonify(ok=False, error='migration_module_unavailable'), 503
+    except Exception as exc:
+        return _jsonify(ok=False, error=str(exc)), 500
+
+
 def _import_datetime():
     from datetime import datetime
     return datetime

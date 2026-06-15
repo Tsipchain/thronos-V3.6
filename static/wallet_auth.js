@@ -113,6 +113,47 @@
     let cachedRuntimeSigningAddress = '';
     let lastMismatchError = null;
 
+    const _SESSION_SECRET_KEY = 'thr_auth_secret';
+    const _SESSION_ADDRESS_KEY = 'thr_auth_secret_address';
+    const _SESSION_TS_KEY = 'thr_auth_ts';
+    const _SESSION_TTL = 30 * 60 * 1000;
+
+    function _saveAuthSession(address, secret) {
+        try {
+            sessionStorage.setItem(_SESSION_SECRET_KEY, btoa(secret || ''));
+            sessionStorage.setItem(_SESSION_ADDRESS_KEY, address || '');
+            sessionStorage.setItem(_SESSION_TS_KEY, String(Date.now()));
+        } catch (_) {}
+    }
+    function _loadAuthSession() {
+        try {
+            const ts = parseInt(sessionStorage.getItem(_SESSION_TS_KEY) || '0', 10);
+            if (!ts || Date.now() - ts > _SESSION_TTL) { _clearAuthSession(); return null; }
+            const secret = atob(sessionStorage.getItem(_SESSION_SECRET_KEY) || '');
+            const address = sessionStorage.getItem(_SESSION_ADDRESS_KEY) || '';
+            if (!secret || !address) return null;
+            return { secret, address };
+        } catch (_) { return null; }
+    }
+    function _clearAuthSession() {
+        try {
+            sessionStorage.removeItem(_SESSION_SECRET_KEY);
+            sessionStorage.removeItem(_SESSION_ADDRESS_KEY);
+            sessionStorage.removeItem(_SESSION_TS_KEY);
+        } catch (_) {}
+    }
+    function _refreshAuthSessionTimestamp() {
+        try { sessionStorage.setItem(_SESSION_TS_KEY, String(Date.now())); } catch (_) {}
+    }
+
+    // Restore session on page load (for legacy HMAC wallets)
+    (function _restoreAuthSession() {
+        const s = _loadAuthSession();
+        if (!s) return;
+        cachedAuthSecret = s.secret;
+        cachedAuthAddress = s.address;
+    })();
+
     const WalletAuth = {
         version: VERSION,
         /**
@@ -141,15 +182,27 @@
                 return buildAuthResult(address, '', credentialLookupAddress);
             }
 
-            // Do not persist plaintext signing material in localStorage/sessionStorage.
+            // Signing material is persisted in sessionStorage for the tab lifetime (cleared on tab close).
             if (cachedAuthSecret && (!cachedAuthAddress || cachedAuthAddress === address || cachedAuthAddress === credentialLookupAddress)) {
+                _refreshAuthSessionTimestamp();
                 return buildAuthResult(address, cachedAuthSecret, credentialLookupAddress);
+            }
+
+            // Restore from sessionStorage if page was navigated (cachedAuthSecret lost in memory).
+            const restoredSession = _loadAuthSession();
+            if (restoredSession && restoredSession.secret &&
+                (!restoredSession.address || restoredSession.address === address || restoredSession.address === credentialLookupAddress)) {
+                cachedAuthSecret = restoredSession.secret;
+                cachedAuthAddress = restoredSession.address || address;
+                _refreshAuthSessionTimestamp();
+                return buildAuthResult(address, restoredSession.secret, credentialLookupAddress);
             }
 
             const storedSecret = getSigningMaterial(address);
             if (storedSecret) {
                 cachedAuthSecret = storedSecret;
                 cachedAuthAddress = address;
+                _saveAuthSession(address, storedSecret);
                 return buildAuthResult(address, storedSecret, credentialLookupAddress);
             }
 
@@ -192,6 +245,7 @@
                     if (authSecret) {
                         cachedAuthSecret = authSecret;
                         cachedAuthAddress = address;
+                        _saveAuthSession(address, authSecret);
                         return buildAuthResult(address, authSecret, credentialLookupAddress);
                     }
                     throw walletLockedRelockRequiredError();
@@ -252,6 +306,7 @@
                     if (authSecret) {
                         cachedAuthSecret = authSecret;
                         cachedAuthAddress = address;
+                        _saveAuthSession(address, authSecret);
                         return buildAuthResult(address, authSecret, credentialLookupAddress);
                     }
                     throw walletLockedRelockRequiredError();
@@ -272,7 +327,10 @@
 
         isUnlocked() {
             const address = getActiveWalletAddress();
-            return !!(hasRuntimeSigningMaterial(address) || cachedAuthSecret || getSigningMaterial(address));
+            if (hasRuntimeSigningMaterial(address) || cachedAuthSecret || getSigningMaterial(address)) return true;
+            // Also check sessionStorage (restored after navigation)
+            const s = _loadAuthSession();
+            return !!(s && s.secret);
         },
 
         hasRuntimeSigningMaterial(address = null) {
@@ -289,7 +347,7 @@
         },
 
         _autoLockTimer: null,
-        _autoLockTimeout: 5 * 60 * 1000,
+        _autoLockTimeout: 30 * 60 * 1000,
 
         startAutoLock(timeoutMs = null) {
             this.stopAutoLock();
@@ -317,12 +375,23 @@
             }
         },
 
+        extendSession(additionalMs = null) {
+            _refreshAuthSessionTimestamp();
+            this.stopAutoLock();
+            const timeout = additionalMs || this._autoLockTimeout;
+            this._autoLockTimer = setTimeout(() => {
+                console.log('[WalletAuth] Auto-locking wallet after inactivity');
+                this.lock();
+                if (typeof showToast === 'function') showToast('Wallet locked due to inactivity');
+            }, timeout);
+            if (typeof showToast === 'function') showToast('Wallet session extended');
+        },
+
         lock() {
             cachedAuthSecret = '';
             cachedAuthAddress = '';
             cachedRuntimeSigningAddress = '';
-            sessionStorage.removeItem('thr_auth_secret');
-            sessionStorage.removeItem('thr_auth_secret_address');
+            _clearAuthSession();
             if (window.walletSession && typeof window.walletSession.lockWallet === 'function') {
                 window.walletSession.lockWallet();
             }
@@ -401,6 +470,9 @@
     }
 
     function initAutoLock() {
+        // On page load: if wallet was unlocked in this tab (session restored), resume the timer.
+        // isUnlocked() will return true because cachedAuthSecret was restored from sessionStorage
+        // at module init time, or walletSession restored unlockedPrivateKeyHex from sessionStorage.
         if (WalletAuth.isUnlocked()) {
             WalletAuth.startAutoLock();
         }
@@ -408,7 +480,10 @@
         const activityEvents = ['mousedown', 'keypress', 'scroll', 'touchstart', 'click'];
         activityEvents.forEach(eventType => {
             document.addEventListener(eventType, () => {
-                WalletAuth.resetAutoLock();
+                if (WalletAuth.isUnlocked()) {
+                    _refreshAuthSessionTimestamp();
+                    WalletAuth.resetAutoLock();
+                }
             }, { passive: true });
         });
 
@@ -419,6 +494,6 @@
             return result;
         };
 
-        console.log('[WalletAuth] Auto-lock initialized');
+        console.log('[WalletAuth] Auto-lock initialized (30 min timeout, session persistence enabled)');
     }
 })(window);

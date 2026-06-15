@@ -6138,11 +6138,16 @@ function initWalletUiControls(){
     }
 
     if(lockBtn){
-        lockBtn.addEventListener('click', async (ev)=>{
+        lockBtn.addEventListener('click', (ev)=>{
             ev.stopPropagation();
-            const ok = await ensureWalletPinSet();
-            if(ok) alert('PIN set. Wallet will auto-lock after inactivity.');
+            if (window.WalletAuth && window.WalletAuth.isUnlocked()) {
+                window.WalletAuth.extendSession();
+            } else {
+                // Wallet already locked — clicking lock button should just show the wallet modal
+                setWalletOpen(true);
+            }
         });
+        lockBtn.title = 'Extend session (keep unlocked)';
     }
 
     // Click-to-toggle wallet popup (stays open until closed)

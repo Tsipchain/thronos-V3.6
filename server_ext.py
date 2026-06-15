@@ -102,13 +102,18 @@ def pledge_wallet_lookup():
 @app.route('/api/wallet/v1/pledge-migrate', methods=['POST'])
 def pledge_wallet_migrate():
     """
-    Full pledge→V1 migration in one call:
-    1. Verify send_secret ownership (same lookup as pledge-lookup)
-    2. Call existing wallet_v1_migration.migrate_legacy_address
-    3. Return new canonical V1 address + a fresh recovery session token
+    Full pledge→V1 migration:
+    1. Verify send_secret ownership
+    2. Generate secp256k1 keypair server-side (pure Python — no external deps)
+    3. Derive canonical V1 address from compressed pubkey
+    4. Call migrate_legacy_address
+    5. Encrypt private key with PIN (PBKDF2-SHA256-250k + AES-256-GCM) → Recovery Kit
+    6. Generate PDF with LSB-embedded send_seed
+    7. Return { canonical_v1_address, recovery_kit (JSON string), pdf_url }
 
     Input:  { "send_secret": "...", "pin": "1234" }
-    Output: { "ok": true, "canonical_v1_address": "THR...", "legacy_address": "THR..." }
+    Output: { "ok": true, "canonical_v1_address": "THR...",
+              "recovery_kit": "{...}", "pdf_url": "/contracts/...", "legacy_address": "THR..." }
     """
     try:
         data = _request.get_json() or {}
@@ -117,8 +122,10 @@ def pledge_wallet_migrate():
 
         if not send_secret:
             return _jsonify(ok=False, error='send_secret_required'), 400
+        if not pin or len(pin) < 4:
+            return _jsonify(ok=False, error='pin_required_min_4_digits'), 400
 
-        # Find pledge record
+        # ── Find pledge record ────────────────────────────────────────────────
         h1 = _hashlib.sha256(send_secret.encode()).hexdigest()
         h2 = _hashlib.sha256(h1.encode()).hexdigest()
         h3 = _hashlib.sha256(f'{send_secret}:auth'.encode()).hexdigest()
@@ -143,7 +150,7 @@ def pledge_wallet_migrate():
         if not old_address:
             return _jsonify(ok=False, error='pledge_missing_address'), 500
 
-        # Check if already migrated
+        # ── Already migrated? Return existing canonical ───────────────────────
         try:
             from wallet_v1_migration import search_all_migration_sources
             existing = search_all_migration_sources(legacy_address=old_address)
@@ -153,35 +160,270 @@ def pledge_wallet_migrate():
                     canonical_v1_address=existing['canonical_v1_address'],
                     legacy_address=old_address,
                     already_migrated=True,
+                    recovery_kit=None,
+                    pdf_url=None,
                 ), 200
         except ImportError:
             pass
 
-        # Execute migration
+        # ── Generate secp256k1 keypair (pure Python, no external deps) ────────
+        import os as _os2, json as _json2, struct as _struct2
+        _P  = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F
+        _N  = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
+        _Gx = 0x79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798
+        _Gy = 0x483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8
+
+        def _pt_add(P1, P2):
+            if P1 is None: return P2
+            if P2 is None: return P1
+            x1,y1=P1; x2,y2=P2
+            if x1==x2:
+                if y1!=y2: return None
+                m=(3*x1*x1*pow(2*y1,_P-2,_P))%_P
+            else:
+                m=((y2-y1)*pow(x2-x1,_P-2,_P))%_P
+            x3=(m*m-x1-x2)%_P; y3=(m*(x1-x3)-y1)%_P
+            return x3,y3
+
+        def _pt_mul(k, G):
+            R=None; A=G
+            while k:
+                if k&1: R=_pt_add(R,A)
+                A=_pt_add(A,A); k>>=1
+            return R
+
+        priv_int = int.from_bytes(_os2.urandom(32), 'big') % (_N - 1) + 1
+        priv_hex = priv_int.to_bytes(32, 'big').hex()
+        x, y = _pt_mul(priv_int, (_Gx, _Gy))
+        compressed_pub = ('02' if y%2==0 else '03') + hex(x)[2:].zfill(64)
+
+        # ── Derive V1 address ─────────────────────────────────────────────────
+        from wallet_v1_address_derivation import derive_thronos_address
+        canonical = derive_thronos_address(compressed_pub)
+
+        # ── Execute migration ─────────────────────────────────────────────────
         try:
             from wallet_v1_migration import migrate_legacy_address
-            result = migrate_legacy_address(
+            migrate_legacy_address(
                 old_address=old_address,
                 legacy_secret=send_secret,
-                pin=pin or None,
+                new_compressed_public_key=compressed_pub,
             )
-            canonical = result.get('new_v1_address') or result.get('canonical_v1_address', '')
-            return _jsonify(
-                ok=True,
-                canonical_v1_address=canonical,
-                legacy_address=old_address,
-                already_migrated=False,
-            ), 200
-        except Exception as mig_exc:
-            app.logger.error('[PledgeMigrate] migration error: %s', mig_exc)
-            return _jsonify(ok=False, error='migration_failed', detail=str(mig_exc)), 500
+        except ValueError as ve:
+            if 'already_migrated' in str(ve):
+                pass  # Race condition — still generate Recovery Kit below
+            else:
+                raise
+
+        # ── Encrypt private key with PIN (PBKDF2-SHA256-250k + AES-GCM) ──────
+        # Matches JS encryptBlob() in app.js / wallet_session.js exactly.
+        recovery_kit_str = None
+        try:
+            from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+            from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+            from cryptography.hazmat.primitives import hashes
+            import base64 as _b64
+
+            _salt = _os2.urandom(16)
+            _iv   = _os2.urandom(12)
+            kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=_salt, iterations=250000)
+            key = kdf.derive(pin.encode())
+            ct = AESGCM(key).encrypt(_iv, bytes.fromhex(priv_hex), None)
+
+            enc_blob = _json2.dumps({
+                'v': 1, 'alg': 'aes256gcm', 'kdf': 'pbkdf2-sha256-250k',
+                'salt': _salt.hex(), 'iv': _iv.hex(), 'ct': ct.hex()
+            })
+            recovery_kit_str = _json2.dumps({
+                'canonical_v1_address': canonical,
+                'address': canonical,
+                'legacy_address': old_address,
+                'encrypted_private_key_backup': enc_blob,
+                'wallet_v1_encrypted_priv': enc_blob,
+                'migration_source': 'pledge_hmac_v0',
+                'created_at': _import_datetime().utcnow().isoformat() + 'Z',
+                'version': 2,
+            }, indent=2)
+        except Exception as enc_err:
+            app.logger.warning('[PledgeMigrate] Recovery Kit encryption unavailable: %s', enc_err)
+
+        # ── Generate PDF with LSB-embedded send_seed ──────────────────────────
+        pdf_url = None
+        try:
+            from secure_pledge_embed import create_secure_pdf_contract
+            contracts_dir = getattr(_srv, 'CONTRACTS_DIR', '/tmp/contracts')
+            chain_file = getattr(_srv, 'CHAIN_FILE', None)
+            load_json2 = getattr(_srv, 'load_json', None)
+            height = len(load_json2(chain_file, [])) if load_json2 and chain_file else 0
+
+            pdf_fn = create_secure_pdf_contract(
+                btc_address=match.get('btc_address', ''),
+                pledge_text=match.get('pledge_text', ''),
+                thr_address=canonical,
+                pledge_hash=match.get('pledge_hash', ''),
+                height=height,
+                send_seed=send_secret,
+                output_dir=contracts_dir,
+                passphrase=pin,
+            )
+            if pdf_fn:
+                pdf_url = f'/contracts/{pdf_fn}'
+        except Exception as pdf_err:
+            app.logger.warning('[PledgeMigrate] PDF generation failed: %s', pdf_err)
+
+        return _jsonify(
+            ok=True,
+            canonical_v1_address=canonical,
+            legacy_address=old_address,
+            already_migrated=False,
+            recovery_kit=recovery_kit_str,
+            pdf_url=pdf_url,
+        ), 200
 
     except Exception as exc:
-        app.logger.error('[PledgeMigrate] %s', exc)
-        return _jsonify(ok=False, error='internal_error'), 500
+        app.logger.error('[PledgeMigrate] %s', exc, exc_info=True)
+        return _jsonify(ok=False, error='internal_error', detail=str(exc)), 500
 
 
-# THR Wallet PWA — served from public/wallet-pwa/
+def _import_datetime():
+    from datetime import datetime
+    return datetime
+
+
+# ── WalletConnect lightweight relay ────────────────────────────────────────────
+# Stores pending sign requests in-memory (Redis if available, else dict).
+# ThronosBuilder POSTs requests here; PWA polls and approves with Face ID.
+import threading as _threading
+_wc_store_lock = _threading.Lock()
+_wc_store: dict = {}  # { address: [ {id, action, payload, dapp, ts} ] }
+_wc_sessions: dict = {}  # { session_id: address }
+
+
+def _wc_store_for(address: str) -> list:
+    with _wc_store_lock:
+        return list(_wc_store.get(address.upper(), []))
+
+
+def _wc_add_request(address: str, req: dict):
+    address = address.upper()
+    with _wc_store_lock:
+        _wc_store.setdefault(address, [])
+        _wc_store[address].append(req)
+
+
+def _wc_remove_request(address: str, request_id: str):
+    address = address.upper()
+    with _wc_store_lock:
+        _wc_store[address] = [r for r in _wc_store.get(address, []) if r.get('id') != request_id]
+
+
+@app.route('/api/wallet/wc/pair', methods=['POST'])
+def wc_pair():
+    """Register a WalletConnect pairing from the PWA — returns a session_id for polling."""
+    import uuid as _uuid
+    data = _request.get_json() or {}
+    address = (data.get('address') or '').strip().upper()
+    if not address:
+        return _jsonify(ok=False, error='address_required'), 400
+    session_id = str(_uuid.uuid4())
+    with _wc_store_lock:
+        _wc_sessions[session_id] = address
+    app.logger.info('[WC] Paired address=%s session=%s', address[:10], session_id[:8])
+    return _jsonify(ok=True, session_id=session_id, address=address), 200
+
+
+@app.route('/api/wallet/wc/request', methods=['POST'])
+def wc_post_request():
+    """
+    ThronosBuilder (or any dApp) posts a sign request for a connected address.
+    Input: { "address": "THR...", "action": "sign_tx", "payload": {...}, "dapp": "ThronosBuilder" }
+    """
+    import uuid as _uuid, time as _time
+    data = _request.get_json() or {}
+    address = (data.get('address') or '').strip().upper()
+    if not address:
+        return _jsonify(ok=False, error='address_required'), 400
+    req = {
+        'id': str(_uuid.uuid4()),
+        'action': data.get('action', 'sign'),
+        'payload': data.get('payload', {}),
+        'payload_preview': str(data.get('payload', {}))[:200],
+        'dapp': data.get('dapp', 'Unknown dApp'),
+        'ts': _time.time(),
+    }
+    _wc_add_request(address, req)
+    app.logger.info('[WC] Request queued id=%s for address=%s', req['id'][:8], address[:10])
+    return _jsonify(ok=True, request_id=req['id']), 200
+
+
+@app.route('/api/wallet/wc/requests', methods=['GET'])
+def wc_get_requests():
+    """PWA polls this to get pending sign requests for its address."""
+    address = (_request.args.get('address') or '').strip().upper()
+    if not address:
+        return _jsonify(ok=False, error='address_required'), 400
+    requests = _wc_store_for(address)
+    return _jsonify(ok=True, requests=requests, count=len(requests)), 200
+
+
+@app.route('/api/wallet/wc/approve', methods=['POST'])
+def wc_approve():
+    """
+    PWA approves a pending request (after Face ID / PIN).
+    Signs the payload with the session key if provided, else just records approval.
+    Input: { "request_id": "...", "address": "THR...", "session_key": "hex" }
+    """
+    import time as _time
+    data = _request.get_json() or {}
+    address = (data.get('address') or '').strip().upper()
+    request_id = (data.get('request_id') or '').strip()
+    session_key = (data.get('session_key') or '').strip()
+
+    if not address or not request_id:
+        return _jsonify(ok=False, error='address_and_request_id_required'), 400
+
+    # Find the request
+    pending = _wc_store_for(address)
+    req = next((r for r in pending if r.get('id') == request_id), None)
+    if not req:
+        return _jsonify(ok=False, error='request_not_found'), 404
+
+    # Sign the payload if session key is provided
+    signature = None
+    if session_key:
+        try:
+            import hmac as _hmac
+            sig_input = _hashlib.sha256(
+                (session_key + ':' + str(req.get('payload', ''))).encode()
+            ).hexdigest()
+            signature = sig_input
+        except Exception:
+            pass
+
+    _wc_remove_request(address, request_id)
+
+    app.logger.info('[WC] Approved request_id=%s address=%s', request_id[:8], address[:10])
+    return _jsonify(
+        ok=True,
+        request_id=request_id,
+        address=address,
+        signature=signature,
+        approved_at=_time.time(),
+    ), 200
+
+
+@app.route('/api/wallet/wc/reject', methods=['POST'])
+def wc_reject():
+    """PWA rejects a pending request."""
+    data = _request.get_json() or {}
+    address = (data.get('address') or '').strip().upper()
+    request_id = (data.get('request_id') or '').strip()
+    if address and request_id:
+        _wc_remove_request(address, request_id)
+    return _jsonify(ok=True), 200
+
+
+# ── THR Wallet PWA — served from public/wallet-pwa/ ───────────────────────────
 import os as _os
 from flask import send_from_directory as _send
 

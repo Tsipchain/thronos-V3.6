@@ -913,96 +913,221 @@ async function showTokens() {
 
 // ─── Send screen ──────────────────────────────────────────────────────────────
 
-// ── WalletConnect — sign from mobile without re-importing Recovery Kit ─────────
-// Architecture: lightweight custom relay (no WalletConnect server needed).
-// ThronosBuilder posts a sign request to /api/wallet/wc/request keyed by address.
-// PWA polls for pending requests, shows Face ID prompt, signs, posts signature back.
-// For full WalletConnect v2 URI support (wc://...), we parse the pairing topic
-// and connect to the Thronos relay endpoint.
+// ── WalletConnect — scan QR from ThronosBuilder or paste URI ──────────────────
+// Architecture: lightweight custom relay.
+// ThronosBuilder generates thrconnect:// URI + QR code → PWA scans → paired.
+// Builder posts sign requests → PWA polls, shows approval → user approves.
 
-const WC_POLL_INTERVAL = 4000; // ms
+const WC_POLL_INTERVAL = 4000;
 let _wcPollTimer = null;
 
 function showWalletConnect() {
   const address = getActiveAddr();
+  const hasBarcodeDetector = 'BarcodeDetector' in window;
+  const hasCamera = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+  const canScan = hasBarcodeDetector || hasCamera;
+
   render(`
     <div class="screen">
-      <div class="card">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
-          <h2 style="font-size:1.1rem;margin:0">⬡ Connect dApp</h2>
-          <button class="btn btn--ghost" id="wcBackBtn" style="padding:6px 12px;font-size:.85rem">← Back</button>
-        </div>
-        <p style="color:var(--muted);font-size:.85rem;margin-bottom:14px">
-          Scan a QR code or paste a <b>wc://</b> URI from ThronosBuilder or any compatible dApp to sign transactions from this wallet.
-        </p>
+      <div class="header">
+        <button class="btn--icon" id="wcBackBtn">←</button>
+        <span class="header__title">⬡ Connect dApp</span>
+      </div>
 
-        <div style="margin-bottom:12px">
-          <label style="font-size:.85rem;color:var(--accent);display:block;margin-bottom:6px">Paste WC URI or connection code</label>
-          <textarea id="wcUri" class="input" rows="3" placeholder="wc:// or thrconnect://..." style="font-family:monospace;font-size:.78rem;resize:none"></textarea>
-          <button class="btn btn--primary mt8" id="wcConnectBtn" style="width:100%">🔗 Connect</button>
-        </div>
+      <!-- Camera scan -->
+      ${canScan ? `
+      <button class="btn btn--primary" id="scanQrBtn" style="width:100%;padding:14px;font-size:1rem;margin-bottom:14px;display:flex;align-items:center;justify-content:center;gap:8px">
+        📷 Scan QR Code
+      </button>
+      <div style="text-align:center;color:var(--muted);font-size:.82rem;margin-bottom:12px">— or paste URI manually —</div>
+      ` : `
+      <div style="background:#1a1040;border:1px solid #7c5cbf;border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:.78rem;color:#b08cf8">
+        Camera not available on this browser. Paste the URI from ThronosBuilder below.
+      </div>
+      `}
 
-        <div style="text-align:center;color:var(--muted);font-size:.82rem;margin:10px 0">— OR —</div>
+      <!-- Manual paste -->
+      <div class="card" style="padding:12px;margin-bottom:12px">
+        <label style="font-size:.82rem;color:var(--accent);display:block;margin-bottom:6px">Paste connection URI</label>
+        <textarea id="wcUri" class="input" rows="3" placeholder="thrconnect://… or wc://…" style="font-family:monospace;font-size:.75rem;resize:none"></textarea>
+        <button class="btn btn--primary mt8" id="wcConnectBtn" style="width:100%">🔗 Connect</button>
+      </div>
 
-        <div style="background:#0d0a1a;border:1px solid var(--accent);border-radius:8px;padding:12px;text-align:center">
-          <div style="font-size:.82rem;color:var(--muted);margin-bottom:8px">Waiting for sign requests from connected dApps…</div>
-          <div id="wcStatus" style="font-size:.85rem;color:var(--accent)">● Polling for requests…</div>
-          <div id="wcRequestArea" style="margin-top:10px"></div>
-        </div>
+      <!-- Status + pending requests -->
+      <div style="background:#0d0a1a;border:1px solid var(--accent);border-radius:8px;padding:12px">
+        <div id="wcStatus" style="font-size:.82rem;color:var(--accent);margin-bottom:8px">● Ready to connect</div>
+        <div id="wcRequestArea"></div>
+      </div>
 
-        <div style="margin-top:14px;padding:10px;background:#0a0a14;border-radius:6px;font-size:.78rem;color:var(--muted)">
-          <b style="color:var(--accent)">Your wallet address:</b><br>
-          <span style="font-family:monospace;word-break:break-all">${address}</span>
-        </div>
+      <div style="margin-top:12px;padding:10px;background:#0a0a14;border-radius:6px;font-size:.72rem;color:var(--muted)">
+        <b style="color:var(--accent)">Wallet:</b><br>
+        <span style="font-family:monospace;word-break:break-all">${address}</span>
       </div>
     </div>
   `);
 
-  document.getElementById('wcBackBtn').addEventListener('click', showWallet);
+  document.getElementById('wcBackBtn').addEventListener('click', () => {
+    if (_wcPollTimer) { clearInterval(_wcPollTimer); _wcPollTimer = null; }
+    showWallet();
+  });
+
+  if (canScan) {
+    document.getElementById('scanQrBtn').addEventListener('click', () => _openQrScanner(address));
+  }
 
   document.getElementById('wcConnectBtn').addEventListener('click', async () => {
     const uri = document.getElementById('wcUri')?.value?.trim();
-    if (!uri) { alert('Paste a WC URI first'); return; }
-    const statusEl = document.getElementById('wcStatus');
-
-    // Handle thrconnect:// (our custom relay protocol)
-    if (uri.startsWith('thrconnect://') || uri.startsWith('thr://')) {
-      const sessionId = uri.replace(/^(thrconnect|thr):\/\//, '');
-      statusEl.textContent = `✅ Connected (session: ${sessionId.slice(0,8)}…)`;
-      sessionStorage.setItem('thr_wc_session', sessionId);
-      _startWcPoll(address, sessionId);
-      return;
-    }
-
-    // Handle wc:// URI — extract topic and relay server
-    if (uri.startsWith('wc:')) {
-      try {
-        // wc:<topic>@<version>?relay-protocol=...&symKey=...
-        const topic = uri.split('@')[0].replace('wc:', '');
-        statusEl.textContent = `🔗 WC pairing: ${topic.slice(0,8)}…`;
-        // Register with our relay
-        const r = await fetch(`${API_WRITE}/api/wallet/wc/pair`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ address, wc_uri: uri, topic })
-        });
-        const d = await r.json().catch(() => ({}));
-        if (d.ok) {
-          statusEl.textContent = `✅ Paired — waiting for sign requests`;
-          _startWcPoll(address, d.session_id || topic);
-        } else {
-          statusEl.textContent = `⚠️ Pair failed: ${d.error || 'unknown'}`;
-        }
-      } catch(e) {
-        statusEl.textContent = `⚠️ Error: ${e.message}`;
-      }
-      return;
-    }
-
-    alert('Unknown URI format. Expected wc:// or thrconnect://');
+    if (!uri) return;
+    await _handleWcUri(uri, address);
   });
 
-  // Start polling immediately
-  _startWcPoll(address, sessionStorage.getItem('thr_wc_session') || null);
+  // Resume polling if already paired this session
+  const existingSession = sessionStorage.getItem('thr_wc_session');
+  if (existingSession) {
+    const statusEl = document.getElementById('wcStatus');
+    if (statusEl) statusEl.textContent = `● Connected (session: ${existingSession.slice(0,8)}…)`;
+    _startWcPoll(address, existingSession);
+  } else {
+    _startWcPoll(address, null);
+  }
+}
+
+// ─── QR Scanner ───────────────────────────────────────────────────────────────
+
+async function _openQrScanner(address) {
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
+    });
+  } catch (e) {
+    alert('Camera permission denied or unavailable: ' + e.message);
+    return;
+  }
+
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:#000;z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;';
+  overlay.innerHTML = `
+    <div style="position:relative;width:min(100vw,480px);max-height:60vh;overflow:hidden;border-radius:10px">
+      <video id="qrVideo" autoplay playsinline muted style="width:100%;display:block"></video>
+      <!-- Viewfinder overlay -->
+      <div style="position:absolute;inset:0;pointer-events:none">
+        <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:200px;height:200px;
+                    border:3px solid var(--accent,#00ff66);border-radius:12px;
+                    box-shadow:0 0 0 4000px rgba(0,0,0,.55)"></div>
+      </div>
+    </div>
+    <p style="color:#fff;margin:16px 0 8px;font-size:.9rem;text-align:center">
+      Aim the QR code at the box above
+    </p>
+    <button id="cancelScanBtn" style="padding:10px 28px;background:#222;color:#fff;border:1px solid #555;border-radius:8px;font-size:.9rem;cursor:pointer">Cancel</button>
+  `;
+  document.body.appendChild(overlay);
+
+  const video = overlay.querySelector('#qrVideo');
+  video.srcObject = stream;
+
+  const stopScan = () => {
+    stream.getTracks().forEach(t => t.stop());
+    overlay.remove();
+  };
+
+  overlay.querySelector('#cancelScanBtn').addEventListener('click', stopScan);
+
+  const _scanLoop = async () => {
+    if (!overlay.isConnected) return;
+    try {
+      if ('BarcodeDetector' in window) {
+        const detector = new BarcodeDetector({ formats: ['qr_code'] });
+        const codes = await detector.detect(video);
+        for (const code of codes) {
+          if (code.rawValue) {
+            stopScan();
+            await _handleWcUri(code.rawValue, address);
+            return;
+          }
+        }
+      } else {
+        // Canvas-based fallback (without BarcodeDetector)
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth || 640;
+        canvas.height = video.videoHeight || 480;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(video, 0, 0);
+        // Without jsQR we can only prompt the user to paste the URI
+        // Show the video but tell user to use paste mode
+        const statusEl = document.getElementById('wcStatus');
+        if (statusEl && !statusEl._fbShown) {
+          statusEl._fbShown = true;
+          stopScan();
+          alert('QR scanning requires Chrome/Safari 16+. Please copy the URI from ThronosBuilder and paste it.');
+          return;
+        }
+      }
+    } catch {}
+    requestAnimationFrame(_scanLoop);
+  };
+
+  video.addEventListener('loadedmetadata', () => requestAnimationFrame(_scanLoop));
+}
+
+// ─── URI handler ──────────────────────────────────────────────────────────────
+
+async function _handleWcUri(uri, address) {
+  const statusEl = document.getElementById('wcStatus');
+  const setStatus = t => { if (statusEl) statusEl.textContent = t; };
+
+  // thrconnect://SESSION_ID?relay=URL&dapp=NAME
+  if (uri.startsWith('thrconnect://')) {
+    const withoutProto = uri.slice('thrconnect://'.length);
+    const [sessionId, queryStr] = withoutProto.split('?');
+    const params = new URLSearchParams(queryStr || '');
+    const dapp   = params.get('dapp') || 'dApp';
+
+    setStatus(`🔗 Pairing with ${dapp}…`);
+    try {
+      const r = await fetch(`${API_WRITE}/api/wallet/wc/pair`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ address, session_id: sessionId, dapp })
+      });
+      const d = await r.json().catch(() => ({}));
+      if (d.ok) {
+        sessionStorage.setItem('thr_wc_session', sessionId);
+        setStatus(`✅ Connected to ${dapp} — awaiting requests`);
+        _startWcPoll(address, sessionId);
+      } else {
+        setStatus(`⚠️ Pair failed: ${d.error || 'unknown'}`);
+      }
+    } catch (e) {
+      setStatus(`⚠️ Network error: ${e.message}`);
+    }
+    return;
+  }
+
+  // wc:// (standard WalletConnect v2)
+  if (uri.startsWith('wc:')) {
+    const topic = uri.split('@')[0].replace('wc:', '');
+    setStatus(`🔗 WC pairing: ${topic.slice(0,8)}…`);
+    try {
+      const r = await fetch(`${API_WRITE}/api/wallet/wc/pair`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ address, wc_uri: uri, topic })
+      });
+      const d = await r.json().catch(() => ({}));
+      if (d.ok) {
+        sessionStorage.setItem('thr_wc_session', d.session_id || topic);
+        setStatus(`✅ Paired — waiting for sign requests`);
+        _startWcPoll(address, d.session_id || topic);
+      } else {
+        setStatus(`⚠️ Pair failed: ${d.error || 'unknown'}`);
+      }
+    } catch (e) {
+      setStatus(`⚠️ Error: ${e.message}`);
+    }
+    return;
+  }
+
+  alert('Unknown URI format. Expected thrconnect:// or wc://');
 }
 
 function _startWcPoll(address, sessionId) {
@@ -1012,43 +1137,47 @@ function _startWcPoll(address, sessionId) {
 }
 
 async function _checkWcRequests(address, sessionId) {
-  const reqArea = document.getElementById('wcRequestArea');
+  const reqArea  = document.getElementById('wcRequestArea');
   const statusEl = document.getElementById('wcStatus');
   if (!reqArea) { clearInterval(_wcPollTimer); return; }
   try {
-    const url = sessionId
-      ? `${API_WRITE}/api/wallet/wc/requests?address=${encodeURIComponent(address)}&session=${encodeURIComponent(sessionId)}`
-      : `${API_WRITE}/api/wallet/wc/requests?address=${encodeURIComponent(address)}`;
+    const url = `${API_WRITE}/api/wallet/wc/requests?address=${encodeURIComponent(address)}`
+              + (sessionId ? `&session=${encodeURIComponent(sessionId)}` : '');
     const r = await fetch(url);
     if (!r.ok) return;
     const d = await r.json().catch(() => ({}));
     const requests = d.requests || [];
     if (!requests.length) {
-      statusEl.textContent = '● Polling — no pending requests';
+      if (statusEl && !statusEl.textContent.includes('Connected') && !statusEl.textContent.includes('Paired')) {
+        statusEl.textContent = '● Ready — no pending requests';
+      }
       reqArea.innerHTML = '';
       return;
     }
-    statusEl.textContent = `🔔 ${requests.length} sign request(s) pending`;
-    reqArea.innerHTML = requests.map(req => `
-      <div style="background:#0a0014;border:1px solid var(--accent);border-radius:8px;padding:10px;margin-bottom:8px">
-        <div style="font-size:.82rem;color:#ccc;margin-bottom:6px">
-          <b style="color:var(--accent)">${req.action || 'Sign Request'}</b>
-          ${req.dapp ? `— from <b>${req.dapp}</b>` : ''}
+    if (statusEl) statusEl.textContent = `🔔 ${requests.length} request(s) need your approval`;
+    reqArea.innerHTML = requests.map(req => {
+      const p = req.payload || {};
+      const toShort = p.to ? p.to.slice(0,12) + '…' : '—';
+      const amtLine = p.amount ? `<div style="font-size:1rem;font-weight:700;color:#fff;margin:6px 0">${p.amount} ${p.token || 'THR'}</div>` : '';
+      const toLine  = p.to    ? `<div style="font-size:.72rem;color:var(--muted)">To: <span style="font-family:monospace">${toShort}</span></div>` : '';
+      return `
+      <div style="background:#0d0a1a;border:2px solid #7c5cbf;border-radius:10px;padding:12px;margin-bottom:8px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+          <div style="font-size:.78rem;color:#b08cf8;font-weight:600">${escHtml(req.dapp || 'dApp')} — ${escHtml(req.action || 'Sign Request')}</div>
+          <div style="font-size:.7rem;color:var(--muted)">${new Date((req.ts || Date.now() / 1000) * 1000).toLocaleTimeString()}</div>
         </div>
-        <div style="font-size:.78rem;color:var(--muted);font-family:monospace;word-break:break-all;margin-bottom:8px">
-          ${(req.payload_preview || JSON.stringify(req.payload || {})).slice(0,120)}…
-        </div>
-        <div style="display:flex;gap:6px">
-          <button class="btn btn--primary" style="flex:2;padding:8px;font-size:.82rem" onclick="_approveWcRequest('${req.id}', '${address}')">
-            🔐 Approve (Face ID)
+        ${amtLine}${toLine}
+        <div style="display:flex;gap:8px;margin-top:10px">
+          <button class="btn btn--primary" style="flex:2;padding:10px;font-size:.85rem" onclick="_approveWcRequest('${escHtml(req.id)}', '${escHtml(address)}')">
+            🔐 Approve
           </button>
-          <button class="btn btn--ghost" style="flex:1;padding:8px;font-size:.82rem" onclick="_rejectWcRequest('${req.id}', '${address}')">
+          <button class="btn btn--ghost" style="flex:1;padding:10px;font-size:.85rem;color:#ff6b6b;border-color:#ff6b6b" onclick="_rejectWcRequest('${escHtml(req.id)}', '${escHtml(address)}')">
             ✗ Reject
           </button>
         </div>
-      </div>
-    `).join('');
-  } catch { /* network error — try again next tick */ }
+      </div>`;
+    }).join('');
+  } catch { /* network error — retry next tick */ }
 }
 
 async function _approveWcRequest(requestId, address) {

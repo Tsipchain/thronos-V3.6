@@ -58,6 +58,7 @@
       unlockedPrivateKeyHex = s.k;
       unlockedForAddress = storedAddr || currentAddr;
       localStorage.setItem(LOCK_KEY, '0');
+      localStorage.setItem(BOUND_KEY, '1'); // mark wallet as connected after session restore
     } catch (_) {}
   })();
 

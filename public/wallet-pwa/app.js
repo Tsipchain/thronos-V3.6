@@ -706,9 +706,11 @@ async function showWallet() {
       </div>
 
       <!-- Quick actions — matches web wallet -->
-      <div class="actions mt8" style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px">
+      <div class="actions mt8" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px">
         <button class="action-btn" id="sendBtn"><span class="action-btn__icon">💸</span>Send</button>
         <button class="action-btn" id="receiveBtn"><span class="action-btn__icon">📥</span>Receive</button>
+        <button class="action-btn" id="swapBtn"><span class="action-btn__icon">🔄</span>Swap</button>
+        <button class="action-btn" id="poolsBtn"><span class="action-btn__icon">💧</span>Pools</button>
         <button class="action-btn" id="tokensBtn"><span class="action-btn__icon">◈</span>Tokens</button>
         <button class="action-btn" id="connectBtn"><span class="action-btn__icon">⬡</span>Connect</button>
         <button class="action-btn" id="musicBtn"><span class="action-btn__icon">🎵</span>Music</button>
@@ -743,6 +745,8 @@ async function showWallet() {
   document.getElementById('addAccBtn').addEventListener('click', () => showImport(true));
   document.getElementById('sendBtn').addEventListener('click', showSend);
   document.getElementById('receiveBtn').addEventListener('click', showReceive);
+  document.getElementById('swapBtn').addEventListener('click', showSwap);
+  document.getElementById('poolsBtn').addEventListener('click', showPools);
   document.getElementById('tokensBtn').addEventListener('click', showTokens);
   document.getElementById('connectBtn').addEventListener('click', showWalletConnect);
   document.getElementById('musicBtn').addEventListener('click', showMusic);
@@ -1788,6 +1792,299 @@ function showReceive() {
     setSuccess('Address copied!');
     const btn = document.getElementById('copyBtn');
     if (btn) { btn.textContent = 'Copied!'; setTimeout(() => { if (btn) btn.textContent = 'Copy Address'; }, 2000); }
+  });
+}
+
+// ─── Swap ─────────────────────────────────────────────────────────────────────
+
+async function showSwap(preselectedIn = null) {
+  const address = getActiveAddr();
+  if (!address || !unlocked.has(address)) { showUnlock(); return; }
+
+  // Fetch tokens and pools for the selector
+  let tokens = ['THR', 'WBTC', 'L2E', 'USDT'];
+  try {
+    const [pr, tr] = await Promise.all([
+      fetch(`${API_BASE}/api/v1/pools`).then(r => r.json()).catch(() => ({})),
+      fetch(`${API_BASE}/api/v1/tokens`).then(r => r.json()).catch(() => ({})),
+    ]);
+    const poolSyms = new Set();
+    (pr.pools || []).forEach(p => {
+      if (p.token_a) poolSyms.add(p.token_a.toUpperCase());
+      if (p.token_b) poolSyms.add(p.token_b.toUpperCase());
+    });
+    (tr.tokens || []).forEach(t => poolSyms.add((t.symbol || '').toUpperCase()));
+    if (poolSyms.size) tokens = [...poolSyms].filter(s => s);
+  } catch {}
+
+  const makeOptions = (selected) => tokens.map(t => `<option value="${t}" ${t === selected ? 'selected' : ''}>${t}</option>`).join('');
+
+  render(`
+    <div class="screen">
+      <div class="header">
+        <button class="btn--icon" id="backBtn">←</button>
+        <span style="font-weight:700;color:#fff">🔄 Swap</span>
+        <span></span>
+      </div>
+      <div class="card" style="padding:16px;margin-top:10px">
+        <label style="font-size:.82rem;color:var(--muted)">From</label>
+        <div style="display:flex;gap:8px;margin-bottom:12px">
+          <select id="tokenIn" class="input" style="flex:1">${makeOptions(preselectedIn || 'THR')}</select>
+          <input type="number" id="amountIn" class="input" style="flex:2" placeholder="0.00" min="0.000001" step="0.000001" inputmode="decimal">
+        </div>
+        <div style="text-align:center;margin:4px 0">
+          <button id="swapDir" style="background:none;border:none;color:var(--accent);font-size:1.4rem;cursor:pointer">⇅</button>
+        </div>
+        <label style="font-size:.82rem;color:var(--muted)">To</label>
+        <select id="tokenOut" class="input" style="margin-bottom:12px">${makeOptions('WBTC')}</select>
+
+        <div id="quoteBox" style="background:#0d0a1a;border-radius:8px;padding:10px;margin-bottom:12px;min-height:48px;display:flex;align-items:center;justify-content:center">
+          <span style="color:var(--muted);font-size:.85rem">Enter amount to see quote</span>
+        </div>
+
+        <button class="btn btn--primary" id="getQuoteBtn" style="width:100%;margin-bottom:8px">Get Quote</button>
+        <button class="btn btn--primary" id="swapExecBtn" style="width:100%;display:none;background:#00c853">Swap Now</button>
+        <div id="swapErr" style="color:#ff6b6b;font-size:.82rem;margin-top:8px;display:none"></div>
+        <div id="swapOk" style="color:#00ff66;font-size:.82rem;margin-top:8px;display:none"></div>
+      </div>
+      <div class="card" style="padding:12px;margin-top:10px;opacity:.7;text-align:center;font-size:.82rem;color:var(--muted)">
+        🌉 Cross-chain THR/USDT via Binance — <em>coming soon</em>
+      </div>
+    </div>
+  `);
+
+  document.getElementById('backBtn').addEventListener('click', showWallet);
+
+  let lastQuote = null;
+
+  const setSwapErr = (msg) => {
+    const e = document.getElementById('swapErr');
+    if (e) { e.textContent = msg || ''; e.style.display = msg ? '' : 'none'; }
+  };
+  const setSwapOk = (msg) => {
+    const e = document.getElementById('swapOk');
+    if (e) { e.textContent = msg || ''; e.style.display = msg ? '' : 'none'; }
+  };
+
+  document.getElementById('swapDir').addEventListener('click', () => {
+    const ti = document.getElementById('tokenIn');
+    const to = document.getElementById('tokenOut');
+    const tmp = ti.value; ti.value = to.value; to.value = tmp;
+    document.getElementById('swapExecBtn').style.display = 'none';
+    lastQuote = null;
+  });
+
+  document.getElementById('getQuoteBtn').addEventListener('click', async () => {
+    const tokenIn = document.getElementById('tokenIn').value;
+    const tokenOut = document.getElementById('tokenOut').value;
+    const amtIn = parseFloat(document.getElementById('amountIn').value);
+    const qb = document.getElementById('quoteBox');
+    setSwapErr(null);
+    document.getElementById('swapExecBtn').style.display = 'none';
+    lastQuote = null;
+
+    if (!amtIn || amtIn <= 0) { setSwapErr('Enter a valid amount'); return; }
+    if (tokenIn === tokenOut) { setSwapErr('Select different tokens'); return; }
+
+    qb.innerHTML = '<span style="color:var(--muted)">Getting quote…</span>';
+    try {
+      const r = await fetch(`${API_BASE}/api/swap/quote?token_in=${encodeURIComponent(tokenIn)}&token_out=${encodeURIComponent(tokenOut)}&amount_in=${encodeURIComponent(amtIn)}`);
+      const d = await r.json();
+      if (!r.ok || d.status !== 'success') {
+        qb.innerHTML = '<span style="color:#ff6b6b">No route found</span>';
+        return;
+      }
+      lastQuote = d;
+      const impact = d.price_impact ? ` (${(d.price_impact * 100).toFixed(2)}% impact)` : '';
+      qb.innerHTML = `
+        <div style="text-align:center">
+          <div style="color:#00ff66;font-size:1.1rem;font-weight:700">${Number(d.amount_out).toLocaleString(undefined, {maximumFractionDigits:8})} ${tokenOut}</div>
+          <div style="color:var(--muted);font-size:.78rem">fee: ${d.fee || '~'} ${tokenIn}${impact}</div>
+          <div style="color:var(--muted);font-size:.75rem">Rate: 1 ${tokenIn} ≈ ${(d.amount_out / amtIn).toFixed(6)} ${tokenOut}</div>
+        </div>`;
+      document.getElementById('swapExecBtn').style.display = '';
+    } catch {
+      qb.innerHTML = '<span style="color:#ff6b6b">Quote failed</span>';
+    }
+  });
+
+  document.getElementById('swapExecBtn').addEventListener('click', async () => {
+    if (!lastQuote) { setSwapErr('Get a quote first'); return; }
+    const { privHex } = unlocked.get(address) || {};
+    if (!privHex) { setSwapErr('Wallet locked'); return; }
+    const tokenIn = document.getElementById('tokenIn').value;
+    const tokenOut = document.getElementById('tokenOut').value;
+    const amtIn = parseFloat(document.getElementById('amountIn').value);
+    const minOut = lastQuote.amount_out * 0.97; // 3% slippage tolerance
+
+    const btn = document.getElementById('swapExecBtn');
+    btn.disabled = true; btn.textContent = 'Swapping…';
+    setSwapErr(null); setSwapOk(null);
+
+    try {
+      const r = await fetch(`${API_WRITE}/api/wallet/v1/swap`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ from: address, token_in: tokenIn, token_out: tokenOut, amount_in: amtIn, min_amount_out: minOut, private_key_hex: privHex })
+      });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok && d.status === 'success') {
+        setSwapOk(`✅ Swapped! Received ${Number(d.amount_out).toLocaleString(undefined, {maximumFractionDigits:8})} ${tokenOut}`);
+        btn.textContent = 'Swap Now';
+        btn.disabled = false;
+        lastQuote = null;
+        document.getElementById('quoteBox').innerHTML = '<span style="color:var(--muted)">Enter amount to see quote</span>';
+      } else {
+        throw new Error(d.message || d.error || 'swap_failed');
+      }
+    } catch (e) {
+      setSwapErr(e.message || 'Swap failed');
+      btn.disabled = false; btn.textContent = 'Swap Now';
+    }
+  });
+}
+
+// ─── Pools ────────────────────────────────────────────────────────────────────
+
+async function showPools() {
+  const address = getActiveAddr();
+  if (!address || !unlocked.has(address)) { showUnlock(); return; }
+
+  render(`
+    <div class="screen">
+      <div class="header">
+        <button class="btn--icon" id="backBtn">←</button>
+        <span style="font-weight:700;color:#fff">💧 Liquidity Pools</span>
+        <span></span>
+      </div>
+      <div id="poolsBody" style="margin-top:10px">
+        <p style="color:var(--muted);text-align:center;padding:20px">Loading pools…</p>
+      </div>
+    </div>
+  `);
+
+  document.getElementById('backBtn').addEventListener('click', showWallet);
+
+  try {
+    const [pr, posr] = await Promise.all([
+      fetch(`${API_BASE}/api/v1/pools`).then(r => r.json()).catch(() => ({})),
+      fetch(`${API_BASE}/api/v1/pools/positions/${encodeURIComponent(address)}`).then(r => r.json()).catch(() => ({})),
+    ]);
+
+    const pools = pr.pools || [];
+    const positions = posr.positions || [];
+    const posMap = {};
+    positions.forEach(p => { posMap[p.pool_id] = p; });
+
+    const el = document.getElementById('poolsBody');
+    if (!el) return;
+
+    if (!pools.length) {
+      el.innerHTML = '<p style="color:var(--muted);text-align:center;padding:20px">No pools available yet.</p>';
+      return;
+    }
+
+    // User positions summary
+    let posHtml = '';
+    if (positions.length) {
+      posHtml = `<div class="card" style="padding:12px;margin-bottom:10px">
+        <div style="font-size:.9rem;font-weight:700;color:#b08cf8;margin-bottom:8px">My Positions</div>
+        ${positions.map(p => `
+          <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #1a1040;font-size:.82rem">
+            <span style="color:#fff">${p.token_a || '?'}/${p.token_b || '?'}</span>
+            <span style="color:var(--accent)">${Number(p.share_percent || 0).toFixed(2)}% share</span>
+          </div>
+        `).join('')}
+      </div>`;
+    }
+
+    el.innerHTML = posHtml + pools.map(pool => {
+      const a = pool.token_a || '?';
+      const b = pool.token_b || '?';
+      const ra = Number(pool.reserves_a || 0);
+      const rb = Number(pool.reserves_b || 0);
+      const apy = pool.apy_estimate ? `${Number(pool.apy_estimate).toFixed(1)}%` : 'N/A';
+      const vol = pool.volume_24h ? `${Number(pool.volume_24h).toLocaleString(undefined, {maximumFractionDigits:2})} ${a}` : '—';
+      const myPos = posMap[pool.id];
+
+      return `<div class="card" style="padding:12px;margin-bottom:8px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <div style="font-size:1rem;font-weight:700;color:#fff">${a} / ${b}</div>
+          <div style="font-size:.78rem;color:#00ff66;font-weight:700">APY ${apy}</div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:.78rem;color:var(--muted);margin-bottom:8px">
+          <div>Reserves ${a}: <span style="color:#fff">${ra.toLocaleString(undefined,{maximumFractionDigits:4})}</span></div>
+          <div>Reserves ${b}: <span style="color:#fff">${rb.toLocaleString(undefined,{maximumFractionDigits:4})}</span></div>
+          <div>24h Volume: <span style="color:#fff">${vol}</span></div>
+          <div>Fee: <span style="color:#fff">${pool.fee_bps ? pool.fee_bps/100 + '%' : '0.3%'}</span></div>
+        </div>
+        ${myPos ? `<div style="background:#1a1040;border-radius:6px;padding:6px 8px;font-size:.78rem;color:#b08cf8;margin-bottom:8px">My share: ${Number(myPos.share_percent || 0).toFixed(2)}%</div>` : ''}
+        <div style="display:flex;gap:8px">
+          <button class="btn btn--primary" style="flex:1;padding:8px;font-size:.8rem" onclick="showSwap('${a}')">🔄 Swap</button>
+          <button class="btn btn--ghost" style="flex:1;padding:8px;font-size:.8rem" onclick="showAddLiquidity('${pool.id}','${a}','${b}')">+ Add Liquidity</button>
+        </div>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    const el = document.getElementById('poolsBody');
+    if (el) el.innerHTML = `<p style="color:#ff6b6b;text-align:center;padding:20px">Error: ${e.message}</p>`;
+  }
+}
+
+async function showAddLiquidity(poolId, tokenA, tokenB) {
+  const address = getActiveAddr();
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:#000000aa;z-index:999;display:flex;align-items:flex-end;justify-content:center;';
+  overlay.innerHTML = `
+    <div style="background:#13112a;border-radius:16px 16px 0 0;width:100%;max-width:480px;padding:20px 20px 32px">
+      <div style="font-size:1rem;font-weight:700;color:#fff;margin-bottom:16px">💧 Add Liquidity: ${tokenA}/${tokenB}</div>
+      <label style="font-size:.82rem;color:var(--muted)">${tokenA} Amount</label>
+      <input type="number" id="liqA" class="input" placeholder="0.00" min="0" step="0.000001" inputmode="decimal" style="margin-bottom:10px">
+      <label style="font-size:.82rem;color:var(--muted)">${tokenB} Amount</label>
+      <input type="number" id="liqB" class="input" placeholder="0.00" min="0" step="0.000001" inputmode="decimal" style="margin-bottom:14px">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <button id="liqCancel" class="btn btn--ghost" style="padding:12px">Cancel</button>
+        <button id="liqAdd" class="btn btn--primary" style="padding:12px">Add Liquidity</button>
+      </div>
+      <div id="liqErr" style="margin-top:10px;color:#ff6b6b;font-size:.82rem;display:none"></div>
+      <div id="liqOk" style="margin-top:10px;color:#00ff66;font-size:.82rem;display:none"></div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#liqCancel').addEventListener('click', () => overlay.remove());
+  overlay.querySelector('#liqAdd').addEventListener('click', async () => {
+    const amtA = parseFloat(overlay.querySelector('#liqA').value);
+    const amtB = parseFloat(overlay.querySelector('#liqB').value);
+    const errEl = overlay.querySelector('#liqErr');
+    const okEl = overlay.querySelector('#liqOk');
+    if (!amtA || amtA <= 0 || !amtB || amtB <= 0) {
+      errEl.textContent = 'Enter valid amounts for both tokens';
+      errEl.style.display = '';
+      return;
+    }
+    const { privHex } = unlocked.get(address) || {};
+    if (!privHex) { errEl.textContent = 'Wallet locked'; errEl.style.display = ''; return; }
+
+    const btn = overlay.querySelector('#liqAdd');
+    btn.disabled = true; btn.textContent = 'Adding…';
+    try {
+      const r = await fetch(`${API_WRITE}/api/wallet/v1/add_liquidity`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ from: address, pool_id: poolId, amount_a: amtA, amount_b: amtB, private_key_hex: privHex })
+      });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok && (d.ok || d.status === 'success')) {
+        okEl.textContent = '✅ Liquidity added!';
+        okEl.style.display = '';
+        setTimeout(() => overlay.remove(), 2000);
+      } else {
+        throw new Error(d.message || d.error || 'failed');
+      }
+    } catch (e) {
+      errEl.textContent = e.message || 'Add liquidity failed';
+      errEl.style.display = '';
+      btn.disabled = false; btn.textContent = 'Add Liquidity';
+    }
   });
 }
 

@@ -150,23 +150,24 @@ const API_READ  = 'https://api.thronoschain.org';  // write node knows migration
 const API_WRITE = 'https://api.thronoschain.org';
 
 async function fetchBalances(address) {
-  // Try main node first (migration-aware). Fall back to reading legacy_address from kit.
+  // Use the same endpoint as the web wallet: /api/balances?show_zero=true
   try {
-    const r = await fetch(`${API_WRITE}/balances?address=${encodeURIComponent(address)}`);
+    const r = await fetch(`${API_WRITE}/api/balances?address=${encodeURIComponent(address)}&show_zero=true`);
     if (r.ok) {
       const d = await r.json();
-      const thr = d.thr_balance ?? d.THR ?? d.balance ?? d.thr ?? 0;
-      if (Number(thr) > 0 || d.balances) return d;
+      const tokens = Array.isArray(d.tokens) ? d.tokens : [];
+      const thr = tokens.find(t => t.symbol === 'THR')?.balance ?? d.thr_balance ?? 0;
+      if (Number(thr) > 0 || tokens.length) return d;
     }
   } catch {}
-  // If address has no balance, try legacy_address stored in Recovery Kit
+  // If address has no balance, try legacy_address from Recovery Kit
   try {
     const acc = getAccount(address);
     const kitRaw = acc?.kit;
     const kit = kitRaw ? (typeof kitRaw === 'string' ? JSON.parse(kitRaw) : kitRaw) : null;
     const legacy = kit?.legacy_address;
     if (legacy && legacy !== address) {
-      const r2 = await fetch(`${API_WRITE}/balances?address=${encodeURIComponent(legacy)}`);
+      const r2 = await fetch(`${API_WRITE}/api/balances?address=${encodeURIComponent(legacy)}&show_zero=true`);
       if (r2.ok) return await r2.json();
     }
   } catch {}
@@ -691,33 +692,30 @@ async function showWallet() {
         </div>
       </div>
 
-      <div class="card--gradient">
-        <div class="balance-label">${label}</div>
-        <div id="balancesArea" style="margin:12px 0">
+      <!-- Address bar -->
+      <div style="display:flex;align-items:center;justify-content:space-between;background:#0d0a1a;border-radius:8px;padding:8px 12px;margin-bottom:10px">
+        <span id="addrLine" style="font-family:monospace;font-size:.8rem;color:var(--accent);cursor:pointer" title="Tap to copy">${shortAddr(address)}</span>
+        <button onclick="document.getElementById('copyAddrBtn').click()" style="background:none;border:1px solid var(--accent);color:var(--accent);font-size:.7rem;padding:2px 8px;border-radius:4px;cursor:pointer" id="copyAddrBtn">Copy</button>
+      </div>
+
+      <!-- Balances + Token list -->
+      <div class="card" style="padding:12px;margin-bottom:10px">
+        <div id="balancesArea">
           <div class="balance-amount balance-amount--loading">···</div>
         </div>
-        <div class="address-display" id="addrLine" title="Tap to copy">${shortAddr(address)}</div>
       </div>
 
-      <div class="actions mt16">
-        <button class="action-btn" id="sendBtn">
-          <span class="action-btn__icon">↑</span>Send
-        </button>
-        <button class="action-btn" id="receiveBtn">
-          <span class="action-btn__icon">↓</span>Receive
-        </button>
-        <button class="action-btn" id="tokensBtn">
-          <span class="action-btn__icon">◈</span>Tokens
-        </button>
-        <button class="action-btn" id="connectBtn">
-          <span class="action-btn__icon">⬡</span>Connect
-        </button>
-        <button class="action-btn" id="musicBtn">
-          <span class="action-btn__icon">♪</span>Music
-        </button>
+      <!-- Quick actions — matches web wallet -->
+      <div class="actions mt8" style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px">
+        <button class="action-btn" id="sendBtn"><span class="action-btn__icon">💸</span>Send</button>
+        <button class="action-btn" id="receiveBtn"><span class="action-btn__icon">📥</span>Receive</button>
+        <button class="action-btn" id="tokensBtn"><span class="action-btn__icon">◈</span>Tokens</button>
+        <button class="action-btn" id="connectBtn"><span class="action-btn__icon">⬡</span>Connect</button>
+        <button class="action-btn" id="musicBtn"><span class="action-btn__icon">🎵</span>Music</button>
+        <button class="action-btn" id="historyBtn"><span class="action-btn__icon">📋</span>History</button>
       </div>
 
-      <div class="tx-feed">
+      <div class="tx-feed" id="txFeed" style="display:none">
         <div class="tx-feed__title">Recent Activity</div>
         <div id="txList"><p style="color:var(--muted);font-size:.88rem">Loading…</p></div>
       </div>
@@ -727,7 +725,12 @@ async function showWallet() {
   document.getElementById('addrLine').addEventListener('click', async () => {
     try { await navigator.clipboard.writeText(address); } catch {}
     const el = document.getElementById('addrLine');
-    if (el) { el.textContent = 'Copied!'; setTimeout(() => { if (el) el.textContent = shortAddr(address); }, 2000); }
+    if (el) { el.textContent = 'Copied!'; setTimeout(() => { if (el) el.textContent = shortAddr(address); }, 1500); }
+  });
+  document.getElementById('copyAddrBtn').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(address); } catch {}
+    const b = document.getElementById('copyAddrBtn');
+    if (b) { b.textContent = '✓'; setTimeout(() => { if (b) b.textContent = 'Copy'; }, 1500); }
   });
 
   document.getElementById('lockBtn').addEventListener('click', () => {
@@ -743,44 +746,86 @@ async function showWallet() {
   document.getElementById('tokensBtn').addEventListener('click', showTokens);
   document.getElementById('connectBtn').addEventListener('click', showWalletConnect);
   document.getElementById('musicBtn').addEventListener('click', showMusic);
+  document.getElementById('historyBtn').addEventListener('click', () => {
+    const feed = document.getElementById('txFeed');
+    if (feed) feed.style.display = feed.style.display === 'none' ? '' : 'none';
+    if (feed?.style.display !== 'none') {
+      fetchHistory(address).then(txs => {
+        const el = document.getElementById('txList');
+        if (!el) return;
+        if (!txs.length) { el.innerHTML = '<p style="color:var(--muted);font-size:.88rem">No transactions yet.</p>'; return; }
+        el.innerHTML = txs.slice(0, 20).map(tx => {
+          const isIn = (tx.to || '').toUpperCase() === address;
+          const dir = isIn ? 'in' : 'out';
+          const peer = isIn ? (tx.from || '').slice(0, 10) : (tx.to || '').slice(0, 10);
+          const sym = tx.token || 'THR';
+          const amt = tx.amount ? `${isIn ? '+' : '-'}${tx.amount} ${sym}` : '';
+          const date = tx.timestamp ? new Date(tx.timestamp * 1000).toLocaleDateString() : '';
+          return `<div class="tx-item">
+            <div class="tx-item__dir tx-item__dir--${dir}">${isIn ? '↓' : '↑'}</div>
+            <div class="tx-item__info"><div class="tx-item__label">${isIn ? 'From' : 'To'} ${peer}…</div><div class="tx-item__date">${date}</div></div>
+            <div class="tx-item__amount tx-item__amount--${dir}">${amt}</div>
+          </div>`;
+        }).join('');
+      });
+    }
+  });
 
-  // Load balances (migration-aware: also checks legacy_address if new addr has 0)
+  // Load balances — same API as web wallet
   fetchBalances(address).then(data => {
     const el = document.getElementById('balancesArea');
     if (!el) return;
-    if (!data) { el.innerHTML = '<div class="balance-amount">— THR</div>'; return; }
-    const thr = data.thr_balance ?? data.THR ?? data.balance ?? data.thr ?? 0;
-    const wbtc = data.WBTC ?? data.wbtc ?? (data.balances?.WBTC) ?? 0;
-    const l2e = data.L2E ?? data.l2e ?? (data.balances?.L2E) ?? 0;
-    const primary = `${Number(thr).toLocaleString()} THR`;
-    const extras = [
-      wbtc > 0 ? `${Number(wbtc).toFixed(6)} WBTC` : '',
-      l2e > 0 ? `${Number(l2e).toFixed(2)} L2E` : '',
-    ].filter(Boolean).join(' · ');
-    el.innerHTML = `<div class="balance-amount">${primary}</div>` +
-      (extras ? `<div style="color:var(--muted);font-size:.8rem;margin-top:4px">${extras}</div>` : '');
-  });
+    const tokens = Array.isArray(data?.tokens) ? data.tokens : [];
+    const thrTok = tokens.find(t => t.symbol === 'THR');
+    const totalTHR = tokens.filter(t => t.value_in_thr != null)
+                          .reduce((s, t) => s + Number(t.value_in_thr || 0), 0);
+    const totalUSD = tokens.filter(t => t.value_usd != null)
+                          .reduce((s, t) => s + Number(t.value_usd || 0), 0);
+    const totalBTC = tokens.filter(t => t.value_wbtc != null)
+                          .reduce((s, t) => s + Number(t.value_wbtc || 0), 0);
 
-  // Load history
-  fetchHistory(address).then(txs => {
-    const el = document.getElementById('txList');
-    if (!el) return;
-    if (!txs.length) { el.innerHTML = '<p style="color:var(--muted);font-size:.88rem">No transactions yet.</p>'; return; }
-    el.innerHTML = txs.slice(0, 20).map(tx => {
-      const isIn = (tx.to || '').toUpperCase() === address;
-      const dir = isIn ? 'in' : 'out';
-      const peer = isIn ? (tx.from || '').slice(0, 12) : (tx.to || '').slice(0, 12);
-      const label = isIn ? `From ${peer}…` : `To ${peer}…`;
-      const sym = tx.token || 'THR';
-      const amt = tx.amount ? `${isIn ? '+' : '-'}${tx.amount} ${sym}` : '';
-      const date = tx.timestamp ? new Date(tx.timestamp * 1000).toLocaleDateString() : '';
-      return `<div class="tx-item">
-        <div class="tx-item__dir tx-item__dir--${dir}">${isIn ? '↓' : '↑'}</div>
-        <div class="tx-item__info"><div class="tx-item__label">${label}</div><div class="tx-item__date">${date}</div></div>
-        <div class="tx-item__amount tx-item__amount--${dir}">${amt}</div>
+    if (!tokens.length) {
+      // Fallback to legacy thr_balance field
+      const raw = data?.thr_balance ?? 0;
+      el.innerHTML = `<div class="balance-amount">${Number(raw).toLocaleString()} THR</div>`;
+      return;
+    }
+
+    const tokenRows = tokens.filter(t => Number(t.balance) > 0).map(t => {
+      const bal = Number(t.balance || 0);
+      const sym = t.symbol || '?';
+      const color = t.color || '#00ff66';
+      const logo = t.logo_url || t.logo || '';
+      const valThr = t.value_in_thr != null ? `≈ ${Number(t.value_in_thr).toFixed(4)} THR` : '';
+      const valUsd = t.value_usd != null ? `≈ $${Number(t.value_usd).toFixed(2)}` : '';
+      const logoHtml = logo
+        ? `<img src="${logo}" alt="${sym}" style="width:28px;height:28px;border-radius:50%;object-fit:cover" onerror="this.style.display='none'">`
+        : `<div style="width:28px;height:28px;border-radius:50%;background:${color}33;border:1px solid ${color};display:flex;align-items:center;justify-content:center;font-size:.75rem;font-weight:bold;color:${color}">${sym[0]}</div>`;
+      return `<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid #ffffff10">
+        ${logoHtml}
+        <div style="flex:1;min-width:0">
+          <div style="font-size:.88rem;font-weight:600;color:#fff">${escHtml(t.name || sym)} <span style="color:var(--muted);font-size:.75rem">${sym}</span></div>
+          ${sym !== 'THR' && valThr ? `<div style="font-size:.72rem;color:var(--muted)">${valThr}</div>` : ''}
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:.88rem;color:#fff">${bal.toFixed(t.decimals ?? 6)} ${sym}</div>
+          <div style="font-size:.72rem;color:var(--muted)">${valUsd}</div>
+        </div>
       </div>`;
     }).join('');
+
+    el.innerHTML = `
+      <div style="text-align:center;padding:8px 0 12px">
+        <div class="balance-amount">${tokens.length ? totalTHR.toFixed(4) : '—'} THR</div>
+        <div style="color:var(--muted);font-size:.78rem;margin-top:3px">
+          ≈ ${totalUSD > 0 ? '$' + totalUSD.toFixed(2) : '—'} · ₿ ${totalBTC > 0 ? totalBTC.toFixed(8) : '—'}
+        </div>
+      </div>
+      <div style="font-size:.7rem;text-transform:uppercase;letter-spacing:1px;color:var(--accent);margin-bottom:4px">Assets</div>
+      ${tokenRows || '<div style="color:var(--muted);font-size:.85rem;padding:8px 0">No tokens found</div>'}
+    `;
   });
+
 }
 
 // ─── Tokens screen ────────────────────────────────────────────────────────────

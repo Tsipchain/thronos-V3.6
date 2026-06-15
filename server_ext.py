@@ -538,6 +538,54 @@ def wc_get_result(request_id):
     return _jsonify(ok=True, **result), 200
 
 
+@app.route('/api/wallet/v1/transfer', methods=['POST'])
+def wallet_v1_transfer():
+    """
+    PWA send: caller provides private_key_hex, server derives address and verifies
+    ownership, then executes the transfer via ledger adapter (no HMAC auth needed).
+    """
+    data = _request.get_json() or {}
+    from_addr   = (data.get('from')             or '').strip().upper()
+    to_addr     = (data.get('to')               or '').strip()
+    amount_raw  = data.get('amount', 0)
+    token       = (data.get('token')            or 'THR').upper()
+    priv_hex    = (data.get('private_key_hex')  or '').strip()
+
+    if not from_addr or not to_addr or not priv_hex:
+        return _jsonify(ok=False, error='missing_required_fields'), 400
+    if token != 'THR':
+        return _jsonify(ok=False, error='only_thr_supported_use_tokens_transfer'), 400
+
+    # ── Verify ownership: derive THR address from private key ─────────────────
+    try:
+        from cryptography.hazmat.primitives.asymmetric import ec as _ec
+        from cryptography.hazmat.primitives.serialization import Encoding as _Enc, PublicFormat as _PF
+        from cryptography.hazmat.backends import default_backend as _backend
+        from wallet_v1_address_derivation import derive_thronos_address as _derive
+        _priv_int = int(priv_hex, 16)
+        _priv_key = _ec.derive_private_key(_priv_int, _ec.SECP256K1(), _backend())
+        _pub_bytes = _priv_key.public_key().public_bytes(_Enc.X962, _PF.CompressedPoint)
+        derived_addr = _derive(_pub_bytes.hex())
+        if derived_addr.upper() != from_addr.upper():
+            app.logger.warning('[V1Transfer] address_mismatch derived=%s from=%s', derived_addr, from_addr)
+            return _jsonify(ok=False, error='address_mismatch'), 403
+    except Exception as _e:
+        app.logger.warning('[V1Transfer] key_error: %s', _e)
+        return _jsonify(ok=False, error='invalid_private_key', detail=str(_e)), 400
+
+    # ── Execute transfer via adapter ───────────────────────────────────────────
+    try:
+        from wallet_v1_execution_adapter import execute_verified_signed_transfer as _exec_tx
+        ok, result, status_code = _exec_tx({
+            'from': from_addr, 'to': to_addr,
+            'amount': amount_raw, 'speed': 'fast', 'nonce': None,
+        })
+        return _jsonify(**result), status_code
+    except Exception as _e:
+        app.logger.error('[V1Transfer] transfer_error: %s', _e)
+        return _jsonify(ok=False, error='transfer_failed', detail=str(_e)), 500
+
+
 # ── THR Wallet PWA — served from public/wallet-pwa/ ───────────────────────────
 import os as _os
 from flask import send_from_directory as _send

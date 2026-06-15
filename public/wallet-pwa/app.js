@@ -1480,7 +1480,7 @@ function _showTipModal() {
       <div style="font-size:1rem;font-weight:700;color:#fff;margin-bottom:16px">💰 Send Tip to Artist</div>
       <div style="font-size:.8rem;color:var(--muted);margin-bottom:12px;word-break:break-all">${escHtml(artistAddr)}</div>
       <label style="font-size:.82rem;color:var(--muted)">Amount (THR)</label>
-      <input type="number" id="tipAmount" class="input" placeholder="1.00" min="0.01" step="0.01" inputmode="decimal" style="margin-bottom:14px">
+      <input type="number" id="tipAmount" class="input" value="1.00" min="0.01" step="0.01" inputmode="decimal" style="margin-bottom:14px">
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
         <button id="tipCancel" class="btn btn--ghost" style="padding:12px">Cancel</button>
         <button id="tipSend" class="btn btn--primary" style="padding:12px">Send Tip</button>

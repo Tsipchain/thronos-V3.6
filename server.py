@@ -19524,15 +19524,23 @@ def mining_center_page():
 def miner_kit_page():
     """Render miner kit download page (Phase 6B)"""
     return render_template("miner_kit_download.html")
+
+
+@app.route("/download/miner-kit", methods=["GET"])
+def download_miner_kit_zip():
     """
-    Download miner kit as JSON file (requires pledge verification)
+    Build a personalized miner kit zip with the user's THR address
+    pre-filled into every config — CPU (HTTP miner), ASIC/USB stick
+    (Stratum proxy + cgminer.conf). User just extracts and runs, no
+    manual editing required. Requires a confirmed pledge.
 
     GET /download/miner-kit?address=THR7c...
     """
     try:
-        thr_address = request.args.get("address", "")
+        thr_address = (request.args.get("address") or "").strip()
+        if not validate_thr_address(thr_address):
+            return jsonify(status="error", error="valid THR address required"), 400
 
-        # Check if user has made a pledge
         pledge_entry = get_mining_whitelist_entry(thr_address)
         if not pledge_entry or not pledge_entry.get("pledge_ok", False):
             return jsonify(
@@ -19540,25 +19548,83 @@ def miner_kit_page():
                 error="Complete a THR pledge to download miner kit"
             ), 403
 
-        # Load miner kit configuration
-        kit_file = Path("/home/user/thronos-V3.6/miner-kit-config.json")
-        if not kit_file.exists():
-            kit_file = Path(DATA_DIR) / "miner-kit-config.json"
+        base_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "miner_kit")
 
-        if kit_file.exists():
-            kit_data = json.loads(kit_file.read_text())
-            return jsonify({
-                **kit_data,
-                "pledge_verified": True,
-                "miner_address": thr_address,
-                "download_timestamp": datetime.utcnow().isoformat()
-            }), 200
-        else:
-            return jsonify(status="error", error="Miner kit not available"), 404
+        def _read(name):
+            with open(os.path.join(base_dir, name), "r", encoding="utf-8") as f:
+                return f.read()
+
+        server_url = os.getenv("THRONOS_SERVER_URL", os.getenv("THRONOS_SERVER", "https://thrchain.up.railway.app"))
+
+        cgminer_conf = _read("cgminer.conf").replace("YOUR_V1_WALLET_ADDRESS", thr_address)
+        pow_miner_cpu = _read("pow_miner_cpu.py").replace(
+            'THR_ADDRESS = "THR_PUT_YOUR_ADDRESS_HERE"', f'THR_ADDRESS = "{thr_address}"'
+        )
+        stratum_proxy = _read("stratum_proxy.py").replace(
+            'STRATUM_PROXY_ADDRESS = os.getenv("STRATUM_PROXY_ADDRESS", "")',
+            f'STRATUM_PROXY_ADDRESS = os.getenv("STRATUM_PROXY_ADDRESS", "{thr_address}")',
+        )
+
+        readme = f"""Thronos Miner Kit — pre-configured for {thr_address}
+=====================================================================
+
+This kit already has your THR address filled in everywhere it's
+needed. Extract the zip and pick the mining method that matches your
+hardware:
+
+CPU MINING
+----------
+1. pip install requests
+2. python pow_miner_cpu.py
+(Uses the HTTP mining contract: GET /api/miner/work, POST /api/miner/submit)
+
+GPU MINING
+----------
+No dedicated GPU binary is shipped yet — the CPU script's HTTP contract
+(GET /api/miner/work, POST /api/miner/submit) is hardware-agnostic, so a
+GPU miner can reuse it by submitting nonce/pow_hash/address the same way.
+
+ASIC MINING (Stratum)
+----------------------
+1. python stratum_proxy.py        (bridges Stratum -> Thronos HTTP API)
+2. run_miner.bat                  (Windows, requires cgminer.exe)
+   or: cgminer -c cgminer.conf    (Linux/Mac)
+
+USB STICK MINERS (e.g. GekkoScience, Antminer USB)
+----------------------------------------------------
+Same as ASIC above — plug in the USB miner, run stratum_proxy.py, then
+point cgminer at cgminer.conf. USB stick miners are detected by cgminer
+automatically; no separate config is required.
+
+DUAL MINING (Thronos + NiceHash, Windows only)
+------------------------------------------------
+start_dual_mining.bat
+
+Your THR address: {thr_address}
+Server: {server_url}
+"""
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("README.txt", readme)
+            zf.writestr("cgminer.conf", cgminer_conf)
+            zf.writestr("pow_miner_cpu.py", pow_miner_cpu)
+            zf.writestr("stratum_proxy.py", stratum_proxy)
+            zf.writestr("run_miner.bat", _read("run_miner.bat"))
+            zf.writestr("start_dual_mining.bat", _read("start_dual_mining.bat"))
+            zf.writestr("job_sniffer.py", _read("job_sniffer.py"))
+        buf.seek(0)
+
+        return send_file(
+            buf,
+            mimetype="application/zip",
+            as_attachment=True,
+            download_name=f"thronos_miner_kit_{thr_address[:12]}.zip",
+        )
 
     except Exception as e:
         logger = logging.getLogger("thronos")
-        logger.error(f"Error downloading miner kit: {e}")
+        logger.error(f"Error building miner kit zip: {e}")
         return jsonify(status="error", error=str(e)), 500
 
 

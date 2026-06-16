@@ -299,6 +299,48 @@ export async function removeLiquiditySigned(params: { pool_id: string; shares: n
   return request('/api/v1/pools/remove_liquidity', { method: 'POST', body: JSON.stringify({ pool_id: params.pool_id, shares: params.shares, tx: params.signedTx }) });
 }
 
+export interface HalvingEntry {
+  epoch: number;
+  halving_date: string;
+  block_height: number;
+  reward_before: number;
+  reward_after: number;
+  supply_at_halving: number;
+  epoch_duration_hours: number;
+  blocks_until_halving: number;
+}
+
+export async function getHalvingSchedule(): Promise<{ total_supply: number; block_time_minutes: number; halving_interval_blocks: number; halvings: HalvingEntry[] }> {
+  return request('/api/mining/halving-schedule');
+}
+
+export interface CurrentEpochInfo {
+  epoch: number;
+  block_range: string;
+  current_block: number;
+  blocks_until_halving: number;
+  halving_date_estimate: string;
+  current_reward: number;
+  reward_distribution: Record<string, number>;
+  supply_circulating: number;
+  supply_max: number;
+}
+
+export async function getCurrentEpoch(blockHeight?: number): Promise<CurrentEpochInfo> {
+  return request(`/api/mining/current-epoch${blockHeight ? `?block_height=${blockHeight}` : ''}`);
+}
+
+export async function getMiningEcosystemStats(): Promise<{
+  total_supply_max: number;
+  initial_reward: number;
+  block_time_minutes: number;
+  halving_interval_blocks: number;
+  halving_interval_months: number;
+  estimated_full_circulation_years: number;
+}> {
+  return request('/api/mining/ecosystem-stats');
+}
+
 export interface ThronosToken {
   id?: string;
   symbol: string;

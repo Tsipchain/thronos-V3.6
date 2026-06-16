@@ -16972,6 +16972,7 @@ async def api_pledge_submit(request: Request, db: Annotated[Session, Depends(get
             status="already_verified",
             thr_address=exists["thr_address"],
             pledge_hash=exists["pledge_hash"],
+            pdf_filename=exists.get("pdf_filename"),
             recovery_required=True,
             message="Pledge already exists for this BTC address"
         ), 200
@@ -17054,6 +17055,7 @@ async def api_pledge_submit(request: Request, db: Annotated[Session, Depends(get
             status="verified" if not pending_confirmation else "pending_confirmation",
             thr_address=thr_addr,
             pledge_hash=phash,
+            pdf_filename=pdf_name,
             secret_seed=send_seed,
             pending_confirmation=pending_confirmation,
             message="Pledge created successfully" if not pending_confirmation else "Pledge created, awaiting BTC confirmation"
@@ -17304,6 +17306,7 @@ def api_pledge_status():
             status=status,
             thr_address=exists["thr_address"],
             pledge_hash=exists["pledge_hash"],
+            pdf_filename=exists.get("pdf_filename"),
             timestamp=exists.get("timestamp"),
             has_passphrase=exists.get("has_passphrase", False),
             pending_confirmation=exists.get("pending_confirmation", False),

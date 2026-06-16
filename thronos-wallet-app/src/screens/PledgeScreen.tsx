@@ -9,7 +9,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import * as Clipboard from 'expo-clipboard';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS } from '../constants/theme';
 import { CONFIG } from '../constants/config';
-import { submitPledge, verifyBtcPayment, downloadPledgePdf } from '../services/api';
+import { submitPledge, getPledgeStatus } from '../services/api';
 
 // BTC Pledge Entry — The gateway to Thronos Network
 // Users send min BTC fee to the pledge address, watcher verifies,
@@ -24,6 +24,7 @@ export default function PledgeScreen({ navigation }: any) {
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
   const [thrAddress, setThrAddress] = useState<string | null>(null);
+  const [secretSeed, setSecretSeed] = useState<string | null>(null);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
 
   const copyPledgeAddress = async () => {
@@ -43,11 +44,17 @@ export default function PledgeScreen({ navigation }: any) {
         btc_address: btcAddress.trim(),
         pledge_text: pledgeText.trim() || 'I pledge to the Thronos Network',
       });
-      if (res.success && res.thr_address) {
+      if (res.ok && res.thr_address) {
         setThrAddress(res.thr_address);
-        setStep('verify');
+        if (res.secret_seed) setSecretSeed(res.secret_seed);
+        if (res.pdf_filename) setPdfUrl(`${CONFIG.API_URL}/contracts/${res.pdf_filename}`);
+        if (res.status === 'verified') {
+          setStep('complete');
+        } else {
+          setStep('verify');
+        }
       } else {
-        Alert.alert('Error', res.error || 'Pledge submission failed');
+        Alert.alert('Error', res.error || 'Pledge submission failed — make sure you already sent BTC to the pledge address first');
       }
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Network error');
@@ -60,16 +67,11 @@ export default function PledgeScreen({ navigation }: any) {
     if (!btcAddress) return;
     setLoading(true);
     try {
-      const res = await verifyBtcPayment(btcAddress);
-      if (res.verified) {
-        // Fetch PDF
-        if (thrAddress) {
-          const pdf = await downloadPledgePdf(thrAddress);
-          setPdfUrl(pdf.pdf_url);
-        }
+      const res = await getPledgeStatus(btcAddress);
+      if (res.ok && res.status === 'verified') {
         setStep('complete');
       } else {
-        Alert.alert('Not Yet', 'BTC payment not detected yet. The watcher checks every few minutes. Please wait and try again.');
+        Alert.alert('Not Yet', 'BTC payment not confirmed yet. The watcher checks every few minutes. Please wait and try again.');
       }
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Verification failed');
@@ -251,13 +253,22 @@ export default function PledgeScreen({ navigation }: any) {
               <Ionicons name="checkmark-circle" size={56} color={COLORS.success} />
               <Text style={styles.completeTitle}>Welcome to Thronos!</Text>
               <Text style={styles.completeDesc}>
-                Your pledge has been verified. Your THR wallet is now active and your mobile
-                device has been registered as a Phantom Network node.
+                Your pledge has been verified and a THR address has been reserved for you.
               </Text>
               {thrAddress && (
                 <View style={styles.thrFinal}>
                   <Text style={styles.thrFinalLabel}>THR Address</Text>
                   <Text style={styles.thrFinalAddr}>{thrAddress}</Text>
+                </View>
+              )}
+              {secretSeed && (
+                <View style={styles.thrFinal}>
+                  <Text style={styles.thrFinalLabel}>⚠️ Your Send Secret — save this!</Text>
+                  <Text style={styles.thrFinalAddr}>{secretSeed}</Text>
+                  <Text style={[styles.stepDesc, { marginTop: 6 }]}>
+                    To get your full V1 wallet (and import it on other devices), open your wallet
+                    app's "Pledge Secret" import option and enter this secret with a PIN.
+                  </Text>
                 </View>
               )}
             </LinearGradient>

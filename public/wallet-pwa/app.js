@@ -409,10 +409,11 @@ async function showImport(addingExtra = false) {
       <div class="logo">⬡ THR</div>
       <p class="tagline">Thronos Chain Wallet</p>
 
-      <div style="display:flex;gap:6px;margin-bottom:10px">
-        <button class="btn btn--ghost" id="tabCreate" style="flex:1;padding:8px;font-size:.82rem;border-radius:10px">✨ New Wallet</button>
-        <button class="btn" id="tabKit" style="flex:1;padding:8px;font-size:.82rem;background:var(--accent);color:#fff;border-radius:10px">Recovery Kit</button>
-        <button class="btn btn--ghost" id="tabPledge" style="flex:1;padding:8px;font-size:.82rem;border-radius:10px">Pledge Secret</button>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">
+        <button class="btn btn--ghost" id="tabCreate" style="flex:1;min-width:90px;padding:8px;font-size:.8rem;border-radius:10px">✨ New Wallet</button>
+        <button class="btn" id="tabKit" style="flex:1;min-width:90px;padding:8px;font-size:.8rem;background:var(--accent);color:#fff;border-radius:10px">Recovery Kit</button>
+        <button class="btn btn--ghost" id="tabBtcPledge" style="flex:1;min-width:90px;padding:8px;font-size:.8rem;border-radius:10px">₿ BTC Pledge</button>
+        <button class="btn btn--ghost" id="tabPledge" style="flex:1;min-width:90px;padding:8px;font-size:.8rem;border-radius:10px">Pledge Secret</button>
       </div>
 
       <!-- Create New Wallet tab -->
@@ -449,6 +450,28 @@ async function showImport(addingExtra = false) {
         <div id="err" class="banner banner--error hidden"></div>
       </div>
 
+      <!-- BTC Pledge tab (new wallet via direct BTC payment) -->
+      <div id="paneBtcPledge" class="card" style="display:none">
+        <h2 style="font-size:1.1rem">₿ BTC Pledge</h2>
+        <p style="color:var(--muted);font-size:.85rem">Send a small BTC fee to the pledge address below, then submit your sending BTC address to claim a THR wallet.</p>
+        <div id="btcPledgeStep1">
+          <div style="background:#0d0a1a;border:1px solid #F7931A;border-radius:8px;padding:10px;font-size:.82rem;color:#F7931A;word-break:break-all;margin-bottom:10px" id="btcPledgeVaultBox">Loading vault address…</div>
+          <input type="text" id="btcPledgeAddr" class="input" placeholder="Your BTC address (sender)" autocomplete="off">
+          <input type="text" id="btcPledgeText" class="input mt8" placeholder="Pledge message (optional)">
+          <button class="btn btn--primary mt8" id="btcPledgeSubmitBtn">📤 Submit Pledge</button>
+        </div>
+        <div id="btcPledgeStep2" style="display:none;margin-top:12px">
+          <div id="btcPledgeInfo" style="background:#0d0a1a;border:1px solid var(--accent);border-radius:8px;padding:10px;font-size:.82rem;color:var(--accent);word-break:break-all;margin-bottom:10px"></div>
+          <div id="btcPledgeSecretBox" style="background:#1a0a0a;border:1px solid #ff6b6b;border-radius:8px;padding:10px;font-size:.8rem;color:#ff6b6b;word-break:break-all;margin-bottom:10px"></div>
+          <button class="btn btn--ghost" id="btcPledgeCheckBtn">🔄 Check Confirmation</button>
+        </div>
+        <div id="btcPledgeDone" style="display:none;margin-top:12px">
+          <p style="color:var(--muted);font-size:.85rem">✅ Confirmed! Go to the <strong>Pledge Secret</strong> tab and enter your send secret with a new PIN to get your full V1 wallet and Recovery Kit.</p>
+          <button class="btn btn--primary mt8" id="btcPledgeGoMigrateBtn">Go to Pledge Secret →</button>
+        </div>
+        <div id="btcPledgeErr" class="banner banner--error hidden"></div>
+      </div>
+
       <!-- Pledge Secret tab (HMAC/v0 wallet migration) -->
       <div id="panePledge" class="card" style="display:none">
         <h2 style="font-size:1.1rem">Pledge Wallet Migration</h2>
@@ -474,8 +497,8 @@ async function showImport(addingExtra = false) {
 
   // Tab switching (Create / Kit / Pledge)
   function activateTab(name) {
-    const panes = { create: 'paneCreate', kit: 'paneKit', pledge: 'panePledge' };
-    const tabs  = { create: 'tabCreate',  kit: 'tabKit',  pledge: 'tabPledge'  };
+    const panes = { create: 'paneCreate', kit: 'paneKit', btcpledge: 'paneBtcPledge', pledge: 'panePledge' };
+    const tabs  = { create: 'tabCreate',  kit: 'tabKit',  btcpledge: 'tabBtcPledge',  pledge: 'tabPledge'  };
     for (const k of Object.keys(panes)) {
       document.getElementById(panes[k]).style.display = (k === name) ? '' : 'none';
       document.getElementById(tabs[k]).style.background = (k === name) ? 'var(--accent)' : '';
@@ -484,6 +507,7 @@ async function showImport(addingExtra = false) {
   }
   document.getElementById('tabCreate').addEventListener('click', () => activateTab('create'));
   document.getElementById('tabKit').addEventListener('click', () => activateTab('kit'));
+  document.getElementById('tabBtcPledge').addEventListener('click', () => { activateTab('btcpledge'); loadBtcPledgeVault(); });
   document.getElementById('tabPledge').addEventListener('click', () => activateTab('pledge'));
 
   // ── Create New Wallet ──
@@ -548,6 +572,96 @@ async function showImport(addingExtra = false) {
       btn.disabled = false; btn.textContent = '✅ Create Wallet';
       errEl.textContent = 'Could not create wallet: ' + e.message;
       errEl.classList.remove('hidden');
+    }
+  });
+
+  // ── BTC Pledge ──
+  let btcPledgeSecret = null;
+  let btcPledgeBtcAddr = null;
+  async function loadBtcPledgeVault() {
+    const box = document.getElementById('btcPledgeVaultBox');
+    if (!box || box.dataset.loaded) return;
+    try {
+      const r = await fetch(`${API_WRITE}/api/pledge/quote`);
+      const d = await r.json().catch(() => ({}));
+      if (r.ok && d.ok !== false) {
+        box.innerHTML = `Send <b>${d.required_btc ?? '0.00001'} BTC</b> to:<br>${d.vault_address || '—'}`;
+        box.dataset.loaded = '1';
+      } else {
+        box.textContent = 'Could not load vault address.';
+      }
+    } catch (e) {
+      box.textContent = 'Network error loading vault address.';
+    }
+  }
+
+  document.getElementById('btcPledgeSubmitBtn').addEventListener('click', async () => {
+    const btcAddr = document.getElementById('btcPledgeAddr')?.value?.trim();
+    const pledgeText = document.getElementById('btcPledgeText')?.value?.trim();
+    const errEl = document.getElementById('btcPledgeErr');
+    errEl.classList.add('hidden');
+    if (!btcAddr) { errEl.textContent = 'Enter your sending BTC address'; errEl.classList.remove('hidden'); return; }
+    const btn = document.getElementById('btcPledgeSubmitBtn');
+    btn.disabled = true; btn.textContent = 'Submitting…';
+    try {
+      const r = await fetch(`${API_WRITE}/api/pledge`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ btc_address: btcAddr, pledge_text: pledgeText || 'I pledge to the Thronos Network' })
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok) {
+        errEl.textContent = 'Pledge failed: ' + (d.error || 'make sure you already sent BTC to the vault address above');
+        errEl.classList.remove('hidden'); return;
+      }
+      btcPledgeBtcAddr = btcAddr;
+      btcPledgeSecret = d.secret_seed || null;
+      document.getElementById('btcPledgeInfo').innerHTML = '✅ THR Address (pending):<br><b>' + (d.thr_address || '—') + '</b>';
+      if (btcPledgeSecret) {
+        document.getElementById('btcPledgeSecretBox').innerHTML =
+          '⚠️ Save this send secret — you need it to unlock your full V1 wallet:<br><b>' + btcPledgeSecret + '</b>';
+      }
+      document.getElementById('btcPledgeStep1').style.display = 'none';
+      if (d.status === 'verified') {
+        document.getElementById('btcPledgeStep2').style.display = 'none';
+        document.getElementById('btcPledgeDone').style.display = '';
+      } else {
+        document.getElementById('btcPledgeStep2').style.display = '';
+      }
+    } catch (e) {
+      errEl.textContent = 'Network error: ' + e.message; errEl.classList.remove('hidden');
+    } finally {
+      btn.disabled = false; btn.textContent = '📤 Submit Pledge';
+    }
+  });
+
+  document.getElementById('btcPledgeCheckBtn').addEventListener('click', async () => {
+    const errEl = document.getElementById('btcPledgeErr');
+    errEl.classList.add('hidden');
+    if (!btcPledgeBtcAddr) return;
+    const btn = document.getElementById('btcPledgeCheckBtn');
+    btn.disabled = true; btn.textContent = 'Checking…';
+    try {
+      const r = await fetch(`${API_WRITE}/api/pledge/status?btc=${encodeURIComponent(btcPledgeBtcAddr)}`);
+      const d = await r.json().catch(() => ({}));
+      if (d.ok && d.status === 'verified') {
+        document.getElementById('btcPledgeStep2').style.display = 'none';
+        document.getElementById('btcPledgeDone').style.display = '';
+      } else {
+        errEl.textContent = 'BTC payment not confirmed yet. The watcher checks every few minutes.';
+        errEl.classList.remove('hidden');
+      }
+    } catch (e) {
+      errEl.textContent = 'Network error: ' + e.message; errEl.classList.remove('hidden');
+    } finally {
+      btn.disabled = false; btn.textContent = '🔄 Check Confirmation';
+    }
+  });
+
+  document.getElementById('btcPledgeGoMigrateBtn').addEventListener('click', () => {
+    activateTab('pledge');
+    if (btcPledgeSecret) {
+      const secretInput = document.getElementById('pledgeSecret');
+      if (secretInput) secretInput.value = btcPledgeSecret;
     }
   });
 

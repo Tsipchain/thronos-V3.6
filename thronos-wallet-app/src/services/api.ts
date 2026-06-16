@@ -259,16 +259,12 @@ export async function getBridgeStats(): Promise<{ total_burned_thr: number; tota
   return request('/api/bridge/stats');
 }
 
-export async function submitPledge(params: { btc_address: string; pledge_text: string; recovery_phrase?: string }): Promise<{ success: boolean; thr_address?: string; send_secret?: string; pledge_hash?: string; pdf_filename?: string; error?: string }> {
-  return request('/api/pledge/submit', { method: 'POST', body: JSON.stringify(params) });
+export async function submitPledge(params: { btc_address: string; pledge_text: string }): Promise<{ ok: boolean; status?: string; thr_address?: string; secret_seed?: string; pledge_hash?: string; pending_confirmation?: boolean; error?: string }> {
+  return request('/api/pledge', { method: 'POST', body: JSON.stringify({ btc_address: params.btc_address, pledge_text: params.pledge_text }) });
 }
 
-export async function verifyBtcPayment(btc_address: string): Promise<{ verified: boolean; amount?: number; txid?: string }> {
-  return request(`/api/pledge/verify_btc/${btc_address}`);
-}
-
-export async function downloadPledgePdf(thr_address: string): Promise<{ pdf_url: string }> {
-  return request(`/api/pledge/pdf/${thr_address}`);
+export async function getPledgeStatus(btc_address: string): Promise<{ ok: boolean; status?: string; thr_address?: string; pledge_hash?: string; pending_confirmation?: boolean }> {
+  return request(`/api/pledge/status?btc=${encodeURIComponent(btc_address)}`);
 }
 
 export async function getBnbPledgeQuote(): Promise<{ ok: boolean; vault_address?: string; token_contract?: string; chain?: string; min_usdt?: number; usdt_thr_rate?: number }> {

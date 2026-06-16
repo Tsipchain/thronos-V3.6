@@ -305,40 +305,32 @@ def verify_publickey_matches_address(signed_tx: Dict[str, Any]) -> Tuple[bool, s
             return True, ""
 
         # RULE 2: Check for active key binding (re-key ceremony case)
+        # Uses the same store written by /api/wallet/v1/key-binding/register
+        # and /api/wallet/v1/key-binding/rebind (see server.py WALLET_V1_PUBLIC_KEY_BINDINGS_FILE):
+        # {"bindings": {canonical_v1_address: {public_key, public_key_address, ...}}}
         try:
-            import hashlib
-            public_key_hash = hashlib.sha256(public_key_hex.encode()).hexdigest()[:32]
-
-            # Load key bindings from server state
             import os
             import json
-            bindings_file = os.path.join(os.environ.get('DATA_DIR', 'data'), 'wallet_v1_key_bindings.json')
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            data_dir = os.environ.get('DATA_DIR', os.path.join(base_dir, 'data'))
+            bindings_file = os.path.join(data_dir, 'wallet_v1_public_key_bindings.json')
 
             if os.path.exists(bindings_file):
                 with open(bindings_file, 'r') as f:
-                    bindings = json.load(f)
+                    store = json.load(f)
 
-                # Find active binding for this address
-                for binding in bindings:
-                    if (binding.get('canonical_v1_address') == from_address and
-                        binding.get('status') == 'active'):
-                        # Check if public key hash matches
-                        if binding.get('active_public_key_hash') == public_key_hash:
-                            # Key binding is valid
-                            bound_key_address = binding.get('bound_key_address', '')
-                            if derived_address == bound_key_address:
-                                # Hash matches and derived address matches binding
-                                return True, ""
-                            else:
-                                return (
-                                    False,
-                                    f"binding_address_mismatch:expected_{bound_key_address}_got_{derived_address}",
-                                )
-                        else:
-                            return (
-                                False,
-                                f"binding_key_hash_mismatch:no_matching_binding",
-                            )
+                binding = (store or {}).get('bindings', {}).get(from_address)
+                if binding:
+                    bound_pubkey = (binding.get('public_key') or '').strip().lower()
+                    if bound_pubkey == public_key_hex.strip().lower():
+                        bound_key_address = binding.get('public_key_address', '')
+                        if not bound_key_address or derived_address == bound_key_address:
+                            return True, ""
+                        return (
+                            False,
+                            f"binding_address_mismatch:expected_{bound_key_address}_got_{derived_address}",
+                        )
+                    return False, "binding_key_mismatch:no_matching_binding"
         except Exception as binding_check_err:
             # Binding check failed, fall through to final error
             pass

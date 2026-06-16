@@ -267,6 +267,10 @@ export async function getPledgeStatus(btc_address: string): Promise<{ ok: boolea
   return request(`/api/pledge/status?btc=${encodeURIComponent(btc_address)}`);
 }
 
+export async function pledgeMigrate(params: { send_secret: string; pin: string }): Promise<{ ok: boolean; canonical_v1_address?: string; recovery_kit?: string; pdf_url?: string; error?: string }> {
+  return request('/api/wallet/v1/pledge-migrate', { method: 'POST', body: JSON.stringify(params) });
+}
+
 export async function getBnbPledgeQuote(): Promise<{ ok: boolean; vault_address?: string; token_contract?: string; chain?: string; min_usdt?: number; usdt_thr_rate?: number }> {
   return request('/api/pledge/bnb/quote');
 }

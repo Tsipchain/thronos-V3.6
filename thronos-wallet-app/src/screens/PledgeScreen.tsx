@@ -9,13 +9,13 @@ import { LinearGradient } from 'expo-linear-gradient';
 import * as Clipboard from 'expo-clipboard';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS } from '../constants/theme';
 import { CONFIG } from '../constants/config';
-import { submitPledge, getPledgeStatus } from '../services/api';
+import { submitPledge, getPledgeStatus, pledgeMigrate } from '../services/api';
 
 // BTC Pledge Entry — The gateway to Thronos Network
 // Users send min BTC fee to the pledge address, watcher verifies,
 // then a THR wallet + encrypted PDF contract is generated.
 
-type Step = 'intro' | 'send_btc' | 'verify' | 'complete';
+type Step = 'intro' | 'send_btc' | 'verify' | 'complete' | 'v1_ready';
 
 export default function PledgeScreen({ navigation }: any) {
   const [step, setStep] = useState<Step>('intro');
@@ -26,6 +26,10 @@ export default function PledgeScreen({ navigation }: any) {
   const [thrAddress, setThrAddress] = useState<string | null>(null);
   const [secretSeed, setSecretSeed] = useState<string | null>(null);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+  const [pin, setPin] = useState('');
+  const [pinConfirm, setPinConfirm] = useState('');
+  const [v1Address, setV1Address] = useState<string | null>(null);
+  const [v1PdfUrl, setV1PdfUrl] = useState<string | null>(null);
 
   const copyPledgeAddress = async () => {
     await Clipboard.setStringAsync(CONFIG.BTC_PLEDGE_ADDRESS);
@@ -79,6 +83,36 @@ export default function PledgeScreen({ navigation }: any) {
       setLoading(false);
     }
   }, [btcAddress, thrAddress]);
+
+  const handleCreateV1 = useCallback(async () => {
+    if (!pin || pin.length < 4) {
+      Alert.alert('PIN Required', 'Enter a PIN of at least 4 digits');
+      return;
+    }
+    if (pin !== pinConfirm) {
+      Alert.alert('PIN Mismatch', 'PINs do not match — please re-enter');
+      return;
+    }
+    if (!secretSeed) {
+      Alert.alert('Error', 'No pledge secret — please re-submit your pledge');
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await pledgeMigrate({ send_secret: secretSeed, pin });
+      if (res.ok && res.canonical_v1_address) {
+        setV1Address(res.canonical_v1_address);
+        if (res.pdf_url) setV1PdfUrl(`${CONFIG.API_URL}${res.pdf_url}`);
+        setStep('v1_ready');
+      } else {
+        Alert.alert('Error', res.error || 'V1 wallet creation failed');
+      }
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Network error');
+    } finally {
+      setLoading(false);
+    }
+  }, [pin, pinConfirm, secretSeed]);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -246,40 +280,90 @@ export default function PledgeScreen({ navigation }: any) {
           </>
         )}
 
-        {/* Step: Complete */}
+        {/* Step: Complete — set PIN to create V1 wallet */}
         {step === 'complete' && (
           <>
             <LinearGradient colors={['#001A00', '#000D05']} style={styles.completeCard}>
               <Ionicons name="checkmark-circle" size={56} color={COLORS.success} />
-              <Text style={styles.completeTitle}>Welcome to Thronos!</Text>
+              <Text style={styles.completeTitle}>Pledge Confirmed!</Text>
               <Text style={styles.completeDesc}>
-                Your pledge has been verified and a THR address has been reserved for you.
+                Set a PIN to generate your V1 wallet. We'll create your encrypted Recovery Kit
+                and a PDF contract with your secret embedded via LSB steganography.
               </Text>
               {thrAddress && (
                 <View style={styles.thrFinal}>
-                  <Text style={styles.thrFinalLabel}>THR Address</Text>
+                  <Text style={styles.thrFinalLabel}>Reserved THR Address</Text>
                   <Text style={styles.thrFinalAddr}>{thrAddress}</Text>
-                </View>
-              )}
-              {secretSeed && (
-                <View style={styles.thrFinal}>
-                  <Text style={styles.thrFinalLabel}>⚠️ Your Send Secret — save this!</Text>
-                  <Text style={styles.thrFinalAddr}>{secretSeed}</Text>
-                  <Text style={[styles.stepDesc, { marginTop: 6 }]}>
-                    To get your full V1 wallet (and import it on other devices), open your wallet
-                    app's "Pledge Secret" import option and enter this secret with a PIN.
-                  </Text>
                 </View>
               )}
             </LinearGradient>
 
-            {pdfUrl && (
+            <Text style={styles.inputLabel}>New PIN (4-8 digits)</Text>
+            <TextInput
+              style={styles.input}
+              value={pin}
+              onChangeText={setPin}
+              placeholder="Enter PIN..."
+              placeholderTextColor={COLORS.textMuted}
+              secureTextEntry
+              keyboardType="numeric"
+              maxLength={8}
+            />
+
+            <Text style={styles.inputLabel}>Confirm PIN</Text>
+            <TextInput
+              style={styles.input}
+              value={pinConfirm}
+              onChangeText={setPinConfirm}
+              placeholder="Re-enter PIN..."
+              placeholderTextColor={COLORS.textMuted}
+              secureTextEntry
+              keyboardType="numeric"
+              maxLength={8}
+            />
+
+            <TouchableOpacity
+              style={[styles.primaryBtn, loading && styles.btnDisabled]}
+              onPress={handleCreateV1}
+              disabled={loading}
+            >
+              {loading ? (
+                <ActivityIndicator color={COLORS.background} />
+              ) : (
+                <>
+                  <Ionicons name="key" size={20} color={COLORS.background} />
+                  <Text style={styles.primaryBtnText}>Create V1 Wallet</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </>
+        )}
+
+        {/* Step: V1 Ready */}
+        {step === 'v1_ready' && (
+          <>
+            <LinearGradient colors={['#001A00', '#000D05']} style={styles.completeCard}>
+              <Ionicons name="shield-checkmark" size={56} color={COLORS.success} />
+              <Text style={styles.completeTitle}>Welcome to Thronos!</Text>
+              <Text style={styles.completeDesc}>
+                Your V1 wallet is ready. Save your Recovery Kit and download the PDF contract
+                — your secret is embedded in it via LSB steganography.
+              </Text>
+              {v1Address && (
+                <View style={styles.thrFinal}>
+                  <Text style={styles.thrFinalLabel}>Your V1 THR Address</Text>
+                  <Text style={styles.thrFinalAddr}>{v1Address}</Text>
+                </View>
+              )}
+            </LinearGradient>
+
+            {v1PdfUrl && (
               <TouchableOpacity
                 style={styles.pdfBtn}
-                onPress={() => Linking.openURL(pdfUrl)}
+                onPress={() => Linking.openURL(v1PdfUrl!)}
               >
                 <Ionicons name="document" size={20} color={COLORS.gold} />
-                <Text style={styles.pdfBtnText}>Download Encrypted PDF Contract</Text>
+                <Text style={styles.pdfBtnText}>Download PDF Contract (LSB)</Text>
               </TouchableOpacity>
             )}
 

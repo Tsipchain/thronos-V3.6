@@ -466,8 +466,10 @@ async function showImport(addingExtra = false) {
           <button class="btn btn--ghost" id="btcPledgeCheckBtn">🔄 Check Confirmation</button>
         </div>
         <div id="btcPledgeDone" style="display:none;margin-top:12px">
-          <p style="color:var(--muted);font-size:.85rem">✅ Confirmed! Go to the <strong>Pledge Secret</strong> tab and enter your send secret with a new PIN to get your full V1 wallet and Recovery Kit.</p>
-          <button class="btn btn--primary mt8" id="btcPledgeGoMigrateBtn">Go to Pledge Secret →</button>
+          <p style="color:var(--muted);font-size:.85rem">✅ BTC confirmed! Set a PIN to create your V1 wallet — we'll generate your Recovery Kit and encrypted PDF contract with LSB steganography.</p>
+          <input type="password" id="btcPledgePin" class="input mt8" placeholder="New PIN (4-8 digits)" autocomplete="new-password">
+          <input type="password" id="btcPledgePinConfirm" class="input mt8" placeholder="Confirm PIN" autocomplete="new-password">
+          <button class="btn btn--primary mt8" id="btcPledgeCreateV1Btn">🔑 Create V1 Wallet</button>
         </div>
         <div id="btcPledgeErr" class="banner banner--error hidden"></div>
       </div>
@@ -657,12 +659,55 @@ async function showImport(addingExtra = false) {
     }
   });
 
-  document.getElementById('btcPledgeGoMigrateBtn').addEventListener('click', () => {
-    activateTab('pledge');
-    if (btcPledgeSecret) {
-      const secretInput = document.getElementById('pledgeSecret');
-      if (secretInput) secretInput.value = btcPledgeSecret;
-    }
+  document.getElementById('btcPledgeCreateV1Btn').addEventListener('click', async () => {
+    const pin = document.getElementById('btcPledgePin')?.value?.trim();
+    const pin2 = document.getElementById('btcPledgePinConfirm')?.value?.trim();
+    const errEl = document.getElementById('btcPledgeErr');
+    errEl.classList.add('hidden');
+    if (!pin || pin.length < 4) { errEl.textContent = 'PIN must be 4-8 digits'; errEl.classList.remove('hidden'); return; }
+    if (pin !== pin2) { errEl.textContent = 'PINs do not match'; errEl.classList.remove('hidden'); return; }
+    if (!btcPledgeSecret) { errEl.textContent = 'No pledge secret — submit your pledge first'; errEl.classList.remove('hidden'); return; }
+    const btn = document.getElementById('btcPledgeCreateV1Btn');
+    btn.disabled = true; btn.textContent = 'Creating…';
+    try {
+      const r = await fetch(`${API_WRITE}/api/wallet/v1/pledge-migrate`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ send_secret: btcPledgeSecret, pin })
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok) {
+        errEl.textContent = 'V1 creation failed: ' + (d.error || d.detail || 'unknown');
+        errEl.classList.remove('hidden'); return;
+      }
+      const canonical = d.canonical_v1_address;
+      const kitObj = d.recovery_kit ? (() => { try { return JSON.parse(d.recovery_kit); } catch { return { canonical_v1_address: canonical }; } })() : { canonical_v1_address: canonical };
+      upsertAccount(canonical, kitObj, shortAddr(canonical));
+      setActiveAddr(canonical);
+      let migratedPrivHex = null;
+      try {
+        const encBlob = kitObj.encrypted_private_key_backup ?? kitObj.wallet_v1_encrypted_priv ?? kitObj.encrypted_private_key ?? kitObj.enc_key;
+        if (encBlob) migratedPrivHex = await decryptBlob(encBlob, pin);
+      } catch {}
+      if (migratedPrivHex) unlocked.set(canonical, { privHex: migratedPrivHex });
+      if (d.recovery_kit) {
+        const blob = new Blob([d.recovery_kit], { type: 'application/json' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `thr-recovery-kit-${canonical.slice(0, 10)}.json`;
+        a.click();
+        URL.revokeObjectURL(a.href);
+      }
+      if (d.pdf_url) {
+        const pdfMsg = document.createElement('div');
+        pdfMsg.style.cssText = 'margin:8px 0;padding:8px;background:#0d0a1a;border:1px solid var(--accent);border-radius:6px;font-size:.82rem;text-align:center';
+        pdfMsg.innerHTML = `📄 <a href="${API_WRITE}${d.pdf_url}" target="_blank" style="color:var(--accent)">Download PDF Contract (LSB steganography)</a>`;
+        document.getElementById('btcPledgeErr')?.parentNode?.insertBefore(pdfMsg, document.getElementById('btcPledgeErr'));
+      }
+      await promptFaceID(canonical, migratedPrivHex);
+      showWallet();
+    } catch (e) {
+      errEl.textContent = 'Network error: ' + e.message; errEl.classList.remove('hidden');
+    } finally { btn.disabled = false; btn.textContent = '🔑 Create V1 Wallet'; }
   });
 
   // Pledge lookup

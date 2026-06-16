@@ -203,6 +203,25 @@ async function _deriveEvmAddress(privHex) {
   } catch { return null; }
 }
 
+async function _fetchBtcAddress(privHex, address) {
+  if (!privHex) return '';
+  const cacheKey = `thr_btc_address_${address}`;
+  const cached = localStorage.getItem(cacheKey);
+  if (cached) return cached;
+  try {
+    const r = await fetch(`${API_WRITE}/api/wallet/v1/btc-address-from-key`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ private_key_hex: privHex }),
+    });
+    const d = await r.json();
+    if (d.ok && d.btc_address) {
+      localStorage.setItem(cacheKey, d.btc_address);
+      return d.btc_address;
+    }
+  } catch {}
+  return '';
+}
+
 async function _fetchBtcBalance(btcAddr) {
   if (!btcAddr) return null;
   try {
@@ -1443,7 +1462,7 @@ async function _rejectWcRequest(requestId, address) {
 async function showMultiChain() {
   const address = getActiveAddr();
   const { privHex } = unlocked.get(address) || {};
-  const btcAddr = localStorage.getItem('thr_btc_address') || localStorage.getItem('btc_address') || '';
+  let btcAddr = privHex ? await _fetchBtcAddress(privHex, address) : '';
 
   render(`
     <div class="screen">
@@ -2238,11 +2257,19 @@ function showSend(preselectedToken = null, prefillAddr = null) {
     _deriveEvmAddress(privHex).then(a => { cachedEvmAddr = a; }).catch(() => {});
   }
 
-  // BTC address from localStorage (set by wallet_session)
-  const btcAddr = localStorage.getItem('thr_btc_address') || localStorage.getItem('btc_address') || '';
+  let btcAddr = '';
+  if (privHex) {
+    _fetchBtcAddress(privHex, address).then(a => {
+      btcAddr = a;
+      if (selectedNetwork === 'bitcoin') {
+        const depVal = document.getElementById('depositAddrVal');
+        if (depVal) depVal.textContent = getDepositAddr('bitcoin');
+      }
+    }).catch(() => {});
+  }
 
   const getDepositAddr = (netId) => {
-    if (netId === 'bitcoin') return btcAddr || '(not available)';
+    if (netId === 'bitcoin') return btcAddr || '(unlock wallet to see)';
     if (['ethereum','bnb','arbitrum','base'].includes(netId)) return cachedEvmAddr || '(unlock wallet to see)';
     return address;
   };

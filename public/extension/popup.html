@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Thronos Wallet</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- ── Welcome / Setup ── -->
+  <div id="welcomeScreen" class="screen">
+    <div class="welcome-logo">🏛️</div>
+    <div class="welcome-title">Thronos Wallet</div>
+    <div class="welcome-sub">The multi-chain gateway to Thronos Chain. Create a new wallet or import your existing one.</div>
+    <button class="btn btn-primary" id="btnCreate">✨ Create New Wallet</button>
+    <hr class="divider">
+    <button class="btn btn-secondary" id="btnImport">📥 Import Existing Wallet</button>
+  </div>
+
+  <!-- ── Create wallet ── -->
+  <div id="createScreen" class="screen">
+    <div class="hdr">
+      <div class="hdr-logo"><span>🏛️ Create Wallet</span></div>
+      <div class="hdr-actions"><button class="icon-btn" id="createBack">✕</button></div>
+    </div>
+    <div style="padding:16px;display:flex;flex-direction:column;gap:14px;flex:1">
+      <div class="field">
+        <label>Wallet Label (optional)</label>
+        <input type="text" id="createLabel" placeholder="My Wallet">
+      </div>
+      <div class="field">
+        <label>PIN (4–8 digits)</label>
+        <input type="password" id="createPin" inputmode="numeric" maxlength="8" placeholder="••••">
+      </div>
+      <div class="field">
+        <label>Confirm PIN</label>
+        <input type="password" id="createPin2" inputmode="numeric" maxlength="8" placeholder="••••">
+      </div>
+      <div id="createStatus" class="status-msg"></div>
+      <div id="seedSection" class="hidden">
+        <p style="font-size:12px;color:var(--muted);margin-bottom:10px;line-height:1.5">
+          ⚠️ Write down your recovery key. Never share it. This is the only way to restore your wallet.
+        </p>
+        <div id="seedGrid" class="seed-grid"></div>
+        <button class="btn btn-secondary mt8" id="btnCopySeed">📋 Copy Recovery Key</button>
+      </div>
+      <button class="btn btn-primary" id="btnCreateWallet">Create Wallet</button>
+      <button class="btn btn-primary hidden" id="btnCreateDone">✅ I Saved My Key — Continue</button>
+    </div>
+  </div>
+
+  <!-- ── Import wallet ── -->
+  <div id="importScreen" class="screen">
+    <div class="hdr">
+      <div class="hdr-logo"><span>📥 Import Wallet</span></div>
+      <div class="hdr-actions"><button class="icon-btn" id="importBack">✕</button></div>
+    </div>
+    <div style="padding:16px;display:flex;flex-direction:column;gap:14px;flex:1">
+      <div class="tabs">
+        <button class="tab-btn active" data-tab="privkey">Private Key</button>
+        <button class="tab-btn" data-tab="address">Address Only</button>
+      </div>
+      <div id="tab-privkey">
+        <div class="field">
+          <label>Private Key (hex, no 0x)</label>
+          <input type="password" id="importPrivKey" placeholder="64 hex characters" style="font-family:monospace;font-size:12px">
+        </div>
+        <div class="field">
+          <label>PIN (4–8 digits)</label>
+          <input type="password" id="importPin" inputmode="numeric" maxlength="8" placeholder="••••">
+        </div>
+        <div class="field">
+          <label>Wallet Label (optional)</label>
+          <input type="text" id="importLabel" placeholder="Imported Wallet">
+        </div>
+        <div id="importStatus" class="status-msg"></div>
+        <button class="btn btn-primary" id="btnImportKey">Import</button>
+      </div>
+      <div id="tab-address" class="hidden">
+        <div class="field">
+          <label>THR Address</label>
+          <input type="text" id="importAddr" placeholder="THR…" style="font-family:monospace;font-size:12px">
+        </div>
+        <div id="importAddrStatus" class="status-msg"></div>
+        <p style="font-size:12px;color:var(--muted);line-height:1.5">Watch-only mode — you can view balances and history but cannot sign transactions.</p>
+        <button class="btn btn-primary mt8" id="btnImportAddr">Add Watch Address</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Lock screen ── -->
+  <div id="lockScreen" class="screen">
+    <div class="lock-icon">🔐</div>
+    <div class="lock-title">Thronos Wallet</div>
+    <div class="lock-sub" id="lockAddrHint">Enter your PIN to unlock</div>
+    <div class="pin-dots" id="pinDots"></div>
+    <div id="pinError" class="pin-error"></div>
+    <div class="pin-pad" id="pinPad"></div>
+    <button class="btn btn-secondary" id="btnLockForgot" style="margin-top:8px;font-size:12px">Forgot PIN / Switch Account</button>
+  </div>
+
+  <!-- ── Main home screen ── -->
+  <div id="homeScreen" class="screen">
+    <!-- Header -->
+    <div class="hdr">
+      <div class="hdr-logo">
+        <img src="icons/icon48.png" onerror="this.style.display='none'" alt="">
+        <span>THR Wallet</span>
+      </div>
+      <div class="hdr-actions">
+        <button class="icon-btn" id="btnRefresh" title="Refresh">↻</button>
+        <button class="icon-btn" id="btnAccounts" title="Accounts">👛</button>
+      </div>
+    </div>
+
+    <!-- Balance card -->
+    <div class="balance-card">
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <div>
+          <div class="balance-label">Total Balance</div>
+          <div class="balance-amount" id="balAmount">—</div>
+          <div class="balance-usd" id="balUsd"></div>
+        </div>
+        <div class="net-badge"><span class="net-dot"></span><span id="netName">Thronos</span></div>
+      </div>
+      <div class="addr-row">
+        <div class="addr-text" id="addrDisplay">—</div>
+        <button class="copy-btn" id="btnCopyAddr" title="Copy address">📋</button>
+      </div>
+    </div>
+
+    <!-- Quick actions -->
+    <div class="actions-grid">
+      <button class="action-btn" id="actSend"><span class="icon">↑</span><span class="label">Send</span></button>
+      <button class="action-btn" id="actReceive"><span class="icon">↓</span><span class="label">Receive</span></button>
+      <button class="action-btn" id="actSwap"><span class="icon">⇄</span><span class="label">Swap</span></button>
+      <button class="action-btn" id="actStake"><span class="icon">🔒</span><span class="label">Stake</span></button>
+      <button class="action-btn" id="actBridge"><span class="icon">⚡</span><span class="label">Bridge</span></button>
+      <button class="action-btn" id="actHistory"><span class="icon">📋</span><span class="label">History</span></button>
+      <button class="action-btn" id="actNetworks"><span class="icon">🌐</span><span class="label">Networks</span></button>
+      <button class="action-btn" id="actSettings"><span class="icon">⚙️</span><span class="label">Settings</span></button>
+    </div>
+
+    <!-- Tokens -->
+    <div class="section-title">Your Tokens</div>
+    <div class="token-list" id="tokenList">
+      <div class="status-msg">Loading…</div>
+    </div>
+  </div>
+
+  <!-- ── History tab ── -->
+  <div id="historyScreen" class="screen">
+    <div class="hdr">
+      <div class="hdr-logo"><span>📋 History</span></div>
+      <div class="hdr-actions"><button class="icon-btn" id="historyBack">←</button></div>
+    </div>
+    <div id="txList" class="tx-list"><div class="status-msg">Loading…</div></div>
+  </div>
+
+  <!-- ── Settings tab ── -->
+  <div id="settingsScreen" class="screen">
+    <div class="hdr">
+      <div class="hdr-logo"><span>⚙️ Settings</span></div>
+      <div class="hdr-actions"><button class="icon-btn" id="settingsBack">←</button></div>
+    </div>
+    <div class="settings-list">
+      <div class="setting-row" id="setChangePin">
+        <div><div class="setting-label">Change PIN</div><div class="setting-sub">Update your wallet PIN</div></div>
+        <span class="setting-arrow">›</span>
+      </div>
+      <div class="setting-row" id="setExportKey">
+        <div><div class="setting-label">Export Private Key</div><div class="setting-sub">View your private key (dangerous)</div></div>
+        <span class="setting-arrow">›</span>
+      </div>
+      <div class="setting-row" id="setAddAccount">
+        <div><div class="setting-label">Add Account</div><div class="setting-sub">Create or import another wallet</div></div>
+        <span class="setting-arrow">›</span>
+      </div>
+      <div class="setting-row" id="setLock">
+        <div><div class="setting-label">Lock Wallet</div><div class="setting-sub">Re-lock now</div></div>
+        <span class="setting-arrow">🔒</span>
+      </div>
+      <div class="setting-row" id="setForget" style="border-color:var(--red)">
+        <div><div class="setting-label" style="color:var(--red)">Forget Device</div><div class="setting-sub">Remove all wallet data from this browser</div></div>
+        <span class="setting-arrow" style="color:var(--red)">✕</span>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ── Modals ── -->
+
+<!-- Send modal -->
+<div class="modal-overlay" id="sendModal">
+  <div class="modal-sheet">
+    <div class="modal-handle"></div>
+    <button class="modal-close" id="sendClose">✕</button>
+    <div class="modal-title">Send</div>
+    <div class="modal-body">
+      <div class="tabs" id="sendNetTabs">
+        <button class="tab-btn active" data-net="THR">THR</button>
+        <button class="tab-btn" data-net="BTC">BTC</button>
+        <button class="tab-btn" data-net="ETH">ETH</button>
+        <button class="tab-btn" data-net="BNB">BNB</button>
+        <button class="tab-btn" data-net="ARB">ARB</button>
+      </div>
+      <div class="field">
+        <label>Recipient</label>
+        <div class="input-row">
+          <input type="text" id="sendTo" placeholder="THR… or paste address">
+          <button class="input-suffix-btn" id="sendPaste">📋 Paste</button>
+        </div>
+      </div>
+      <div class="field">
+        <label>Token</label>
+        <select id="sendToken"></select>
+      </div>
+      <div class="field">
+        <label>Amount</label>
+        <div class="input-row">
+          <input type="number" id="sendAmount" placeholder="0.00" min="0" step="any">
+          <button class="input-suffix-btn" id="sendMax">MAX</button>
+        </div>
+      </div>
+      <div class="field">
+        <label>Speed</label>
+        <select id="sendSpeed">
+          <option value="standard">Standard</option>
+          <option value="fast">Fast (+10%)</option>
+          <option value="instant">Instant (+20%)</option>
+        </select>
+      </div>
+      <div id="sendStatus" class="status-msg"></div>
+      <button class="btn btn-primary" id="btnSendSubmit">Send →</button>
+      <div id="nonThrNote" class="status-msg mt8 hidden" style="font-size:11px;line-height:1.5"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Receive modal -->
+<div class="modal-overlay" id="receiveModal">
+  <div class="modal-sheet">
+    <div class="modal-handle"></div>
+    <button class="modal-close" id="receiveClose">✕</button>
+    <div class="modal-title">Receive</div>
+    <div class="modal-body">
+      <div class="qr-wrap">
+        <div id="qrCanvas"></div>
+        <div class="addr-row" style="width:100%">
+          <div class="addr-text mono" id="receiveAddr">—</div>
+          <button class="copy-btn" id="btnCopyReceive">📋</button>
+        </div>
+      </div>
+      <p class="status-msg" style="font-size:12px;line-height:1.5">
+        Share this address to receive THR tokens on Thronos Chain.
+      </p>
+    </div>
+  </div>
+</div>
+
+<!-- Swap modal -->
+<div class="modal-overlay" id="swapModal">
+  <div class="modal-sheet">
+    <div class="modal-handle"></div>
+    <button class="modal-close" id="swapClose">✕</button>
+    <div class="modal-title">Swap</div>
+    <div class="modal-body">
+      <div class="field">
+        <label>From Token</label>
+        <select id="swapFrom">
+          <option value="THR">THR</option>
+          <option value="USDT">USDT</option>
+          <option value="USDC">USDC</option>
+          <option value="WBTC">WBTC</option>
+          <option value="WETH">WETH</option>
+        </select>
+      </div>
+      <div style="text-align:center;font-size:22px;color:var(--gold);margin:4px 0">⇄</div>
+      <div class="field">
+        <label>To Token</label>
+        <select id="swapTo">
+          <option value="USDT">USDT</option>
+          <option value="THR">THR</option>
+          <option value="USDC">USDC</option>
+          <option value="WBTC">WBTC</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Amount In</label>
+        <input type="number" id="swapAmount" placeholder="0.00" min="0" step="any">
+      </div>
+      <div id="swapQuote" class="status-msg"></div>
+      <div id="swapStatus" class="status-msg"></div>
+      <button class="btn btn-primary" id="btnSwapSubmit">Get Quote</button>
+    </div>
+  </div>
+</div>
+
+<!-- Stake modal -->
+<div class="modal-overlay" id="stakeModal">
+  <div class="modal-sheet">
+    <div class="modal-handle"></div>
+    <button class="modal-close" id="stakeClose">✕</button>
+    <div class="modal-title">Stake THR</div>
+    <div class="modal-body">
+      <div id="stakePools" class="status-msg">Loading pools…</div>
+      <div class="field mt8">
+        <label>Amount to Stake</label>
+        <div class="input-row">
+          <input type="number" id="stakeAmount" placeholder="0.00" min="0" step="any">
+          <button class="input-suffix-btn" id="stakeMax">MAX</button>
+        </div>
+      </div>
+      <div id="stakeStatus" class="status-msg"></div>
+      <button class="btn btn-primary" id="btnStakeSubmit">Stake</button>
+    </div>
+  </div>
+</div>
+
+<!-- Bridge modal -->
+<div class="modal-overlay" id="bridgeModal">
+  <div class="modal-sheet">
+    <div class="modal-handle"></div>
+    <button class="modal-close" id="bridgeClose">✕</button>
+    <div class="modal-title">Bridge</div>
+    <div class="modal-body">
+      <div class="field">
+        <label>Bridge Pair</label>
+        <select id="bridgePair">
+          <option value="BTC_WBTC">BTC → WBTC (Thronos)</option>
+          <option value="WBTC_BTC">WBTC → BTC (native)</option>
+          <option value="THR_WBTC">THR → WBTC</option>
+          <option value="WBTC_THR">WBTC → THR</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Amount</label>
+        <input type="number" id="bridgeAmount" placeholder="0.00" min="0" step="any">
+      </div>
+      <div class="field">
+        <label>Destination Address (optional)</label>
+        <input type="text" id="bridgeDest" placeholder="Leave blank to use wallet address">
+      </div>
+      <div id="bridgeQuote" class="status-msg"></div>
+      <div id="bridgeStatus" class="status-msg"></div>
+      <button class="btn btn-primary" id="btnBridgeSubmit">Bridge →</button>
+    </div>
+  </div>
+</div>
+
+<!-- Networks / cross-chain modal -->
+<div class="modal-overlay" id="networksModal">
+  <div class="modal-sheet">
+    <div class="modal-handle"></div>
+    <button class="modal-close" id="networksClose">✕</button>
+    <div class="modal-title">Cross-Chain Portfolio</div>
+    <div class="modal-body">
+      <div id="networksContent" class="status-msg">Loading…</div>
+    </div>
+  </div>
+</div>
+
+<!-- Accounts modal -->
+<div class="modal-overlay" id="accountsModal">
+  <div class="modal-sheet">
+    <div class="modal-handle"></div>
+    <button class="modal-close" id="accountsClose">✕</button>
+    <div class="modal-title">Accounts</div>
+    <div class="modal-body">
+      <div id="accountsList"></div>
+      <button class="btn btn-secondary mt8" id="btnAddAccModal">+ Add Account</button>
+    </div>
+  </div>
+</div>
+
+<!-- Export key modal -->
+<div class="modal-overlay" id="exportModal">
+  <div class="modal-sheet">
+    <div class="modal-handle"></div>
+    <button class="modal-close" id="exportClose">✕</button>
+    <div class="modal-title">Export Private Key</div>
+    <div class="modal-body">
+      <p style="font-size:12px;color:var(--red);margin-bottom:12px;line-height:1.5">
+        ⚠️ Never share your private key. Anyone with it can steal your funds.
+      </p>
+      <div class="field">
+        <label>Enter PIN to reveal</label>
+        <input type="password" id="exportPin" inputmode="numeric" maxlength="8" placeholder="••••">
+      </div>
+      <div id="exportKeyBox" class="hidden" style="background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:12px;word-break:break-all;font-family:monospace;font-size:11px;margin-bottom:12px;"></div>
+      <div id="exportStatus" class="status-msg"></div>
+      <button class="btn btn-primary" id="btnExportReveal">Reveal Key</button>
+    </div>
+  </div>
+</div>
+
+<!-- Stake success popup (simple) -->
+<div class="modal-overlay" id="stakeSuccessModal">
+  <div class="modal-sheet">
+    <div class="modal-handle"></div>
+    <button class="modal-close" id="stakeSuccessClose">✕</button>
+    <div class="modal-title">Staked! 🎉</div>
+    <div class="modal-body">
+      <div class="status-msg status-ok" id="stakeSuccessMsg"></div>
+      <button class="btn btn-primary mt8" id="btnStakeSuccessDone">Done</button>
+    </div>
+  </div>
+</div>
+
+<script src="lib/secp256k1.js"></script>
+<script src="lib/qrcode.min.js"></script>
+<script src="popup.js"></script>
+</body>
+</html>

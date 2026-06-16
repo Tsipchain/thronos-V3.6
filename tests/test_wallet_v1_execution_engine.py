@@ -181,15 +181,34 @@ def test_no_zero_fee_unless_legacy_fee_function_returns_zero(monkeypatch):
     assert payload["fee"] == 0.0
 
 
-def test_non_thr_rejected(monkeypatch, tmp_path):
+def test_non_thr_token_transfer_executes(monkeypatch, tmp_path):
+    # Custom-token V1 signed transfers must succeed (not be rejected), bypassing the
+    # legacy BTC-pledge gate the same way THR transfers do — ownership is already
+    # proven via ECDSA signature verification upstream.
+    state = FakeServerState()
+    from_addr = "THR" + "7" * 40
+    to_addr = "THR" + "8" * 40
+    install_fake_server(monkeypatch, state)
+    monkeypatch.setattr(wallet_v1_prod, "verify_signed_transaction_core", lambda _tx: (True, ""))
+    monkeypatch.setattr(adapter.server_module, "load_custom_tokens", lambda: {
+        "USDT": {"id": "usdt-id", "decimals": 6, "transferable": True}
+    })
+    token_ledger = {from_addr: 100.0}
+    monkeypatch.setattr(adapter.server_module, "load_custom_token_ledger", lambda _id: dict(token_ledger))
+    monkeypatch.setattr(adapter.server_module, "save_custom_token_ledger", lambda _id, data: token_ledger.update(data))
+    monkeypatch.setattr(adapter.server_module, "calculate_dynamic_fee", lambda _amount: 0.01)
+    state.ledger[from_addr] = 10.0
+
+    import wallet_v1_handlers
+    monkeypatch.setattr(wallet_v1_handlers, "require_active_thr_address", lambda _addr: True)
+
     app = Flask(__name__)
     redis = DummyRedis()
-    monkeypatch.setattr(wallet_v1_prod, "verify_signed_transaction_core", lambda _tx: (True, ""))
     register_wallet_v1_routes(app, redis_client=redis, node_role="master", read_only=False, sqlite_path=str(tmp_path / "ledger.sqlite3"))
     client = app.test_client()
     res = client.post("/api/v1/tx/send", json={"tx": {
-        "from": "THR" + "7" * 40,
-        "to": "THR" + "8" * 40,
+        "from": from_addr,
+        "to": to_addr,
         "amount": 1,
         "token": "USDT",
         "nonce": "n-token",
@@ -197,8 +216,10 @@ def test_non_thr_rejected(monkeypatch, tmp_path):
         "signature": "00",
         "publicKey": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
     }})
-    assert res.status_code == 400
-    assert res.get_json()["error"] == "unsupported_token_for_wallet_v1_execution"
+    assert res.status_code == 200
+    body = res.get_json()
+    assert body["ok"] is True
+    assert token_ledger[to_addr] == 1.0
 
 
 def test_replica_write_still_503(tmp_path):

@@ -63,11 +63,22 @@ def init_wallet_v1_handler(app, redis_client, node_role="master", read_only=Fals
 
 
 def execute_verified_signed_transfer(signed_tx):
-    from server import send_thr_internal
-    return send_thr_internal(
-        from_thr=signed_tx.get('from'), to_thr=signed_tx.get('to'), amount_raw=signed_tx.get('amount'),
-        auth_secret='', passphrase='', speed=signed_tx.get('speed', 'fast'), tx_id=signed_tx.get('nonce')
-    )
+    """Persist an already-verified V1 signed transfer (THR or custom token).
+
+    Ownership of `from` is already proven via ECDSA signature verification
+    (verify_signed_transaction_core), so this intentionally bypasses the
+    legacy auth_secret/BTC-pledge gate (validate_effective_auth) used by
+    send_thr_internal/transfer_custom_token — re-imposing that gate here
+    would defeat the purpose of the V1 signed-envelope flow and incorrectly
+    block V1 wallets that never made a BTC pledge.
+    """
+    import wallet_v1_execution_adapter as _adapter
+    token = (signed_tx.get('token') or 'THR').upper()
+    if token == 'THR':
+        ok, result, status = _adapter.execute_verified_signed_transfer(signed_tx)
+    else:
+        ok, result, status = _adapter.execute_verified_signed_token_transfer(token, signed_tx)
+    return jsonify(result), status
 
 
 def handle_tx_send(request):
@@ -86,8 +97,6 @@ def handle_tx_send(request):
         require_active_thr_address(signed_tx.get('from'))
     except AdmissionError as ae:
         return jsonify({'ok': False, 'error': str(ae)}), 403
-    if (signed_tx.get('token') or 'THR').upper() != 'THR':
-        return jsonify({'ok': False, 'error': 'unsupported_token'}), 400
     return execute_verified_signed_transfer(signed_tx)
 
 

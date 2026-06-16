@@ -553,8 +553,6 @@ def wallet_v1_transfer():
 
     if not from_addr or not to_addr or not priv_hex:
         return _jsonify(ok=False, error='missing_required_fields'), 400
-    if token != 'THR':
-        return _jsonify(ok=False, error='only_thr_supported_use_tokens_transfer'), 400
 
     # ── Verify ownership: derive THR address from private key ─────────────────
     try:
@@ -575,11 +573,12 @@ def wallet_v1_transfer():
 
     # ── Execute transfer via adapter ───────────────────────────────────────────
     try:
-        from wallet_v1_execution_adapter import execute_verified_signed_transfer as _exec_tx
-        ok, result, status_code = _exec_tx({
-            'from': from_addr, 'to': to_addr,
-            'amount': amount_raw, 'speed': 'fast', 'nonce': None,
-        })
+        import wallet_v1_execution_adapter as _adapter
+        signed_tx = {'from': from_addr, 'to': to_addr, 'amount': amount_raw, 'speed': 'fast', 'nonce': None}
+        if token == 'THR':
+            ok, result, status_code = _adapter.execute_verified_signed_transfer(signed_tx)
+        else:
+            ok, result, status_code = _adapter.execute_verified_signed_token_transfer(token, signed_tx)
         return _jsonify(**result), status_code
     except Exception as _e:
         app.logger.error('[V1Transfer] transfer_error: %s', _e)

@@ -177,6 +177,101 @@ async function fetchBalances(address) {
   return null;
 }
 
+
+// ─── Cross-chain portfolio helpers ────────────────────────────────────────────
+
+let _ethers = null;
+async function _loadEthers() {
+  if (_ethers) return _ethers;
+  if (window.ethers) { _ethers = window.ethers; return _ethers; }
+  await new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js';
+    s.onload = () => { _ethers = window.ethers; resolve(); };
+    s.onerror = () => resolve(); // proceed even if CDN fails
+    document.head.appendChild(s);
+  });
+  return _ethers;
+}
+
+async function _deriveEvmAddress(privHex) {
+  try {
+    const ethers = await _loadEthers();
+    if (!ethers) return null;
+    const wallet = new ethers.Wallet('0x' + privHex.replace(/^0x/, ''));
+    return wallet.address;
+  } catch { return null; }
+}
+
+async function _fetchBtcBalance(btcAddr) {
+  if (!btcAddr) return null;
+  try {
+    const r = await fetch(`https://blockstream.info/api/address/${encodeURIComponent(btcAddr)}`, { signal: AbortSignal.timeout(8000) });
+    if (!r.ok) return null;
+    const d = await r.json();
+    const sats = (d.chain_stats?.funded_txo_sum || 0) - (d.chain_stats?.spent_txo_sum || 0);
+    return sats / 1e8;
+  } catch { return null; }
+}
+
+async function _fetchEvmNative(evmAddr, rpcUrl) {
+  if (!evmAddr || !rpcUrl) return null;
+  try {
+    const r = await fetch(rpcUrl, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc:'2.0', method:'eth_getBalance', params:[evmAddr,'latest'], id:1 }),
+      signal: AbortSignal.timeout(8000),
+    });
+    const d = await r.json();
+    if (d.error || !d.result) return null;
+    return parseInt(d.result, 16) / 1e18;
+  } catch { return null; }
+}
+
+async function _fetchErc20(evmAddr, tokenContract, rpcUrl, decimals) {
+  if (!evmAddr || !tokenContract || !rpcUrl) return null;
+  try {
+    const data = '0x70a08231' + evmAddr.replace(/^0x/, '').padStart(64, '0');
+    const r = await fetch(rpcUrl, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc:'2.0', method:'eth_call', params:[{to:tokenContract, data},'latest'], id:1 }),
+      signal: AbortSignal.timeout(8000),
+    });
+    const d = await r.json();
+    if (d.error || !d.result || d.result === '0x') return null;
+    return parseInt(d.result, 16) / Math.pow(10, decimals);
+  } catch { return null; }
+}
+
+const _CC_RPC = {
+  eth:  'https://eth.llamarpc.com',
+  bnb:  'https://bsc-dataseed.binance.org',
+  arb:  'https://arb1.arbitrum.io/rpc',
+  op:   'https://mainnet.optimism.io',
+  base: 'https://mainnet.base.org',
+  poly: 'https://polygon-rpc.com',
+};
+const _USDT_BNB  = '0x55d398326f99059fF775485246999027B3197955'; // 18 dec
+const _USDT_ARB  = '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9'; // 6 dec
+const _USDC_BASE = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'; // 6 dec
+
+async function _fetchAllChainBalances(privHex, btcAddr) {
+  const evmAddr = privHex ? await _deriveEvmAddress(privHex) : null;
+  const [btc, eth, bnb, arb, op, base, usdtBnb, usdtArb, usdcBase] = await Promise.allSettled([
+    _fetchBtcBalance(btcAddr),
+    _fetchEvmNative(evmAddr, _CC_RPC.eth),
+    _fetchEvmNative(evmAddr, _CC_RPC.bnb),
+    _fetchEvmNative(evmAddr, _CC_RPC.arb),
+    _fetchEvmNative(evmAddr, _CC_RPC.op),
+    _fetchEvmNative(evmAddr, _CC_RPC.base),
+    _fetchErc20(evmAddr, _USDT_BNB, _CC_RPC.bnb, 18),
+    _fetchErc20(evmAddr, _USDT_ARB, _CC_RPC.arb, 6),
+    _fetchErc20(evmAddr, _USDC_BASE, _CC_RPC.base, 6),
+  ]);
+  const v = r => r.status === 'fulfilled' ? r.value : null;
+  return { evmAddr, btc: v(btc), eth: v(eth), bnb: v(bnb), arb: v(arb), op: v(op), base: v(base), usdtBnb: v(usdtBnb), usdtArb: v(usdtArb), usdcBase: v(usdcBase) };
+}
+
 async function fetchHistory(address) {
   try {
     const r = await fetch(`${API_WRITE}/wallet_data/${encodeURIComponent(address)}`);
@@ -714,6 +809,8 @@ async function showWallet() {
         <button class="action-btn" id="receiveBtn"><span class="action-btn__icon">📥</span>Receive</button>
         <button class="action-btn" id="swapBtn"><span class="action-btn__icon">🔄</span>Swap</button>
         <button class="action-btn" id="poolsBtn"><span class="action-btn__icon">💧</span>Pools</button>
+        <button class="action-btn" id="bridgeBtn"><span class="action-btn__icon">⚡</span>Bridge</button>
+        <button class="action-btn" id="networksBtn"><span class="action-btn__icon">🌐</span>Networks</button>
         <button class="action-btn" id="tokensBtn"><span class="action-btn__icon">◈</span>Tokens</button>
         <button class="action-btn" id="connectBtn"><span class="action-btn__icon">⬡</span>Connect</button>
         <button class="action-btn" id="musicBtn"><span class="action-btn__icon">🎵</span>Music</button>
@@ -751,6 +848,8 @@ async function showWallet() {
   document.getElementById('swapBtn').addEventListener('click', showSwap);
   document.getElementById('poolsBtn').addEventListener('click', showPools);
   document.getElementById('tokensBtn').addEventListener('click', showTokens);
+  document.getElementById('bridgeBtn').addEventListener('click', () => showBridge('BTC', 'WBTC'));
+  document.getElementById('networksBtn').addEventListener('click', showMultiChain);
   document.getElementById('connectBtn').addEventListener('click', showWalletConnect);
   document.getElementById('musicBtn').addEventListener('click', showMusic);
   document.getElementById('historyBtn').addEventListener('click', () => {
@@ -1339,6 +1438,211 @@ async function _rejectWcRequest(requestId, address) {
   _checkWcRequests(address, sessionStorage.getItem('thr_wc_session'));
 }
 
+// ─── Multi-chain portfolio ────────────────────────────────────────────────────
+
+async function showMultiChain() {
+  const address = getActiveAddr();
+  const { privHex } = unlocked.get(address) || {};
+  const btcAddr = localStorage.getItem('thr_btc_address') || localStorage.getItem('btc_address') || '';
+
+  render(`
+    <div class="screen">
+      <div class="header">
+        <button class="btn--icon" id="backBtn">←</button>
+        <span class="header__title">🌐 Networks</span>
+        <button class="btn--icon" id="refreshCcBtn" title="Refresh balances">↻</button>
+      </div>
+      <div style="padding:0 12px">
+        <div id="evmAddrRow" style="display:none;background:#12122a;border:1px solid #2a2050;border-radius:8px;padding:10px 12px;margin-bottom:12px">
+          <div style="font-size:.7rem;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">EVM Address (ETH / BNB / L2)</div>
+          <div id="evmAddrVal" style="font-family:monospace;font-size:.75rem;color:#b08cf8;word-break:break-all"></div>
+          <button id="copyEvmBtn" class="btn btn--ghost" style="margin-top:6px;padding:3px 10px;font-size:.72rem">📋 Copy</button>
+        </div>
+        <div id="ccBalances" style="display:flex;flex-direction:column;gap:8px">
+          <div style="color:var(--muted);text-align:center;padding:32px 0">⏳ Fetching cross-chain balances…</div>
+        </div>
+        <div style="margin-top:16px;background:#1a1040;border:1px solid #7c5cbf;border-radius:12px;padding:14px">
+          <div style="font-size:.88rem;font-weight:700;color:#fff;margin-bottom:6px">⚡ Instant Bridge → Thronos</div>
+          <div style="font-size:.78rem;color:var(--muted);margin-bottom:10px">Convert BTC or ETH to WBTC on Thronos in minutes</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+            <button class="btn btn--primary" id="btcBridgeBtn" style="padding:10px;font-size:.82rem">₿ BTC → WBTC</button>
+            <button class="btn btn--ghost" id="ethBridgeBtn" style="padding:10px;font-size:.82rem">Ξ ETH → Bridge</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `);
+
+  document.getElementById('backBtn').addEventListener('click', showWallet);
+  document.getElementById('btcBridgeBtn').addEventListener('click', () => showBridge('BTC', 'WBTC'));
+  document.getElementById('ethBridgeBtn').addEventListener('click', () => showBridge('ETH', 'THR'));
+
+  const renderCc = async () => {
+    const el = document.getElementById('ccBalances');
+    if (!el) return;
+    if (!privHex) {
+      el.innerHTML = '<div style="color:#ff6b6b;text-align:center;padding:24px 0">Wallet locked — unlock to view balances</div>';
+      return;
+    }
+    el.innerHTML = '<div style="color:var(--muted);text-align:center;padding:24px 0">⏳ Loading…</div>';
+    const bal = await _fetchAllChainBalances(privHex, btcAddr);
+
+    if (bal.evmAddr) {
+      document.getElementById('evmAddrRow').style.display = '';
+      document.getElementById('evmAddrVal').textContent = bal.evmAddr;
+      document.getElementById('copyEvmBtn').addEventListener('click', async () => {
+        try { await navigator.clipboard.writeText(bal.evmAddr); } catch {}
+        const b = document.getElementById('copyEvmBtn');
+        if (b) { b.textContent = '✓ Copied'; setTimeout(() => { if(b) b.textContent = '📋 Copy'; }, 2000); }
+      });
+    }
+
+    const fmt = (v, d=8) => v == null ? '—' : v === 0 ? '0.00' : v.toFixed(d);
+    const chains = [
+      { icon:'₿', label:'Bitcoin',         sym:'BTC',  val:bal.btc,      color:'#f7931a', net:'bitcoin',  addr:btcAddr },
+      { icon:'Ξ', label:'Ethereum',         sym:'ETH',  val:bal.eth,      color:'#627eea', net:'ethereum', addr:bal.evmAddr },
+      { icon:'🔶',label:'BNB Chain',        sym:'BNB',  val:bal.bnb,      color:'#f3ba2f', net:'bnb',      addr:bal.evmAddr },
+      { icon:'₮', label:'USDT on BNB',      sym:'USDT', val:bal.usdtBnb,  color:'#26a17b', net:'bnb',      addr:bal.evmAddr },
+      { icon:'🔵',label:'Arbitrum',          sym:'ETH',  val:bal.arb,      color:'#28a0f0', net:'arbitrum', addr:bal.evmAddr },
+      { icon:'₮', label:'USDT on Arbitrum', sym:'USDT', val:bal.usdtArb,  color:'#26a17b', net:'arbitrum', addr:bal.evmAddr },
+      { icon:'⬛',label:'Optimism',          sym:'ETH',  val:bal.op,       color:'#ff0420', net:'optimism', addr:bal.evmAddr },
+      { icon:'⬛',label:'Base',              sym:'ETH',  val:bal.base,     color:'#0052ff', net:'base',     addr:bal.evmAddr },
+      { icon:'$', label:'USDC on Base',      sym:'USDC', val:bal.usdcBase, color:'#2775ca', net:'base',     addr:bal.evmAddr },
+    ];
+
+    el.innerHTML = chains.map(c => `
+      <div style="background:#12122a;border:1px solid #2a2050;border-radius:10px;padding:11px 13px;display:flex;align-items:center;gap:10px">
+        <div style="width:36px;height:36px;border-radius:50%;background:${c.color}20;border:1px solid ${c.color}40;display:flex;align-items:center;justify-content:center;font-size:1rem;flex-shrink:0">${c.icon}</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:.84rem;font-weight:700;color:#fff">${c.label}</div>
+          ${c.addr ? `<div style="font-size:.68rem;color:var(--muted);font-family:monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${c.addr.slice(0,14)}…${c.addr.slice(-5)}</div>` : ''}
+        </div>
+        <div style="text-align:right;flex-shrink:0">
+          <div style="font-size:.88rem;font-weight:700;color:${c.val ? '#fff' : 'var(--muted)'}">${fmt(c.val)} ${c.sym}</div>
+          ${(c.val && c.val > 0) ? `<button onclick="showBridge('${c.sym}','WBTC')" style="font-size:.68rem;padding:2px 7px;margin-top:3px;background:#2a1a4a;border:1px solid #7c5cbf;color:#b08cf8;border-radius:4px;cursor:pointer">Bridge→</button>` : ''}
+        </div>
+      </div>`).join('');
+  };
+
+  await renderCc();
+  document.getElementById('refreshCcBtn')?.addEventListener('click', renderCc);
+}
+
+// ─── Bridge screen ─────────────────────────────────────────────────────────────
+
+const _BRIDGE_PAIRS = [
+  { from:'BTC',  to:'WBTC', fee:0.1,  time:'~5 min',  label:'₿ BTC → WBTC',  available:true },
+  { from:'WBTC', to:'BTC',  fee:0.1,  time:'~15 min', label:'WBTC → ₿ BTC',  available:true },
+  { from:'THR',  to:'WBTC', fee:0.1,  time:'~2 min',  label:'THR → WBTC',    available:true },
+  { from:'ETH',  to:'THR',  fee:0.2,  time:'~10 min', label:'Ξ ETH → THR',   available:false },
+  { from:'BNB',  to:'THR',  fee:0.15, time:'~8 min',  label:'🔶 BNB → THR',  available:false },
+];
+
+async function showBridge(fromToken = 'BTC', toToken = 'WBTC') {
+  const address = getActiveAddr();
+  const { privHex } = unlocked.get(address) || {};
+  let activePair = _BRIDGE_PAIRS.find(p => p.from === fromToken && p.to === toToken) || _BRIDGE_PAIRS[0];
+
+  const pairBtns = _BRIDGE_PAIRS.map((p, i) => {
+    const isActive = p.from === fromToken && p.to === toToken;
+    return `<button class="bridge-pair-btn${isActive?' bpb-active':''}" data-from="${p.from}" data-to="${p.to}"
+      style="background:${isActive?'#1a1040':'#0d0d1a'};border:1px solid ${isActive?'#7c5cbf':'#2a2050'};
+      border-radius:10px;padding:11px 13px;display:flex;align-items:center;justify-content:space-between;
+      cursor:${p.available?'pointer':'not-allowed'};color:${p.available?'#fff':'#555'}">
+      <span style="font-size:.86rem;font-weight:600">${p.label}</span>
+      <span style="font-size:.72rem;color:${p.available?'#b08cf8':'#555'}">${p.available?p.fee+'% · '+p.time:'Coming soon'}</span>
+    </button>`;
+  }).join('');
+
+  render(`
+    <div class="screen">
+      <div class="header">
+        <button class="btn--icon" id="backBtn">←</button>
+        <span class="header__title">⚡ Bridge</span>
+        <span style="width:36px"></span>
+      </div>
+      <div style="padding:0 12px;display:flex;flex-direction:column;gap:10px">
+        <div style="display:flex;flex-direction:column;gap:6px">${pairBtns}</div>
+        <div style="background:#12122a;border:1px solid #7c5cbf;border-radius:12px;padding:16px">
+          <div id="bridgePairLabel" style="font-size:1rem;font-weight:700;color:#fff;margin-bottom:12px">${activePair.label}</div>
+          <label style="color:var(--muted);font-size:.82rem">Amount (<span id="bridgeFromSym">${activePair.from}</span>)</label>
+          <input type="number" id="bridgeAmt" class="input" placeholder="0.0001" step="any" inputmode="decimal" min="0">
+          <div id="quoteBox" style="display:none;background:#0d0d1a;border-radius:8px;padding:10px;margin:10px 0;font-size:.82rem">
+            <div style="display:flex;justify-content:space-between"><span style="color:var(--muted)">You receive</span><span id="quoteOut" style="color:#00ff66;font-weight:700"></span></div>
+            <div style="display:flex;justify-content:space-between;margin-top:4px"><span style="color:var(--muted)">Fee</span><span id="quoteFee" style="color:#b08cf8"></span></div>
+            <div style="display:flex;justify-content:space-between;margin-top:4px"><span style="color:var(--muted)">Est. time</span><span id="quoteTime" style="color:var(--muted)"></span></div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px">
+            <button class="btn btn--ghost" id="quoteBtn" style="padding:12px">Get Quote</button>
+            <button class="btn btn--primary" id="bridgeBtn" style="padding:12px" disabled>Bridge Now</button>
+          </div>
+          <div id="bridgeErr" style="margin-top:8px;color:#ff6b6b;font-size:.82rem;display:none"></div>
+          <div id="bridgeOk" style="margin-top:8px;color:#00ff66;font-size:.82rem;display:none"></div>
+        </div>
+        <div style="font-size:.72rem;color:var(--muted);text-align:center">Non-custodial · Powered by Thronos Cross-Chain Protocol</div>
+      </div>
+    </div>
+  `);
+
+  document.getElementById('backBtn').addEventListener('click', showMultiChain);
+
+  document.querySelectorAll('.bridge-pair-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const p = _BRIDGE_PAIRS.find(x => x.from === btn.dataset.from && x.to === btn.dataset.to);
+      if (!p || !p.available) return;
+      activePair = p;
+      document.querySelectorAll('.bridge-pair-btn').forEach(b => {
+        const active = b.dataset.from === p.from && b.dataset.to === p.to;
+        b.style.background = active ? '#1a1040' : '#0d0d1a';
+        b.style.borderColor = active ? '#7c5cbf' : '#2a2050';
+      });
+      document.getElementById('bridgePairLabel').textContent = p.label;
+      document.getElementById('bridgeFromSym').textContent = p.from;
+      document.getElementById('quoteBox').style.display = 'none';
+      document.getElementById('bridgeBtn').disabled = true;
+    });
+  });
+
+  document.getElementById('quoteBtn').addEventListener('click', () => {
+    const amt = parseFloat(document.getElementById('bridgeAmt').value);
+    document.getElementById('bridgeErr').style.display = 'none';
+    if (!amt || amt <= 0) { document.getElementById('bridgeErr').textContent = 'Enter an amount'; document.getElementById('bridgeErr').style.display = ''; return; }
+    const fee = amt * (activePair.fee / 100);
+    document.getElementById('quoteOut').textContent = `${(amt - fee).toFixed(8)} ${activePair.to}`;
+    document.getElementById('quoteFee').textContent = `${fee.toFixed(8)} ${activePair.from} (${activePair.fee}%)`;
+    document.getElementById('quoteTime').textContent = activePair.time;
+    document.getElementById('quoteBox').style.display = '';
+    document.getElementById('bridgeBtn').disabled = false;
+  });
+
+  document.getElementById('bridgeBtn').addEventListener('click', async () => {
+    if (!privHex) { document.getElementById('bridgeErr').textContent = 'Wallet locked'; document.getElementById('bridgeErr').style.display = ''; return; }
+    const amt = parseFloat(document.getElementById('bridgeAmt').value);
+    if (!amt || amt <= 0) return;
+    const btn = document.getElementById('bridgeBtn');
+    btn.disabled = true; btn.textContent = 'Bridging…';
+    document.getElementById('bridgeErr').style.display = 'none';
+    try {
+      const r = await fetch(`${API_WRITE}/api/bridge/execute`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ from_token: activePair.from, to_token: activePair.to, amount: amt, from_address: address, private_key_hex: privHex }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok && (d.ok || d.accepted || d.tx_id || d.txid)) {
+        document.getElementById('bridgeOk').textContent = `✅ Bridge initiated! TX: ${d.tx_id || d.txid || 'submitted'}`;
+        document.getElementById('bridgeOk').style.display = '';
+        btn.textContent = 'Done ✓';
+      } else {
+        throw new Error(d.error || d.message || `HTTP ${r.status}`);
+      }
+    } catch (e) {
+      document.getElementById('bridgeErr').textContent = e.message;
+      document.getElementById('bridgeErr').style.display = '';
+      btn.disabled = false; btn.textContent = 'Bridge Now';
+    }
+  });
+}
+
 // ─── Music screen ─────────────────────────────────────────────────────────────
 // NOTE: L2E (Learn-to-Earn) = earned from Courses, NOT music.
 //        Music listening rewards = T2E (Time-to-Earn) / boost credits.
@@ -1867,18 +2171,17 @@ async function _stopMusic() {
   }
 }
 
-function showSend(preselectedToken = null) {
+function showSend(preselectedToken = null, prefillAddr = null) {
   const address = getActiveAddr();
 
-  // Fetch token list for the selector
-  const buildTokenSel = (tokens) => {
-    const defaults = ['THR','WBTC','WETH','USDT','USDC','L2E','JAM','MAR'];
-    const syms = tokens.length
-      ? tokens.filter(t => Number(t.balance) > 0).map(t => t.symbol)
-      : defaults;
-    const unique = [...new Set([...syms, ...defaults])];
-    return unique.map(s => `<option value="${s}" ${s === (preselectedToken || 'THR') ? 'selected' : ''}>${s}</option>`).join('');
-  };
+  const NETWORKS_DEF = [
+    { id: 'thronos', label: '🔗 THR',  placeholder: 'THR…',       addrKey: null },
+    { id: 'bitcoin', label: '₿ BTC',   placeholder: 'bc1… or 1…', addrKey: 'btc' },
+    { id: 'ethereum',label: 'Ξ ETH',   placeholder: '0x…',        addrKey: 'evm' },
+    { id: 'bnb',     label: '🔶 BNB',  placeholder: '0x…',        addrKey: 'evm' },
+    { id: 'arbitrum',label: '🔵 ARB',  placeholder: '0x…',        addrKey: 'evm' },
+    { id: 'base',    label: '⬛ Base', placeholder: '0x…',        addrKey: 'evm' },
+  ];
 
   render(`
     <div class="screen">
@@ -1888,18 +2191,36 @@ function showSend(preselectedToken = null) {
         <span style="width:36px"></span>
       </div>
       <div class="card mt16">
-        <label style="color:var(--muted);font-size:.85rem">Token</label>
+        <!-- Network selector -->
+        <label style="color:var(--muted);font-size:.82rem;margin-bottom:6px;display:block">Network</label>
+        <div style="display:flex;gap:0;overflow-x:auto;border:1px solid #2a2050;border-radius:8px;margin-bottom:12px" id="netTabs">
+          ${NETWORKS_DEF.map((n,i) => `<button class="send-net-tab${i===0?' active':''}" data-net="${n.id}" style="flex:1;min-width:56px;padding:8px 6px;background:${i===0?'#1a1040':'transparent'};border:none;color:${i===0?'#b08cf8':'var(--muted)'};font-size:.75rem;cursor:pointer;white-space:nowrap;border-right:1px solid #2a2050">${n.label}</button>`).join('')}
+        </div>
+        <!-- Deposit address for current network -->
+        <div id="depositAddrRow" style="display:none;background:#12122a;border:1px solid #2a2050;border-radius:8px;padding:8px 10px;margin-bottom:10px;font-size:.75rem">
+          <div style="color:var(--muted);font-size:.7rem;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">Your address on this network</div>
+          <div id="depositAddrVal" style="font-family:monospace;color:#b08cf8;word-break:break-all"></div>
+        </div>
+        <!-- Token -->
+        <label style="color:var(--muted);font-size:.82rem">Token</label>
         <select id="tokenSel" class="input" style="cursor:pointer">
-          <option value="THR" ${!preselectedToken || preselectedToken==='THR' ? 'selected' : ''}>THR — Thronos</option>
+          <option value="THR">THR — Thronos</option>
           ${preselectedToken && preselectedToken !== 'THR' ? `<option value="${escHtml(preselectedToken)}" selected>${escHtml(preselectedToken)}</option>` : ''}
         </select>
-        <label style="color:var(--muted);font-size:.85rem">Recipient address</label>
+        <!-- Recipient -->
+        <label style="color:var(--muted);font-size:.82rem">Recipient address</label>
         <div style="display:flex;gap:8px;align-items:center;margin-bottom:4px">
-          <input type="text" id="toAddr" class="input" placeholder="THR…" autocomplete="off" autocorrect="off" spellcheck="false" style="flex:1;margin-bottom:0">
-          <button id="scanAddrBtn" class="btn btn--ghost" style="padding:10px 12px;font-size:1.1rem;white-space:nowrap" title="Scan QR code">📷</button>
+          <input type="text" id="toAddr" class="input" placeholder="THR…" value="${escHtml(prefillAddr||'')}" autocomplete="off" autocorrect="off" spellcheck="false" style="flex:1;margin-bottom:0">
+          <button id="scanAddrBtn" class="btn btn--ghost" style="padding:10px 12px;font-size:1.1rem" title="Scan QR">📷</button>
         </div>
-        <label style="color:var(--muted);font-size:.85rem">Amount</label>
+        <!-- Amount -->
+        <label style="color:var(--muted);font-size:.82rem">Amount</label>
         <input type="number" id="amount" class="input" placeholder="0.00" min="0.000001" step="any" inputmode="decimal">
+        <!-- Speed -->
+        <div style="display:flex;gap:8px;margin-top:8px" id="speedRow">
+          <button class="btn btn--ghost speed-btn active" data-speed="fast" style="flex:1;padding:8px;font-size:.8rem;border:1px solid #7c5cbf;background:#1a1040">⚡ Fast <span style="color:var(--muted);font-size:.72rem">0.5%</span></button>
+          <button class="btn btn--ghost speed-btn" data-speed="slow" style="flex:1;padding:8px;font-size:.8rem">🐢 Slow <span style="color:var(--muted);font-size:.72rem">0.09%</span></button>
+        </div>
         <button class="btn btn--primary mt8" id="sendBtn">Send</button>
         <div id="err" class="banner banner--error hidden"></div>
         <div id="ok" class="banner banner--success hidden"></div>
@@ -1907,42 +2228,112 @@ function showSend(preselectedToken = null) {
     </div>
   `);
 
-  document.getElementById('backBtn').addEventListener('click', showWallet);
+  let selectedNetwork = 'thronos';
+  let selectedSpeed = 'fast';
+  let cachedEvmAddr = null;
+  const { privHex } = unlocked.get(address) || {};
 
-  // QR scan button for recipient address
-  document.getElementById('scanAddrBtn').addEventListener('click', () => {
-    _openQrScannerForAddress((scannedAddr) => {
-      const el = document.getElementById('toAddr');
-      if (el) el.value = scannedAddr;
+  // Pre-derive EVM address in background
+  if (privHex) {
+    _deriveEvmAddress(privHex).then(a => { cachedEvmAddr = a; }).catch(() => {});
+  }
+
+  // BTC address from localStorage (set by wallet_session)
+  const btcAddr = localStorage.getItem('thr_btc_address') || localStorage.getItem('btc_address') || '';
+
+  const getDepositAddr = (netId) => {
+    if (netId === 'bitcoin') return btcAddr || '(not available)';
+    if (['ethereum','bnb','arbitrum','base'].includes(netId)) return cachedEvmAddr || '(unlock wallet to see)';
+    return address;
+  };
+
+  const switchNet = (netId) => {
+    selectedNetwork = netId;
+    const def = NETWORKS_DEF.find(n => n.id === netId);
+    document.querySelectorAll('.send-net-tab').forEach(b => {
+      const isActive = b.dataset.net === netId;
+      b.style.background = isActive ? '#1a1040' : 'transparent';
+      b.style.color = isActive ? '#b08cf8' : 'var(--muted)';
+    });
+    const toEl = document.getElementById('toAddr');
+    if (toEl) toEl.placeholder = def?.placeholder || '…';
+    // Show deposit address for non-Thronos networks
+    const depRow = document.getElementById('depositAddrRow');
+    const depVal = document.getElementById('depositAddrVal');
+    const speedRow = document.getElementById('speedRow');
+    if (netId !== 'thronos') {
+      if (depRow) depRow.style.display = '';
+      if (depVal) depVal.textContent = getDepositAddr(netId);
+      if (speedRow) speedRow.style.display = 'none';
+    } else {
+      if (depRow) depRow.style.display = 'none';
+      if (speedRow) speedRow.style.display = '';
+    }
+    // Update token selector
+    const sel = document.getElementById('tokenSel');
+    if (sel) {
+      const tokensByNet = {
+        thronos:  ['THR','WBTC','L2E','T2E','JAM'],
+        bitcoin:  ['BTC'],
+        ethereum: ['ETH','USDT','USDC','WBTC'],
+        bnb:      ['BNB','USDT','USDC','BUSD'],
+        arbitrum: ['ETH','USDT','USDC','ARB'],
+        base:     ['ETH','USDC','USDT'],
+      };
+      const tokens = tokensByNet[netId] || ['THR'];
+      sel.innerHTML = tokens.map(t => `<option value="${t}"${t === (preselectedToken||tokens[0])?' selected':''}>${t}</option>`).join('');
+    }
+  };
+
+  document.querySelectorAll('.send-net-tab').forEach(b => {
+    b.addEventListener('click', () => switchNet(b.dataset.net));
+  });
+
+  document.querySelectorAll('.speed-btn').forEach(b => {
+    b.addEventListener('click', () => {
+      selectedSpeed = b.dataset.speed;
+      document.querySelectorAll('.speed-btn').forEach(x => {
+        x.style.background = x.dataset.speed === selectedSpeed ? '#1a1040' : 'transparent';
+        x.style.borderColor = x.dataset.speed === selectedSpeed ? '#7c5cbf' : 'var(--border)';
+      });
     });
   });
 
-  // Populate token selector from live balances
+  document.getElementById('backBtn').addEventListener('click', showWallet);
+  document.getElementById('scanAddrBtn').addEventListener('click', () => {
+    _openQrScannerForAddress(addr => { const el = document.getElementById('toAddr'); if (el) el.value = addr; });
+  });
+
+  // Populate token selector from live balances (Thronos only)
   fetchBalances(address).then(data => {
+    if (selectedNetwork !== 'thronos') return;
     const tokens = Array.isArray(data?.tokens) ? data.tokens.filter(t => Number(t.balance) > 0) : [];
     const sel = document.getElementById('tokenSel');
     if (!sel || !tokens.length) return;
-    const current = sel.value;
     sel.innerHTML = tokens.map(t =>
-      `<option value="${escHtml(t.symbol)}" ${t.symbol === (preselectedToken || current) ? 'selected' : ''}>${escHtml(t.symbol)} — ${escHtml(t.name || t.symbol)}</option>`
+      `<option value="${escHtml(t.symbol)}" ${t.symbol === (preselectedToken||'THR') ? 'selected' : ''}>${escHtml(t.symbol)} — ${escHtml(t.name||t.symbol)}</option>`
     ).join('');
   }).catch(() => {});
 
   document.getElementById('sendBtn').addEventListener('click', async () => {
-    const to = document.getElementById('toAddr').value.trim().toUpperCase();
+    const to = document.getElementById('toAddr').value.trim();
     const amount = parseFloat(document.getElementById('amount').value);
     const token = document.getElementById('tokenSel').value;
 
     if (!to) { setError('Enter a recipient address'); return; }
     if (!amount || amount <= 0) { setError('Enter a valid amount'); return; }
 
+    // Non-Thronos sends: route to bridge screen for now
+    if (selectedNetwork !== 'thronos') {
+      showBridge(token, 'WBTC');
+      return;
+    }
+
     const btn = document.getElementById('sendBtn');
     btn.disabled = true; btn.textContent = 'Sending…'; setError(null);
-
     try {
-      const { privHex } = unlocked.get(address) || {};
       if (!privHex) throw new Error('Wallet is locked — please unlock first');
-      const result = await sendToken(address, to, amount, token, privHex);
+      const result = await sendToken(address, to.toUpperCase(), amount, token, privHex);
       setSuccess(`Sent! TX: ${result.tx_hash || result.txid || result.tx || 'submitted'}`);
       btn.textContent = 'Sent ✓';
       setTimeout(showWallet, 3000);
@@ -1952,6 +2343,7 @@ function showSend(preselectedToken = null) {
     }
   });
 }
+
 
 // ─── Receive screen ───────────────────────────────────────────────────────────
 

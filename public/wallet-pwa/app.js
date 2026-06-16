@@ -26,6 +26,39 @@ async function decryptBlob(blob, pin) {
   return bytesToHex(new Uint8Array(plain));
 }
 
+async function encryptBlob(dataHex, pin) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const key = await pbkdfKey(pin, salt);
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, hexToBytes(dataHex));
+  return { v: 1, salt: bytesToHex(salt), iv: bytesToHex(iv), ct: bytesToHex(new Uint8Array(ct)) };
+}
+
+// Generates a fresh secp256k1 keypair and derives a THR address using the
+// same scheme as the mobile app (thrAddressFromPubKey in wallet.ts):
+// THR + uppercase-hex(ripemd160(sha256(compressed_pubkey))).slice(0,40)
+let _nobleLibs = null;
+async function _loadNobleLibs() {
+  if (_nobleLibs) return _nobleLibs;
+  const [{ secp256k1 }, { sha256 }, { ripemd160 }] = await Promise.all([
+    import('https://esm.sh/@noble/curves@1.4.0/secp256k1'),
+    import('https://esm.sh/@noble/hashes@1.4.0/sha256'),
+    import('https://esm.sh/@noble/hashes@1.4.0/ripemd160'),
+  ]);
+  _nobleLibs = { secp256k1, sha256, ripemd160 };
+  return _nobleLibs;
+}
+
+async function generateThrKeypair() {
+  const { secp256k1, sha256, ripemd160 } = await _loadNobleLibs();
+  const privBytes = secp256k1.utils.randomPrivateKey();
+  const pubBytes = secp256k1.getPublicKey(privBytes, true); // compressed
+  const h1 = sha256(pubBytes);
+  const h2 = ripemd160(h1);
+  const address = 'THR' + bytesToHex(h2).substring(0, 40).toUpperCase();
+  return { privHex: bytesToHex(privBytes), pubHex: bytesToHex(pubBytes), address };
+}
+
 async function encryptWithKey(rawKey32, dataHex) {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const aesKey = await crypto.subtle.importKey('raw', rawKey32, 'AES-GCM', false, ['encrypt']);
@@ -377,8 +410,27 @@ async function showImport(addingExtra = false) {
       <p class="tagline">Thronos Chain Wallet</p>
 
       <div style="display:flex;gap:6px;margin-bottom:10px">
+        <button class="btn btn--ghost" id="tabCreate" style="flex:1;padding:8px;font-size:.82rem;border-radius:10px">✨ New Wallet</button>
         <button class="btn" id="tabKit" style="flex:1;padding:8px;font-size:.82rem;background:var(--accent);color:#fff;border-radius:10px">Recovery Kit</button>
         <button class="btn btn--ghost" id="tabPledge" style="flex:1;padding:8px;font-size:.82rem;border-radius:10px">Pledge Secret</button>
+      </div>
+
+      <!-- Create New Wallet tab -->
+      <div id="paneCreate" class="card" style="display:none">
+        <h2 style="font-size:1.1rem">Create New Wallet</h2>
+        <p style="color:var(--muted);font-size:.85rem">Generate a brand-new Thronos address on this device. Your private key never leaves the browser.</p>
+        <div id="createStep1">
+          <button class="btn btn--primary" id="generateWalletBtn">⚡ Generate New Wallet</button>
+        </div>
+        <div id="createStep2" style="display:none;margin-top:12px">
+          <div id="createAddrBox" style="background:#0d0a1a;border:1px solid var(--accent);border-radius:8px;padding:10px;font-size:.82rem;color:var(--accent);word-break:break-all;margin-bottom:10px"></div>
+          <p style="color:#ff6b6b;font-size:.78rem;margin-bottom:8px">⚠️ Set a PIN to protect this wallet. There is no recovery if you lose both your PIN and the Recovery Kit file you'll download next.</p>
+          <input type="text" id="createLabel" class="input" placeholder="Account label (optional)">
+          <input type="password" id="createPin" class="input mt8" placeholder="New PIN (4-8 digits)" autocomplete="new-password">
+          <input type="password" id="createPinConfirm" class="input mt8" placeholder="Confirm PIN" autocomplete="new-password">
+          <button class="btn btn--primary mt8" id="createConfirmBtn">✅ Create Wallet</button>
+        </div>
+        <div id="createErr" class="banner banner--error hidden"></div>
       </div>
 
       <!-- Recovery Kit tab -->
@@ -420,22 +472,83 @@ async function showImport(addingExtra = false) {
     </div>
   `);
 
-  // Tab switching
-  document.getElementById('tabKit').addEventListener('click', () => {
-    document.getElementById('paneKit').style.display = '';
-    document.getElementById('panePledge').style.display = 'none';
-    document.getElementById('tabKit').style.background = 'var(--accent)';
-    document.getElementById('tabKit').style.color = '#fff';
-    document.getElementById('tabPledge').style.background = '';
-    document.getElementById('tabPledge').style.color = '';
+  // Tab switching (Create / Kit / Pledge)
+  function activateTab(name) {
+    const panes = { create: 'paneCreate', kit: 'paneKit', pledge: 'panePledge' };
+    const tabs  = { create: 'tabCreate',  kit: 'tabKit',  pledge: 'tabPledge'  };
+    for (const k of Object.keys(panes)) {
+      document.getElementById(panes[k]).style.display = (k === name) ? '' : 'none';
+      document.getElementById(tabs[k]).style.background = (k === name) ? 'var(--accent)' : '';
+      document.getElementById(tabs[k]).style.color = (k === name) ? '#fff' : '';
+    }
+  }
+  document.getElementById('tabCreate').addEventListener('click', () => activateTab('create'));
+  document.getElementById('tabKit').addEventListener('click', () => activateTab('kit'));
+  document.getElementById('tabPledge').addEventListener('click', () => activateTab('pledge'));
+
+  // ── Create New Wallet ──
+  let generatedKeypair = null;
+  document.getElementById('generateWalletBtn').addEventListener('click', async () => {
+    const btn = document.getElementById('generateWalletBtn');
+    const errEl = document.getElementById('createErr');
+    errEl.classList.add('hidden');
+    btn.disabled = true; btn.textContent = 'Generating…';
+    try {
+      generatedKeypair = await generateThrKeypair();
+      document.getElementById('createAddrBox').innerHTML =
+        '✅ New address:<br><b>' + generatedKeypair.address + '</b>';
+      document.getElementById('createStep1').style.display = 'none';
+      document.getElementById('createStep2').style.display = '';
+    } catch (e) {
+      errEl.textContent = 'Could not generate wallet: ' + e.message;
+      errEl.classList.remove('hidden');
+    } finally {
+      btn.disabled = false; btn.textContent = '⚡ Generate New Wallet';
+    }
   });
-  document.getElementById('tabPledge').addEventListener('click', () => {
-    document.getElementById('paneKit').style.display = 'none';
-    document.getElementById('panePledge').style.display = '';
-    document.getElementById('tabPledge').style.background = 'var(--accent)';
-    document.getElementById('tabPledge').style.color = '#fff';
-    document.getElementById('tabKit').style.background = '';
-    document.getElementById('tabKit').style.color = '';
+
+  document.getElementById('createConfirmBtn').addEventListener('click', async () => {
+    const errEl = document.getElementById('createErr');
+    errEl.classList.add('hidden');
+    if (!generatedKeypair) { errEl.textContent = 'Generate a wallet first'; errEl.classList.remove('hidden'); return; }
+    const pin = document.getElementById('createPin')?.value?.trim();
+    const pinConfirm = document.getElementById('createPinConfirm')?.value?.trim();
+    const label = document.getElementById('createLabel')?.value?.trim();
+    if (!pin || pin.length < 4) { errEl.textContent = 'PIN must be 4-8 digits'; errEl.classList.remove('hidden'); return; }
+    if (pin !== pinConfirm) { errEl.textContent = 'PINs do not match'; errEl.classList.remove('hidden'); return; }
+
+    const btn = document.getElementById('createConfirmBtn');
+    btn.disabled = true; btn.textContent = 'Creating…';
+    try {
+      const { address, privHex, pubHex } = generatedKeypair;
+      const encrypted_private_key_backup = await encryptBlob(privHex, pin);
+      const kit = {
+        version: 'wallet-v1-recovery-kit',
+        canonical_v1_address: address,
+        public_key: pubHex,
+        encrypted_private_key_backup,
+        created_at: new Date().toISOString(),
+      };
+
+      upsertAccount(address, kit, label || shortAddr(address));
+      setActiveAddr(address);
+      unlocked.set(address, { privHex });
+
+      // Auto-download Recovery Kit so the user has an offline backup immediately
+      const blob = new Blob([JSON.stringify(kit, null, 2)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `thr-recovery-kit-${address.slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+
+      // Offer Face ID / passkey setup now that the wallet is unlocked in-memory
+      await promptFaceID(address, privHex);
+    } catch (e) {
+      btn.disabled = false; btn.textContent = '✅ Create Wallet';
+      errEl.textContent = 'Could not create wallet: ' + e.message;
+      errEl.classList.remove('hidden');
+    }
   });
 
   // Pledge lookup
@@ -500,6 +613,14 @@ async function showImport(addingExtra = false) {
       upsertAccount(canonical, kitObj, shortAddr(canonical));
       setActiveAddr(canonical);
 
+      // Decrypt with the PIN just set so Face ID enrollment below has the real key
+      let migratedPrivHex = null;
+      try {
+        const encBlob = kitObj.encrypted_private_key_backup ?? kitObj.wallet_v1_encrypted_priv ?? kitObj.encrypted_private_key ?? kitObj.enc_key;
+        if (encBlob) migratedPrivHex = await decryptBlob(encBlob, pin);
+      } catch {}
+      if (migratedPrivHex) unlocked.set(canonical, { privHex: migratedPrivHex });
+
       // Auto-download Recovery Kit if server generated it
       if (d.recovery_kit) {
         const blob = new Blob([d.recovery_kit], { type: 'application/json' });
@@ -519,7 +640,7 @@ async function showImport(addingExtra = false) {
       }
 
       // Offer Face ID / fingerprint
-      await promptFaceID(canonical, null);
+      await promptFaceID(canonical, migratedPrivHex);
       showWallet();
     } catch(e) {
       errEl.textContent = 'Network error: ' + e.message; errEl.classList.remove('hidden');

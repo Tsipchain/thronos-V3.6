@@ -1291,7 +1291,9 @@ async function _openQrScannerGeneric(onResult) {
         canvas.width = w; canvas.height = h;
         ctx.drawImage(video, 0, 0, w, h);
         const img = ctx.getImageData(0, 0, w, h);
-        const res = _jsQR(img.data, img.width, img.height, { inversionAttempts: 'dontInvert' });
+        // attemptBoth: ThronosBuilder's QR uses inverted colors (white modules on
+        // dark background), which 'dontInvert' cannot decode.
+        const res = _jsQR(img.data, img.width, img.height, { inversionAttempts: 'attemptBoth' });
         if (res?.data) { stopScan(); onResult(res.data); return; }
       } catch (_) {}
     }
@@ -1399,7 +1401,9 @@ async function _openQrScanner(address) {
         _scanCanvas.height = h;
         _scanCtx.drawImage(video, 0, 0, w, h);
         const imgData = _scanCtx.getImageData(0, 0, w, h);
-        const result = _jsQR(imgData.data, imgData.width, imgData.height, { inversionAttempts: 'dontInvert' });
+        // attemptBoth: ThronosBuilder's QR uses inverted colors (white modules on
+        // dark background), which 'dontInvert' cannot decode.
+        const result = _jsQR(imgData.data, imgData.width, imgData.height, { inversionAttempts: 'attemptBoth' });
         if (result && result.data) {
           stopScan();
           await _handleWcUri(result.data, address);
@@ -1428,48 +1432,49 @@ async function requestDappApproval(dappName) {
     const fid = LS.getObj(`thr_fid_${address}`);
     const hasFid = !!(fid?.credId);
 
-    render(`
-      <div class="screen screen--center" style="background:rgba(0,0,0,0.92);position:fixed;inset:0;z-index:9999">
-        <div style="background:#0d0a1a;border-radius:12px;padding:24px;max-width:320px;text-align:center;border:1px solid #2a2050">
-          <div style="font-size:2rem;margin-bottom:12px">🔐</div>
-          <p style="font-size:1.1rem;font-weight:600;color:#fff;margin-bottom:6px">Approve dApp Connection</p>
-          <p style="color:var(--muted);font-size:.9rem;margin-bottom:20px">Connecting to <strong>${escHtml(dappName)}</strong></p>
-          ${hasFid ? `<button class="btn btn--faceid" id="fidApproveBtn" style="margin-bottom:12px;width:100%">${fidSvg()} Approve with Face ID</button><div class="divider">or</div>` : ''}
-          <div style="width:100%;display:flex;flex-direction:column;gap:8px;margin-bottom:12px">
-            <input type="password" id="pinApproveInput" class="input" placeholder="Enter PIN" autocomplete="current-password">
-            <button class="btn btn--primary" id="pinApproveBtn">Approve with PIN</button>
-          </div>
-          <button class="btn btn--ghost" id="cancelApproveBtn" style="width:100%">Cancel</button>
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:9999;display:flex;align-items:center;justify-content:center;';
+    overlay.innerHTML = `
+      <div style="background:#0d0a1a;border-radius:12px;padding:24px;max-width:320px;text-align:center;border:1px solid #2a2050">
+        <div style="font-size:2rem;margin-bottom:12px">🔐</div>
+        <p style="font-size:1.1rem;font-weight:600;color:#fff;margin-bottom:6px">Approve dApp Connection</p>
+        <p style="color:var(--muted);font-size:.9rem;margin-bottom:20px">Connecting to <strong>${escHtml(dappName)}</strong></p>
+        ${hasFid ? `<button class="btn btn--faceid" id="fidApproveBtn" style="margin-bottom:12px;width:100%">${fidSvg()} Approve with Face ID</button><div class="divider">or</div>` : ''}
+        <div style="width:100%;display:flex;flex-direction:column;gap:8px;margin-bottom:12px">
+          <input type="password" id="pinApproveInput" class="input" placeholder="Enter PIN" autocomplete="current-password">
+          <button class="btn btn--primary" id="pinApproveBtn">Approve with PIN</button>
         </div>
+        <button class="btn btn--ghost" id="cancelApproveBtn" style="width:100%">Cancel</button>
       </div>
-    `);
+    `;
+    document.body.appendChild(overlay);
 
-    const doCancelApprove = () => { render(''); resolve(false); };
+    const closeOverlay = (result) => { overlay.remove(); resolve(result); };
 
-    document.getElementById('cancelApproveBtn')?.addEventListener('click', doCancelApprove);
-    document.getElementById('pinApproveInput')?.addEventListener('keydown', e => {
-      if (e.key === 'Enter') document.getElementById('pinApproveBtn')?.click();
+    overlay.querySelector('#cancelApproveBtn')?.addEventListener('click', () => closeOverlay(false));
+    overlay.querySelector('#pinApproveInput')?.addEventListener('keydown', e => {
+      if (e.key === 'Enter') overlay.querySelector('#pinApproveBtn')?.click();
     });
 
-    document.getElementById('fidApproveBtn')?.addEventListener('click', async () => {
+    overlay.querySelector('#fidApproveBtn')?.addEventListener('click', async () => {
       try {
         const fid = LS.getObj(`thr_fid_${address}`);
         const env = LS.getObj(`thr_env_${address}`);
         if (!fid?.credId || !env) throw new Error('Face ID not available');
         const privHex = await unwrapFromSession(address, env);
-        if (privHex) { render(''); resolve(true); return; }
+        if (privHex) { closeOverlay(true); return; }
         throw new Error('Face ID unlock failed');
       } catch (err) {
         if (err.name === 'NotAllowedError') {
-          render(''); resolve(false);
+          closeOverlay(false);
         } else {
           alert('Face ID failed: ' + (err.message || 'try PIN instead'));
         }
       }
     });
 
-    document.getElementById('pinApproveBtn')?.addEventListener('click', async () => {
-      const pin = document.getElementById('pinApproveInput')?.value?.trim();
+    overlay.querySelector('#pinApproveBtn')?.addEventListener('click', async () => {
+      const pin = overlay.querySelector('#pinApproveInput')?.value?.trim();
       if (!pin) { alert('Enter your PIN'); return; }
       try {
         const acc = getAccount(address);
@@ -1477,7 +1482,7 @@ async function requestDappApproval(dappName) {
         const kit = typeof acc.kit === 'string' ? JSON.parse(acc.kit) : acc.kit;
         const encBlob = kit.encrypted_private_key_backup ?? kit.wallet_v1_encrypted_priv ?? kit.encrypted_private_key ?? kit.enc_key;
         const privHex = await decryptBlob(encBlob, pin);
-        render(''); resolve(true);
+        closeOverlay(true);
       } catch {
         alert('Wrong PIN — please try again');
       }

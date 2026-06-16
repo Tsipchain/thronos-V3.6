@@ -834,6 +834,8 @@ async function showWallet() {
         <button class="action-btn" id="connectBtn"><span class="action-btn__icon">⬡</span>Connect</button>
         <button class="action-btn" id="musicBtn"><span class="action-btn__icon">🎵</span>Music</button>
         <button class="action-btn" id="historyBtn"><span class="action-btn__icon">📋</span>History</button>
+        <button class="action-btn" id="createTokenBtn"><span class="action-btn__icon">🪙</span>Create Token</button>
+        <button class="action-btn" id="nftBtn"><span class="action-btn__icon">🖼️</span>NFTs</button>
       </div>
 
       <div class="tx-feed" id="txFeed" style="display:none">
@@ -871,6 +873,8 @@ async function showWallet() {
   document.getElementById('networksBtn').addEventListener('click', showMultiChain);
   document.getElementById('connectBtn').addEventListener('click', showWalletConnect);
   document.getElementById('musicBtn').addEventListener('click', showMusic);
+  document.getElementById('createTokenBtn').addEventListener('click', showCreateToken);
+  document.getElementById('nftBtn').addEventListener('click', showNFTs);
   document.getElementById('historyBtn').addEventListener('click', () => {
     const feed = document.getElementById('txFeed');
     if (feed) feed.style.display = feed.style.display === 'none' ? '' : 'none';
@@ -2692,6 +2696,239 @@ async function showAddLiquidity(poolId, tokenA, tokenB) {
       errEl.textContent = e.message || 'Add liquidity failed';
       errEl.style.display = '';
       btn.disabled = false; btn.textContent = 'Add Liquidity';
+    }
+  });
+}
+
+// ─── Create Token ──────────────────────────────────────────────────────────────
+
+async function showCreateToken() {
+  const address = getActiveAddr();
+  if (!address || !unlocked.has(address)) { showUnlock(); return; }
+
+  render(`
+    <div class="screen">
+      <div class="header">
+        <button class="btn--icon" id="backBtn">←</button>
+        <span style="font-weight:700;color:#fff">🪙 Create Token</span>
+        <span></span>
+      </div>
+      <div style="padding:4px 0">
+        <p style="color:var(--muted);font-size:.8rem;margin-bottom:14px">
+          Launch your own experimental token on the Thronos network. The full supply is minted to your address.
+        </p>
+        <label style="font-size:.82rem;color:var(--muted)">Token Name</label>
+        <input type="text" id="tokName" class="input" placeholder="e.g. My Awesome Token" style="margin-bottom:10px">
+        <label style="font-size:.82rem;color:var(--muted)">Symbol (1-8 chars, A-Z0-9)</label>
+        <input type="text" id="tokSymbol" class="input" placeholder="e.g. MAT" maxlength="8" style="margin-bottom:10px;text-transform:uppercase">
+        <label style="font-size:.82rem;color:var(--muted)">Total Supply</label>
+        <input type="number" id="tokSupply" class="input" placeholder="1000000" min="0" step="1" inputmode="decimal" style="margin-bottom:10px">
+        <label style="font-size:.82rem;color:var(--muted)">Decimals (0-18)</label>
+        <input type="number" id="tokDecimals" class="input" placeholder="8" min="0" max="18" step="1" value="8" style="margin-bottom:14px">
+        <button id="tokCreateBtn" class="btn btn--primary" style="width:100%;padding:13px">Create Token</button>
+        <div id="tokErr" style="margin-top:10px;color:#ff6b6b;font-size:.82rem;display:none"></div>
+        <div id="tokOk" style="margin-top:10px;color:#00ff66;font-size:.82rem;display:none"></div>
+      </div>
+    </div>
+  `);
+
+  document.getElementById('backBtn').addEventListener('click', showWallet);
+  document.getElementById('tokCreateBtn').addEventListener('click', async () => {
+    const name = document.getElementById('tokName').value.trim();
+    const symbol = document.getElementById('tokSymbol').value.trim().toUpperCase();
+    const supply = parseFloat(document.getElementById('tokSupply').value);
+    const decimals = parseInt(document.getElementById('tokDecimals').value, 10);
+    const errEl = document.getElementById('tokErr');
+    const okEl = document.getElementById('tokOk');
+    errEl.style.display = 'none'; okEl.style.display = 'none';
+
+    if (!name || !symbol || !supply || supply <= 0) {
+      errEl.textContent = 'Fill in name, symbol and a positive supply';
+      errEl.style.display = '';
+      return;
+    }
+    const { privHex } = unlocked.get(address) || {};
+    if (!privHex) { errEl.textContent = 'Wallet locked'; errEl.style.display = ''; return; }
+
+    const btn = document.getElementById('tokCreateBtn');
+    btn.disabled = true; btn.textContent = 'Creating…';
+    try {
+      const r = await fetch(`${API_WRITE}/api/wallet/v1/create_token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          from: address, name, symbol, total_supply: supply,
+          decimals: isNaN(decimals) ? 8 : decimals, private_key_hex: privHex,
+        }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok && (d.ok || d.status === 'success')) {
+        okEl.textContent = `✅ Token ${symbol} created! Full supply credited to your wallet.`;
+        okEl.style.display = '';
+        btn.textContent = 'Created';
+      } else {
+        throw new Error(d.message || d.error || 'failed');
+      }
+    } catch (e) {
+      errEl.textContent = e.message || 'Token creation failed';
+      errEl.style.display = '';
+      btn.disabled = false; btn.textContent = 'Create Token';
+    }
+  });
+}
+
+// ─── NFTs ──────────────────────────────────────────────────────────────────────
+
+async function showNFTs() {
+  const address = getActiveAddr();
+  if (!address || !unlocked.has(address)) { showUnlock(); return; }
+
+  render(`
+    <div class="screen">
+      <div class="header">
+        <button class="btn--icon" id="backBtn">←</button>
+        <span style="font-weight:700;color:#fff">🖼️ NFTs</span>
+        <button class="btn--icon" id="mintBtn" title="Mint NFT">＋</button>
+      </div>
+      <div id="nftBody" style="margin-top:10px">
+        <p style="color:var(--muted);text-align:center;padding:20px">Loading NFTs…</p>
+      </div>
+    </div>
+  `);
+
+  document.getElementById('backBtn').addEventListener('click', showWallet);
+  document.getElementById('mintBtn').addEventListener('click', showMintNFT);
+
+  try {
+    const r = await fetch(`${API_BASE}/api/v1/nfts`);
+    const d = await r.json().catch(() => ({}));
+    const nfts = d.nfts || [];
+    const el = document.getElementById('nftBody');
+    if (!el) return;
+
+    if (!nfts.length) {
+      el.innerHTML = '<p style="color:var(--muted);text-align:center;padding:20px">No NFTs minted yet. Tap + to mint the first one.</p>';
+      return;
+    }
+
+    el.innerHTML = nfts.slice().reverse().map(nft => {
+      const isMine = (nft.owner || '').toUpperCase() === address;
+      const img = nft.image_url
+        ? `<img src="${nft.image_url}" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:8px;margin-bottom:8px">`
+        : `<div style="width:100%;aspect-ratio:1;border-radius:8px;margin-bottom:8px;background:#1a1040;display:flex;align-items:center;justify-content:center;font-size:2rem">🖼️</div>`;
+      return `<div class="card" style="padding:12px;margin-bottom:10px">
+        ${img}
+        <div style="font-size:.95rem;font-weight:700;color:#fff">${escHtml(nft.name || 'Untitled')}</div>
+        <div style="font-size:.76rem;color:var(--muted);margin:2px 0 8px">${escHtml(nft.description || '')}</div>
+        <div style="display:flex;justify-content:space-between;font-size:.78rem;color:var(--muted);margin-bottom:8px">
+          <span>Owner: ${isMine ? 'You' : shortAddr(nft.owner || '')}</span>
+          <span>${nft.price ? nft.price + ' THR' : 'Not for sale'}</span>
+        </div>
+        ${(!isMine && nft.for_sale && nft.price > 0)
+          ? `<button class="btn btn--primary" style="width:100%;padding:9px;font-size:.82rem" onclick="buyNFT('${nft.id}')">Buy for ${nft.price} THR</button>`
+          : ''}
+      </div>`;
+    }).join('');
+  } catch (e) {
+    const el = document.getElementById('nftBody');
+    if (el) el.innerHTML = `<p style="color:#ff6b6b;text-align:center;padding:20px">Error: ${e.message}</p>`;
+  }
+}
+
+async function buyNFT(nftId) {
+  const address = getActiveAddr();
+  const { privHex } = unlocked.get(address) || {};
+  if (!privHex) { alert('Wallet locked'); return; }
+  if (!confirm('Buy this NFT?')) return;
+  try {
+    const r = await fetch(`${API_WRITE}/api/wallet/v1/nfts/buy`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from: address, nft_id: nftId, private_key_hex: privHex }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok && (d.ok || d.status === 'success')) {
+      alert('✅ NFT purchased!');
+      showNFTs();
+    } else {
+      throw new Error(d.message || d.error || 'failed');
+    }
+  } catch (e) {
+    alert('Buy failed: ' + e.message);
+  }
+}
+
+function showMintNFT() {
+  const address = getActiveAddr();
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:#000000aa;z-index:999;display:flex;align-items:flex-end;justify-content:center;';
+  overlay.innerHTML = `
+    <div style="background:#13112a;border-radius:16px 16px 0 0;width:100%;max-width:480px;padding:20px 20px 32px;max-height:88vh;overflow-y:auto">
+      <div style="font-size:1rem;font-weight:700;color:#fff;margin-bottom:14px">🖼️ Mint NFT</div>
+      <label style="font-size:.82rem;color:var(--muted)">Image (optional)</label>
+      <input type="file" id="nftImg" accept="image/png,image/jpeg,image/gif,image/webp" style="margin-bottom:10px;width:100%;color:var(--muted)">
+      <label style="font-size:.82rem;color:var(--muted)">Name</label>
+      <input type="text" id="nftName" class="input" placeholder="NFT name" style="margin-bottom:10px">
+      <label style="font-size:.82rem;color:var(--muted)">Description</label>
+      <input type="text" id="nftDesc" class="input" placeholder="Optional description" style="margin-bottom:10px">
+      <label style="font-size:.82rem;color:var(--muted)">Price (THR, 0 = not for sale)</label>
+      <input type="number" id="nftPrice" class="input" placeholder="0" min="0" step="0.01" inputmode="decimal" style="margin-bottom:10px">
+      <label style="font-size:.82rem;color:var(--muted)">Royalties % (0-50)</label>
+      <input type="number" id="nftRoyalty" class="input" placeholder="10" min="0" max="50" step="1" value="10" style="margin-bottom:14px">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <button id="nftCancel" class="btn btn--ghost" style="padding:12px">Cancel</button>
+        <button id="nftMintBtn" class="btn btn--primary" style="padding:12px">Mint</button>
+      </div>
+      <div id="nftErr" style="margin-top:10px;color:#ff6b6b;font-size:.82rem;display:none"></div>
+      <div id="nftOk" style="margin-top:10px;color:#00ff66;font-size:.82rem;display:none"></div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#nftCancel').addEventListener('click', () => overlay.remove());
+
+  const readFileAsDataUrl = (file) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+
+  overlay.querySelector('#nftMintBtn').addEventListener('click', async () => {
+    const name = overlay.querySelector('#nftName').value.trim();
+    const description = overlay.querySelector('#nftDesc').value.trim();
+    const price = parseFloat(overlay.querySelector('#nftPrice').value) || 0;
+    const royalties = parseInt(overlay.querySelector('#nftRoyalty').value, 10) || 0;
+    const file = overlay.querySelector('#nftImg').files[0];
+    const errEl = overlay.querySelector('#nftErr');
+    const okEl = overlay.querySelector('#nftOk');
+    errEl.style.display = 'none'; okEl.style.display = 'none';
+
+    if (!name) { errEl.textContent = 'Enter a name'; errEl.style.display = ''; return; }
+    const { privHex } = unlocked.get(address) || {};
+    if (!privHex) { errEl.textContent = 'Wallet locked'; errEl.style.display = ''; return; }
+
+    const btn = overlay.querySelector('#nftMintBtn');
+    btn.disabled = true; btn.textContent = 'Minting…';
+    try {
+      let image_data_url = '';
+      if (file) image_data_url = await readFileAsDataUrl(file);
+      const r = await fetch(`${API_WRITE}/api/wallet/v1/nfts/mint`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          from: address, name, description, price, royalties,
+          image_data_url, private_key_hex: privHex,
+        }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok && (d.ok || d.status === 'success')) {
+        okEl.textContent = '✅ NFT minted!';
+        okEl.style.display = '';
+        setTimeout(() => { overlay.remove(); showNFTs(); }, 1500);
+      } else {
+        throw new Error(d.message || d.error || 'failed');
+      }
+    } catch (e) {
+      errEl.textContent = e.message || 'Mint failed';
+      errEl.style.display = '';
+      btn.disabled = false; btn.textContent = 'Mint';
     }
   });
 }

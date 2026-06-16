@@ -946,6 +946,271 @@ def wallet_v1_add_liquidity():
                     added_a=amt_a, added_b=amt_b), 200
 
 
+def _wallet_v1_verify_owner(from_addr, priv_hex):
+    """Shared helper: derive THR address from private_key_hex, confirm it matches from_addr."""
+    try:
+        from cryptography.hazmat.primitives.asymmetric import ec as _ec
+        from cryptography.hazmat.primitives.serialization import Encoding as _Enc, PublicFormat as _PF
+        from cryptography.hazmat.backends import default_backend as _backend
+        from wallet_v1_address_derivation import derive_thronos_address as _derive
+        priv_key = _ec.derive_private_key(int(priv_hex, 16), _ec.SECP256K1(), _backend())
+        pub_bytes = priv_key.public_key().public_bytes(_Enc.X962, _PF.CompressedPoint)
+        derived = _derive(pub_bytes.hex())
+        if derived.upper() != from_addr.upper():
+            return False, None
+        return True, derived
+    except Exception:
+        return False, None
+
+
+@app.route('/api/wallet/v1/create_token', methods=['POST'])
+def wallet_v1_create_token():
+    """
+    PWA/mobile create-token: caller provides private_key_hex, server verifies
+    ownership and creates the token directly (V1 wallets have no legacy
+    auth_secret/pledge, so this bypasses validate_effective_auth — same trust
+    model as /api/wallet/v1/transfer and /api/wallet/v1/add_liquidity).
+    """
+    import server as _srv3
+    import time as _t3
+    import uuid as _uuid3
+
+    data = _request.get_json() or {}
+    from_addr    = (data.get('from')             or '').strip().upper()
+    name         = (data.get('name')             or '').strip()
+    symbol       = (data.get('symbol')           or '').strip().upper()
+    total_raw    = data.get('total_supply', 0)
+    decimals_raw = data.get('decimals', 0)
+    priv_hex     = (data.get('private_key_hex')  or '').strip()
+
+    if not from_addr or not name or not symbol or not priv_hex:
+        return _jsonify(ok=False, error='missing_required_fields'), 400
+
+    owner_ok, _derived = _wallet_v1_verify_owner(from_addr, priv_hex)
+    if not owner_ok:
+        return _jsonify(ok=False, error='invalid_private_key_or_address_mismatch'), 403
+
+    try:
+        total_supply = float(total_raw)
+    except (TypeError, ValueError):
+        return _jsonify(ok=False, error='invalid_total_supply'), 400
+    if total_supply <= 0:
+        return _jsonify(ok=False, error='invalid_total_supply'), 400
+    if not symbol or len(symbol) > 8 or not symbol.isalnum():
+        return _jsonify(ok=False, error='invalid_symbol'), 400
+    if symbol in ('THR', 'WBTC'):
+        return _jsonify(ok=False, error='symbol_reserved'), 400
+    try:
+        decimals = int(decimals_raw)
+    except (TypeError, ValueError):
+        return _jsonify(ok=False, error='invalid_decimals'), 400
+    if decimals < 0 or decimals > 18:
+        return _jsonify(ok=False, error='decimals_out_of_range'), 400
+
+    tokens = _srv3.load_tokens()
+    if any(t.get('symbol') == symbol for t in tokens):
+        return _jsonify(ok=False, error='symbol_already_exists'), 400
+
+    token_id = str(_uuid3.uuid4())
+    new_token = {
+        'id': token_id, 'name': name, 'symbol': symbol,
+        'total_supply': round(total_supply, decimals), 'decimals': decimals,
+        'owner': from_addr,
+    }
+    tokens.append(new_token)
+    _srv3.save_tokens(tokens)
+
+    balances = _srv3.load_token_balances()
+    balances.setdefault(symbol, {})
+    balances[symbol][from_addr] = round(total_supply, decimals)
+    _srv3.save_token_balances(balances)
+
+    ts = _t3.strftime('%Y-%m-%d %H:%M:%S UTC', _t3.gmtime())
+    tx_id = f"TOKEN-CREATE-{int(_t3.time())}-{_uuid3.uuid4().hex[:8]}"
+    tx = {
+        'type': 'token_create', 'symbol': symbol, 'name': name,
+        'decimals': decimals, 'owner': from_addr,
+        'total_supply': round(total_supply, decimals),
+        'timestamp': ts, 'tx_id': tx_id, 'status': 'confirmed',
+    }
+    chain = _srv3.load_json(_srv3.CHAIN_FILE, [])
+    chain.append(tx)
+    _srv3.save_json(_srv3.CHAIN_FILE, chain)
+    try: _srv3.update_last_block(tx, is_block=False)
+    except Exception: pass
+    try: _srv3.broadcast_tx(tx)
+    except Exception: pass
+
+    return _jsonify(ok=True, status='success', token=new_token), 201
+
+
+@app.route('/api/wallet/v1/nfts/mint', methods=['POST'])
+def wallet_v1_nfts_mint():
+    """
+    PWA/mobile NFT mint: caller provides private_key_hex, server verifies ownership,
+    deducts the mint fee, and records the NFT. Accepts an optional base64
+    `image_data_url` (data:image/...;base64,...) instead of multipart file upload,
+    so PWA/mobile clients can mint from a single JSON POST.
+    """
+    import server as _srv4
+    import time as _t4
+    import base64 as _b64
+    import re as _re4
+
+    data = _request.get_json() or {}
+    from_addr      = (data.get('from')            or '').strip().upper()
+    name           = (data.get('name')            or '').strip()
+    description    = (data.get('description')     or '').strip()
+    category       = (data.get('category')        or 'art').strip()
+    price_raw      = data.get('price', 0)
+    royalties_raw  = data.get('royalties', 10)
+    image_data_url = (data.get('image_data_url')  or '').strip()
+    priv_hex       = (data.get('private_key_hex') or '').strip()
+
+    if not from_addr or not name or not priv_hex:
+        return _jsonify(ok=False, error='missing_required_fields'), 400
+
+    owner_ok, _derived = _wallet_v1_verify_owner(from_addr, priv_hex)
+    if not owner_ok:
+        return _jsonify(ok=False, error='invalid_private_key_or_address_mismatch'), 403
+
+    try:
+        price = float(price_raw)
+    except (TypeError, ValueError):
+        return _jsonify(ok=False, error='invalid_price'), 400
+    try:
+        royalties = max(0, min(50, int(royalties_raw)))
+    except (TypeError, ValueError):
+        return _jsonify(ok=False, error='invalid_royalties'), 400
+
+    mint_fee = _srv4.NFT_MINT_FEE
+    ledger = _srv4.load_json(_srv4.LEDGER_FILE, {})
+    balance = float(ledger.get(from_addr, 0.0))
+    if balance < mint_fee:
+        return _jsonify(ok=False, error='insufficient_balance',
+                        mint_fee=mint_fee, balance=balance), 402
+
+    nft_id = f"NFT{int(_t4.time() * 1000)}"
+    image_url = None
+    if image_data_url:
+        match = _re4.match(r'^data:image/(png|jpe?g|gif|webp);base64,(.+)$', image_data_url, _re4.IGNORECASE)
+        if match:
+            ext = match.group(1).lower().replace('jpeg', 'jpg')
+            try:
+                raw = _b64.b64decode(match.group(2))
+                _srv4.os.makedirs(_srv4.NFT_IMAGES_DIR, exist_ok=True)
+                filename = f"{nft_id}.{ext}"
+                with open(_srv4.os.path.join(_srv4.NFT_IMAGES_DIR, filename), 'wb') as f:
+                    f.write(raw)
+                image_url = f"/media/nft_images/{filename}"
+            except Exception:
+                image_url = None
+
+    ledger[from_addr] = round(balance - mint_fee, 6)
+    network_wallet = _srv4.os.getenv('NETWORK_FEE_WALLET', 'THR_NETWORK_FEES_00001')
+    ledger[network_wallet] = round(float(ledger.get(network_wallet, 0.0)) + mint_fee, 6)
+    _srv4.save_json(_srv4.LEDGER_FILE, ledger)
+
+    timestamp = _t4.strftime('%Y-%m-%d %H:%M:%S UTC', _t4.gmtime())
+    nft = {
+        'id': nft_id, 'name': name, 'description': description, 'category': category,
+        'price': price, 'royalties': royalties, 'creator': from_addr, 'owner': from_addr,
+        'image_url': image_url, 'created_at': timestamp, 'for_sale': True, 'mint_fee': mint_fee,
+    }
+    registry = _srv4.load_nft_registry()
+    registry.setdefault('nfts', []).append(nft)
+    _srv4.save_nft_registry(registry)
+
+    chain = _srv4.load_json(_srv4.CHAIN_FILE, [])
+    tx = {
+        'type': 'nft_mint', 'category': 'nft_mint', 'from': from_addr, 'to': network_wallet,
+        'amount': mint_fee, 'fee': mint_fee, 'fee_burned': mint_fee,
+        'symbol': 'THR', 'token_symbol': 'THR', 'asset_symbol': 'THR',
+        'nft_id': nft_id, 'nft_name': name, 'timestamp': timestamp, 'status': 'confirmed',
+    }
+    chain.append(tx)
+    _srv4.save_json(_srv4.CHAIN_FILE, chain)
+    try: _srv4.update_last_block(tx, is_block=False)
+    except Exception: pass
+
+    nft['image_url'] = _srv4.normalize_media_url(nft.get('image_url') or nft.get('image'))
+    return _jsonify(ok=True, status='success', nft=nft, mint_fee=mint_fee,
+                    new_balance=ledger.get(from_addr, 0.0)), 201
+
+
+@app.route('/api/wallet/v1/nfts/buy', methods=['POST'])
+def wallet_v1_nfts_buy():
+    """PWA/mobile NFT buy: caller provides private_key_hex, server verifies ownership then executes the purchase."""
+    import server as _srv5
+    import time as _t5
+
+    data = _request.get_json() or {}
+    from_addr = (data.get('from') or '').strip().upper()
+    nft_id    = (data.get('nft_id') or '').strip()
+    priv_hex  = (data.get('private_key_hex') or '').strip()
+
+    if not from_addr or not nft_id or not priv_hex:
+        return _jsonify(ok=False, error='missing_required_fields'), 400
+
+    owner_ok, _derived = _wallet_v1_verify_owner(from_addr, priv_hex)
+    if not owner_ok:
+        return _jsonify(ok=False, error='invalid_private_key_or_address_mismatch'), 403
+
+    buyer = from_addr
+    registry = _srv5.load_nft_registry()
+    nft = next((n for n in registry.get('nfts', []) if n.get('id') == nft_id), None)
+    if not nft:
+        return _jsonify(ok=False, error='nft_not_found'), 404
+    if not nft.get('for_sale'):
+        return _jsonify(ok=False, error='nft_not_for_sale'), 400
+    if nft.get('owner') == buyer:
+        return _jsonify(ok=False, error='already_owned'), 400
+
+    price = float(nft.get('price', 0))
+    if price <= 0:
+        return _jsonify(ok=False, error='nft_has_no_price'), 400
+
+    ledger = _srv5.load_json(_srv5.LEDGER_FILE, {})
+    buyer_balance = float(ledger.get(buyer, 0.0))
+    if buyer_balance < price:
+        return _jsonify(ok=False, error='insufficient_balance', price=price, balance=buyer_balance), 402
+
+    royalty_pct = min(50, max(0, int(nft.get('royalties', 10)))) / 100.0
+    royalty_amount = round(price * royalty_pct, 6)
+    seller_amount = round(price - royalty_amount, 6)
+    old_owner = nft['owner']
+    creator_addr = nft.get('creator', old_owner)
+
+    ledger[buyer] = round(buyer_balance - price, 6)
+    ledger[old_owner] = round(float(ledger.get(old_owner, 0.0)) + seller_amount, 6)
+    if creator_addr != old_owner and royalty_amount > 0:
+        ledger[creator_addr] = round(float(ledger.get(creator_addr, 0.0)) + royalty_amount, 6)
+    elif royalty_amount > 0:
+        ledger[old_owner] = round(float(ledger.get(old_owner, 0.0)) + royalty_amount, 6)
+    _srv5.save_json(_srv5.LEDGER_FILE, ledger)
+
+    nft['owner'] = buyer
+    nft['for_sale'] = False
+    _srv5.save_nft_registry(registry)
+
+    timestamp = _t5.strftime('%Y-%m-%d %H:%M:%S UTC', _t5.gmtime())
+    chain = _srv5.load_json(_srv5.CHAIN_FILE, [])
+    tx = {
+        'type': 'nft_buy', 'category': 'nft_buy', 'from': buyer, 'to': old_owner,
+        'amount': price, 'fee': 0.0, 'symbol': 'THR', 'token_symbol': 'THR', 'asset_symbol': 'THR',
+        'nft_id': nft_id, 'nft_name': nft.get('name', ''),
+        'royalty_amount': royalty_amount, 'royalty_to': creator_addr,
+        'timestamp': timestamp, 'status': 'confirmed',
+    }
+    chain.append(tx)
+    _srv5.save_json(_srv5.CHAIN_FILE, chain)
+    try: _srv5.update_last_block(tx, is_block=False)
+    except Exception: pass
+
+    return _jsonify(ok=True, status='success', nft=nft, price=price,
+                    royalty=royalty_amount, new_balance=ledger.get(buyer, 0.0)), 200
+
+
 # ── THR Wallet PWA — served from public/wallet-pwa/ ───────────────────────────
 import os as _os
 from flask import send_from_directory as _send

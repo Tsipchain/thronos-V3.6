@@ -54,6 +54,9 @@ const QUICK_ACTIONS: Array<{
   { label: 'Bridge', icon: 'git-compare', color: COLORS.warning, screen: 'Bridge' },
   { label: 'Stake', icon: 'layers', color: COLORS.gold, screen: 'Stake' },
   { label: 'Pledge', icon: 'shield-checkmark', color: '#FF6B6B', screen: 'Pledge' },
+  { label: 'Pools', icon: 'water', color: COLORS.info, screen: 'Pools' },
+  { label: 'New Token', icon: 'add-circle', color: COLORS.success, screen: 'CreateToken' },
+  { label: 'NFTs', icon: 'image', color: COLORS.primary, screen: 'NFT' },
 ];
 
 // USD price per THR (derived from 1 THR = 0.0001 BTC)

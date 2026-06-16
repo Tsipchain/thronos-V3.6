@@ -291,12 +291,51 @@ export async function getLPPositions(address: string): Promise<{ positions: Arra
   return request(`/api/v1/pools/positions/${address}`);
 }
 
-export async function addLiquiditySigned(params: { pool_id: string; amount_a: number; amount_b: number; signedTx: SignedTxEnvelope }): Promise<{ success: boolean; shares?: number; error?: string }> {
-  return request('/api/v1/pools/add_liquidity', { method: 'POST', body: JSON.stringify({ pool_id: params.pool_id, amount_a: params.amount_a, amount_b: params.amount_b, tx: params.signedTx }) });
+export async function addLiquidity(params: { from: string; pool_id: string; amount_a: number; amount_b: number; private_key_hex: string }): Promise<{ ok: boolean; status?: string; shares_minted?: number; error?: string }> {
+  return request('/api/wallet/v1/add_liquidity', { method: 'POST', body: JSON.stringify({ from: params.from, pool_id: params.pool_id, amount_a: params.amount_a, amount_b: params.amount_b, private_key_hex: params.private_key_hex }) });
 }
 
 export async function removeLiquiditySigned(params: { pool_id: string; shares: number; signedTx: SignedTxEnvelope }): Promise<{ success: boolean; amount_a?: number; amount_b?: number; error?: string }> {
   return request('/api/v1/pools/remove_liquidity', { method: 'POST', body: JSON.stringify({ pool_id: params.pool_id, shares: params.shares, tx: params.signedTx }) });
+}
+
+export interface ThronosToken {
+  id?: string;
+  symbol: string;
+  name: string;
+  decimals: number;
+  owner: string;
+  total_supply: number;
+}
+
+export async function createToken(params: { from: string; name: string; symbol: string; total_supply: number; decimals: number; private_key_hex: string }): Promise<{ ok: boolean; status?: string; token?: ThronosToken; error?: string }> {
+  return request('/api/wallet/v1/create_token', { method: 'POST', body: JSON.stringify(params) });
+}
+
+export interface ThronosNft {
+  id: string;
+  name: string;
+  description?: string;
+  category?: string;
+  price: number;
+  royalties: number;
+  creator: string;
+  owner: string;
+  image_url?: string;
+  for_sale: boolean;
+  created_at?: string;
+}
+
+export async function getNfts(): Promise<{ nfts: ThronosNft[] }> {
+  return request('/api/v1/nfts');
+}
+
+export async function mintNft(params: { from: string; name: string; description?: string; category?: string; price?: number; royalties?: number; image_data_url?: string; private_key_hex: string }): Promise<{ ok: boolean; status?: string; nft?: ThronosNft; error?: string }> {
+  return request('/api/wallet/v1/nfts/mint', { method: 'POST', body: JSON.stringify(params) });
+}
+
+export async function buyNft(params: { from: string; nft_id: string; private_key_hex: string }): Promise<{ ok: boolean; status?: string; nft?: ThronosNft; error?: string }> {
+  return request('/api/wallet/v1/nfts/buy', { method: 'POST', body: JSON.stringify(params) });
 }
 
 export async function getMiningInfo(address: string): Promise<{ hashrate: number; pending_reward: number; total_mined: number; blocks_found: number; last_payout: string }> {

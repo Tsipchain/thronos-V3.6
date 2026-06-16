@@ -23576,6 +23576,27 @@ def api_wallet_v1_btc_address():
         return jsonify(ok=False, error=str(exc)), 400
 
 
+@app.route("/api/wallet/v1/btc-address-from-key", methods=["POST"])
+def api_wallet_v1_btc_address_from_key():
+    """PWA/mobile: derive BTC address directly from private_key_hex (same trust model as /api/wallet/v1/transfer)."""
+    data = request.get_json() or {}
+    priv_hex = (data.get("private_key_hex") or "").strip()
+    if not priv_hex:
+        return jsonify(ok=False, error="missing_private_key_hex"), 400
+    try:
+        from cryptography.hazmat.primitives.asymmetric import ec as _ec
+        from cryptography.hazmat.primitives.serialization import Encoding as _Enc, PublicFormat as _PF
+        from cryptography.hazmat.backends import default_backend as _backend
+        priv_int = int(priv_hex, 16)
+        priv_key = _ec.derive_private_key(priv_int, _ec.SECP256K1(), _backend())
+        pub_bytes = priv_key.public_key().public_bytes(_Enc.X962, _PF.CompressedPoint)
+        pubkey_hex = pub_bytes.hex()
+        btc_addr = pubkey_hex_to_btc_address(pubkey_hex)
+        return jsonify(ok=True, btc_address=btc_addr, pubkey=pubkey_hex, network="mainnet", type="P2PKH")
+    except Exception as exc:
+        return jsonify(ok=False, error="invalid_private_key", detail=str(exc)), 400
+
+
 # ─── Token Balances API (NEW) ─────────────────────────────────────
 #
 # This endpoint returns all balances for custom tokens held by the
@@ -30521,12 +30542,27 @@ def api_v1_get_pools():
             pool["tvl_thr"] = round(tvl_thr, 6)
             pool["tvl_btc"] = round(tvl_thr * 0.0001, 8)
             pool["tvl_usd"] = round(tvl_thr * thr_usd, 2) if thr_usd else 0.0
+
+            # Fix: front-end pools view always showed "N/A" APY because this
+            # field was never populated. Estimate from 24h volume and pool fee.
+            fee_bps_val = pool_fee_bps(pool)
+            pool["fee_bps"] = fee_bps_val
+            volume_24h_a = float(pool.get("volume_24h", 0) or 0)
+            volume_24h_thr = volume_24h_a * price_a_thr
+            if tvl_thr > 0:
+                fee_rate = fee_bps_val / 10000
+                daily_fee_revenue_thr = volume_24h_thr * fee_rate
+                pool["apy_estimate"] = round((daily_fee_revenue_thr * 365 / tvl_thr) * 100, 2)
+            else:
+                pool["apy_estimate"] = 0.0
         except Exception:
             # Ensure pool still has required fields even on error
             pool.setdefault("reserve_a", pool.get("reserves_a", 0))
             pool.setdefault("reserve_b", pool.get("reserves_b", 0))
             pool.setdefault("tvl_thr", 0.0)
             pool.setdefault("tvl_usd", 0.0)
+            pool.setdefault("apy_estimate", 0.0)
+            pool.setdefault("fee_bps", 30)
             continue
     return jsonify(pools=pools), 200
 

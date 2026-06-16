@@ -1172,21 +1172,34 @@ async function _openQrScannerGeneric(onResult) {
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d');
 
+  // Some browsers expose the BarcodeDetector API but throw at construction
+  // or detect()-time (e.g. missing OS-level qr_code format support). If we
+  // silently swallow that every frame and keep retrying the same broken
+  // path, the scanner runs forever without ever falling back to jsQR. Once
+  // BarcodeDetector fails, disable it permanently for this scan session.
+  let barcodeDetectorOk = ('BarcodeDetector' in window);
   const scanLoop = async () => {
     if (!overlay.isConnected) return;
-    try {
-      if ('BarcodeDetector' in window) {
+    let handled = false;
+    if (barcodeDetectorOk) {
+      try {
         const codes = await new BarcodeDetector({ formats: ['qr_code'] }).detect(video);
         for (const c of codes) { if (c.rawValue) { stopScan(); onResult(c.rawValue); return; } }
-      } else if (_jsQR && video.readyState >= 2) {
+        handled = true;
+      } catch (_) {
+        barcodeDetectorOk = false;
+      }
+    }
+    if (!handled && _jsQR && video.readyState >= 2) {
+      try {
         const w = video.videoWidth || 640, h = video.videoHeight || 480;
         canvas.width = w; canvas.height = h;
         ctx.drawImage(video, 0, 0, w, h);
         const img = ctx.getImageData(0, 0, w, h);
         const res = _jsQR(img.data, img.width, img.height, { inversionAttempts: 'dontInvert' });
         if (res?.data) { stopScan(); onResult(res.data); return; }
-      }
-    } catch (_) {}
+      } catch (_) {}
+    }
     requestAnimationFrame(scanLoop);
   };
   video.addEventListener('loadedmetadata', () => requestAnimationFrame(scanLoop));
@@ -1263,18 +1276,28 @@ async function _openQrScanner(address) {
   const _scanCanvas = document.createElement('canvas');
   const _scanCtx = _scanCanvas.getContext('2d');
 
+  // See _openQrScannerGeneric for why BarcodeDetector failures must
+  // permanently fall back to jsQR rather than being retried every frame.
+  let _barcodeDetectorOk = ('BarcodeDetector' in window);
   const _scanLoop = async () => {
     if (!overlay.isConnected) return;
-    try {
-      if ('BarcodeDetector' in window) {
+    let _handled = false;
+    if (_barcodeDetectorOk) {
+      try {
         // Native API (Chrome Android, Chrome desktop)
         const detector = new BarcodeDetector({ formats: ['qr_code'] });
         const codes = await detector.detect(video);
         for (const code of codes) {
           if (code.rawValue) { stopScan(); await _handleWcUri(code.rawValue, address); return; }
         }
-      } else if (_jsQR && video.readyState >= 2) {
-        // jsQR canvas decode — works on iOS Safari, Firefox, all browsers
+        _handled = true;
+      } catch (_) {
+        _barcodeDetectorOk = false;
+      }
+    }
+    if (!_handled && _jsQR && video.readyState >= 2) {
+      // jsQR canvas decode — works on iOS Safari, Firefox, all browsers
+      try {
         const w = video.videoWidth || 640;
         const h = video.videoHeight || 480;
         _scanCanvas.width = w;
@@ -1287,13 +1310,13 @@ async function _openQrScanner(address) {
           await _handleWcUri(result.data, address);
           return;
         }
-      } else if (!_jsQR) {
-        // jsQR failed to load — fall back to paste UI
-        stopScan();
-        alert('Camera QR scan unavailable. Please copy the URI from ThronosBuilder and paste it below.');
-        return;
-      }
-    } catch (_) {}
+      } catch (_) {}
+    } else if (!_handled && !_barcodeDetectorOk && !_jsQR) {
+      // Neither native detector nor jsQR is usable — fall back to paste UI
+      stopScan();
+      alert('Camera QR scan unavailable. Please copy the URI from ThronosBuilder and paste it below.');
+      return;
+    }
     requestAnimationFrame(_scanLoop);
   };
 
@@ -2617,7 +2640,7 @@ async function showPools() {
       const b = pool.token_b || '?';
       const ra = Number(pool.reserves_a || 0);
       const rb = Number(pool.reserves_b || 0);
-      const apy = pool.apy_estimate ? `${Number(pool.apy_estimate).toFixed(1)}%` : 'N/A';
+      const apy = (pool.apy_estimate !== undefined && pool.apy_estimate !== null) ? `${Number(pool.apy_estimate).toFixed(1)}%` : 'N/A';
       const vol = pool.volume_24h ? `${Number(pool.volume_24h).toLocaleString(undefined, {maximumFractionDigits:2})} ${a}` : '—';
       const myPos = posMap[pool.id];
 
@@ -3057,5 +3080,17 @@ async function boot() {
   setActiveAddr(active);
   await showUnlock();
 }
+
+// Expose functions referenced by inline onclick="" HTML attributes — those
+// attributes execute in the global scope, but this file is loaded as an ES
+// module, so top-level function declarations are NOT added to `window` by
+// default. Without this, clicking these buttons throws a silent
+// "X is not defined" ReferenceError and appears to do nothing.
+window.showBridge = showBridge;
+window.showSwap = showSwap;
+window.showAddLiquidity = showAddLiquidity;
+window._approveWcRequest = _approveWcRequest;
+window._rejectWcRequest = _rejectWcRequest;
+window.buyNFT = buyNFT;
 
 boot();

@@ -103,7 +103,8 @@ export default function ScanScreen() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           session_id: parsed.sessionId,
-          wallet_address: walletAddress,
+          address: walletAddress,
+          dapp: parsed.dapp,
         }),
       });
       const json = await resp.json().catch(() => ({}));

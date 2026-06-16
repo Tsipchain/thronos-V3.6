@@ -1420,6 +1420,71 @@ async function _openQrScanner(address) {
   if (video.readyState >= 2) requestAnimationFrame(_scanLoop);
 }
 
+// ─── dApp approval (requires PIN/Face ID before connection) ────────────────────
+
+async function requestDappApproval(dappName) {
+  return new Promise((resolve) => {
+    const address = getActiveAddr();
+    const fid = LS.getObj(`thr_fid_${address}`);
+    const hasFid = !!(fid?.credId);
+
+    render(`
+      <div class="screen screen--center" style="background:rgba(0,0,0,0.92);position:fixed;inset:0;z-index:9999">
+        <div style="background:#0d0a1a;border-radius:12px;padding:24px;max-width:320px;text-align:center;border:1px solid #2a2050">
+          <div style="font-size:2rem;margin-bottom:12px">🔐</div>
+          <p style="font-size:1.1rem;font-weight:600;color:#fff;margin-bottom:6px">Approve dApp Connection</p>
+          <p style="color:var(--muted);font-size:.9rem;margin-bottom:20px">Connecting to <strong>${escHtml(dappName)}</strong></p>
+          ${hasFid ? `<button class="btn btn--faceid" id="fidApproveBtn" style="margin-bottom:12px;width:100%">${fidSvg()} Approve with Face ID</button><div class="divider">or</div>` : ''}
+          <div style="width:100%;display:flex;flex-direction:column;gap:8px;margin-bottom:12px">
+            <input type="password" id="pinApproveInput" class="input" placeholder="Enter PIN" autocomplete="current-password">
+            <button class="btn btn--primary" id="pinApproveBtn">Approve with PIN</button>
+          </div>
+          <button class="btn btn--ghost" id="cancelApproveBtn" style="width:100%">Cancel</button>
+        </div>
+      </div>
+    `);
+
+    const doCancelApprove = () => { render(''); resolve(false); };
+
+    document.getElementById('cancelApproveBtn')?.addEventListener('click', doCancelApprove);
+    document.getElementById('pinApproveInput')?.addEventListener('keydown', e => {
+      if (e.key === 'Enter') document.getElementById('pinApproveBtn')?.click();
+    });
+
+    document.getElementById('fidApproveBtn')?.addEventListener('click', async () => {
+      try {
+        const fid = LS.getObj(`thr_fid_${address}`);
+        const env = LS.getObj(`thr_env_${address}`);
+        if (!fid?.credId || !env) throw new Error('Face ID not available');
+        const privHex = await unwrapFromSession(address, env);
+        if (privHex) { render(''); resolve(true); return; }
+        throw new Error('Face ID unlock failed');
+      } catch (err) {
+        if (err.name === 'NotAllowedError') {
+          render(''); resolve(false);
+        } else {
+          alert('Face ID failed: ' + (err.message || 'try PIN instead'));
+        }
+      }
+    });
+
+    document.getElementById('pinApproveBtn')?.addEventListener('click', async () => {
+      const pin = document.getElementById('pinApproveInput')?.value?.trim();
+      if (!pin) { alert('Enter your PIN'); return; }
+      try {
+        const acc = getAccount(address);
+        if (!acc) throw new Error('Account not found');
+        const kit = typeof acc.kit === 'string' ? JSON.parse(acc.kit) : acc.kit;
+        const encBlob = kit.encrypted_private_key_backup ?? kit.wallet_v1_encrypted_priv ?? kit.encrypted_private_key ?? kit.enc_key;
+        const privHex = await decryptBlob(encBlob, pin);
+        render(''); resolve(true);
+      } catch {
+        alert('Wrong PIN — please try again');
+      }
+    });
+  });
+}
+
 // ─── URI handler ──────────────────────────────────────────────────────────────
 
 async function _handleWcUri(uri, address) {
@@ -1432,6 +1497,13 @@ async function _handleWcUri(uri, address) {
     const [sessionId, queryStr] = withoutProto.split('?');
     const params = new URLSearchParams(queryStr || '');
     const dapp   = params.get('dapp') || 'dApp';
+
+    // Require PIN/Face ID authentication before approving the connection
+    const approved = await requestDappApproval(dapp);
+    if (!approved) {
+      setStatus(`⚠️ Connection cancelled`);
+      return;
+    }
 
     setStatus(`🔗 Pairing with ${dapp}…`);
     try {
@@ -1456,6 +1528,14 @@ async function _handleWcUri(uri, address) {
   // wc:// (standard WalletConnect v2)
   if (uri.startsWith('wc:')) {
     const topic = uri.split('@')[0].replace('wc:', '');
+
+    // Require PIN/Face ID authentication before approving the connection
+    const approved = await requestDappApproval('WalletConnect dApp');
+    if (!approved) {
+      setStatus(`⚠️ Connection cancelled`);
+      return;
+    }
+
     setStatus(`🔗 WC pairing: ${topic.slice(0,8)}…`);
     try {
       const r = await fetch(`${API_WRITE}/api/wallet/wc/pair`, {

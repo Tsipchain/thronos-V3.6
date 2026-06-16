@@ -10,6 +10,7 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS } from '../constants/theme';
 import { useStore } from '../store/useStore';
 import { CONFIG } from '../constants/config';
+import { authenticateWithBiometrics } from '../services/wallet';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -95,6 +96,18 @@ export default function ScanScreen() {
       ]);
       return;
     }
+
+    // Require biometric/Face ID/passcode authentication before approving dApp connection
+    const authenticated = await authenticateWithBiometrics(`Approve ${parsed.dapp} connection`);
+    if (!authenticated) {
+      Alert.alert(
+        'Authentication Required',
+        'Please authenticate to connect to the dApp.',
+        [{ text: 'OK', onPress: () => { processingRef.current = false; setScanned(false); } }],
+      );
+      return;
+    }
+
     setPairing(true);
     try {
       const relayBase = parsed.relay.replace(/\/$/, '');

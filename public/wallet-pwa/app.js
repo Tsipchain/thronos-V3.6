@@ -985,6 +985,7 @@ async function showWallet() {
         <button class="action-btn" id="swapBtn"><span class="action-btn__icon">🔄</span>Swap</button>
         <button class="action-btn" id="poolsBtn"><span class="action-btn__icon">💧</span>Pools</button>
         <button class="action-btn" id="bridgeBtn"><span class="action-btn__icon">⚡</span>Bridge</button>
+        <button class="action-btn" id="usdtPledgeBtn"><span class="action-btn__icon">💵</span>USDT Pledge</button>
         <button class="action-btn" id="networksBtn"><span class="action-btn__icon">🌐</span>Networks</button>
         <button class="action-btn" id="tokensBtn"><span class="action-btn__icon">◈</span>Tokens</button>
         <button class="action-btn" id="connectBtn"><span class="action-btn__icon">⬡</span>Connect</button>
@@ -1011,6 +1012,7 @@ async function showWallet() {
   document.getElementById('poolsBtn').addEventListener('click', showPools);
   document.getElementById('tokensBtn').addEventListener('click', showTokens);
   document.getElementById('bridgeBtn').addEventListener('click', () => showBridge('BTC', 'WBTC'));
+  document.getElementById('usdtPledgeBtn').addEventListener('click', () => showUsdtPledge(address));
   document.getElementById('networksBtn').addEventListener('click', showMultiChain);
   document.getElementById('connectBtn').addEventListener('click', showWalletConnect);
   document.getElementById('musicBtn').addEventListener('click', showMusic);
@@ -1850,6 +1852,99 @@ async function showMultiChain() {
 }
 
 // ─── Bridge screen ─────────────────────────────────────────────────────────────
+
+// ─── USDT-on-BNB-Chain Pledge (PWA/mobile only) ────────────────────────────
+
+async function showUsdtPledge(address) {
+  render(`
+    <div class="screen">
+      <div class="header">
+        <button class="btn--icon" id="backBtn">←</button>
+        <span class="logo--sm">⬡ THR</span>
+        <span style="width:32px"></span>
+      </div>
+      <h2 style="font-size:1.1rem;margin-top:8px">💵 USDT Pledge (BNB Chain)</h2>
+      <p style="color:var(--muted);font-size:.85rem">Send USDT (BEP20) on Binance Smart Chain to the vault below. Once confirmed, your THR equivalent is credited automatically — half is paired into the THR/USDT liquidity pool. Minimum pledge applies.</p>
+
+      <div id="pledgeQuoteArea" class="card" style="padding:12px;margin-bottom:10px">
+        <div style="color:var(--muted);font-size:.85rem">Loading vault details…</div>
+      </div>
+
+      <div class="card" style="padding:12px;margin-bottom:10px">
+        <h3 style="font-size:.95rem;margin-bottom:6px">1. Register your sending BNB address</h3>
+        <p style="color:var(--muted);font-size:.8rem">Enter the BNB/BEP20 address you'll send USDT FROM — this links your pledge to your THR wallet.</p>
+        <input type="text" id="bnbAddrInput" class="input" placeholder="0x... (your BNB sending address)" autocomplete="off">
+        <button class="btn btn--primary mt8" id="bnbRegisterBtn">Register Address</button>
+        <div id="bnbRegisterMsg" style="margin-top:8px;font-size:.82rem"></div>
+      </div>
+
+      <div id="pledgeErr" class="banner banner--error hidden"></div>
+    </div>
+  `);
+
+  document.getElementById('backBtn').addEventListener('click', showWallet);
+
+  // Load quote (vault address, contract, min, rate)
+  try {
+    const r = await fetch(`${API_WRITE}/api/pledge/bnb/quote`);
+    const d = await r.json().catch(() => ({}));
+    const quoteEl = document.getElementById('pledgeQuoteArea');
+    if (r.ok && d.ok !== false) {
+      quoteEl.innerHTML = `
+        <div style="font-size:.78rem;color:var(--muted);margin-bottom:4px">Send USDT (BEP20) to:</div>
+        <div style="font-family:monospace;font-size:.82rem;color:var(--accent);word-break:break-all;background:#0d0a1a;border-radius:6px;padding:8px;margin-bottom:8px" id="vaultAddrLine">${d.vault_address || '—'}</div>
+        <button class="btn btn--ghost" id="copyVaultBtn" style="font-size:.75rem;padding:4px 10px;margin-bottom:8px">Copy Address</button>
+        <div style="font-size:.78rem;color:var(--muted)">Token contract: <span style="font-family:monospace">${d.token_contract || '—'}</span></div>
+        <div style="font-size:.78rem;color:var(--muted)">Network: ${d.chain || 'BNB Smart Chain (BEP20)'}</div>
+        <div style="font-size:.78rem;color:var(--muted)">Minimum pledge: ${d.min_usdt ?? 10} USDT</div>
+        <div style="font-size:.78rem;color:var(--muted)">Rate: 1 USDT ≈ ${d.usdt_thr_rate ?? 100} THR</div>
+      `;
+      document.getElementById('copyVaultBtn')?.addEventListener('click', async () => {
+        try { await navigator.clipboard.writeText(d.vault_address || ''); } catch {}
+        const b = document.getElementById('copyVaultBtn');
+        if (b) { b.textContent = '✓ Copied'; setTimeout(() => { if (b) b.textContent = 'Copy Address'; }, 1500); }
+      });
+    } else {
+      quoteEl.innerHTML = `<div style="color:#ff6b6b;font-size:.85rem">Pledge vault not configured yet. Try again later.</div>`;
+    }
+  } catch (e) {
+    document.getElementById('pledgeQuoteArea').innerHTML = `<div style="color:#ff6b6b;font-size:.85rem">Network error loading vault details.</div>`;
+  }
+
+  document.getElementById('bnbRegisterBtn').addEventListener('click', async () => {
+    const bnbAddr = document.getElementById('bnbAddrInput')?.value?.trim();
+    const msgEl = document.getElementById('bnbRegisterMsg');
+    const errEl = document.getElementById('pledgeErr');
+    errEl.classList.add('hidden');
+    msgEl.textContent = '';
+    if (!bnbAddr || !/^0x[a-fA-F0-9]{40}$/.test(bnbAddr)) {
+      errEl.textContent = 'Enter a valid BNB (0x...) address';
+      errEl.classList.remove('hidden');
+      return;
+    }
+    const btn = document.getElementById('bnbRegisterBtn');
+    btn.disabled = true; btn.textContent = 'Registering…';
+    try {
+      const r = await fetch(`${API_WRITE}/api/pledge/bnb/register`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ thr_address: address, bnb_address: bnbAddr })
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || d.ok === false) {
+        errEl.textContent = 'Registration failed: ' + (d.error || 'unknown');
+        errEl.classList.remove('hidden');
+        return;
+      }
+      msgEl.style.color = '#4ade80';
+      msgEl.textContent = '✅ Address registered. Send USDT from this address to the vault above — THR will be credited once confirmed (~5 min).';
+    } catch (e) {
+      errEl.textContent = 'Network error: ' + e.message;
+      errEl.classList.remove('hidden');
+    } finally {
+      btn.disabled = false; btn.textContent = 'Register Address';
+    }
+  });
+}
 
 const _BRIDGE_PAIRS = [
   { from:'BTC',  to:'WBTC', fee:0.1,  time:'~5 min',  label:'₿ BTC → WBTC',  available:true },

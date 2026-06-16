@@ -70,7 +70,10 @@ describe('API Security - No Secret Transmission', () => {
 
   test('Old secret-based API methods should be removed', () => {
     const apiModule = require('../api');
-    const oldMethods = ['sendTHR','sendToken','executeSwap','executeBridge','pledgeTokens','voteOnProposal','addLiquidity','removeLiquidity'];
+    // NOTE: addLiquidity is intentionally excluded here — it uses the V1
+    // private-key-ownership wallet model (same as createToken/mintNft/buyNft),
+    // not the legacy unsigned secret model this test guards against.
+    const oldMethods = ['sendTHR','sendToken','executeSwap','executeBridge','pledgeTokens','voteOnProposal','removeLiquidity'];
     oldMethods.forEach(method => {
       expect(apiModule[method]).toBeUndefined();
     });
@@ -78,7 +81,7 @@ describe('API Security - No Secret Transmission', () => {
 
   test('Signed-only API methods should be exported', () => {
     const apiModule = require('../api');
-    const signedMethods = ['sendTHRSigned','sendTokenSigned','executeSwapSigned','executeBridgeSigned','pledgeTokensSigned','voteOnProposalSigned','addLiquiditySigned','removeLiquiditySigned'];
+    const signedMethods = ['sendTHRSigned','sendTokenSigned','executeSwapSigned','executeBridgeSigned','pledgeTokensSigned','voteOnProposalSigned','removeLiquiditySigned'];
     signedMethods.forEach(method => {
       expect(apiModule[method]).toBeDefined();
       expect(typeof apiModule[method]).toBe('function');

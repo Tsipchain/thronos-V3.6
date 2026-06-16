@@ -27,6 +27,7 @@ import PledgeScreen from './src/screens/PledgeScreen';
 import PoolsScreen from './src/screens/PoolsScreen';
 import CreateTokenScreen from './src/screens/CreateTokenScreen';
 import NFTScreen from './src/screens/NFTScreen';
+import EpochScreen from './src/screens/EpochScreen';
 
 import { useStore } from './src/store/useStore';
 import { COLORS } from './src/constants/theme';
@@ -49,6 +50,7 @@ export type RootStackParamList = {
   Pools: undefined;
   CreateToken: undefined;
   NFT: undefined;
+  Epoch: undefined;
 };
 
 export type TabParamList = {
@@ -172,6 +174,7 @@ export default function App() {
               <Stack.Screen name="Pools" component={PoolsScreen} options={{ presentation: 'modal' }} />
               <Stack.Screen name="CreateToken" component={CreateTokenScreen} options={{ presentation: 'modal' }} />
               <Stack.Screen name="NFT" component={NFTScreen} options={{ presentation: 'modal' }} />
+              <Stack.Screen name="Epoch" component={EpochScreen} options={{ presentation: 'modal' }} />
             </>
           )}
         </Stack.Navigator>

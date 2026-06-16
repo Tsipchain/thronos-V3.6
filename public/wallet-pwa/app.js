@@ -836,6 +836,7 @@ async function showWallet() {
         <button class="action-btn" id="historyBtn"><span class="action-btn__icon">📋</span>History</button>
         <button class="action-btn" id="createTokenBtn"><span class="action-btn__icon">🪙</span>Create Token</button>
         <button class="action-btn" id="nftBtn"><span class="action-btn__icon">🖼️</span>NFTs</button>
+        <button class="action-btn" id="epochBtn"><span class="action-btn__icon">⏳</span>Epoch</button>
       </div>
 
       <div class="tx-feed" id="txFeed" style="display:none">
@@ -875,6 +876,7 @@ async function showWallet() {
   document.getElementById('musicBtn').addEventListener('click', showMusic);
   document.getElementById('createTokenBtn').addEventListener('click', showCreateToken);
   document.getElementById('nftBtn').addEventListener('click', showNFTs);
+  document.getElementById('epochBtn').addEventListener('click', showEpoch);
   document.getElementById('historyBtn').addEventListener('click', () => {
     const feed = document.getElementById('txFeed');
     if (feed) feed.style.display = feed.style.display === 'none' ? '' : 'none';
@@ -2698,6 +2700,78 @@ async function showAddLiquidity(poolId, tokenA, tokenB) {
       btn.disabled = false; btn.textContent = 'Add Liquidity';
     }
   });
+}
+
+// ─── Epoch & Halving ────────────────────────────────────────────────────────────
+
+async function showEpoch() {
+  render(`
+    <div class="screen">
+      <div class="header">
+        <button class="btn--icon" id="backBtn">←</button>
+        <span style="font-weight:700;color:#fff">⏳ Epoch & Halving</span>
+        <span></span>
+      </div>
+      <div id="epochArea" style="padding:4px 0;color:var(--muted);font-size:.85rem">Loading…</div>
+    </div>
+  `);
+  document.getElementById('backBtn').addEventListener('click', showWallet);
+
+  const area = document.getElementById('epochArea');
+  try {
+    const [epochRes, schedRes, statsRes] = await Promise.allSettled([
+      fetch(`${API_BASE}/api/mining/current-epoch`).then((r) => r.json()),
+      fetch(`${API_BASE}/api/mining/halving-schedule`).then((r) => r.json()),
+      fetch(`${API_BASE}/api/mining/ecosystem-stats`).then((r) => r.json()),
+    ]);
+    const epoch = epochRes.status === 'fulfilled' ? epochRes.value : null;
+    const halvings = schedRes.status === 'fulfilled' ? (schedRes.value.halvings || []) : [];
+    const stats = statsRes.status === 'fulfilled' ? statsRes.value : null;
+
+    const halvingRows = halvings.slice(0, 8).map((h) => `
+      <div style="display:flex;justify-content:space-between;align-items:center;background:rgba(255,255,255,.04);
+                  border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:10px 12px;margin-bottom:6px">
+        <div>
+          <div style="font-weight:700;color:#fff;font-size:.88rem">Epoch ${h.epoch}</div>
+          <div style="font-size:.74rem;color:var(--muted)">${new Date(h.halving_date).toLocaleDateString()}</div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:.82rem;color:#ddd">${h.reward_before} → ${h.reward_after}</div>
+          <div style="font-size:.74rem;color:var(--muted)">${Number(h.supply_at_halving).toLocaleString()} THR</div>
+        </div>
+      </div>
+    `).join('');
+
+    area.innerHTML = `
+      <div style="text-align:center;background:linear-gradient(135deg,#221600,#140f00,#0d0d1a);
+                  border:1px solid rgba(255,215,0,.4);border-radius:18px;padding:20px;margin-bottom:14px">
+        <div style="font-size:.74rem;letter-spacing:2px;color:rgba(255,215,0,.7);font-weight:700">CURRENT EPOCH</div>
+        <div style="font-size:2.6rem;font-weight:800;color:#FFD700;margin-top:4px">${epoch?.epoch ?? '—'}</div>
+        <div style="font-size:.74rem;color:var(--muted);margin-top:4px">Block ${epoch?.current_block?.toLocaleString() ?? '—'} · range ${epoch?.block_range ?? '—'}</div>
+        <div style="display:flex;justify-content:center;gap:28px;margin-top:14px">
+          <div><div style="font-weight:700;color:#fff">${epoch?.current_reward ?? '—'}</div><div style="font-size:.72rem;color:var(--muted)">Reward/Block</div></div>
+          <div><div style="font-weight:700;color:#fff">${epoch?.blocks_until_halving?.toLocaleString() ?? '—'}</div><div style="font-size:.72rem;color:var(--muted)">Blocks to Halving</div></div>
+        </div>
+        <div style="font-size:.8rem;color:#ccc;margin-top:12px">
+          Est. halving: ${epoch?.halving_date_estimate ? new Date(epoch.halving_date_estimate).toLocaleDateString() : '—'}
+        </div>
+      </div>
+
+      <div style="background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:14px;margin-bottom:14px">
+        <div style="display:flex;justify-content:space-between;margin-bottom:6px"><span style="color:var(--muted);font-size:.82rem">Circulating Supply</span><span style="font-weight:700;color:#fff;font-size:.82rem">${epoch?.supply_circulating?.toLocaleString() ?? '—'} THR</span></div>
+        <div style="display:flex;justify-content:space-between;margin-bottom:6px"><span style="color:var(--muted);font-size:.82rem">Max Supply</span><span style="font-weight:700;color:#fff;font-size:.82rem">${(epoch?.supply_max ?? 21000001).toLocaleString()} THR</span></div>
+        ${stats ? `
+        <div style="display:flex;justify-content:space-between;margin-bottom:6px"><span style="color:var(--muted);font-size:.82rem">Halving Interval</span><span style="font-weight:700;color:#fff;font-size:.82rem">${stats.halving_interval_months} months</span></div>
+        <div style="display:flex;justify-content:space-between"><span style="color:var(--muted);font-size:.82rem">Full Circulation (est.)</span><span style="font-weight:700;color:#fff;font-size:.82rem">~${stats.estimated_full_circulation_years} years</span></div>
+        ` : ''}
+      </div>
+
+      <div style="font-size:.72rem;font-weight:700;color:var(--muted);letter-spacing:2px;margin-bottom:8px;text-transform:uppercase">Halving Schedule</div>
+      ${halvingRows || '<p style="color:var(--muted);font-size:.82rem">No schedule data available.</p>'}
+    `;
+  } catch (e) {
+    area.innerHTML = `<p style="color:#ff6b6b;font-size:.85rem">Failed to load epoch data.</p>`;
+  }
 }
 
 // ─── Create Token ──────────────────────────────────────────────────────────────

@@ -790,6 +790,29 @@ function showAccountPicker() {
 
 // ─── Main wallet screen ───────────────────────────────────────────────────────
 
+const HOME_NETWORKS = [
+  { id: 'thronos',  icon: '⬡',  label: 'Thronos' },
+  { id: 'bitcoin',  icon: '₿',  label: 'Bitcoin' },
+  { id: 'ethereum', icon: 'Ξ',  label: 'Ethereum' },
+  { id: 'bnb',      icon: '🔶', label: 'BNB Chain' },
+  { id: 'arbitrum', icon: '🔵', label: 'Arbitrum' },
+  { id: 'base',     icon: '⬛', label: 'Base' },
+];
+
+function _renderHomeAssetRow(icon, label, sym, val, color, addr) {
+  const fmt = v => v == null ? '—' : Number(v).toFixed(8);
+  return `<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid #ffffff10">
+    <div style="width:28px;height:28px;border-radius:50%;background:${color}33;border:1px solid ${color};display:flex;align-items:center;justify-content:center;font-size:.8rem;flex-shrink:0">${icon}</div>
+    <div style="flex:1;min-width:0">
+      <div style="font-size:.88rem;font-weight:600;color:#fff">${escHtml(label)} <span style="color:var(--muted);font-size:.75rem">${sym}</span></div>
+      ${addr ? `<div style="font-size:.7rem;color:var(--muted);font-family:monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${addr.slice(0,10)}…${addr.slice(-5)}</div>` : ''}
+    </div>
+    <div style="text-align:right;flex-shrink:0">
+      <div style="font-size:.88rem;color:${val ? '#fff' : 'var(--muted)'}">${fmt(val)} ${sym}</div>
+    </div>
+  </div>`;
+}
+
 async function showWallet() {
   const address = getActiveAddr();
   if (!address || !unlocked.has(address)) { showUnlock(); return; }
@@ -797,6 +820,10 @@ async function showWallet() {
   const accs = getAccounts();
   const acc = getAccount(address);
   const label = acc?.label || shortAddr(address);
+  const { privHex } = unlocked.get(address) || {};
+  let homeBtcAddr = '';
+  let homeEvmAddr = '';
+  let homeChainBalances = null;
 
   render(`
     <div class="screen">
@@ -807,6 +834,14 @@ async function showWallet() {
           <button class="btn--icon" id="addAccBtn" title="Add account">＋</button>
           <button class="btn--icon" id="lockBtn" title="Lock">🔒</button>
         </div>
+      </div>
+
+      <!-- Network selector -->
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <span style="font-size:.7rem;text-transform:uppercase;letter-spacing:1px;color:var(--muted)">Network</span>
+        <select id="homeNetSel" class="input" style="flex:1;margin:0;padding:6px 10px;font-size:.85rem;width:auto;background:#0d0a1a;border:1px solid #2a2050;color:#b08cf8">
+          ${HOME_NETWORKS.map(n => `<option value="${n.id}">${n.icon} ${n.label}</option>`).join('')}
+        </select>
       </div>
 
       <!-- Address bar -->
@@ -845,17 +880,6 @@ async function showWallet() {
       </div>
     </div>
   `);
-
-  document.getElementById('addrLine').addEventListener('click', async () => {
-    try { await navigator.clipboard.writeText(address); } catch {}
-    const el = document.getElementById('addrLine');
-    if (el) { el.textContent = 'Copied!'; setTimeout(() => { if (el) el.textContent = shortAddr(address); }, 1500); }
-  });
-  document.getElementById('copyAddrBtn').addEventListener('click', async () => {
-    try { await navigator.clipboard.writeText(address); } catch {}
-    const b = document.getElementById('copyAddrBtn');
-    if (b) { b.textContent = '✓'; setTimeout(() => { if (b) b.textContent = 'Copy'; }, 1500); }
-  });
 
   document.getElementById('lockBtn').addEventListener('click', () => {
     sessionStorage.removeItem(`thr_sk_${address}`);
@@ -902,12 +926,33 @@ async function showWallet() {
     }
   });
 
-  // Load balances — same API as web wallet
-  fetchBalances(address).then(data => {
+  const setAddrBarValue = (full) => {
+    const lineEl = document.getElementById('addrLine');
+    if (lineEl) lineEl.textContent = full ? shortAddr(full) : '(unlock wallet to see)';
+    const copyBtn = document.getElementById('copyAddrBtn');
+    if (copyBtn) copyBtn.dataset.fullAddr = full || '';
+  };
+  setAddrBarValue(address);
+
+  // Re-bind copy/tap handlers to read the currently-displayed network address
+  document.getElementById('addrLine').addEventListener('click', async () => {
+    const full = document.getElementById('copyAddrBtn')?.dataset.fullAddr || address;
+    try { await navigator.clipboard.writeText(full); } catch {}
+    const el = document.getElementById('addrLine');
+    if (el) { el.textContent = 'Copied!'; setTimeout(() => setAddrBarValue(full), 1500); }
+  });
+  document.getElementById('copyAddrBtn').addEventListener('click', async () => {
+    const full = document.getElementById('copyAddrBtn')?.dataset.fullAddr || address;
+    try { await navigator.clipboard.writeText(full); } catch {}
+    const b = document.getElementById('copyAddrBtn');
+    if (b) { b.textContent = '✓'; setTimeout(() => { if (b) b.textContent = 'Copy'; }, 1500); }
+  });
+
+  const loadThronosAssets = () => fetchBalances(address).then(data => {
     const el = document.getElementById('balancesArea');
     if (!el) return;
+    setAddrBarValue(address);
     const tokens = Array.isArray(data?.tokens) ? data.tokens : [];
-    const thrTok = tokens.find(t => t.symbol === 'THR');
     const totalTHR = tokens.filter(t => t.value_in_thr != null)
                           .reduce((s, t) => s + Number(t.value_in_thr || 0), 0);
     const totalUSD = tokens.filter(t => t.value_usd != null)
@@ -964,6 +1009,56 @@ async function showWallet() {
     });
   });
 
+  // Load assets/address for a non-Thronos network on demand
+  const loadOtherNetworkAssets = async (netId) => {
+    const el = document.getElementById('balancesArea');
+    if (!el) return;
+    el.innerHTML = '<div class="balance-amount balance-amount--loading">···</div>';
+
+    if (!privHex) {
+      setAddrBarValue('');
+      el.innerHTML = '<div style="color:#ff6b6b;text-align:center;padding:24px 0">Unlock wallet to view this network</div>';
+      return;
+    }
+
+    if (netId === 'bitcoin') {
+      if (!homeBtcAddr) homeBtcAddr = await _fetchBtcAddress(privHex, address).catch(() => '');
+      setAddrBarValue(homeBtcAddr);
+      if (!homeChainBalances) homeChainBalances = await _fetchAllChainBalances(privHex, homeBtcAddr).catch(() => ({}));
+      el.innerHTML = `<div style="font-size:.7rem;text-transform:uppercase;letter-spacing:1px;color:var(--accent);margin-bottom:4px">Assets</div>`
+        + _renderHomeAssetRow('₿', 'Bitcoin', 'BTC', homeChainBalances.btc, '#f7931a', homeBtcAddr);
+      return;
+    }
+
+    // EVM-based chains share one address
+    if (!homeEvmAddr) homeEvmAddr = await _deriveEvmAddress(privHex).catch(() => '');
+    setAddrBarValue(homeEvmAddr);
+    if (!homeChainBalances) homeChainBalances = await _fetchAllChainBalances(privHex, homeBtcAddr).catch(() => ({}));
+    const bal = homeChainBalances;
+    let rows = '';
+    if (netId === 'ethereum') {
+      rows = _renderHomeAssetRow('Ξ', 'Ethereum', 'ETH', bal.eth, '#627eea', homeEvmAddr);
+    } else if (netId === 'bnb') {
+      rows = _renderHomeAssetRow('🔶', 'BNB Chain', 'BNB', bal.bnb, '#f3ba2f', homeEvmAddr)
+           + _renderHomeAssetRow('₮', 'USDT on BNB', 'USDT', bal.usdtBnb, '#26a17b', homeEvmAddr);
+    } else if (netId === 'arbitrum') {
+      rows = _renderHomeAssetRow('🔵', 'Arbitrum', 'ETH', bal.arb, '#28a0f0', homeEvmAddr)
+           + _renderHomeAssetRow('₮', 'USDT on Arbitrum', 'USDT', bal.usdtArb, '#26a17b', homeEvmAddr);
+    } else if (netId === 'base') {
+      rows = _renderHomeAssetRow('⬛', 'Base', 'ETH', bal.base, '#0052ff', homeEvmAddr)
+           + _renderHomeAssetRow('$', 'USDC on Base', 'USDC', bal.usdcBase, '#2775ca', homeEvmAddr);
+    }
+    el.innerHTML = `<div style="font-size:.7rem;text-transform:uppercase;letter-spacing:1px;color:var(--accent);margin-bottom:4px">Assets</div>${rows}`;
+  };
+
+  document.getElementById('homeNetSel').addEventListener('change', (e) => {
+    const netId = e.target.value;
+    if (netId === 'thronos') { loadThronosAssets(); return; }
+    loadOtherNetworkAssets(netId);
+  });
+
+  // Load balances — same API as web wallet
+  loadThronosAssets();
 }
 
 // ─── Token detail modal ────────────────────────────────────────────────────────

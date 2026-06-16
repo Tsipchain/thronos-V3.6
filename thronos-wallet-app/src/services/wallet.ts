@@ -8,6 +8,7 @@ import { gcm } from '@noble/ciphers/aes';
 import { pbkdf2 } from '@noble/hashes/pbkdf2';
 import { sha256 } from '@noble/hashes/sha256';
 import { ripemd160 } from '@noble/hashes/ripemd160';
+import { keccak_256 } from '@noble/hashes/sha3';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { generateMnemonic as _genMnemonic, mnemonicToSeedSync, validateMnemonic as _validateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english';
@@ -247,6 +248,16 @@ export async function clearMnemonic(): Promise<void> {
 
 export function isValidAddress(address: string): boolean {
   return /^THR[0-9a-fA-F]{40}$/i.test(address);
+}
+
+// Derives the EVM (Ethereum/BNB/Arbitrum/Base — they share one address) address
+// from the same secp256k1 private key used for THR, since all are
+// secp256k1-based chains: address = last 20 bytes of keccak256(uncompressed pubkey).
+export function deriveEvmAddress(privateKeyHex: string): string {
+  const privBytes = hexToBytes(privateKeyHex.replace(/^0x/, ''));
+  const pubUncompressed = secp256k1.getPublicKey(privBytes, false); // 0x04 || X || Y
+  const hash = keccak_256(pubUncompressed.slice(1));
+  return '0x' + bytesToHex(hash.slice(-20));
 }
 
 export function shortenAddress(address: string): string {

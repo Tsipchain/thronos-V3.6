@@ -11,9 +11,21 @@ import * as Clipboard from 'expo-clipboard';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS } from '../constants/theme';
 import { useStore } from '../store/useStore';
 import { getTokenBalances, getNetworkStatus, getTokenPrices } from '../services/api';
-import { shortenAddress } from '../services/wallet';
+import { shortenAddress, deriveEvmAddress, getPrivateKey } from '../services/wallet';
+import { fetchBtcAddress, fetchAllChainBalances, ChainBalances } from '../services/crossChain';
 import { CONFIG } from '../constants/config';
 import type { RootStackParamList } from '../../App';
+
+type HomeNetwork = 'thronos' | 'bitcoin' | 'ethereum' | 'bnb' | 'arbitrum' | 'base';
+
+const HOME_NETWORKS: Array<{ id: HomeNetwork; label: string; icon: keyof typeof Ionicons.glyphMap }> = [
+  { id: 'thronos', label: 'THR', icon: 'planet' },
+  { id: 'bitcoin', label: 'BTC', icon: 'logo-bitcoin' },
+  { id: 'ethereum', label: 'ETH', icon: 'diamond' },
+  { id: 'bnb', label: 'BNB', icon: 'cube' },
+  { id: 'arbitrum', label: 'ARB', icon: 'flash' },
+  { id: 'base', label: 'Base', icon: 'square' },
+];
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 

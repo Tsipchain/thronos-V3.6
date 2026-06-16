@@ -271,6 +271,14 @@ export async function downloadPledgePdf(thr_address: string): Promise<{ pdf_url:
   return request(`/api/pledge/pdf/${thr_address}`);
 }
 
+export async function getBnbPledgeQuote(): Promise<{ ok: boolean; vault_address?: string; token_contract?: string; chain?: string; min_usdt?: number; usdt_thr_rate?: number }> {
+  return request('/api/pledge/bnb/quote');
+}
+
+export async function registerBnbAddress(params: { thr_address: string; bnb_address: string }): Promise<{ ok: boolean; error?: string }> {
+  return request('/api/pledge/bnb/register', { method: 'POST', body: JSON.stringify(params) });
+}
+
 export async function recoverWallet(params: { pdf_filename?: string; recovery_phrase?: string }): Promise<{ success: boolean; thr_address?: string; send_secret?: string; error?: string }> {
   return request('/recovery', { method: 'POST', body: JSON.stringify(params) });
 }

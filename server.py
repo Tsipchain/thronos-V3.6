@@ -1395,6 +1395,18 @@ OPTIMISM_RPC_URL = os.getenv("OPTIMISM_RPC_URL", "https://mainnet.optimism.io")
 SOLANA_RPC_URL = os.getenv("SOLANA_RPC_URL", "https://api.mainnet-beta.solana.com")
 XRP_RPC_URL = os.getenv("XRP_RPC_URL", os.getenv("XRPL_RPC_URL", "https://xrplcluster.com"))
 
+# ─── USDT-on-BNB-Chain Pledge (mobile/PWA only) ────────────────────────────
+# Vault EVM address that watches for incoming USDT (BEP20) pledge deposits.
+# Uses BSC_RPC_URL above — no separate RPC needed.
+BNB_PLEDGE_VAULT = os.getenv("BNB_PLEDGE_VAULT", "")
+USDT_BNB_CONTRACT = os.getenv("USDT_BNB_CONTRACT", "0x55d398326f99059fF775485246999027B3197955")  # BEP20 USDT, 18 decimals
+USDT_THR_RATE = float(_strip_env_quotes(os.getenv("USDT_THR_RATE", "100")))  # 1 USDT = 100 THR
+MIN_USDT_PLEDGE = float(_strip_env_quotes(os.getenv("MIN_USDT_PLEDGE", "10")))  # minimum 10 USDT
+# Fraction of each incoming USDT pledge that gets paired into the THR/USDT
+# liquidity pool (the rest of the THR equivalent is credited straight to the
+# user's wallet) — mirrors the existing BTC-bridge pool-seeding behavior.
+USDT_PLEDGE_POOL_SPLIT = float(_strip_env_quotes(os.getenv("USDT_PLEDGE_POOL_SPLIT", "0.5")))
+
 # User profile storage file
 USER_PROFILES_FILE = os.path.join(DATA_DIR, "user_profiles.json")
 
@@ -26412,6 +26424,15 @@ if NODE_ROLE == "master" and SCHEDULER_ENABLED and ENABLE_CHAIN:
     except ImportError as e:
         print(f"[SCHEDULER] BTC pledge watcher unavailable: {e}")
 
+    # BNB/USDT Pledge Watcher – polls BSC for USDT vault deposits via eth_getLogs
+    try:
+        from bnb_pledge_watcher import watch_bnb_pledges
+        scheduler.add_job(_with_app_context(watch_bnb_pledges), "interval", minutes=5,
+                         coalesce=True, max_instances=1, id="bnb_pledge_watcher")
+        print("[SCHEDULER] BNB/USDT pledge watcher scheduled (every 5 min)")
+    except ImportError as e:
+        print(f"[SCHEDULER] BNB/USDT pledge watcher unavailable: {e}")
+
     # PYTHEIA Worker – system health monitoring & governance advice
     try:
         os.makedirs("/app/logs", exist_ok=True)
@@ -26690,6 +26711,170 @@ def api_btc_pledge():
         thr_address=thr_address,
         new_balance=new_balance,
         btc_txid=btc_txid
+    ), 201
+
+
+def _seed_usdt_thr_pool(usdt_amount: float, thr_amount: float) -> dict | None:
+    """
+    Pair fresh USDT pledge inflow with newly-minted THR into the THR/USDT
+    liquidity pool (auto-created if missing). Mirrors the existing
+    BTC-bridge behavior of seeding pool liquidity from external deposits —
+    no user balance is debited since this capital is new to the chain.
+    """
+    try:
+        pools = load_pools()
+        pool = None
+        for p in pools:
+            a = (p.get("token_a") or "").upper()
+            b = (p.get("token_b") or "").upper()
+            if {a, b} == {"THR", "USDT"}:
+                pool = p
+                break
+        if pool is None:
+            pool = {
+                "id": f"pool-thr-usdt-{secrets.token_hex(4)}",
+                "token_a": "THR",
+                "token_b": "USDT",
+                "reserves_a": 0.0,
+                "reserves_b": 0.0,
+                "fee_bps": 30,
+                "created_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+                "auto_seeded": True,
+            }
+            pools.append(pool)
+        pool["reserves_a"] = round(float(pool.get("reserves_a", 0.0) or 0.0) + thr_amount, 6)
+        pool["reserves_b"] = round(float(pool.get("reserves_b", 0.0) or 0.0) + usdt_amount, 6)
+        save_pools(pools)
+        return pool
+    except Exception:
+        app.logger.exception("Failed to seed THR/USDT pool from pledge")
+        return None
+
+
+@app.route("/api/pledge/bnb/quote")
+def api_pledge_bnb_quote():
+    """Return current USDT-on-BNB-Chain pledge requirements (mobile/PWA only)."""
+    return jsonify(
+        ok=True,
+        vault_address=BNB_PLEDGE_VAULT,
+        token_contract=USDT_BNB_CONTRACT,
+        chain="bnb",
+        min_usdt=MIN_USDT_PLEDGE,
+        usdt_thr_rate=USDT_THR_RATE,
+        thr_per_min_pledge=round(MIN_USDT_PLEDGE * USDT_THR_RATE, 6),
+    ), 200
+
+
+@app.route("/api/pledge/bnb/register", methods=["POST"])
+def api_pledge_bnb_register():
+    """
+    Register the BNB-chain (BSC) address a user will send USDT from, linking
+    it to their THR address so the watcher can credit the right wallet.
+    Called by the mobile app / PWA before the user sends USDT.
+    """
+    data = request.get_json() or {}
+    thr_address = (data.get("thr_address") or "").strip().upper()
+    bnb_address = (data.get("bnb_address") or "").strip().lower()
+
+    if not validate_thr_address(thr_address):
+        return jsonify(ok=False, error="invalid_thr_address"), 400
+    if not re.match(r"^0x[a-f0-9]{40}$", bnb_address):
+        return jsonify(ok=False, error="invalid_bnb_address"), 400
+
+    registry_file = os.path.join(DATA_DIR, "bnb_user_registry.json")
+    registry = load_json(registry_file, {})
+    registry[bnb_address] = {
+        "thr_address": thr_address,
+        "registered_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+    }
+    save_json(registry_file, registry)
+
+    return jsonify(ok=True, thr_address=thr_address, bnb_address=bnb_address, vault_address=BNB_PLEDGE_VAULT), 200
+
+
+@app.route("/api/usdt/pledge", methods=["POST"])
+def api_usdt_pledge():
+    """
+    Create a USDT-on-BNB-Chain pledge transaction (called by bnb_pledge_watcher
+    on Node 2). Requires ADMIN_SECRET for authentication. Mirrors /api/btc/pledge,
+    plus seeds half the pledge into the THR/USDT liquidity pool.
+
+    Expected payload:
+    {
+        "secret": "ADMIN_SECRET",
+        "thr_address": "THR...",
+        "bnb_address": "0x...",
+        "usdt_amount": 10.0,
+        "bnb_txid": "0x...",
+    }
+    """
+    data = request.get_json() or {}
+    secret = data.get("secret")
+    if secret != ADMIN_SECRET:
+        return jsonify(ok=False, error="Unauthorized"), 403
+
+    thr_address = data.get("thr_address")
+    bnb_address = data.get("bnb_address")
+    usdt_amount = float(data.get("usdt_amount", 0))
+    bnb_txid = data.get("bnb_txid")
+
+    if not all([thr_address, bnb_address, bnb_txid]):
+        return jsonify(ok=False, error="Missing required fields"), 400
+    if usdt_amount < MIN_USDT_PLEDGE:
+        return jsonify(ok=False, error="below_minimum_pledge"), 400
+
+    thr_amount = round(usdt_amount * USDT_THR_RATE, 6)
+    pool_usdt = round(usdt_amount * USDT_PLEDGE_POOL_SPLIT, 6)
+    pool_thr = round(pool_usdt * USDT_THR_RATE, 6)
+
+    # Credit THR to the user's wallet
+    ledger = load_json(LEDGER_FILE, {})
+    current_balance = float(ledger.get(thr_address, 0.0))
+    new_balance = round(current_balance + thr_amount, 6)
+    ledger[thr_address] = new_balance
+    save_json(LEDGER_FILE, ledger)
+
+    # Seed THR/USDT pool with half the pledge (new external capital, no debit)
+    _seed_usdt_thr_pool(pool_usdt, pool_thr)
+
+    # Create pledge transaction on the chain
+    chain = load_json(CHAIN_FILE, [])
+    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    tx_id = f"USDT_PLEDGE-{int(time.time())}-{secrets.token_hex(4)}"
+
+    tx = {
+        "type": "usdt_pledge",
+        "tx_id": tx_id,
+        "from": bnb_address,
+        "to": thr_address,
+        "thr_address": thr_address,
+        "bnb_address": bnb_address,
+        "usdt_amount": usdt_amount,
+        "thr_amount": thr_amount,
+        "pool_usdt_seeded": pool_usdt,
+        "pool_thr_seeded": pool_thr,
+        "bnb_txid": bnb_txid,
+        "timestamp": ts,
+        "status": "confirmed",
+    }
+
+    chain.append(tx)
+    save_json(CHAIN_FILE, chain)
+    update_last_block(tx, is_block=False)
+
+    try:
+        broadcast_tx(tx)
+    except Exception:
+        pass
+
+    return jsonify(
+        ok=True,
+        tx_id=tx_id,
+        thr_address=thr_address,
+        new_balance=new_balance,
+        bnb_txid=bnb_txid,
+        pool_usdt_seeded=pool_usdt,
+        pool_thr_seeded=pool_thr,
     ), 201
 
 

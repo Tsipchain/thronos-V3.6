@@ -873,11 +873,6 @@ async function showWallet() {
         <button class="action-btn" id="nftBtn"><span class="action-btn__icon">🖼️</span>NFTs</button>
         <button class="action-btn" id="epochBtn"><span class="action-btn__icon">⏳</span>Epoch</button>
       </div>
-
-      <div class="tx-feed" id="txFeed" style="display:none">
-        <div class="tx-feed__title">Recent Activity</div>
-        <div id="txList"><p style="color:var(--muted);font-size:.88rem">Loading…</p></div>
-      </div>
     </div>
   `);
 
@@ -901,30 +896,7 @@ async function showWallet() {
   document.getElementById('createTokenBtn').addEventListener('click', showCreateToken);
   document.getElementById('nftBtn').addEventListener('click', showNFTs);
   document.getElementById('epochBtn').addEventListener('click', showEpoch);
-  document.getElementById('historyBtn').addEventListener('click', () => {
-    const feed = document.getElementById('txFeed');
-    if (feed) feed.style.display = feed.style.display === 'none' ? '' : 'none';
-    if (feed?.style.display !== 'none') {
-      fetchHistory(address).then(txs => {
-        const el = document.getElementById('txList');
-        if (!el) return;
-        if (!txs.length) { el.innerHTML = '<p style="color:var(--muted);font-size:.88rem">No transactions yet.</p>'; return; }
-        el.innerHTML = txs.slice(0, 20).map(tx => {
-          const isIn = (tx.to || '').toUpperCase() === address;
-          const dir = isIn ? 'in' : 'out';
-          const peer = isIn ? (tx.from || '').slice(0, 10) : (tx.to || '').slice(0, 10);
-          const sym = tx.token || 'THR';
-          const amt = tx.amount ? `${isIn ? '+' : '-'}${tx.amount} ${sym}` : '';
-          const date = tx.timestamp ? new Date(tx.timestamp * 1000).toLocaleDateString() : '';
-          return `<div class="tx-item">
-            <div class="tx-item__dir tx-item__dir--${dir}">${isIn ? '↓' : '↑'}</div>
-            <div class="tx-item__info"><div class="tx-item__label">${isIn ? 'From' : 'To'} ${peer}…</div><div class="tx-item__date">${date}</div></div>
-            <div class="tx-item__amount tx-item__amount--${dir}">${amt}</div>
-          </div>`;
-        }).join('');
-      });
-    }
-  });
+  document.getElementById('historyBtn').addEventListener('click', () => showHistory(address));
 
   const setAddrBarValue = (full) => {
     const lineEl = document.getElementById('addrLine');
@@ -2762,6 +2734,139 @@ async function showSwap(preselectedIn = null) {
 }
 
 // ─── Pools ────────────────────────────────────────────────────────────────────
+
+const HISTORY_FILTERS = [
+  { key: 'all', label: 'All' },
+  { key: 'thr_transfer', label: 'THR' },
+  { key: 'token_transfer', label: 'Tokens' },
+  { key: 'swap', label: 'Swaps' },
+  { key: 'liquidity', label: 'Liquidity' },
+  { key: 'mining_reward', label: 'Mining' },
+  { key: 'bridge', label: 'Bridge' },
+  { key: 'mint', label: 'Mint' },
+  { key: 'burn', label: 'Burn' },
+];
+
+function _parseTxDate(ts) {
+  if (ts === undefined || ts === null || ts === '') return null;
+  if (typeof ts === 'number') return new Date(ts > 1e12 ? ts : ts * 1000);
+  const s = String(ts).trim();
+  if (/^\d+$/.test(s)) {
+    const n = Number(s);
+    return new Date(n > 1e12 ? n : n * 1000);
+  }
+  const d = new Date(s.replace(' UTC', 'Z').replace(' ', 'T'));
+  if (!isNaN(d.getTime())) return d;
+  const d2 = new Date(s);
+  return isNaN(d2.getTime()) ? null : d2;
+}
+
+function _renderHistoryRow(tx) {
+  const kind = tx.kind || tx.type || tx.category || 'transfer';
+  const label = tx.category_label || kind.replace(/_/g, ' ');
+  const direction = tx.direction || (tx.kind === 'swap' ? 'swap' : 'out');
+  const symbol = (tx.asset_symbol || tx.symbol || 'THR').toUpperCase();
+  const amount = tx.display_amount !== undefined ? tx.display_amount : (tx.amount_in !== undefined ? tx.amount_in : tx.amount);
+  const date = _parseTxDate(tx.timestamp);
+  const dateStr = date ? date.toLocaleString() : (tx.timestamp || '—');
+  const status = tx.status || (tx.reject_reason ? 'failed' : 'confirmed');
+  const statusColor = status === 'failed' || status === 'rejected' ? '#ff6b6b' : (status === 'pending' ? '#ffb347' : '#00ff66');
+
+  let amountHtml;
+  if (kind === 'swap' && tx.amount_out !== undefined) {
+    const symOut = (tx.symbol_out || '').toUpperCase();
+    amountHtml = `<span style="color:#ff6b6b">-${Number(amount || 0).toLocaleString(undefined,{maximumFractionDigits:6})} ${symbol}</span>
+      <span style="color:var(--muted)"> → </span>
+      <span style="color:#00ff66">+${Number(tx.amount_out).toLocaleString(undefined,{maximumFractionDigits:6})} ${symOut}</span>`;
+  } else if (kind === 'liquidity' && Array.isArray(tx.amounts)) {
+    amountHtml = tx.amounts.map(a => `<span style="color:#fff">${Number(a.amount || a).toLocaleString(undefined,{maximumFractionDigits:6})} ${(a.symbol || '').toUpperCase()}</span>`).join(' / ');
+  } else {
+    const sign = direction === 'in' ? '+' : (direction === 'out' ? '-' : '');
+    const color = direction === 'in' ? '#00ff66' : (direction === 'out' ? '#ff6b6b' : '#fff');
+    amountHtml = `<span style="color:${color}">${sign}${Number(amount || 0).toLocaleString(undefined,{maximumFractionDigits:6})} ${symbol}</span>`;
+  }
+
+  const feeHtml = tx.fee_burned ? `<div style="font-size:.72rem;color:var(--muted)">Fee: ${Number(tx.fee_burned).toLocaleString(undefined,{maximumFractionDigits:6})} THR</div>` : '';
+  const noteHtml = tx.note ? `<div style="font-size:.72rem;color:var(--muted);margin-top:2px">${tx.note}</div>` : '';
+  const linkHtml = tx.explorer_link ? `<a href="${tx.explorer_link}" target="_blank" style="font-size:.72rem;color:#b08cf8">View ↗</a>` : '';
+
+  return `<div class="card" style="padding:10px 12px;margin-bottom:8px">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start">
+      <div>
+        <div style="font-size:.85rem;font-weight:700;color:#fff;text-transform:capitalize">${label}</div>
+        <div style="font-size:.72rem;color:var(--muted)">${dateStr}</div>
+      </div>
+      <div style="text-align:right;font-size:.85rem;font-weight:700">${amountHtml}</div>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px">
+      <div>${feeHtml}${noteHtml}</div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <span style="font-size:.7rem;color:${statusColor};text-transform:capitalize">${status}</span>
+        ${linkHtml}
+      </div>
+    </div>
+  </div>`;
+}
+
+async function showHistory(address) {
+  address = address || getActiveAddr();
+  if (!address || !unlocked.has(address)) { showUnlock(); return; }
+
+  render(`
+    <div class="screen">
+      <div class="header">
+        <button class="btn--icon" id="backBtn">←</button>
+        <span style="font-weight:700;color:#fff">📋 Transaction History</span>
+        <span></span>
+      </div>
+      <div id="historyFilters" style="display:flex;gap:6px;overflow-x:auto;padding:10px 0;white-space:nowrap"></div>
+      <div id="historyBody" style="margin-top:4px">
+        <p style="color:var(--muted);text-align:center;padding:20px">Loading history…</p>
+      </div>
+    </div>
+  `);
+
+  document.getElementById('backBtn').addEventListener('click', showWallet);
+
+  let allTx = [];
+  let activeFilter = 'all';
+
+  function renderFilters() {
+    const el = document.getElementById('historyFilters');
+    if (!el) return;
+    el.innerHTML = HISTORY_FILTERS.map(f => `
+      <button class="btn ${f.key === activeFilter ? 'btn--primary' : 'btn--ghost'}" data-filter="${f.key}" style="padding:6px 12px;font-size:.75rem;flex-shrink:0">${f.label}</button>
+    `).join('');
+    el.querySelectorAll('button[data-filter]').forEach(btn => {
+      btn.addEventListener('click', () => { activeFilter = btn.dataset.filter; renderFilters(); renderList(); });
+    });
+  }
+
+  function renderList() {
+    const el = document.getElementById('historyBody');
+    if (!el) return;
+    const filtered = activeFilter === 'all' ? allTx : allTx.filter(tx => (tx.kind || tx.type || tx.category) === activeFilter);
+    if (!filtered.length) {
+      el.innerHTML = '<p style="color:var(--muted);text-align:center;padding:20px">No transactions found.</p>';
+      return;
+    }
+    const sorted = [...filtered].sort((a, b) => {
+      const da = _parseTxDate(a.timestamp), db = _parseTxDate(b.timestamp);
+      return (db ? db.getTime() : 0) - (da ? da.getTime() : 0);
+    });
+    el.innerHTML = sorted.map(_renderHistoryRow).join('');
+  }
+
+  renderFilters();
+
+  try {
+    allTx = await fetchHistory(address);
+    renderList();
+  } catch (e) {
+    const el = document.getElementById('historyBody');
+    if (el) el.innerHTML = `<p style="color:#ff6b6b;text-align:center;padding:20px">Error: ${e.message}</p>`;
+  }
+}
 
 async function showPools() {
   const address = getActiveAddr();

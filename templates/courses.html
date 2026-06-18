@@ -1088,6 +1088,42 @@ function openPledgeSystem() {
     window.location.href = pledgeShortcutUrl;
 }
 
+function hasWalletV1SigningReady() {
+    return Boolean(window.walletSession
+        && typeof window.walletSession.isWalletV1 === 'function'
+        && window.walletSession.isWalletV1()
+        && typeof window.walletSession.signTransaction === 'function');
+}
+
+async function buildCourseActionSignedTx(actionTo) {
+    if (!connectedWallet || !hasWalletV1SigningReady()) return null;
+    if (window.walletSession.isLocked && window.walletSession.isLocked()) {
+        const unlocked = await window.walletSession.unlockWallet({ address: connectedWallet });
+        if (!unlocked) throw new Error(currentLang === 'el' ? 'Το Wallet V1 είναι κλειδωμένο' : 'Wallet V1 is locked');
+    }
+    const txCore = {
+        from: connectedWallet,
+        to: actionTo,
+        amount: 0,
+        token: 'COURSE',
+        nonce: `COURSE-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        timestamp: Math.floor(Date.now() / 1000)
+    };
+    const signature = await window.walletSession.signTransaction(txCore);
+    const publicKey = window.walletSession.getPublicKey ? window.walletSession.getPublicKey() : '';
+    if (!signature || !publicKey) throw new Error(currentLang === 'el' ? 'Δεν βρέθηκε υπογραφή Wallet V1' : 'Wallet V1 signature unavailable');
+    return { ...txCore, signature, publicKey };
+}
+
+function requireCourseWallet(message) {
+    if (!connectedWallet) {
+        log(message || (currentLang === 'el' ? 'Συνδέστε Wallet V1 πρώτα' : 'Please connect Wallet V1 first'), true);
+        syncWalletFromSession(false);
+        return false;
+    }
+    return true;
+}
+
 function parseSessionDateTime(session) {
     if (!session?.date || !session?.time) return null;
     const iso = `${session.date}T${session.time}:00Z`;
@@ -1783,10 +1819,7 @@ async function loadMyCourses() {
 
 // Create Course
 $("create").onclick = async () => {
-    if (!connectedWallet || !connectedSecret) {
-        log("Please connect wallet first", true);
-        return;
-    }
+    if (!requireCourseWallet()) return;
 
     const title = $("title").value.trim();
     const price = parseFloat($("price").value || "0");
@@ -1850,6 +1883,8 @@ $("create").onclick = async () => {
         formData.append('tenant_course_notes', tenantCourseNotes);
         formData.append('auth_secret', connectedSecret);
         formData.append('passphrase', connectedPassphrase);
+        const signedTx = connectedSecret ? null : await buildCourseActionSignedTx('COURSE_CREATE');
+        if (signedTx) formData.append('signed_tx', JSON.stringify(signedTx));
         formData.append('content_type', contentType);
         if (contentType === 'pdf' && slidesFile) formData.append('slides', slidesFile);
         if (contentType === 'video') formData.append('video_url', videoUrl);
@@ -2744,8 +2779,9 @@ function toggleMultiSelect(idx, optionIndex, isChecked) {
 }
 
 async function saveQuiz() {
-    if (!connectedWallet || !connectedSecret) {
+    if (!connectedWallet) {
         alert(currentLang === 'el' ? 'Συνδέστε το πορτοφόλι σας' : 'Please connect your wallet');
+        syncWalletFromSession(false);
         return;
     }
 
@@ -2831,10 +2867,12 @@ async function saveQuiz() {
     }
 
     try {
+        const signedTx = connectedSecret ? null : await buildCourseActionSignedTx(`COURSE_QUIZ:${currentQuizCourseId}`);
         const result = await apiPost(`/api/v1/courses/${currentQuizCourseId}/quiz`, {
             teacher_thr: connectedWallet,
             auth_secret: connectedSecret,
             passphrase: connectedPassphrase,
+            signed_tx: signedTx,
             title: $("quizTitleInput").value || "Course Quiz",
             passing_score: parseInt($("passingScore").value) || 80,
             questions: validQuestions

@@ -17096,6 +17096,7 @@ def pledge_submit():
                 app.logger.info(f"Regenerated pledge PDF for {exists['thr_address']}")
             except Exception as regen_err:
                 app.logger.warning(f"PDF regen failed for {exists['thr_address']}: {regen_err}")
+        stored_recovery_kit = exists.get("wallet_v1_recovery_kit") or None
         return jsonify(
             ok=True,
             canonical_v1_address=exists["thr_address"],
@@ -17104,7 +17105,9 @@ def pledge_submit():
             status="already_has_canonical",
             pledge_hash=exists["pledge_hash"],
             pdf_url=pdf_url,
-            recovery_required=True,
+            recovery_kit=stored_recovery_kit,
+            recovery_kit_available=bool(stored_recovery_kit),
+            recovery_required=not bool(stored_recovery_kit),
             recovery_url="/recovery",
         ),200
     free_list=load_json(WHITELIST_FILE,[])
@@ -17257,6 +17260,13 @@ def pledge_submit():
                 'created_at': datetime.utcnow().isoformat(timespec="seconds") + "Z",
                 'warning': 'Keep this file offline. It restores signing access. For pledge-created wallets, decrypt with your pledge passphrase or send secret.',
             })
+            # Persist only the encrypted recovery kit and its hash. The raw
+            # send_secret/private key are still never stored server-side; the
+            # user must keep the passphrase or one-time send_secret to decrypt it.
+            pledge_entry["wallet_v1_recovery_kit"] = recovery_kit_str
+            pledge_entry["wallet_v1_recovery_kit_hash"] = hashlib.sha256(recovery_kit_str.encode()).hexdigest()
+            pledges[-1] = pledge_entry
+            save_json(PLEDGE_CHAIN, pledges)
         except Exception as enc_err:
             app.logger.warning(f"Recovery Kit encryption unavailable: {enc_err}")
 

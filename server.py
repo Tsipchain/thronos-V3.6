@@ -17271,13 +17271,17 @@ def pledge_submit():
             _enc_blob = json.dumps({'v':1,'alg':'aes256gcm','kdf':'pbkdf2-sha256-250k',
                                     'salt':_salt.hex(),'iv':_iv.hex(),'ct':_ct.hex()})
             recovery_kit_str = json.dumps({
+                'version': 'wallet-v1-recovery-kit',
                 'canonical_v1_address': thr_addr,
                 'address': thr_addr,
+                'bound_key_address': thr_addr,
+                'public_key': compressed_pub,
                 'compressed_public_key': compressed_pub,
                 'encrypted_private_key_backup': _enc_blob,
                 'wallet_v1_encrypted_priv': _enc_blob,
                 'migration_source': 'pledge_v1_direct',
-                'version': 2,
+                'created_at': datetime.utcnow().isoformat(timespec="seconds") + "Z",
+                'warning': 'Keep this file offline. It restores signing access. For pledge-created wallets, decrypt with your pledge passphrase or send secret.',
             })
         except Exception as enc_err:
             app.logger.warning(f"Recovery Kit encryption unavailable: {enc_err}")
@@ -28596,20 +28600,10 @@ def api_v1_delete_course(course_id: str):
     if course.get("teacher") != teacher:
         return jsonify(status="error", message="Not the course teacher"), 403
 
-    ok, _, error_key = validate_effective_auth(teacher, auth_secret, passphrase)
+    signed_tx = data.get("signed_tx") or data.get("wallet_v1_signed_tx")
+    ok, error_key = validate_course_actor_auth(teacher, auth_secret, passphrase, signed_tx, expected_to=f"COURSE_DELETE:{course_id}")
     if not ok:
-        if error_key == "no_effective_pledge":
-            return jsonify(status="error", message="Teacher has no effective pledge access"), 403
-        if error_key == "missing_auth_secret":
-            return jsonify(status="error", message="Missing auth_secret"), 400
-        if error_key == "missing_pledge":
-            return jsonify(status="error", message="Teacher not pledged"), 404
-        if error_key == "send_not_enabled":
-            return jsonify(status="error", message="Teacher send not enabled"), 400
-        if error_key == "passphrase_required":
-            return jsonify(status="error", message="Passphrase required"), 400
-        if error_key == "invalid_auth":
-            return jsonify(status="error", message="Invalid auth"), 403
+        return _course_auth_error_response(error_key, "Teacher")
 
     courses = [c for c in courses if c.get("id") != course_id]
     save_courses(courses)
@@ -28637,6 +28631,96 @@ def api_v1_delete_course(course_id: str):
 
     return jsonify(status="success", message="Course deleted"), 200
 
+
+
+
+def _course_auth_error_response(error_key: str | None, actor_label: str = "Teacher"):
+    if error_key == "no_effective_pledge":
+        return jsonify(status="error", message=f"{actor_label} has no effective pledge access"), 403
+    if error_key == "missing_auth_secret":
+        return jsonify(status="error", message="Missing auth_secret or Wallet V1 signature"), 400
+    if error_key == "missing_pledge":
+        return jsonify(status="error", message=f"{actor_label} not found or has not pledged"), 404
+    if error_key == "send_not_enabled":
+        return jsonify(status="error", message=f"{actor_label} send not enabled"), 400
+    if error_key == "passphrase_required":
+        return jsonify(status="error", message="Passphrase required"), 400
+    if error_key == "invalid_auth":
+        return jsonify(status="error", message="Invalid auth"), 403
+    if error_key == "invalid_v1_signature":
+        return jsonify(status="error", message="Invalid Wallet V1 signature"), 403
+    return jsonify(status="error", message="Authentication failed"), 403
+
+
+def validate_course_actor_auth(actor_address: str, auth_secret: str = "", passphrase: str = "", signed_tx=None, *, expected_to: str = "COURSE_CREATE") -> tuple[bool, str | None]:
+    """Authenticate course mutations with legacy pledge auth or Wallet V1 signature.
+
+    Wallet V1 course signatures are zero-value action envelopes. They prove that
+    the browser controls the connected V1 wallet without requiring the old
+    pledge send_secret, which unblocks migrated pledge wallets on /courses.
+    """
+    actor_address = (actor_address or "").strip()
+    if auth_secret:
+        ok, _state, error_key = validate_effective_auth(actor_address, auth_secret, passphrase)
+        return ok, error_key
+
+    if not signed_tx:
+        return False, "missing_auth_secret"
+
+    if isinstance(signed_tx, str):
+        try:
+            signed_tx = json.loads(signed_tx)
+        except Exception:
+            return False, "invalid_v1_signature"
+    if not isinstance(signed_tx, dict):
+        return False, "invalid_v1_signature"
+
+    try:
+        import wallet_v1_production_final as wallet_v1_prod
+        signed_from = (signed_tx.get("from") or "").strip()
+        signed_to = (signed_tx.get("to") or "").strip()
+        if signed_from != actor_address:
+            return False, "invalid_v1_signature"
+        if expected_to and signed_to != expected_to:
+            return False, "invalid_v1_signature"
+        if str(signed_tx.get("token") or "").upper() not in {"COURSE", "L2E"}:
+            return False, "invalid_v1_signature"
+        if float(signed_tx.get("amount") or 0) != 0:
+            return False, "invalid_v1_signature"
+
+        for verifier in (
+            wallet_v1_prod.verify_required_fields,
+            wallet_v1_prod.verify_no_forbidden_fields,
+            wallet_v1_prod.verify_ecdsa_signature,
+            wallet_v1_prod.verify_publickey_matches_address,
+            wallet_v1_prod.verify_timestamp,
+        ):
+            if verifier is wallet_v1_prod.verify_timestamp:
+                ok, err = verifier(signed_tx.get("timestamp"))
+            else:
+                ok, err = verifier(signed_tx)
+            if not ok:
+                app.logger.warning("Course Wallet V1 auth failed: %s", err)
+                return False, "invalid_v1_signature"
+
+        # Course auth is not a spend transaction, so keep replay state local to courses
+        # instead of consuming the Wallet V1 tx nonce namespace used by /api/v1/tx/send.
+        nonce = str(signed_tx.get("nonce") or "")
+        nonce_file = os.path.join(DATA_DIR, "course_action_nonces.json")
+        nonce_store = load_json(nonce_file, {})
+        now = int(time.time())
+        if not isinstance(nonce_store, dict):
+            nonce_store = {}
+        nonce_store = {k: v for k, v in nonce_store.items() if now - int(v or 0) < 600}
+        nonce_key = f"{actor_address}:{nonce}"
+        if not nonce or nonce_key in nonce_store:
+            return False, "invalid_v1_signature"
+        nonce_store[nonce_key] = now
+        save_json(nonce_file, nonce_store)
+        return True, None
+    except Exception as exc:
+        app.logger.warning("Course Wallet V1 auth exception: %s", exc)
+        return False, "invalid_v1_signature"
 
 @app.route("/api/v1/courses", methods=["POST"])
 def api_v1_create_course():
@@ -28697,21 +28781,11 @@ def api_v1_create_course():
     if not title or not teacher or price_thr < 0 or reward_l2e <= 0:
         return jsonify(status="error", message="Missing or invalid fields"), 400
 
-    # Authenticate teacher
-    ok, _, error_key = validate_effective_auth(teacher, auth_secret, passphrase)
+    # Authenticate teacher (legacy send_secret or Wallet V1 signed action)
+    signed_tx = data.get("signed_tx") or data.get("wallet_v1_signed_tx")
+    ok, error_key = validate_course_actor_auth(teacher, auth_secret, passphrase, signed_tx, expected_to="COURSE_CREATE")
     if not ok:
-        if error_key == "no_effective_pledge":
-            return jsonify(status="error", message="Teacher has no effective pledge access"), 403
-        if error_key == "missing_auth_secret":
-            return jsonify(status="error", message="Missing auth_secret"), 400
-        if error_key == "missing_pledge":
-            return jsonify(status="error", message="Teacher not found or has not pledged"), 404
-        if error_key == "send_not_enabled":
-            return jsonify(status="error", message="Teacher send not enabled"), 400
-        if error_key == "passphrase_required":
-            return jsonify(status="error", message="Passphrase required"), 400
-        if error_key == "invalid_auth":
-            return jsonify(status="error", message="Invalid auth"), 403
+        return _course_auth_error_response(error_key, "Teacher")
 
     courses = load_courses()
     course_id = str(uuid.uuid4())
@@ -31046,20 +31120,10 @@ def api_v1_get_quiz_for_edit(course_id: str):
     if course.get("teacher") != teacher:
         return jsonify(status="error", message="Not the course teacher"), 403
 
-    ok, _, error_key = validate_effective_auth(teacher, auth_secret, passphrase)
+    signed_tx = data.get("signed_tx") or data.get("wallet_v1_signed_tx")
+    ok, error_key = validate_course_actor_auth(teacher, auth_secret, passphrase, signed_tx, expected_to=f"COURSE_QUIZ:{course_id}")
     if not ok:
-        if error_key == "no_effective_pledge":
-            return jsonify(status="error", message="Teacher has no effective pledge access"), 403
-        if error_key == "missing_auth_secret":
-            return jsonify(status="error", message="Missing auth_secret"), 400
-        if error_key == "missing_pledge":
-            return jsonify(status="error", message="Teacher not pledged"), 404
-        if error_key == "send_not_enabled":
-            return jsonify(status="error", message="Teacher send not enabled"), 400
-        if error_key == "passphrase_required":
-            return jsonify(status="error", message="Passphrase required"), 400
-        if error_key == "invalid_auth":
-            return jsonify(status="error", message="Invalid auth"), 403
+        return _course_auth_error_response(error_key, "Teacher")
 
     quiz = load_quizzes().get(course_id)
     if quiz:
@@ -31172,21 +31236,11 @@ def api_v1_create_quiz(course_id: str):
     if course.get("teacher") != teacher:
         return jsonify(status="error", message="Not the course teacher"), 403
 
-    # Authenticate teacher
-    ok, _, error_key = validate_effective_auth(teacher, auth_secret, passphrase)
+    # Authenticate teacher (legacy send_secret or Wallet V1 signed action)
+    signed_tx = data.get("signed_tx") or data.get("wallet_v1_signed_tx")
+    ok, error_key = validate_course_actor_auth(teacher, auth_secret, passphrase, signed_tx, expected_to=f"COURSE_QUIZ:{course_id}")
     if not ok:
-        if error_key == "no_effective_pledge":
-            return jsonify(status="error", message="Teacher has no effective pledge access"), 403
-        if error_key == "missing_auth_secret":
-            return jsonify(status="error", message="Missing auth_secret"), 400
-        if error_key == "missing_pledge":
-            return jsonify(status="error", message="Teacher not pledged"), 404
-        if error_key == "send_not_enabled":
-            return jsonify(status="error", message="Teacher send not enabled"), 400
-        if error_key == "passphrase_required":
-            return jsonify(status="error", message="Passphrase required"), 400
-        if error_key == "invalid_auth":
-            return jsonify(status="error", message="Invalid auth"), 403
+        return _course_auth_error_response(error_key, "Teacher")
 
     # QUEST: Validate questions format (MCQ / True-False)
     validated_questions = []

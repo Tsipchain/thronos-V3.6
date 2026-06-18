@@ -169,7 +169,8 @@ def create_secure_pdf_contract(
     height: int,
     send_seed: str,
     output_dir: str,
-    passphrase: str = None
+    passphrase: str = None,
+    extra_recovery_payload: dict = None
 ) -> str:
     """
     Κεντρική συνάρτηση που καλεί ο server:
@@ -182,6 +183,8 @@ def create_secure_pdf_contract(
     - send_seed: μικρό μυστικό "seed" για το send_thr
     - output_dir: φάκελος αποθήκευσης (συνήθως DATA_DIR/contracts)
     - passphrase: Ο κωδικός του χρήστη για κρυπτογράφηση. Αν δεν δοθεί, χρησιμοποιείται το send_seed ως fallback key.
+    - extra_recovery_payload: Προαιρετικό encrypted-only recovery metadata (π.χ. Wallet V1 recovery kit)
+      που μπαίνει μέσα στο ίδιο AES/LSB payload του PDF.
 
     Επιστρέφει μόνο το pdf_name (π.χ. "pledge_abc123.pdf").
     """
@@ -200,6 +203,11 @@ def create_secure_pdf_contract(
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
         "send_seed": send_seed,
     }
+    if isinstance(extra_recovery_payload, dict) and extra_recovery_payload:
+        # Keep the legacy PDF as the recovery source of truth: this encrypted-only
+        # metadata is recoverable from the PDF/LSB payload with the user's
+        # passphrase (or send_seed fallback), not from raw server-side secrets.
+        payload.update(extra_recovery_payload)
     encrypted_blob = _encrypt_payload(encryption_key_source, payload)
 
     # 2. Εικόνα με fire + QR

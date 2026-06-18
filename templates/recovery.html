@@ -40,6 +40,24 @@
 
 {% block scripts %}
     <script>
+
+        function downloadRecoveredWalletV1Kit() {
+            if (!window.recoveredWalletV1Kit) return alert('No Wallet V1 recovery kit recovered.');
+            let kit = window.recoveredWalletV1Kit;
+            try {
+                if (typeof kit === 'string') kit = JSON.parse(kit);
+            } catch (_) {}
+            const text = typeof kit === 'string' ? kit : JSON.stringify(kit, null, 2);
+            const blob = new Blob([text], { type: 'application/json' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'wallet-v1-recovery-kit-from-pdf.json';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+        }
+
         async function recover() {
             const fileInput = document.getElementById('contractFile');
             const secretInput = document.getElementById('secretPass');
@@ -101,6 +119,11 @@
                         html += "<pre>" + JSON.stringify(data.payload, null, 2) + "</pre>";
                         if (data.payload.send_seed) {
                             html += `<p style='color:yellow'><strong>${msg.seedFound}</strong> ` + data.payload.send_seed + "</p>";
+                        }
+                        if (data.payload.wallet_v1_recovery_kit) {
+                            window.recoveredWalletV1Kit = data.payload.wallet_v1_recovery_kit;
+                            html += `<p style='color:#00ff66'><strong>Wallet V1 Recovery Kit:</strong> recovered from PDF stego payload.</p>`;
+                            html += `<button onclick="downloadRecoveredWalletV1Kit()" style="margin-top:8px;">Download Wallet V1 Recovery Kit</button>`;
                         }
                     }
                     resultDiv.innerHTML = html;

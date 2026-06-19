@@ -290,8 +290,14 @@ async function _fetchErc20(evmAddr, tokenContract, rpcUrl, decimals) {
       signal: AbortSignal.timeout(8000),
     });
     const d = await r.json();
-    if (d.error || !d.result || d.result === '0x') return null;
-    return parseInt(d.result, 16) / Math.pow(10, decimals);
+    if (d.error || !d.result || d.result === '0x' || d.result === '0x' + '0'.repeat(64)) return null;
+    // Use BigInt to avoid precision loss on 256-bit ERC20 balances
+    const raw = BigInt(d.result);
+    if (raw === 0n) return null;
+    const divisor = BigInt(10 ** decimals);
+    const whole = Number(raw / divisor);
+    const frac  = Number(raw % divisor) / (10 ** decimals);
+    return whole + frac;
   } catch { return null; }
 }
 
@@ -1232,7 +1238,16 @@ const HOME_NETWORKS = [
 ];
 
 function _renderHomeAssetRow(icon, label, sym, val, color, addr) {
-  const fmt = v => v == null ? '—' : Number(v).toFixed(8);
+  const fmt = v => {
+    if (v == null) return '—';
+    const n = Number(v);
+    if (n === 0) return '0';
+    // Show enough decimals to be meaningful without trailing zeros
+    if (n >= 1000) return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
+    if (n >= 1)    return n.toFixed(4);
+    if (n >= 0.0001) return n.toFixed(6);
+    return n.toFixed(8);
+  };
   return `<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid #ffffff10">
     <div style="width:28px;height:28px;border-radius:50%;background:${color}33;border:1px solid ${color};display:flex;align-items:center;justify-content:center;font-size:.8rem;flex-shrink:0">${icon}</div>
     <div style="flex:1;min-width:0">

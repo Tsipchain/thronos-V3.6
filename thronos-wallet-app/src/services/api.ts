@@ -391,6 +391,87 @@ export async function addLiquidity(params: { from: string; pool_id: string; amou
   return request('/api/wallet/v1/add_liquidity', { method: 'POST', body: JSON.stringify({ from: params.from, pool_id: params.pool_id, amount_a: params.amount_a, amount_b: params.amount_b, private_key_hex: params.private_key_hex }) });
 }
 
+export interface ExternalChainInfo {
+  chain: string;
+  label: string;
+  token_contract: string;
+  decimals: number;
+  token_standard: string;
+}
+
+export interface AvailablePool {
+  pool_id: string;
+  name: string;
+  token_a: string;
+  token_b: string;
+  reserves_a: number;
+  reserves_b: number;
+  total_shares: number;
+  pool_ratio: number | null;
+  fee_bps: number;
+  lp_symbol: string;
+  external_chains: ExternalChainInfo[];
+}
+
+export async function getAvailablePools(): Promise<{ ok: boolean; pools: AvailablePool[] }> {
+  return request('/api/v1/pools/available');
+}
+
+export interface AddLiquidityQuote {
+  ok: boolean;
+  pool_id?: string;
+  token_a?: string;
+  token_b?: string;
+  amount_a?: number;
+  amount_b?: number;
+  pool_ratio?: number;
+  lp_shares_estimate?: number;
+  share_pct?: number;
+  fee_bps?: number;
+  chain_info?: ExternalChainInfo | null;
+  gas_warning?: string;
+  slippage_tolerance_pct?: number;
+  error?: string;
+}
+
+export async function quoteAddLiquidity(poolId: string, amountA: number, chain?: string): Promise<AddLiquidityQuote> {
+  const params = new URLSearchParams({ pool_id: poolId, amount_a: String(amountA) });
+  if (chain) params.set('chain', chain);
+  return request(`/api/v1/pools/quote-add-liquidity?${params}`);
+}
+
+export interface CrossChainAddLiquidityResult {
+  ok: boolean;
+  tx_id?: string;
+  pool_id?: string;
+  lp_shares_minted?: number;
+  reserves_a?: number;
+  reserves_b?: number;
+  external_chain?: string;
+  status?: string;
+  message?: string;
+  gas_warning?: string;
+  error?: string;
+}
+
+export async function addLiquidityCrossChain(params: {
+  pool_id: string;
+  amount_a: number;
+  amount_b: number;
+  chain: string;
+  token_contract: string;
+  decimals: number;
+  provider_thr: string;
+  evm_address: string;
+  auth_secret: string;
+  passphrase?: string;
+}): Promise<CrossChainAddLiquidityResult> {
+  return request('/api/v1/pools/add-liquidity', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+}
+
 export async function removeLiquiditySigned(params: { pool_id: string; shares: number; signedTx: SignedTxEnvelope }): Promise<{ success: boolean; amount_a?: number; amount_b?: number; error?: string }> {
   return request('/api/v1/pools/remove_liquidity', { method: 'POST', body: JSON.stringify({ pool_id: params.pool_id, shares: params.shares, tx: params.signedTx }) });
 }

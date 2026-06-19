@@ -33016,6 +33016,432 @@ def api_v1_pool_swap():
     ), 200
 
 
+# ─── Issue #672: Cross-Chain Add-Liquidity (THR + USDT/USDC) ─────────────────
+
+# Supported external tokens per chain for pool add-liquidity
+_POOL_EXTERNAL_TOKENS: dict[str, list[dict]] = {
+    "bsc": [
+        {"token": "USDT", "token_contract": USDT_BNB_CONTRACT, "decimals": 18,
+         "token_standard": "BEP20", "network_label": "BNB Smart Chain"},
+        {"token": "USDC", "token_contract": "0x8AC76a51cc950d9822D68b83FE1Ad97B32Cd580d", "decimals": 18,
+         "token_standard": "BEP20", "network_label": "BNB Smart Chain"},
+    ],
+    "arbitrum": [
+        {"token": "USDT", "token_contract": "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9", "decimals": 6,
+         "token_standard": "ERC20", "network_label": "Arbitrum"},
+        {"token": "USDC", "token_contract": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831", "decimals": 6,
+         "token_standard": "ERC20", "network_label": "Arbitrum"},
+    ],
+    "base": [
+        {"token": "USDC", "token_contract": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", "decimals": 6,
+         "token_standard": "ERC20", "network_label": "Base"},
+    ],
+}
+
+_POOL_CHAIN_RPC: dict[str, str] = {
+    "bsc": BSC_RPC_URL,
+    "arbitrum": os.getenv("ARB_RPC_URL", "https://arb1.arbitrum.io/rpc"),
+    "base": os.getenv("BASE_RPC_URL", "https://mainnet.base.org"),
+}
+
+
+def _fetch_erc20_balance_internal(chain: str, evm_address: str, token_contract: str, decimals: int) -> float | None:
+    """Call eth_call balanceOf on a token contract. Returns float balance or None on error."""
+    rpc_url = _POOL_CHAIN_RPC.get(chain, "").strip()
+    if not rpc_url:
+        return None
+    try:
+        data_hex = "0x70a08231" + evm_address.replace("0x", "").lower().zfill(64)
+        result = requests.post(
+            rpc_url,
+            json={"jsonrpc": "2.0", "method": "eth_call",
+                  "params": [{"to": token_contract, "data": data_hex}, "latest"], "id": 1},
+            timeout=10
+        ).json()
+        raw_hex = result.get("result", "0x0") or "0x0"
+        raw = int(raw_hex, 16)
+        divisor = 10 ** decimals
+        return raw / divisor
+    except Exception as exc:
+        logger.warning("[pool_erc20_balance] chain=%s error=%s", chain, exc)
+        return None
+
+
+@app.route("/api/v1/pools/available", methods=["GET"])
+def api_v1_pools_available():
+    """
+    Returns pools eligible for cross-chain add-liquidity (THR paired with USDT or USDC).
+    Includes supported external chains per pool token_b.
+    """
+    pools = load_pools()
+    result = []
+    for pool in pools:
+        token_a = pool.get("token_a", "")
+        token_b = pool.get("token_b", "")
+        # Only THR paired with a stablecoin
+        if token_a != "THR" or token_b not in ("USDT", "USDC"):
+            continue
+
+        reserves_a = float(pool.get("reserves_a", 0))
+        reserves_b = float(pool.get("reserves_b", 0))
+        total_shares = float(pool.get("total_shares", 0))
+
+        # Build supported chain list for the external token (token_b)
+        external_chains = []
+        for chain_id, tokens in _POOL_EXTERNAL_TOKENS.items():
+            for t in tokens:
+                if t["token"] == token_b:
+                    external_chains.append({
+                        "chain": chain_id,
+                        "label": t["network_label"],
+                        "token_contract": t["token_contract"],
+                        "decimals": t["decimals"],
+                        "token_standard": t["token_standard"],
+                    })
+
+        if not external_chains:
+            continue
+
+        result.append({
+            "pool_id": pool.get("id"),
+            "name": pool.get("name", f"{token_a}/{token_b}"),
+            "token_a": token_a,
+            "token_b": token_b,
+            "reserves_a": reserves_a,
+            "reserves_b": reserves_b,
+            "total_shares": total_shares,
+            "pool_ratio": round(reserves_b / reserves_a, 6) if reserves_a > 0 else None,
+            "fee_bps": pool_fee_bps(pool),
+            "lp_symbol": pool.get("lp_symbol", f"LP-{token_a}-{token_b}"),
+            "external_chains": external_chains,
+        })
+
+    return jsonify(ok=True, pools=result), 200
+
+
+@app.route("/api/v1/pools/quote-add-liquidity", methods=["GET"])
+def api_v1_pools_quote_add_liquidity():
+    """
+    Returns a quote for adding liquidity to a cross-chain pool.
+
+    Query params:
+        pool_id: pool UUID
+        amount_a: THR amount (optional; supply either amount_a or amount_b)
+        amount_b: external token amount (optional)
+        chain: external chain (bsc|arbitrum|base)
+
+    Returns: required amounts, lp_shares_estimate, pool_ratio, fee_bps, gas_warning
+    """
+    pool_id = request.args.get("pool_id", "").strip()
+    chain = request.args.get("chain", "").strip().lower()
+    amount_a_str = request.args.get("amount_a", "").strip()
+    amount_b_str = request.args.get("amount_b", "").strip()
+
+    if not pool_id:
+        return jsonify(ok=False, error="missing_pool_id"), 400
+
+    pools = load_pools()
+    pool = next((p for p in pools if p.get("id") == pool_id), None)
+    if not pool:
+        return jsonify(ok=False, error="pool_not_found"), 404
+
+    token_a = pool.get("token_a", "")
+    token_b = pool.get("token_b", "")
+    reserves_a = float(pool.get("reserves_a", 0))
+    reserves_b = float(pool.get("reserves_b", 0))
+    total_shares = float(pool.get("total_shares", 0))
+
+    # Determine chain config for token_b
+    chain_info = None
+    if chain:
+        for t in _POOL_EXTERNAL_TOKENS.get(chain, []):
+            if t["token"] == token_b:
+                chain_info = dict(t, chain=chain)
+                break
+
+    # Calculate required paired amount based on pool ratio
+    if reserves_a > 0 and reserves_b > 0:
+        ratio = reserves_b / reserves_a  # USDT per THR
+        if amount_a_str:
+            try:
+                amount_a = float(amount_a_str)
+            except ValueError:
+                return jsonify(ok=False, error="invalid_amount_a"), 400
+            amount_b = round(amount_a * ratio, 6)
+        elif amount_b_str:
+            try:
+                amount_b = float(amount_b_str)
+            except ValueError:
+                return jsonify(ok=False, error="invalid_amount_b"), 400
+            amount_a = round(amount_b / ratio, 6)
+        else:
+            return jsonify(ok=False, error="provide_amount_a_or_b"), 400
+
+        # LP shares estimate: proportional to contribution
+        lp_shares_estimate = round((amount_a / reserves_a) * total_shares, 6) if total_shares > 0 else 0.0
+        share_pct = round((amount_a / (reserves_a + amount_a)) * 100, 4) if (reserves_a + amount_a) > 0 else 0.0
+    else:
+        # Empty pool: geometric mean initial shares
+        if amount_a_str and amount_b_str:
+            try:
+                amount_a = float(amount_a_str)
+                amount_b = float(amount_b_str)
+            except ValueError:
+                return jsonify(ok=False, error="invalid_amounts"), 400
+        else:
+            return jsonify(ok=False, error="pool_empty_provide_both"), 400
+        import math
+        lp_shares_estimate = round(math.sqrt(amount_a * amount_b), 6)
+        ratio = amount_b / amount_a if amount_a > 0 else 0
+        share_pct = 100.0
+
+    return jsonify(
+        ok=True,
+        pool_id=pool_id,
+        token_a=token_a,
+        token_b=token_b,
+        amount_a=round(amount_a, 6),
+        amount_b=round(amount_b, 6),
+        pool_ratio=round(ratio, 6),
+        lp_shares_estimate=lp_shares_estimate,
+        share_pct=share_pct,
+        fee_bps=pool_fee_bps(pool),
+        chain_info=chain_info,
+        gas_warning="External chain gas required in native token (BNB/ETH) to confirm the USDT/USDC transfer.",
+        slippage_tolerance_pct=2.0,
+    ), 200
+
+
+@app.route("/api/v1/pools/add-liquidity", methods=["POST"])
+def api_v1_pools_add_liquidity_crosschain():
+    """
+    Cross-chain add-liquidity: THR (from Thronos ledger) + USDT/USDC (on external EVM chain).
+
+    Request body:
+    {
+        "pool_id": "uuid...",
+        "amount_a": 500.0,          // THR amount
+        "amount_b": 5.0,            // USDT or USDC amount
+        "chain": "bsc",             // external chain for token_b
+        "token_contract": "0x...",  // ERC20 contract for token_b
+        "decimals": 18,
+        "provider_thr": "THR...",   // Thronos wallet
+        "evm_address": "0x...",     // user's EVM wallet holding USDT/USDC
+        "auth_secret": "..."
+    }
+    """
+    data = request.get_json() or {}
+
+    pool_id = (data.get("pool_id") or "").strip()
+    chain = (data.get("chain") or "").lower().strip()
+    token_contract = (data.get("token_contract") or "").strip()
+    evm_address = (data.get("evm_address") or "").strip()
+    decimals_raw = data.get("decimals", 18)
+    auth_secret = (data.get("auth_secret") or "").strip()
+    provider = (data.get("provider_thr") or data.get("from") or "").strip()
+
+    try:
+        amt_a = float(data.get("amount_a", 0))
+        amt_b = float(data.get("amount_b", 0))
+        decimals = int(decimals_raw)
+    except (TypeError, ValueError):
+        return jsonify(ok=False, error="invalid_amounts"), 400
+
+    if not pool_id or amt_a <= 0 or amt_b <= 0:
+        return jsonify(ok=False, error="missing_fields",
+                       message="pool_id, amount_a, amount_b are required"), 400
+    if not chain or chain not in _POOL_EXTERNAL_TOKENS:
+        return jsonify(ok=False, error="invalid_chain",
+                       message=f"Supported chains: {list(_POOL_EXTERNAL_TOKENS.keys())}"), 400
+    if not token_contract:
+        return jsonify(ok=False, error="missing_token_contract"), 400
+    if not evm_address:
+        return jsonify(ok=False, error="missing_evm_address"), 400
+    if not provider:
+        return jsonify(ok=False, error="missing_provider"), 400
+
+    # Validate token_contract is in known list for this chain
+    known_contracts = {t["token_contract"].lower() for t in _POOL_EXTERNAL_TOKENS.get(chain, [])}
+    if token_contract.lower() not in known_contracts:
+        return jsonify(ok=False, error="unknown_token_contract",
+                       message="Token contract not in supported list for this chain"), 400
+
+    # Determine token metadata for this contract
+    token_meta = next(
+        (t for t in _POOL_EXTERNAL_TOKENS.get(chain, []) if t["token_contract"].lower() == token_contract.lower()),
+        None
+    )
+    if not token_meta:
+        return jsonify(ok=False, error="token_meta_not_found"), 400
+
+    ext_token = token_meta["token"]
+    token_standard = token_meta["token_standard"]
+    network_label = token_meta["network_label"]
+
+    # Auth: verify auth_secret matches provider
+    if not auth_secret:
+        return jsonify(ok=False, error="missing_auth_secret"), 400
+    passphrase = (data.get("passphrase") or "").strip()
+    auth_ok, _auth_state, auth_err = validate_effective_auth(provider, auth_secret, passphrase)
+    if not auth_ok:
+        logger.warning("[add_liquidity_crosschain] invalid_credentials provider=%s err=%s",
+                       provider[:10] if provider else "", auth_err)
+        return jsonify(ok=False, error="invalid_credentials", message="Invalid auth_secret"), 401
+
+    # Load pool
+    pools = load_pools()
+    pool = next((p for p in pools if p.get("id") == pool_id), None)
+    if not pool:
+        return jsonify(ok=False, error="pool_not_found"), 404
+
+    token_a = pool.get("token_a", "")
+    token_b = pool.get("token_b", "")
+
+    if token_a != "THR" or token_b != ext_token:
+        return jsonify(ok=False, error="pool_token_mismatch",
+                       message=f"Pool is {token_a}/{token_b}, requested THR/{ext_token}"), 400
+
+    reserves_a = float(pool.get("reserves_a", 0))
+    reserves_b = float(pool.get("reserves_b", 0))
+    total_shares = float(pool.get("total_shares", 0))
+
+    # Validate ratio (2% slippage tolerance)
+    if reserves_a > 0 and reserves_b > 0:
+        expected_ratio = reserves_b / reserves_a
+        provided_ratio = amt_b / amt_a if amt_a > 0 else 0
+        ratio_deviation = abs(expected_ratio - provided_ratio) / max(expected_ratio, 0.000001)
+        if ratio_deviation > 0.02:
+            return jsonify(
+                ok=False,
+                error="ratio_mismatch",
+                message="Amounts don't match pool ratio within 2% tolerance",
+                expected_ratio=round(expected_ratio, 6),
+                provided_ratio=round(provided_ratio, 6),
+                deviation_pct=round(ratio_deviation * 100, 2),
+            ), 400
+
+    # Check THR balance on Thronos ledger
+    thr_ledger = load_json(LEDGER_FILE, {})
+    thr_balance = float(thr_ledger.get(provider, 0.0))
+    if thr_balance < amt_a:
+        return jsonify(ok=False, error="insufficient_thr",
+                       message=f"Need {amt_a} THR, have {thr_balance}"), 400
+
+    # Check external USDT/USDC balance via balanceOf()
+    ext_balance = _fetch_erc20_balance_internal(chain, evm_address, token_contract, decimals)
+    if ext_balance is None:
+        return jsonify(ok=False, error="external_balance_check_failed",
+                       message="Could not verify external token balance — RPC unavailable"), 502
+    if ext_balance < amt_b:
+        return jsonify(ok=False, error="insufficient_external_balance",
+                       message=f"Need {amt_b} {ext_token} on {network_label}, have {ext_balance}",
+                       balance=ext_balance), 400
+
+    # Pledge access check
+    if not has_pledge_access(provider):
+        return jsonify(ok=False, error="no_pledge_access",
+                       message="Provider must have an active pledge"), 403
+
+    # ── Mutations ──
+
+    # Deduct THR from ledger
+    thr_ledger[provider] = round(thr_balance - amt_a, 6)
+    save_json(LEDGER_FILE, thr_ledger)
+
+    # Mint LP shares
+    import math as _math
+    if total_shares > 0 and reserves_a > 0:
+        shares_minted = round((amt_a / reserves_a) * total_shares, 6)
+    else:
+        shares_minted = round(_math.sqrt(amt_a * amt_b), 6)
+
+    pool["reserves_a"] = round(reserves_a + amt_a, 6)
+    pool["reserves_b"] = round(reserves_b + amt_b, 6)
+    pool["total_shares"] = round(total_shares + shares_minted, 6)
+    providers = pool.setdefault("providers", {})
+    providers[provider] = round(float(providers.get(provider, 0.0)) + shares_minted, 6)
+    save_pools(pools)
+
+    # Record on-chain transaction
+    import secrets as _secrets
+    tx_id = f"POOL-ADD-{int(time.time())}-{_secrets.token_hex(4)}"
+    chain_data = load_json(CHAIN_FILE, [])
+    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    chain_data.append({
+        "type": "pool_add_liquidity",
+        "kind": "pool_add_liquidity",
+        "pool_id": pool_id,
+        "provider": provider,
+        "evm_address": evm_address,
+        "token_a": token_a,
+        "token_b": token_b,
+        "amount_a": amt_a,
+        "amount_b": amt_b,
+        "external_chain": chain,
+        "token_contract": token_contract,
+        "token_standard": token_standard,
+        "lp_shares_minted": shares_minted,
+        "amount": amt_a,
+        "symbol": "THR",
+        "tx_id": tx_id,
+        "timestamp": ts,
+    })
+    save_json(CHAIN_FILE, chain_data)
+
+    # Wallet history: THR side (deducted from Thronos)
+    add_wallet_history_event(
+        thr_address=provider,
+        event_type="pool_add_liquidity",
+        chain="thronos",
+        asset="THR",
+        amount=amt_a,
+        status="confirmed",
+        direction="pool",
+        internal_txid=tx_id,
+        token_standard="native",
+        network_label="Thronos",
+    )
+    # Wallet history: external token side (pending on external chain)
+    add_wallet_history_event(
+        thr_address=provider,
+        event_type="pool_add_liquidity",
+        chain=chain,
+        asset=ext_token,
+        amount=amt_b,
+        status="pending",
+        direction="pool",
+        internal_txid=tx_id,
+        token_contract=token_contract,
+        token_standard=token_standard,
+        network_label=network_label,
+    )
+
+    logger.info(
+        "[pool_add_liquidity_crosschain] provider=%s pool=%s thr=%.6f %s=%.6f chain=%s shares=%.6f",
+        provider, pool_id, amt_a, ext_token, amt_b, chain, shares_minted
+    )
+
+    return jsonify(
+        ok=True,
+        tx_id=tx_id,
+        pool_id=pool_id,
+        provider=provider,
+        amount_a=amt_a,
+        amount_b=amt_b,
+        lp_shares_minted=shares_minted,
+        reserves_a=pool["reserves_a"],
+        reserves_b=pool["reserves_b"],
+        external_chain=chain,
+        evm_address=evm_address,
+        token_contract=token_contract,
+        status="pending",
+        message=f"THR locked in pool. Confirm {amt_b} {ext_token} transfer on {network_label} to complete.",
+        gas_warning=f"You need gas on {network_label} to send {ext_token}.",
+    ), 200
+
+
+# ─── End Issue #672 Cross-Chain Add-Liquidity ────────────────────────────────
+
 # PR-182 FIX: Run AI Wallet Check on Startup (master only)
 # NOTE: Guards are inside ensure_ai_wallet() and recompute_height_offset_from_ledger()
 ensure_ai_wallet()

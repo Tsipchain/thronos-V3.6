@@ -169,11 +169,13 @@ export default function PoolsScreen({ navigation }: { navigation: any }) {
         });
         if (result.ok) {
           Alert.alert(
-            'THR Locked',
-            `${a} THR locked in pool.\n\nNow send ${b} ${selectedPool.token_b} on ${chainInfo.label} to complete.\n\nTX: ${result.tx_id}`,
+            'Intent Created',
+            `Send ${b} ${selectedPool.token_b} to:\n\n${result.vault_address}\n\non ${chainInfo.label}\n\nIntent expires: ${new Date(result.expires_at * 1000).toLocaleString()}`,
+            [
+              { text: 'Copy Address', onPress: () => { /* TODO: clipboard */ } },
+              { text: 'OK', onPress: () => { setSelectedPool(null); loadData(); } },
+            ]
           );
-          setSelectedPool(null);
-          loadData();
         } else {
           Alert.alert('Failed', result.message || result.error || 'Add liquidity failed.');
         }

@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  TextInput, ActivityIndicator, Alert,
+  TextInput, ActivityIndicator, Alert, Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -9,33 +9,42 @@ import { LinearGradient } from 'expo-linear-gradient';
 import * as Clipboard from 'expo-clipboard';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS } from '../constants/theme';
 import { CONFIG } from '../constants/config';
-import { getBnbPledgeQuote, registerBnbAddress } from '../services/api';
+import { getBnbPledgeQuote, registerBnbAddress, pledgeMigrate } from '../services/api';
 import { useStore } from '../store/useStore';
 
-// USDT-on-BNB-Chain Pledge — alternate gateway to Thronos Network.
-// User sends USDT (BEP20) to the vault, registers the sending BNB
-// address so the watcher can resolve it, and is credited THR once
-// the transfer confirms (half the THR equivalent is paired into the
-// THR/USDT liquidity pool).
+// USDT-on-BNB-Chain Pledge — gateway to Thronos Network.
+//
+// Two modes:
+//  - Existing wallet: registers BNB address so the watcher can credit THR
+//  - New user (no wallet): generates THR address + send_secret + PDF, then
+//    creates V1 wallet inline via pledge-migrate (same as BTC pledge flow).
 
-type Step = 'intro' | 'register' | 'done';
+type Step = 'intro' | 'register' | 'setup_v1' | 'v1_ready' | 'done';
 
 export default function UsdtPledgeScreen({ navigation }: any) {
   const { wallet } = useStore();
+  const isNewUser = !wallet.address;
+
   const [step, setStep] = useState<Step>('intro');
   const [bnbAddress, setBnbAddress] = useState('');
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [quote, setQuote] = useState<{ vault_address?: string; token_contract?: string; chain?: string; min_usdt?: number; usdt_thr_rate?: number } | null>(null);
+  const [quote, setQuote] = useState<{ vault_address?: string; token_contract?: string; min_usdt?: number; usdt_thr_rate?: number } | null>(null);
+
+  // new-user state
+  const [secretSeed, setSecretSeed] = useState<string | null>(null);
+  const [pendingThrAddress, setPendingThrAddress] = useState<string | null>(null);
+  const [pin, setPin] = useState('');
+  const [pinConfirm, setPinConfirm] = useState('');
+  const [v1Address, setV1Address] = useState<string | null>(null);
+  const [v1PdfUrl, setV1PdfUrl] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
       try {
         const q = await getBnbPledgeQuote();
         if (q.ok !== false) setQuote(q);
-      } catch (err) {
-        // keep defaults from CONFIG if quote fails to load
-      }
+      } catch {}
     })();
   }, []);
 
@@ -55,24 +64,61 @@ export default function UsdtPledgeScreen({ navigation }: any) {
       Alert.alert('Required', 'Enter a valid BNB (0x...) sending address');
       return;
     }
-    if (!wallet.address) {
-      Alert.alert('Error', 'No THR wallet found');
-      return;
-    }
     setLoading(true);
     try {
-      const res = await registerBnbAddress({ thr_address: wallet.address, bnb_address: bnbAddress.trim() });
-      if (res.ok) {
-        setStep('done');
-      } else {
+      const params = isNewUser
+        ? { bnb_address: bnbAddress.trim() }
+        : { thr_address: wallet.address!, bnb_address: bnbAddress.trim() };
+
+      const res = await registerBnbAddress(params);
+      if (!res.ok) {
         Alert.alert('Error', res.error || 'Registration failed');
+        return;
+      }
+
+      if (isNewUser && res.secret_seed) {
+        setSecretSeed(res.secret_seed);
+        setPendingThrAddress(res.thr_address || null);
+        setStep('setup_v1');
+      } else {
+        setStep('done');
       }
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Network error');
     } finally {
       setLoading(false);
     }
-  }, [bnbAddress, wallet.address]);
+  }, [bnbAddress, wallet.address, isNewUser]);
+
+  const handleCreateV1 = useCallback(async () => {
+    if (!pin || pin.length < 4) {
+      Alert.alert('PIN Required', 'Enter a PIN of at least 4 digits');
+      return;
+    }
+    if (pin !== pinConfirm) {
+      Alert.alert('PIN Mismatch', 'PINs do not match — please re-enter');
+      return;
+    }
+    if (!secretSeed) {
+      Alert.alert('Error', 'No pledge secret — please re-register your BNB address');
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await pledgeMigrate({ send_secret: secretSeed, pin });
+      if (res.ok && res.canonical_v1_address) {
+        setV1Address(res.canonical_v1_address);
+        if (res.pdf_url) setV1PdfUrl(`${CONFIG.API_URL}${res.pdf_url}`);
+        setStep('v1_ready');
+      } else {
+        Alert.alert('Error', res.error || 'V1 wallet creation failed');
+      }
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Network error');
+    } finally {
+      setLoading(false);
+    }
+  }, [pin, pinConfirm, secretSeed]);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -85,6 +131,7 @@ export default function UsdtPledgeScreen({ navigation }: any) {
       </View>
 
       <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false}>
+
         {/* Step: Intro */}
         {step === 'intro' && (
           <>
@@ -92,9 +139,9 @@ export default function UsdtPledgeScreen({ navigation }: any) {
               <Ionicons name="cash" size={48} color={COLORS.gold} />
               <Text style={styles.introTitle}>Pledge USDT on BNB Chain</Text>
               <Text style={styles.introDesc}>
-                Send USDT (BEP20) on Binance Smart Chain to our vault. The watcher detects your
-                transfer and credits the THR equivalent to your wallet — half is paired into the
-                THR/USDT liquidity pool.
+                {isNewUser
+                  ? 'Send USDT (BEP20) to our vault to create your THR wallet. You\'ll get a V1 address, Recovery Kit, and PDF contract with your secret embedded via LSB steganography.'
+                  : 'Send USDT (BEP20) on Binance Smart Chain to our vault. The watcher detects your transfer and credits the THR equivalent to your wallet — half is paired into the THR/USDT liquidity pool.'}
               </Text>
             </LinearGradient>
 
@@ -107,29 +154,31 @@ export default function UsdtPledgeScreen({ navigation }: any) {
               <View style={styles.stepItem}>
                 <View style={styles.stepNum}><Text style={styles.stepNumText}>1</Text></View>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.stepTitle}>Register Your Address</Text>
-                  <Text style={styles.stepDesc}>Link the BNB address you'll send USDT from</Text>
+                  <Text style={styles.stepTitle}>Register Your BNB Address</Text>
+                  <Text style={styles.stepDesc}>Link the BNB address you'll send USDT from (KYC for the watcher)</Text>
                 </View>
               </View>
+              {isNewUser && (
+                <View style={styles.stepItem}>
+                  <View style={styles.stepNum}><Text style={styles.stepNumText}>2</Text></View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.stepTitle}>Create V1 Wallet</Text>
+                    <Text style={styles.stepDesc}>Set a PIN — generates your Recovery Kit + PDF with embedded secret</Text>
+                  </View>
+                </View>
+              )}
               <View style={styles.stepItem}>
-                <View style={styles.stepNum}><Text style={styles.stepNumText}>2</Text></View>
+                <View style={styles.stepNum}><Text style={styles.stepNumText}>{isNewUser ? '3' : '2'}</Text></View>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.stepTitle}>Send USDT</Text>
                   <Text style={styles.stepDesc}>Send minimum {minUsdt} USDT (BEP20) to the vault</Text>
                 </View>
               </View>
               <View style={styles.stepItem}>
-                <View style={styles.stepNum}><Text style={styles.stepNumText}>3</Text></View>
+                <View style={styles.stepNum}><Text style={styles.stepNumText}>{isNewUser ? '4' : '3'}</Text></View>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.stepTitle}>Watcher Verifies</Text>
-                  <Text style={styles.stepDesc}>Our BSC watcher detects your transfer (~5 min)</Text>
-                </View>
-              </View>
-              <View style={styles.stepItem}>
-                <View style={styles.stepNum}><Text style={styles.stepNumText}>4</Text></View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.stepTitle}>Get THR Credited</Text>
-                  <Text style={styles.stepDesc}>THR equivalent lands in your wallet automatically</Text>
+                  <Text style={styles.stepTitle}>THR Credited Automatically</Text>
+                  <Text style={styles.stepDesc}>Our BSC watcher detects your transfer and credits THR (~5 min)</Text>
                 </View>
               </View>
             </View>
@@ -194,7 +243,104 @@ export default function UsdtPledgeScreen({ navigation }: any) {
           </>
         )}
 
-        {/* Step: Done */}
+        {/* Step: Setup V1 Wallet (new users only) */}
+        {step === 'setup_v1' && (
+          <>
+            <LinearGradient colors={['#001A0A', '#000D05']} style={styles.completeCard}>
+              <Ionicons name="key" size={48} color={COLORS.gold} />
+              <Text style={styles.completeTitle}>Address Registered!</Text>
+              <Text style={styles.completeDesc}>
+                Set a PIN to create your V1 wallet. Your Recovery Kit and a PDF contract
+                (with your secret embedded via LSB steganography) will be generated.
+              </Text>
+              {pendingThrAddress && (
+                <View style={styles.thrFinal}>
+                  <Text style={styles.thrFinalLabel}>Reserved THR Address</Text>
+                  <Text style={styles.thrFinalAddr}>{pendingThrAddress}</Text>
+                </View>
+              )}
+            </LinearGradient>
+
+            <Text style={styles.inputLabel}>New PIN (4-8 digits)</Text>
+            <TextInput
+              style={styles.input}
+              value={pin}
+              onChangeText={setPin}
+              placeholder="Enter PIN..."
+              placeholderTextColor={COLORS.textMuted}
+              secureTextEntry
+              keyboardType="numeric"
+              maxLength={8}
+            />
+
+            <Text style={styles.inputLabel}>Confirm PIN</Text>
+            <TextInput
+              style={styles.input}
+              value={pinConfirm}
+              onChangeText={setPinConfirm}
+              placeholder="Re-enter PIN..."
+              placeholderTextColor={COLORS.textMuted}
+              secureTextEntry
+              keyboardType="numeric"
+              maxLength={8}
+            />
+
+            <TouchableOpacity
+              style={[styles.primaryBtn, loading && styles.btnDisabled]}
+              onPress={handleCreateV1}
+              disabled={loading}
+            >
+              {loading ? (
+                <ActivityIndicator color={COLORS.background} />
+              ) : (
+                <>
+                  <Ionicons name="shield-checkmark" size={20} color={COLORS.background} />
+                  <Text style={styles.primaryBtnText}>Create V1 Wallet</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </>
+        )}
+
+        {/* Step: V1 Ready (new users) */}
+        {step === 'v1_ready' && (
+          <>
+            <LinearGradient colors={['#001A00', '#000D05']} style={styles.completeCard}>
+              <Ionicons name="shield-checkmark" size={56} color={COLORS.success} />
+              <Text style={styles.completeTitle}>Welcome to Thronos!</Text>
+              <Text style={styles.completeDesc}>
+                Your V1 wallet is ready. Now send at least {minUsdt} USDT from your registered
+                BNB address to the vault — THR will be credited automatically once confirmed.
+              </Text>
+              {v1Address && (
+                <View style={styles.thrFinal}>
+                  <Text style={styles.thrFinalLabel}>Your V1 THR Address</Text>
+                  <Text style={styles.thrFinalAddr}>{v1Address}</Text>
+                </View>
+              )}
+            </LinearGradient>
+
+            {v1PdfUrl && (
+              <TouchableOpacity
+                style={styles.pdfBtn}
+                onPress={() => Linking.openURL(v1PdfUrl!)}
+              >
+                <Ionicons name="document" size={20} color={COLORS.gold} />
+                <Text style={styles.pdfBtnText}>Download PDF Contract (LSB)</Text>
+              </TouchableOpacity>
+            )}
+
+            <TouchableOpacity
+              style={styles.primaryBtn}
+              onPress={() => navigation.navigate('MainTabs')}
+            >
+              <Ionicons name="wallet" size={20} color={COLORS.background} />
+              <Text style={styles.primaryBtnText}>Go to Wallet</Text>
+            </TouchableOpacity>
+          </>
+        )}
+
+        {/* Step: Done (existing users) */}
         {step === 'done' && (
           <>
             <LinearGradient colors={['#001A00', '#000D05']} style={styles.completeCard}>
@@ -292,6 +438,21 @@ const styles = StyleSheet.create({
   },
   completeTitle: { fontSize: FONT_SIZES.xxl, fontWeight: '800', color: COLORS.success, textAlign: 'center' },
   completeDesc: { fontSize: FONT_SIZES.md, color: COLORS.textSecondary, textAlign: 'center', lineHeight: 22 },
+
+  thrFinal: {
+    backgroundColor: COLORS.background, borderRadius: BORDER_RADIUS.md,
+    padding: SPACING.md, width: '100%', marginTop: SPACING.sm,
+  },
+  thrFinalLabel: { fontSize: FONT_SIZES.xs, color: COLORS.textMuted, marginBottom: 4 },
+  thrFinalAddr: { fontSize: FONT_SIZES.md, color: COLORS.gold, fontFamily: 'monospace', fontWeight: '600' },
+
+  pdfBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: SPACING.sm,
+    backgroundColor: COLORS.surface, borderRadius: BORDER_RADIUS.lg,
+    padding: SPACING.md, marginBottom: SPACING.md,
+    borderWidth: 1, borderColor: COLORS.gold + '30',
+  },
+  pdfBtnText: { fontSize: FONT_SIZES.md, color: COLORS.gold, fontWeight: '600' },
 
   primaryBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: SPACING.sm,

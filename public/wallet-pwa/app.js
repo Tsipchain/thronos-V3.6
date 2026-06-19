@@ -410,10 +410,10 @@ async function showImport(addingExtra = false) {
       <p class="tagline">Thronos Chain Wallet</p>
 
       <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">
-        <button class="btn btn--ghost" id="tabCreate" style="flex:1;min-width:90px;padding:8px;font-size:.8rem;border-radius:10px">✨ New Wallet</button>
-        <button class="btn" id="tabKit" style="flex:1;min-width:90px;padding:8px;font-size:.8rem;background:var(--accent);color:#fff;border-radius:10px">Recovery Kit</button>
-        <button class="btn btn--ghost" id="tabBtcPledge" style="flex:1;min-width:90px;padding:8px;font-size:.8rem;border-radius:10px">₿ BTC Pledge</button>
-        <button class="btn btn--ghost" id="tabPledge" style="flex:1;min-width:90px;padding:8px;font-size:.8rem;border-radius:10px">Pledge Secret</button>
+        <button class="btn btn--ghost" id="tabCreate" style="flex:1;min-width:80px;padding:8px;font-size:.8rem;border-radius:10px">✨ New Wallet</button>
+        <button class="btn" id="tabKit" style="flex:1;min-width:80px;padding:8px;font-size:.8rem;background:var(--accent);color:#fff;border-radius:10px">Recovery Kit</button>
+        <button class="btn btn--ghost" id="tabBtcPledge" style="flex:1;min-width:80px;padding:8px;font-size:.8rem;border-radius:10px">₿ BTC Pledge</button>
+        <button class="btn btn--ghost" id="tabUsdtPledge" style="flex:1;min-width:80px;padding:8px;font-size:.8rem;border-radius:10px">💵 USDT Pledge</button>
       </div>
 
       <!-- Create New Wallet tab -->
@@ -448,6 +448,7 @@ async function showImport(addingExtra = false) {
           <button class="btn btn--primary" id="importBtn">Unlock</button>
         </div>
         <div id="err" class="banner banner--error hidden"></div>
+        <p style="margin-top:14px;font-size:.78rem;color:var(--muted);text-align:center">Migrating from old pledge system? <button class="btn--link" id="showPledgeSecretBtn" style="color:var(--accent);background:none;border:none;cursor:pointer;font-size:.78rem;padding:0;text-decoration:underline">Use your Pledge Secret →</button></p>
       </div>
 
       <!-- BTC Pledge tab (new wallet via direct BTC payment) -->
@@ -472,6 +473,24 @@ async function showImport(addingExtra = false) {
           <button class="btn btn--primary mt8" id="btcPledgeCreateV1Btn">🔑 Create V1 Wallet</button>
         </div>
         <div id="btcPledgeErr" class="banner banner--error hidden"></div>
+      </div>
+
+      <!-- USDT/BNB Pledge tab (new wallet via USDT on BSC) -->
+      <div id="paneUsdtPledge" class="card" style="display:none">
+        <h2 style="font-size:1.1rem">💵 USDT Pledge (BNB Chain)</h2>
+        <p style="color:var(--muted);font-size:.85rem">Register your BNB sending address, then send USDT (BEP20) to the vault. You'll get a THR address, Recovery Kit, and PDF contract with LSB-embedded secret.</p>
+        <div id="usdtPledgeStep1">
+          <div style="background:#0d0a1a;border:1px solid #26A17B;border-radius:8px;padding:10px;font-size:.82rem;color:#26A17B;word-break:break-all;margin-bottom:10px" id="usdtPledgeVaultBox">Loading vault address…</div>
+          <input type="text" id="usdtPledgeBnbAddr" class="input" placeholder="Your BNB sending address (0x...)" autocomplete="off">
+          <button class="btn btn--primary mt8" id="usdtPledgeRegisterBtn">📋 Register Address</button>
+        </div>
+        <div id="usdtPledgeDone" style="display:none;margin-top:12px">
+          <p style="color:var(--muted);font-size:.85rem">✅ Address registered! Set a PIN to create your V1 wallet — then send USDT from your registered address to the vault.</p>
+          <input type="password" id="usdtPledgePin" class="input mt8" placeholder="New PIN (4-8 digits)" autocomplete="new-password">
+          <input type="password" id="usdtPledgePinConfirm" class="input mt8" placeholder="Confirm PIN" autocomplete="new-password">
+          <button class="btn btn--primary mt8" id="usdtPledgeCreateV1Btn">🔑 Create V1 Wallet</button>
+        </div>
+        <div id="usdtPledgeErr" class="banner banner--error hidden"></div>
       </div>
 
       <!-- Pledge Secret tab (HMAC/v0 wallet migration) -->
@@ -499,10 +518,12 @@ async function showImport(addingExtra = false) {
 
   // Tab switching (Create / Kit / Pledge)
   function activateTab(name) {
-    const panes = { create: 'paneCreate', kit: 'paneKit', btcpledge: 'paneBtcPledge', pledge: 'panePledge' };
-    const tabs  = { create: 'tabCreate',  kit: 'tabKit',  btcpledge: 'tabBtcPledge',  pledge: 'tabPledge'  };
+    const panes = { create: 'paneCreate', kit: 'paneKit', btcpledge: 'paneBtcPledge', usdtpledge: 'paneUsdtPledge', pledge: 'panePledge' };
+    const tabs  = { create: 'tabCreate',  kit: 'tabKit',  btcpledge: 'tabBtcPledge',  usdtpledge: 'tabUsdtPledge' };
     for (const k of Object.keys(panes)) {
       document.getElementById(panes[k]).style.display = (k === name) ? '' : 'none';
+    }
+    for (const k of Object.keys(tabs)) {
       document.getElementById(tabs[k]).style.background = (k === name) ? 'var(--accent)' : '';
       document.getElementById(tabs[k]).style.color = (k === name) ? '#fff' : '';
     }
@@ -510,7 +531,8 @@ async function showImport(addingExtra = false) {
   document.getElementById('tabCreate').addEventListener('click', () => activateTab('create'));
   document.getElementById('tabKit').addEventListener('click', () => activateTab('kit'));
   document.getElementById('tabBtcPledge').addEventListener('click', () => { activateTab('btcpledge'); loadBtcPledgeVault(); });
-  document.getElementById('tabPledge').addEventListener('click', () => activateTab('pledge'));
+  document.getElementById('tabUsdtPledge').addEventListener('click', () => { activateTab('usdtpledge'); loadUsdtPledgeVault(); });
+  document.getElementById('showPledgeSecretBtn').addEventListener('click', () => activateTab('pledge'));
 
   // ── Create New Wallet ──
   let generatedKeypair = null;
@@ -702,6 +724,103 @@ async function showImport(addingExtra = false) {
         pdfMsg.style.cssText = 'margin:8px 0;padding:8px;background:#0d0a1a;border:1px solid var(--accent);border-radius:6px;font-size:.82rem;text-align:center';
         pdfMsg.innerHTML = `📄 <a href="${API_WRITE}${d.pdf_url}" target="_blank" style="color:var(--accent)">Download PDF Contract (LSB steganography)</a>`;
         document.getElementById('btcPledgeErr')?.parentNode?.insertBefore(pdfMsg, document.getElementById('btcPledgeErr'));
+      }
+      await promptFaceID(canonical, migratedPrivHex);
+      showWallet();
+    } catch (e) {
+      errEl.textContent = 'Network error: ' + e.message; errEl.classList.remove('hidden');
+    } finally { btn.disabled = false; btn.textContent = '🔑 Create V1 Wallet'; }
+  });
+
+  // ── USDT / BNB Pledge (new wallet via USDT on BSC) ──
+  let usdtPledgeSecret = null;
+  async function loadUsdtPledgeVault() {
+    const box = document.getElementById('usdtPledgeVaultBox');
+    if (!box || box.dataset.loaded) return;
+    try {
+      const r = await fetch(`${API_WRITE}/api/pledge/bnb/quote`);
+      const d = await r.json().catch(() => ({}));
+      if (r.ok && d.ok !== false) {
+        box.innerHTML = `Send <b>min ${d.min_usdt ?? 10} USDT</b> (BEP20) to:<br><span style="word-break:break-all">${d.vault_address || '—'}</span><br><small style="color:var(--muted)">Rate: 1 USDT ≈ ${d.usdt_thr_rate ?? 100} THR</small>`;
+        box.dataset.loaded = '1';
+      } else {
+        box.textContent = 'Vault not configured yet.';
+      }
+    } catch (e) {
+      box.textContent = 'Network error loading vault.';
+    }
+  }
+
+  document.getElementById('usdtPledgeRegisterBtn').addEventListener('click', async () => {
+    const bnbAddr = document.getElementById('usdtPledgeBnbAddr')?.value?.trim();
+    const errEl = document.getElementById('usdtPledgeErr');
+    errEl.classList.add('hidden');
+    if (!bnbAddr || !/^0x[a-fA-F0-9]{40}$/.test(bnbAddr)) {
+      errEl.textContent = 'Enter a valid BNB address (0x...)'; errEl.classList.remove('hidden'); return;
+    }
+    const btn = document.getElementById('usdtPledgeRegisterBtn');
+    btn.disabled = true; btn.textContent = 'Registering…';
+    try {
+      const r = await fetch(`${API_WRITE}/api/pledge/bnb/register`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bnb_address: bnbAddr })  // no thr_address → new user path
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok) {
+        errEl.textContent = 'Registration failed: ' + (d.error || 'unknown');
+        errEl.classList.remove('hidden'); return;
+      }
+      usdtPledgeSecret = d.secret_seed || null;
+      document.getElementById('usdtPledgeStep1').style.display = 'none';
+      document.getElementById('usdtPledgeDone').style.display = '';
+    } catch (e) {
+      errEl.textContent = 'Network error: ' + e.message; errEl.classList.remove('hidden');
+    } finally { btn.disabled = false; btn.textContent = '📋 Register Address'; }
+  });
+
+  document.getElementById('usdtPledgeCreateV1Btn').addEventListener('click', async () => {
+    const pin = document.getElementById('usdtPledgePin')?.value?.trim();
+    const pin2 = document.getElementById('usdtPledgePinConfirm')?.value?.trim();
+    const errEl = document.getElementById('usdtPledgeErr');
+    errEl.classList.add('hidden');
+    if (!pin || pin.length < 4) { errEl.textContent = 'PIN must be 4-8 digits'; errEl.classList.remove('hidden'); return; }
+    if (pin !== pin2) { errEl.textContent = 'PINs do not match'; errEl.classList.remove('hidden'); return; }
+    if (!usdtPledgeSecret) { errEl.textContent = 'No pledge secret — register your BNB address first'; errEl.classList.remove('hidden'); return; }
+    const btn = document.getElementById('usdtPledgeCreateV1Btn');
+    btn.disabled = true; btn.textContent = 'Creating…';
+    try {
+      const r = await fetch(`${API_WRITE}/api/wallet/v1/pledge-migrate`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ send_secret: usdtPledgeSecret, pin })
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok) {
+        errEl.textContent = 'V1 creation failed: ' + (d.error || d.detail || 'unknown');
+        errEl.classList.remove('hidden'); return;
+      }
+      const canonical = d.canonical_v1_address;
+      const kitObj = d.recovery_kit ? (() => { try { return JSON.parse(d.recovery_kit); } catch { return { canonical_v1_address: canonical }; } })() : { canonical_v1_address: canonical };
+      upsertAccount(canonical, kitObj, shortAddr(canonical));
+      setActiveAddr(canonical);
+      let migratedPrivHex = null;
+      try {
+        const encBlob = kitObj.encrypted_private_key_backup ?? kitObj.wallet_v1_encrypted_priv ?? kitObj.encrypted_private_key ?? kitObj.enc_key;
+        if (encBlob) migratedPrivHex = await decryptBlob(encBlob, pin);
+      } catch {}
+      if (migratedPrivHex) unlocked.set(canonical, { privHex: migratedPrivHex });
+      if (d.recovery_kit) {
+        const blob = new Blob([d.recovery_kit], { type: 'application/json' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `thr-recovery-kit-${canonical.slice(0, 10)}.json`;
+        a.click();
+        URL.revokeObjectURL(a.href);
+      }
+      if (d.pdf_url) {
+        const pdfMsg = document.createElement('div');
+        pdfMsg.style.cssText = 'margin:8px 0;padding:8px;background:#0d0a1a;border:1px solid var(--accent);border-radius:6px;font-size:.82rem;text-align:center';
+        pdfMsg.innerHTML = `📄 <a href="${API_WRITE}${d.pdf_url}" target="_blank" style="color:var(--accent)">Download PDF Contract (LSB steganography)</a>`;
+        document.getElementById('usdtPledgeErr')?.parentNode?.insertBefore(pdfMsg, document.getElementById('usdtPledgeErr'));
       }
       await promptFaceID(canonical, migratedPrivHex);
       showWallet();

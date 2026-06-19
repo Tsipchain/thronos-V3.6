@@ -275,7 +275,7 @@ export async function getBnbPledgeQuote(): Promise<{ ok: boolean; vault_address?
   return request('/api/pledge/bnb/quote');
 }
 
-export async function registerBnbAddress(params: { thr_address: string; bnb_address: string }): Promise<{ ok: boolean; error?: string }> {
+export async function registerBnbAddress(params: { thr_address?: string; bnb_address: string; passphrase?: string }): Promise<{ ok: boolean; thr_address?: string; vault_address?: string; secret_seed?: string; pdf_filename?: string; error?: string }> {
   return request('/api/pledge/bnb/register', { method: 'POST', body: JSON.stringify(params) });
 }
 

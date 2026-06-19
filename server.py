@@ -26837,28 +26837,84 @@ def api_pledge_bnb_quote():
 @app.route("/api/pledge/bnb/register", methods=["POST"])
 def api_pledge_bnb_register():
     """
-    Register the BNB-chain (BSC) address a user will send USDT from, linking
-    it to their THR address so the watcher can credit the right wallet.
-    Called by the mobile app / PWA before the user sends USDT.
+    Register the BNB-chain (BSC) address a user will send USDT from.
+
+    Two modes:
+    - thr_address provided  → existing wallet holder (just registers BNB→THR mapping)
+    - thr_address omitted   → new user: generates v0 THR address, send_secret, PDF
+                              contract with LSB-embedded secret, and pledge record so
+                              pledge-migrate can create a V1 wallet inline.
     """
     data = request.get_json() or {}
     thr_address = (data.get("thr_address") or "").strip().upper()
     bnb_address = (data.get("bnb_address") or "").strip().lower()
+    passphrase  = (data.get("passphrase") or "").strip() or None
 
-    if not validate_thr_address(thr_address):
-        return jsonify(ok=False, error="invalid_thr_address"), 400
     if not re.match(r"^0x[a-f0-9]{40}$", bnb_address):
         return jsonify(ok=False, error="invalid_bnb_address"), 400
+    if thr_address and not validate_thr_address(thr_address):
+        return jsonify(ok=False, error="invalid_thr_address"), 400
+
+    secret_seed  = None
+    pdf_filename = None
+
+    if not thr_address:
+        # New-user path: generate deterministic v0 THR address + pledge record + PDF
+        timestamp    = str(int(time.time() * 1000))
+        thr_address  = generate_thr_address(bnb_address, timestamp)
+        pledge_text  = "USDT/BNB Pledge — Thronos Network"
+        phash        = hashlib.sha256((bnb_address + pledge_text).encode()).hexdigest()
+        send_seed    = secrets.token_hex(16)
+        send_seed_hash  = hashlib.sha256(send_seed.encode()).hexdigest()
+        auth_string     = f"{send_seed}:{passphrase}:auth" if passphrase else f"{send_seed}:auth"
+        send_auth_hash  = hashlib.sha256(auth_string.encode()).hexdigest()
+
+        chain  = load_json(CHAIN_FILE, [])
+        height = len(chain)
+
+        try:
+            pdf_name = create_secure_pdf_contract(
+                bnb_address, pledge_text, thr_address, phash, height,
+                send_seed, CONTRACTS_DIR, passphrase
+            )
+        except Exception as _pdf_err:
+            logger.error(f"USDT pledge PDF generation failed: {_pdf_err}")
+            pdf_name = f"pledge_{thr_address}.pdf"
+
+        pledge_entry = {
+            "bnb_address":         bnb_address,
+            "pledge_type":         "usdt_bnb",
+            "pledge_text":         pledge_text,
+            "timestamp":           time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+            "pledge_hash":         phash,
+            "thr_address":         thr_address,
+            "send_seed_hash":      send_seed_hash,
+            "send_auth_hash":      send_auth_hash,
+            "has_passphrase":      bool(passphrase),
+            "pending_confirmation": True,
+            "pdf_filename":        pdf_name,
+        }
+        pledges = load_json(PLEDGE_CHAIN, [])
+        pledges.append(pledge_entry)
+        save_json(PLEDGE_CHAIN, pledges)
+
+        secret_seed  = send_seed
+        pdf_filename = pdf_name
 
     registry_file = os.path.join(DATA_DIR, "bnb_user_registry.json")
     registry = load_json(registry_file, {})
     registry[bnb_address] = {
-        "thr_address": thr_address,
+        "thr_address":   thr_address,
         "registered_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
     }
     save_json(registry_file, registry)
 
-    return jsonify(ok=True, thr_address=thr_address, bnb_address=bnb_address, vault_address=BNB_PLEDGE_VAULT), 200
+    resp = dict(ok=True, thr_address=thr_address, bnb_address=bnb_address, vault_address=BNB_PLEDGE_VAULT)
+    if secret_seed:
+        resp["secret_seed"]  = secret_seed
+    if pdf_filename:
+        resp["pdf_filename"] = pdf_filename
+    return jsonify(**resp), 200
 
 
 @app.route("/api/usdt/pledge", methods=["POST"])

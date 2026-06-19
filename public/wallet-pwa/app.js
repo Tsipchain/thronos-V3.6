@@ -1154,7 +1154,12 @@ async function unlockPin(address, pin) {
       const envelope = await wrapForSession(address, privHex);
       LS.setObj(`thr_env_${address}`, envelope);
     }
-    await showWallet();
+    // Offer Face ID on first PIN unlock if not yet enrolled
+    if (!fid?.credId && await webauthnAvailable()) {
+      await promptFaceID(address, privHex);
+    } else {
+      await showWallet();
+    }
   } catch (err) {
     if (btn) { btn.disabled = false; btn.textContent = 'Unlock with PIN'; }
     setError(err.message);

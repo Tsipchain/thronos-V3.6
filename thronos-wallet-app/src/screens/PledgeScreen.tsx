@@ -10,6 +10,11 @@ import * as Clipboard from 'expo-clipboard';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS } from '../constants/theme';
 import { CONFIG } from '../constants/config';
 import { submitPledge, getPledgeStatus, pledgeMigrate } from '../services/api';
+import {
+  importWalletFromRecoveryJson,
+  isBiometricAvailable, authenticateWithBiometrics, setBiometricEnabled,
+} from '../services/wallet';
+import { useStore } from '../store/useStore';
 
 // BTC Pledge Entry — The gateway to Thronos Network
 // Users send min BTC fee to the pledge address, watcher verifies,
@@ -18,6 +23,7 @@ import { submitPledge, getPledgeStatus, pledgeMigrate } from '../services/api';
 type Step = 'intro' | 'send_btc' | 'verify' | 'complete' | 'v1_ready';
 
 export default function PledgeScreen({ navigation }: any) {
+  const { setWallet } = useStore();
   const [step, setStep] = useState<Step>('intro');
   const [btcAddress, setBtcAddress] = useState('');
   const [pledgeText, setPledgeText] = useState('');
@@ -99,6 +105,11 @@ export default function PledgeScreen({ navigation }: any) {
     try {
       const res = await pledgeMigrate({ send_secret: secretSeed, pin });
       if (res.ok && res.canonical_v1_address) {
+        // Store private key in SecureStore so the wallet is usable immediately
+        if (res.recovery_kit) {
+          try { await importWalletFromRecoveryJson(res.recovery_kit, pin); } catch {}
+        }
+        setWallet({ isConnected: true, address: res.canonical_v1_address, backedUp: true });
         setV1Address(res.canonical_v1_address);
         if (res.pdf_url) setV1PdfUrl(`${CONFIG.API_URL}${res.pdf_url}`);
         setStep('v1_ready');
@@ -111,6 +122,33 @@ export default function PledgeScreen({ navigation }: any) {
       setLoading(false);
     }
   }, [pin, pinConfirm, secretSeed]);
+
+  const handleGoToWallet = useCallback(async () => {
+    const hasBio = await isBiometricAvailable();
+    if (hasBio) {
+      Alert.alert(
+        'Enable Face ID',
+        'Use Face ID to unlock and sign transactions without typing your PIN.',
+        [
+          {
+            text: 'Enable',
+            onPress: async () => {
+              const ok = await authenticateWithBiometrics('Set up Face ID for Thronos');
+              if (ok) await setBiometricEnabled(true);
+              navigation.reset({ index: 0, routes: [{ name: 'MainTabs' }] });
+            },
+          },
+          {
+            text: 'Skip',
+            style: 'cancel',
+            onPress: () => navigation.reset({ index: 0, routes: [{ name: 'MainTabs' }] }),
+          },
+        ],
+      );
+    } else {
+      navigation.reset({ index: 0, routes: [{ name: 'MainTabs' }] });
+    }
+  }, [navigation]);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -367,7 +405,7 @@ export default function PledgeScreen({ navigation }: any) {
 
             <TouchableOpacity
               style={styles.primaryBtn}
-              onPress={() => navigation.navigate('MainTabs')}
+              onPress={handleGoToWallet}
             >
               <Ionicons name="wallet" size={20} color={COLORS.background} />
               <Text style={styles.primaryBtnText}>Go to Wallet</Text>

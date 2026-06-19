@@ -10,6 +10,10 @@ import * as Clipboard from 'expo-clipboard';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS } from '../constants/theme';
 import { CONFIG } from '../constants/config';
 import { getBnbPledgeQuote, registerBnbAddress, getBnbPledgeStatus, pledgeMigrate } from '../services/api';
+import {
+  importWalletFromRecoveryJson,
+  isBiometricAvailable, authenticateWithBiometrics, setBiometricEnabled,
+} from '../services/wallet';
 import { useStore } from '../store/useStore';
 
 // USDT-on-BNB-Chain Pledge — gateway to Thronos Network.
@@ -25,7 +29,7 @@ import { useStore } from '../store/useStore';
 type Step = 'intro' | 'register' | 'pending_payment' | 'setup_v1' | 'v1_ready' | 'done';
 
 export default function UsdtPledgeScreen({ navigation }: any) {
-  const { wallet } = useStore();
+  const { wallet, setWallet } = useStore();
   const isNewUser = !wallet.address;
 
   const [step, setStep] = useState<Step>('intro');
@@ -135,6 +139,11 @@ export default function UsdtPledgeScreen({ navigation }: any) {
     try {
       const res = await pledgeMigrate({ send_secret: secretSeed, pin });
       if (res.ok && res.canonical_v1_address) {
+        // Store private key in SecureStore so the wallet is usable immediately
+        if (res.recovery_kit) {
+          try { await importWalletFromRecoveryJson(res.recovery_kit, pin); } catch {}
+        }
+        setWallet({ isConnected: true, address: res.canonical_v1_address, backedUp: true });
         setV1Address(res.canonical_v1_address);
         if (res.pdf_url) setV1PdfUrl(`${CONFIG.API_URL}${res.pdf_url}`);
         setStep('v1_ready');
@@ -147,6 +156,33 @@ export default function UsdtPledgeScreen({ navigation }: any) {
       setLoading(false);
     }
   }, [pin, pinConfirm, secretSeed]);
+
+  const handleGoToWallet = useCallback(async () => {
+    const hasBio = await isBiometricAvailable();
+    if (hasBio) {
+      Alert.alert(
+        'Enable Face ID',
+        'Use Face ID to unlock and sign transactions without typing your PIN.',
+        [
+          {
+            text: 'Enable',
+            onPress: async () => {
+              const ok = await authenticateWithBiometrics('Set up Face ID for Thronos');
+              if (ok) await setBiometricEnabled(true);
+              navigation.reset({ index: 0, routes: [{ name: 'MainTabs' }] });
+            },
+          },
+          {
+            text: 'Skip',
+            style: 'cancel',
+            onPress: () => navigation.reset({ index: 0, routes: [{ name: 'MainTabs' }] }),
+          },
+        ],
+      );
+    } else {
+      navigation.reset({ index: 0, routes: [{ name: 'MainTabs' }] });
+    }
+  }, [navigation]);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -399,7 +435,7 @@ export default function UsdtPledgeScreen({ navigation }: any) {
 
             <TouchableOpacity
               style={styles.primaryBtn}
-              onPress={() => navigation.navigate('MainTabs')}
+              onPress={handleGoToWallet}
             >
               <Ionicons name="wallet" size={20} color={COLORS.background} />
               <Text style={styles.primaryBtnText}>Go to Wallet</Text>
@@ -422,10 +458,10 @@ export default function UsdtPledgeScreen({ navigation }: any) {
 
             <TouchableOpacity
               style={styles.primaryBtn}
-              onPress={() => navigation.navigate('MainTabs')}
+              onPress={() => navigation.goBack()}
             >
               <Ionicons name="wallet" size={20} color={COLORS.background} />
-              <Text style={styles.primaryBtnText}>Go to Wallet</Text>
+              <Text style={styles.primaryBtnText}>Done</Text>
             </TouchableOpacity>
           </>
         )}

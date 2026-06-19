@@ -165,7 +165,7 @@ def get_vault_transfers(from_block: int = None) -> List[Dict]:
     """
     if not BNB_PLEDGE_VAULT or not USDT_BNB_CONTRACT:
         logger.warning("BNB_PLEDGE_VAULT or USDT_BNB_CONTRACT not configured")
-        return []
+        return [], 0
 
     logger.info(f"Polling BSC for USDT transfers to vault: {BNB_PLEDGE_VAULT}")
 
@@ -185,6 +185,10 @@ def get_vault_transfers(from_block: int = None) -> List[Dict]:
             last_scanned = load_last_scanned_block()
             from_block = max(0, last_scanned + 1, safe_block - BSC_BACKFILL_BLOCKS)
 
+        if from_block > safe_block:
+            logger.info(f"Already up to date (last_scanned={from_block - 1} >= safe_block={safe_block}), skipping")
+            return [], safe_block
+
         logger.info(f"Querying blocks {from_block} to {safe_block}")
 
         # eth_getLogs: filter for Transfer events to vault address
@@ -203,11 +207,11 @@ def get_vault_transfers(from_block: int = None) -> List[Dict]:
 
         if not logs:
             logger.info("No USDT transfers to vault found")
-            return []
+            return [], safe_block
 
         if not isinstance(logs, list):
             logger.error(f"Unexpected logs format: {logs}")
-            return []
+            return [], safe_block
 
         result = []
         for log in logs:

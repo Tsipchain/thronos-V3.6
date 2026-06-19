@@ -33442,14 +33442,25 @@ def api_v1_pools_add_liquidity_crosschain():
 def api_v1_pools_add_liquidity_confirm():
     """
     Watcher/gateway confirms external deposit and commits liquidity.
-    Called by watcher after verifying external blockchain transaction.
+
+    CRITICAL: Watcher MUST verify the external_txid transfer details BEFORE calling this:
+      1. Token address = intent.token_contract
+      2. Amount transferred ≈ intent.amount_b (within slippage)
+      3. Recipient = vault_address (from intent)
+      4. Sender = user's EVM address (from intent.evm_address)
+      5. Chain = intent.external_chain
+
+    This endpoint assumes watcher has already verified transfer validity.
+    Do NOT accept arbitrary external_txid without validating these details.
 
     Request body:
     {
         "intent_id": "INTENT-...",
-        "external_txid": "0x...",  // from external blockchain
-        "gateway_secret": "..."     // gateway authentication
+        "external_txid": "0x...",     // watcher-verified blockchain tx hash
+        "gateway_secret": "..."       // required — blocks if not configured
     }
+
+    Returns: confirms intent, deducts THR, mints LP shares
     """
     data = request.get_json() or {}
     intent_id = (data.get("intent_id") or "").strip()
@@ -33459,28 +33470,47 @@ def api_v1_pools_add_liquidity_confirm():
     if not intent_id or not external_txid:
         return jsonify(ok=False, error="missing_fields"), 400
 
-    # TODO: Validate gateway_secret (environment-based gateway auth)
-    # For now, gate on GATEWAY_SECRET environment variable
+    # Gateway auth — required when GATEWAY_SECRET is configured
     configured_secret = os.getenv("GATEWAY_SECRET", "").strip()
-    if configured_secret and gateway_secret != configured_secret:
-        logger.warning("[add_liquidity_confirm] invalid_gateway_secret")
-        return jsonify(ok=False, error="invalid_gateway_secret"), 401
+    if configured_secret:
+        if not gateway_secret:
+            logger.warning("[add_liquidity_confirm] missing_gateway_secret")
+            return jsonify(ok=False, error="missing_gateway_secret",
+                           message="GATEWAY_SECRET required"), 401
+        if gateway_secret != configured_secret:
+            logger.warning("[add_liquidity_confirm] invalid_gateway_secret attempt")
+            return jsonify(ok=False, error="invalid_gateway_secret"), 401
+    else:
+        logger.warning("[add_liquidity_confirm] GATEWAY_SECRET not configured — refusing all confirm requests for security")
+        return jsonify(ok=False, error="gateway_not_configured",
+                       message="Pool gateway not configured"), 500
 
-    # Load intent
+    # Load intents
     intents_file = os.path.join(DATA_DIR, "pool_liquidity_intents.json")
     intents = load_json(intents_file, [])
     intent = next((i for i in intents if i.get("intent_id") == intent_id), None)
     if not intent:
         return jsonify(ok=False, error="intent_not_found"), 404
 
-    # Verify intent is still pending and not expired
+    # Verify intent status and expiry BEFORE any mutations
     if intent.get("status") != "pending_external_deposit":
         return jsonify(ok=False, error="intent_not_pending",
                        message=f"Intent status is {intent.get('status')}"), 400
+
     if time.time() > intent.get("expires_at", 0):
         intent["status"] = "expired"
         save_json(intents_file, intents)
-        return jsonify(ok=False, error="intent_expired"), 410
+        logger.warning("[add_liquidity_confirm] intent_expired intent=%s", intent_id)
+        return jsonify(ok=False, error="intent_expired",
+                       message="Intent expired — no confirmation possible"), 410
+
+    # Prevent duplicate external_txid confirmation (same txid cannot confirm multiple intents)
+    for other_intent in intents:
+        if other_intent.get("intent_id") != intent_id and other_intent.get("external_txid") == external_txid:
+            logger.warning("[add_liquidity_confirm] duplicate_external_txid txid=%s intent1=%s intent2=%s",
+                           external_txid, other_intent.get("intent_id"), intent_id)
+            return jsonify(ok=False, error="duplicate_external_txid",
+                           message="External transaction already used to confirm another intent"), 409
 
     # Extract intent data
     pool_id = intent.get("pool_id")
@@ -33491,9 +33521,19 @@ def api_v1_pools_add_liquidity_confirm():
     token_b = intent.get("token_b", "")
     chain = intent.get("external_chain", "")
 
-    # ── Commit mutations ──
+    # ── Pre-commit validation (before any mutations) ──
 
-    # 1. Deduct THR from ledger
+    # Validate pool exists
+    pools = load_pools()
+    pool = next((p for p in pools if p.get("id") == pool_id), None)
+    if not pool:
+        intent["status"] = "manual_review"
+        intent["error"] = "Pool not found at confirmation time"
+        save_json(intents_file, intents)
+        logger.warning("[add_liquidity_confirm] pool_not_found intent=%s", intent_id)
+        return jsonify(ok=False, error="pool_not_found_at_confirm"), 500
+
+    # Validate THR balance (before deducting)
     thr_ledger = load_json(LEDGER_FILE, {})
     thr_balance = float(thr_ledger.get(provider, 0.0))
     if thr_balance < amt_a:
@@ -33503,18 +33543,14 @@ def api_v1_pools_add_liquidity_confirm():
         logger.warning("[add_liquidity_confirm] insufficient_thr intent=%s provider=%s", intent_id, provider)
         return jsonify(ok=False, error="insufficient_thr_at_confirm",
                        message="THR balance changed since intent creation"), 400
+
+    # ── Commit mutations (all pre-checks passed) ──
+
+    # 1. Deduct THR from ledger
     thr_ledger[provider] = round(thr_balance - amt_a, 6)
     save_json(LEDGER_FILE, thr_ledger)
 
-    # 2. Load pool and update reserves + mint LP shares
-    pools = load_pools()
-    pool = next((p for p in pools if p.get("id") == pool_id), None)
-    if not pool:
-        intent["status"] = "manual_review"
-        intent["error"] = "Pool not found at confirmation time"
-        save_json(intents_file, intents)
-        logger.warning("[add_liquidity_confirm] pool_not_found intent=%s", intent_id)
-        return jsonify(ok=False, error="pool_not_found_at_confirm"), 500
+    # 2. Update pool reserves + mint LP shares
 
     reserves_a = float(pool.get("reserves_a", 0))
     reserves_b = float(pool.get("reserves_b", 0))

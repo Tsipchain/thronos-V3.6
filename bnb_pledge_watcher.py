@@ -174,7 +174,7 @@ def get_vault_transfers(from_block: int = None) -> List[Dict]:
         latest_block_resp = bsc_rpc_call("eth_blockNumber")
         if not latest_block_resp:
             logger.error("Failed to get latest block number")
-            return []
+            return [], 0
 
         latest_block = int(latest_block_resp, 16)
         # Only scan confirmed blocks (safe from reorg)
@@ -375,6 +375,7 @@ def watch_bnb_pledges():
     logger.info(f"Master node: {MASTER_NODE_URL}")
 
     processed_txs = load_processed_txs()
+    had_processing_failure = False
 
     # Get new USDT transfers to the vault
     vault_transfers, last_safe_block = get_vault_transfers()
@@ -408,12 +409,15 @@ def watch_bnb_pledges():
             processed_txs.append(txhash)
         else:
             logger.error(f"Failed to process USDT pledge: {txhash}")
+            had_processing_failure = True
             # Don't mark as processed so we can retry later
 
-    # Save processed txs and last scanned block (only after successful scan)
+    # Save processed txs and last scanned block (only if all transfers processed successfully)
     save_processed_txs(processed_txs)
-    if last_safe_block > 0:
+    if last_safe_block > 0 and not had_processing_failure:
         save_last_scanned_block(last_safe_block)
+    elif had_processing_failure:
+        logger.warning("Not advancing last_scanned_block because one or more transfers failed processing")
 
     logger.info(f"Watcher cycle complete. Processed {len(vault_transfers)} USDT transfers. Last scanned block: {last_safe_block}")
 

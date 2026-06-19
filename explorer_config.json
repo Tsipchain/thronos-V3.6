@@ -1,0 +1,89 @@
+{
+  "explorers": {
+    "bsc": {
+      "name": "BscScan",
+      "chain_name": "BNB Smart Chain",
+      "chain_id": 56,
+      "tx_url": "https://bscscan.com/tx/{txid}",
+      "address_url": "https://bscscan.com/address/{address}",
+      "token_url": "https://bscscan.com/token/{contract}",
+      "rpc": "https://bsc-dataseed.binance.org"
+    },
+    "base": {
+      "name": "BaseScan",
+      "chain_name": "Base",
+      "chain_id": 8453,
+      "tx_url": "https://basescan.org/tx/{txid}",
+      "address_url": "https://basescan.org/address/{address}",
+      "token_url": "https://basescan.org/token/{contract}",
+      "rpc": "https://mainnet.base.org"
+    },
+    "arbitrum": {
+      "name": "Arbiscan",
+      "chain_name": "Arbitrum",
+      "chain_id": 42161,
+      "tx_url": "https://arbiscan.io/tx/{txid}",
+      "address_url": "https://arbiscan.io/address/{address}",
+      "token_url": "https://arbiscan.io/token/{contract}",
+      "rpc": "https://arb1.arbitrum.io/rpc"
+    },
+    "eth": {
+      "name": "Etherscan",
+      "chain_name": "Ethereum",
+      "chain_id": 1,
+      "tx_url": "https://etherscan.io/tx/{txid}",
+      "address_url": "https://etherscan.io/address/{address}",
+      "token_url": "https://etherscan.io/token/{contract}",
+      "rpc": "https://eth.llamarpc.com"
+    },
+    "btc": {
+      "name": "BTC Explorer",
+      "chain_name": "Bitcoin",
+      "chain_id": null,
+      "tx_url": "https://blockstream.info/tx/{txid}",
+      "address_url": "https://blockstream.info/address/{address}",
+      "token_url": null,
+      "rpc": null
+    },
+    "thronos": {
+      "name": "Thronos Viewer",
+      "chain_name": "Thronos",
+      "chain_id": null,
+      "tx_url": "https://api.thronoschain.org/viewer#/tx/{txid}",
+      "address_url": "https://api.thronoschain.org/viewer#/address/{address}",
+      "token_url": null,
+      "rpc": "https://api.thronoschain.org"
+    }
+  },
+  "asset_contracts": {
+    "bsc": {
+      "USDT": "0x55d398326f99059fF775485246999027B3197955",
+      "USDC": "0x8AC76a51cc950d9822D68b83FE1Ad97B32Cd580d",
+      "BUSD": "0xe9e7cea3dedca5984780bafc599bd69add087d56"
+    },
+    "arbitrum": {
+      "USDT": "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9",
+      "USDC": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"
+    },
+    "base": {
+      "USDC": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+    }
+  },
+  "token_standards": {
+    "native": {
+      "decimals": 18,
+      "symbol": "native",
+      "description": "Native chain asset (BNB, ETH, etc)"
+    },
+    "BEP20": {
+      "decimals": 18,
+      "symbol": "BEP20",
+      "description": "Binance Smart Chain token standard"
+    },
+    "ERC20": {
+      "decimals": null,
+      "symbol": "ERC20",
+      "description": "Ethereum token standard (decimals vary)"
+    }
+  }
+}

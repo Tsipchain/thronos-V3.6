@@ -20532,21 +20532,22 @@ def api_wallet_tokens(thr_addr):
     }), 200
 
 
-@app.route("/viewer", methods=["GET"])
-def viewer():
+@app.route("/v1/viewer", methods=["GET"])
+def v1_viewer():
     """
-    Thronos Viewer - blockchain explorer + cross-chain activity dashboard.
+    Thronos Wallet Viewer — wallet history + cross-chain activity dashboard.
+    Available at /v1/viewer (not /viewer which is the block explorer).
 
     Query params:
     - address: THR address to view (optional)
     - tab: Default tab (all, native_thr, tokens, pledges, pools, bridge, crosschain, withdrawals, failed)
 
     Displays:
-    - All transactions across all chains
+    - All wallet transactions across all chains
     - Native THR transfers
-    - Token transfers (ERC20, BEP20, etc.)
-    - Pledges (BTC, USDT)
-    - Liquidity pool operations
+    - Token transfers (ERC20, BEP20)
+    - Pledges (BTC, USDT-on-BNB)
+    - Liquidity pool operations (seed, withdraw)
     - Bridge/cross-chain activity
     - Withdrawal queue status
     - Failed/manual review items
@@ -20559,10 +20560,10 @@ def viewer():
             "viewer.html",
             address=address,
             default_tab=default_tab,
-            api_url=request.base_url.rstrip("/")
+            api_url=request.url_root.rstrip("/")
         )
     except Exception as e:
-        logger.error(f"Error rendering viewer: {e}")
+        logger.error(f"Error rendering v1_viewer: {e}")
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
@@ -20636,6 +20637,21 @@ def api_viewer_transactions():
     except Exception as e:
         logger.error(f"Error in api_viewer_transactions: {e}")
         return jsonify({"ok": False, "error": str(e)}), 400
+
+
+@app.route("/api/v1/explorer/config", methods=["GET"])
+def api_explorer_config():
+    """
+    Return the public explorer configuration (explorer URLs only, no RPC URLs or secrets).
+    Used by PWA and mobile to build explorer links for transactions.
+    """
+    cfg = load_explorer_config()
+    return jsonify({
+        "ok": True,
+        "explorers": cfg.get("explorers", {}),
+        "asset_contracts": cfg.get("asset_contracts", {}),
+        "token_standards": cfg.get("token_standards", {}),
+    }), 200
 
 
 @app.route("/api/wallet/history/<thr_addr>", methods=["GET"])

@@ -20507,6 +20507,183 @@ def api_wallet_tokens(thr_addr):
     }), 200
 
 
+@app.route("/viewer", methods=["GET"])
+def viewer():
+    """
+    Thronos Viewer - blockchain explorer + cross-chain activity dashboard.
+
+    Query params:
+    - address: THR address to view (optional)
+    - tab: Default tab (all, native_thr, tokens, pledges, pools, bridge, crosschain, withdrawals, failed)
+
+    Displays:
+    - All transactions across all chains
+    - Native THR transfers
+    - Token transfers (ERC20, BEP20, etc.)
+    - Pledges (BTC, USDT)
+    - Liquidity pool operations
+    - Bridge/cross-chain activity
+    - Withdrawal queue status
+    - Failed/manual review items
+    """
+    try:
+        address = request.args.get("address", "").strip()
+        default_tab = request.args.get("tab", "all").lower()
+
+        return render_template(
+            "viewer.html",
+            address=address,
+            default_tab=default_tab,
+            api_url=request.base_url.rstrip("/")
+        )
+    except Exception as e:
+        logger.error(f"Error rendering viewer: {e}")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/v1/viewer/transactions", methods=["GET"])
+def api_viewer_transactions():
+    """
+    Get transactions for Thronos viewer with filtering and pagination.
+
+    Query params:
+    - address: THR address (required)
+    - tab: Filter by tab (all, native_thr, tokens, pledges, pools, bridge, crosschain, withdrawals, failed)
+    - chain: Filter by chain (thronos, bsc, base, arbitrum, eth, btc)
+    - status: Filter by status (pending, confirmed, failed, manual_review)
+    - limit: Max results (default 100, max 500)
+    - offset: Pagination offset (default 0)
+
+    Returns viewer-compatible transaction list with explorer links.
+    """
+    try:
+        address = request.args.get("address", "").strip()
+        tab = request.args.get("tab", "all").lower()
+        chain = request.args.get("chain", "").lower()
+        status = request.args.get("status", "").lower()
+        limit = min(int(request.args.get("limit", 100)), 500)
+        offset = int(request.args.get("offset", 0))
+
+        if not address:
+            return jsonify({"ok": False, "error": "Missing address"}), 400
+
+        # Get wallet history
+        history = get_wallet_history(address, limit=limit * 3)
+
+        # Apply tab filter
+        tab_filters = {
+            "native_thr": lambda e: e.get("asset") == "THR" and e.get("chain") == "thronos",
+            "tokens": lambda e: e.get("asset") != "THR" and e.get("event_type") in ("token_send", "token_receive"),
+            "pledges": lambda e: e.get("event_type") == "pledge",
+            "pools": lambda e: e.get("event_type") in ("pool_seed", "pool_withdraw"),
+            "bridge": lambda e: e.get("event_type") == "bridge",
+            "crosschain": lambda e: e.get("event_type") == "crosschain_withdraw",
+            "withdrawals": lambda e: e.get("event_type") in ("crosschain_withdraw", "gateway_payout"),
+            "failed": lambda e: e.get("status") in ("failed", "manual_review"),
+        }
+
+        if tab != "all" and tab in tab_filters:
+            history = [e for e in history if tab_filters[tab](e)]
+
+        # Apply chain filter
+        if chain:
+            history = [e for e in history if e.get("chain") == chain]
+
+        # Apply status filter
+        if status:
+            history = [e for e in history if e.get("status") == status]
+
+        # Apply pagination
+        total = len(history)
+        history = history[offset : offset + limit]
+
+        return jsonify({
+            "ok": True,
+            "address": address,
+            "tab": tab,
+            "transactions": history,
+            "total": total,
+            "offset": offset,
+            "limit": limit,
+            "last_updated": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error in api_viewer_transactions: {e}")
+        return jsonify({"ok": False, "error": str(e)}), 400
+
+
+@app.route("/api/wallet/history/<thr_addr>", methods=["GET"])
+def api_wallet_history(thr_addr):
+    """
+    Returns transaction history for a wallet.
+
+    Query params:
+    - limit: max results (default 100)
+    - event_type: filter by event type (pledge, token_send, pool_seed, etc)
+    - chain: filter by chain (bsc, base, arbitrum, etc)
+    - status: filter by status (pending, confirmed, sent, failed, etc)
+
+    Returns:
+    {
+        "ok": true,
+        "address": "THR...",
+        "history": [
+            {
+                "id": "...",
+                "event_type": "pledge",
+                "chain": "bsc",
+                "network_label": "BNB Smart Chain",
+                "asset": "USDT",
+                "token_standard": "BEP20",
+                "amount": 10.0,
+                "status": "confirmed",
+                "direction": "in",
+                "internal_txid": "thr_...",
+                "external_txid": "0x...",
+                "explorer_url": "https://bscscan.com/tx/0x...",
+                "timestamp": 1234567890,
+                "created_at": "2024-01-01 12:34:56 UTC"
+            }
+        ],
+        "total": 5
+    }
+    """
+    try:
+        limit = min(int(request.args.get("limit", 100)), 500)
+        event_type = request.args.get("event_type", "").strip()
+        chain = request.args.get("chain", "").strip()
+        status = request.args.get("status", "").strip()
+
+        history = get_wallet_history(thr_addr, limit=limit * 2)  # Get extra to filter
+
+        # Apply filters
+        if event_type:
+            history = [e for e in history if e.get("event_type") == event_type]
+        if chain:
+            history = [e for e in history if e.get("chain") == chain]
+        if status:
+            history = [e for e in history if e.get("status") == status]
+
+        # Trim to limit
+        history = history[:limit]
+
+        return jsonify({
+            "ok": True,
+            "address": thr_addr,
+            "history": history,
+            "total": len(history),
+            "last_updated": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error fetching wallet history: {e}")
+        return jsonify({
+            "ok": False,
+            "error": str(e)
+        }), 400
+
+
 @app.route("/api/balances", methods=["GET"])
 def api_balances():
     address = (request.args.get("address") or request.args.get("wallet") or "").strip()
@@ -27168,6 +27345,57 @@ def api_usdt_pledge():
     except Exception:
         pass
 
+    # Add wallet history events
+    current_ts = time.time()
+
+    # 1. Record USDT pledge on BNB Chain (external)
+    add_wallet_history_event(
+        thr_address=thr_address,
+        event_type="pledge",
+        chain="bsc",
+        asset="USDT",
+        amount=usdt_amount,
+        status="confirmed",
+        direction="in",
+        internal_txid=tx_id,
+        external_txid=bnb_txid,
+        token_contract=USDT_BNB_CONTRACT,
+        token_standard="BEP20",
+        network_label="BNB Smart Chain",
+        timestamp=current_ts,
+    )
+
+    # 2. Record THR credit (internal Thronos transaction)
+    add_wallet_history_event(
+        thr_address=thr_address,
+        event_type="token_receive",
+        chain="thronos",
+        asset="THR",
+        amount=thr_amount,
+        status="credited",
+        direction="in",
+        internal_txid=tx_id,
+        token_standard="native",
+        network_label="Thronos",
+        timestamp=current_ts,
+    )
+
+    # 3. Record pool seed event (if pool received funds)
+    if pool_thr > 0:
+        add_wallet_history_event(
+            thr_address=thr_address,
+            event_type="pool_seed",
+            chain="thronos",
+            asset="THR",
+            amount=pool_thr,
+            status="pool_seeded",
+            direction="pool",
+            internal_txid=tx_id,
+            token_standard="native",
+            network_label="Thronos",
+            timestamp=current_ts,
+        )
+
     return jsonify(
         ok=True,
         tx_id=tx_id,
@@ -27326,6 +27554,117 @@ WITHDRAW_CHAIN_CONFIG: dict = {
 
 WITHDRAW_SUPPORTED_TOKENS = {"USDT", "USDC"}
 WITHDRAW_QUEUE_FILE = os.path.join(DATA_DIR, "withdraw_queue.json")
+
+# Wallet history and cross-chain audit ledger
+WALLET_HISTORY_FILE = os.path.join(DATA_DIR, "wallet_history.json")
+EXPLORER_CONFIG_FILE = os.path.join(BASE_DIR, "explorer_config.json")
+
+
+def load_explorer_config() -> dict:
+    """Load centralized explorer configuration."""
+    try:
+        if os.path.exists(EXPLORER_CONFIG_FILE):
+            with open(EXPLORER_CONFIG_FILE, 'r') as f:
+                return json.load(f)
+    except Exception as e:
+        logger.error(f"Failed to load explorer config: {e}")
+    return {"explorers": {}, "asset_contracts": {}, "token_standards": {}}
+
+
+def get_explorer_url(chain: str, txid: str) -> str | None:
+    """Get full explorer URL for a transaction on a given chain."""
+    config = load_explorer_config()
+    explorer = config.get("explorers", {}).get(chain, {})
+    url_template = explorer.get("tx_url")
+    if url_template and txid:
+        return url_template.format(txid=txid)
+    return None
+
+
+def add_wallet_history_event(
+    thr_address: str,
+    event_type: str,
+    chain: str,
+    asset: str,
+    amount: float,
+    status: str = "confirmed",
+    direction: str = "in",
+    internal_txid: str = "",
+    external_txid: str = "",
+    token_contract: str = "",
+    token_standard: str = "native",
+    network_label: str = "",
+    timestamp: float = None,
+) -> dict:
+    """
+    Write a wallet history event (transaction, pledge, pool seed, withdrawal, etc).
+
+    Args:
+        thr_address: Thronos wallet address
+        event_type: pledge, token_receive, token_send, pool_seed, pool_withdraw, bridge, crosschain_withdraw, gateway_payout, failed, manual_review
+        chain: thronos, bsc, base, arbitrum, eth, btc
+        asset: THR, BTC, WBTC, USDT, USDC, BNB, ETH
+        amount: Transaction amount
+        status: pending, confirmed, credited, pool_seeded, queued, sent, failed, manual_review
+        direction: in, out, pool, bridge, crosschain
+        internal_txid: Thronos transaction ID if applicable
+        external_txid: External chain tx hash if applicable
+        token_contract: Token contract address (for ERC20/BEP20)
+        token_standard: native, BEP20, ERC20
+        network_label: Human-readable chain name
+        timestamp: Unix timestamp (defaults to now)
+
+    Returns:
+        The created event dict
+    """
+    if timestamp is None:
+        timestamp = time.time()
+
+    # Build explorer URL if we have external txid
+    explorer_url = get_explorer_url(chain, external_txid) if external_txid else None
+
+    event = {
+        "id": f"{thr_address}_{event_type}_{int(timestamp*1000)}_{random.randint(1000,9999)}",
+        "thr_address": thr_address,
+        "event_type": event_type,
+        "chain": chain,
+        "network_label": network_label or chain.upper(),
+        "asset": asset,
+        "token_standard": token_standard,
+        "token_contract": token_contract,
+        "amount": amount,
+        "status": status,
+        "direction": direction,
+        "internal_txid": internal_txid,
+        "external_txid": external_txid,
+        "explorer_url": explorer_url,
+        "timestamp": timestamp,
+        "created_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(timestamp)),
+    }
+
+    # Append to wallet history
+    try:
+        history = load_json(WALLET_HISTORY_FILE, [])
+        history.append(event)
+        save_json(WALLET_HISTORY_FILE, history)
+        logger.info(f"Added wallet history event: {event_type} {amount} {asset} for {thr_address}")
+    except Exception as e:
+        logger.error(f"Failed to save wallet history event: {e}")
+
+    return event
+
+
+def get_wallet_history(thr_address: str, limit: int = 100) -> list:
+    """Get transaction history for a wallet (most recent first)."""
+    try:
+        history = load_json(WALLET_HISTORY_FILE, [])
+        wallet_events = [e for e in history if isinstance(e, dict) and e.get("thr_address") == thr_address]
+        # Sort by timestamp descending (most recent first)
+        wallet_events.sort(key=lambda e: e.get("timestamp", 0), reverse=True)
+        return wallet_events[:limit]
+    except Exception as e:
+        logger.error(f"Failed to get wallet history: {e}")
+        return []
 
 
 def get_available_withdraw_chains() -> dict:

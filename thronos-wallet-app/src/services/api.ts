@@ -356,6 +356,33 @@ export async function getWithdrawChains(): Promise<{ ok: boolean; chains: Withdr
   return request('/api/v1/withdraw/chains');
 }
 
+export interface EvmTokenBalanceResult {
+  ok: boolean;
+  chain?: string;
+  address?: string;
+  token_contract?: string;
+  balance?: number;
+  balance_raw?: string;
+  error?: string;
+  details?: string;
+}
+
+export async function getEvmTokenBalance(
+  chain: 'bsc' | 'arbitrum' | 'base',
+  address: string,
+  tokenContract: string,
+  decimals: number
+): Promise<EvmTokenBalanceResult> {
+  try {
+    return await request('/api/evm/token-balance', {
+      method: 'POST',
+      body: JSON.stringify({ chain, address, token_contract: tokenContract, decimals }),
+    });
+  } catch (err: any) {
+    return { ok: false, error: 'request_failed', details: err.message };
+  }
+}
+
 export async function getLPPositions(address: string): Promise<{ positions: Array<{ pool_id: string; token_a: string; token_b: string; liquidity_share: number; value: number; pending_rewards: number }> }> {
   return request(`/api/v1/pools/positions/${address}`);
 }

@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Thronos Viewer - Blockchain Explorer</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: #0d0a1a;
+            color: #fff;
+            padding: 20px;
+        }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .header {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid #2a2050;
+        }
+        .logo {
+            font-size: 28px;
+            font-weight: 700;
+            color: #00ff66;
+        }
+        .address-display {
+            flex: 1;
+            padding: 10px 15px;
+            background: #1a1a2e;
+            border: 1px solid #2a2050;
+            border-radius: 6px;
+            font-family: monospace;
+            font-size: 14px;
+            word-break: break-all;
+        }
+        .search-box {
+            flex: 1;
+            padding: 10px 15px;
+            background: #1a1a2e;
+            border: 1px solid #2a2050;
+            border-radius: 6px;
+            color: #fff;
+            font-size: 14px;
+        }
+        .search-box::placeholder { color: #666; }
+
+        .tabs {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 20px;
+            border-bottom: 1px solid #2a2050;
+            padding-bottom: 10px;
+            overflow-x: auto;
+        }
+        .tab {
+            padding: 10px 15px;
+            background: none;
+            border: none;
+            color: #888;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            border-bottom: 2px solid transparent;
+            transition: all 0.2s;
+        }
+        .tab:hover { color: #00ff66; }
+        .tab.active {
+            color: #00ff66;
+            border-bottom-color: #00ff66;
+        }
+
+        .filters {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        .filter-select {
+            padding: 8px 12px;
+            background: #1a1a2e;
+            border: 1px solid #2a2050;
+            border-radius: 4px;
+            color: #fff;
+            font-size: 12px;
+            cursor: pointer;
+        }
+        .filter-select:focus { outline: 1px solid #00ff66; }
+
+        .transactions-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+        }
+        .transactions-table th {
+            text-align: left;
+            padding: 12px;
+            background: #1a1a2e;
+            border-bottom: 1px solid #2a2050;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #888;
+        }
+        .transactions-table td {
+            padding: 12px;
+            border-bottom: 1px solid #1a1a2e;
+        }
+        .transactions-table tbody tr:hover {
+            background: #1a1a2e;
+            cursor: pointer;
+        }
+
+        .tx-type {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 600;
+            font-size: 13px;
+        }
+        .tx-icon {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            background: #2a2050;
+        }
+
+        .chain-badge {
+            display: inline-block;
+            padding: 4px 8px;
+            background: #2a2050;
+            border: 1px solid #4a3080;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+            color: #00ff66;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+        .status-confirmed { background: #00ff6620; color: #00ff66; }
+        .status-pending { background: #ffb81c20; color: #ffb81c; }
+        .status-failed { background: #ff4d4d20; color: #ff4d4d; }
+
+        .explorer-links {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .explorer-link {
+            padding: 4px 8px;
+            background: #2a2050;
+            border: 1px solid #4a3080;
+            border-radius: 4px;
+            color: #00ff66;
+            text-decoration: none;
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .explorer-link:hover {
+            background: #00ff6620;
+            border-color: #00ff66;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #666;
+        }
+        .empty-state-icon { font-size: 48px; margin-bottom: 10px; }
+
+        .pagination {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            margin-top: 20px;
+        }
+        .pagination button {
+            padding: 8px 12px;
+            background: #2a2050;
+            border: 1px solid #4a3080;
+            border-radius: 4px;
+            color: #fff;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        .pagination button:hover { background: #3a3060; }
+        .pagination button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        .loading { text-align: center; padding: 20px; color: #666; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <div class="logo">⬡ Thronos Viewer</div>
+            <input
+                type="text"
+                class="search-box"
+                id="searchBox"
+                placeholder="Enter THR address or transaction ID..."
+                value="{{ address }}"
+            >
+        </div>
+
+        <!-- Tabs -->
+        <div class="tabs" id="tabs">
+            <button class="tab {% if default_tab == 'all' %}active{% endif %}" data-tab="all">All</button>
+            <button class="tab {% if default_tab == 'native_thr' %}active{% endif %}" data-tab="native_thr">Native THR</button>
+            <button class="tab {% if default_tab == 'tokens' %}active{% endif %}" data-tab="tokens">Tokens</button>
+            <button class="tab {% if default_tab == 'pledges' %}active{% endif %}" data-tab="pledges">Pledges</button>
+            <button class="tab {% if default_tab == 'pools' %}active{% endif %}" data-tab="pools">Pools</button>
+            <button class="tab {% if default_tab == 'bridge' %}active{% endif %}" data-tab="bridge">Bridge</button>
+            <button class="tab {% if default_tab == 'crosschain' %}active{% endif %}" data-tab="crosschain">Cross-Chain</button>
+            <button class="tab {% if default_tab == 'withdrawals' %}active{% endif %}" data-tab="withdrawals">Withdrawals</button>
+            <button class="tab {% if default_tab == 'failed' %}active{% endif %}" data-tab="failed">Failed/Review</button>
+        </div>
+
+        <!-- Filters -->
+        <div class="filters">
+            <select class="filter-select" id="chainFilter">
+                <option value="">All Chains</option>
+                <option value="thronos">Thronos</option>
+                <option value="bsc">BNB Smart Chain</option>
+                <option value="base">Base</option>
+                <option value="arbitrum">Arbitrum</option>
+                <option value="eth">Ethereum</option>
+                <option value="btc">Bitcoin</option>
+            </select>
+            <select class="filter-select" id="statusFilter">
+                <option value="">All Status</option>
+                <option value="confirmed">Confirmed</option>
+                <option value="pending">Pending</option>
+                <option value="failed">Failed</option>
+                <option value="manual_review">Manual Review</option>
+            </select>
+        </div>
+
+        <!-- Transactions Table -->
+        <div id="content">
+            <div class="loading">Loading transactions...</div>
+        </div>
+
+        <!-- Pagination -->
+        <div class="pagination" id="pagination" style="display: none;">
+            <button id="prevBtn" onclick="previousPage()">← Previous</button>
+            <span id="pageInfo"></span>
+            <button id="nextBtn" onclick="nextPage()">Next →</button>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = '{{ api_url }}';
+        let currentAddress = '{{ address }}';
+        let currentTab = '{{ default_tab }}' || 'all';
+        let currentChain = '';
+        let currentStatus = '';
+        let currentOffset = 0;
+        const LIMIT = 50;
+        let totalTransactions = 0;
+
+        async function loadTransactions() {
+            if (!currentAddress) {
+                document.getElementById('content').innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-state-icon">🔍</div>
+                        <p>Enter a THR address to view transactions</p>
+                    </div>
+                `;
+                return;
+            }
+
+            document.getElementById('content').innerHTML = '<div class="loading">Loading transactions...</div>';
+
+            try {
+                const params = new URLSearchParams({
+                    address: currentAddress,
+                    tab: currentTab,
+                    chain: currentChain,
+                    status: currentStatus,
+                    limit: LIMIT,
+                    offset: currentOffset
+                });
+
+                const response = await fetch(`${API_URL}/api/v1/viewer/transactions?${params}`);
+                const data = await response.json();
+
+                if (!data.ok) {
+                    document.getElementById('content').innerHTML = `
+                        <div class="empty-state">
+                            <div class="empty-state-icon">⚠️</div>
+                            <p>${data.error || 'Failed to load transactions'}</p>
+                        </div>
+                    `;
+                    return;
+                }
+
+                totalTransactions = data.total;
+                const transactions = data.transactions;
+
+                if (transactions.length === 0) {
+                    document.getElementById('content').innerHTML = `
+                        <div class="empty-state">
+                            <div class="empty-state-icon">📋</div>
+                            <p>No transactions found</p>
+                        </div>
+                    `;
+                    document.getElementById('pagination').style.display = 'none';
+                    return;
+                }
+
+                // Render table
+                let html = `<table class="transactions-table">
+                    <thead>
+                        <tr>
+                            <th>Action</th>
+                            <th>Amount</th>
+                            <th>Chain</th>
+                            <th>Status</th>
+                            <th>Timestamp</th>
+                            <th>Explorer</th>
+                        </tr>
+                    </thead>
+                    <tbody>`;
+
+                transactions.forEach(tx => {
+                    const icon = getActionIcon(tx.event_type);
+                    const statusClass = `status-${tx.status || 'pending'}`;
+                    const timestamp = new Date(tx.timestamp * 1000).toLocaleString();
+
+                    let explorerLinks = '';
+                    if (tx.internal_txid) {
+                        explorerLinks += `<a class="explorer-link" href="?address=${currentAddress}&tx=${tx.internal_txid}">Thronos</a>`;
+                    }
+                    if (tx.explorer_url) {
+                        explorerLinks += `<a class="explorer-link" href="${tx.explorer_url}" target="_blank">${tx.network_label} ↗</a>`;
+                    }
+
+                    html += `<tr>
+                        <td><div class="tx-type"><div class="tx-icon">${icon}</div> ${tx.event_type}</div></td>
+                        <td><strong>${tx.amount.toFixed(6)} ${tx.asset}</strong></td>
+                        <td><span class="chain-badge">${tx.network_label}</span></td>
+                        <td><span class="status-badge ${statusClass}">${tx.status || 'pending'}</span></td>
+                        <td style="font-size: 12px; color: #888;">${timestamp}</td>
+                        <td><div class="explorer-links">${explorerLinks || '—'}</div></td>
+                    </tr>`;
+                });
+
+                html += `</tbody></table>`;
+                document.getElementById('content').innerHTML = html;
+
+                // Update pagination
+                updatePagination();
+            } catch (error) {
+                console.error('Error loading transactions:', error);
+                document.getElementById('content').innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-state-icon">❌</div>
+                        <p>Error loading transactions: ${error.message}</p>
+                    </div>
+                `;
+            }
+        }
+
+        function getActionIcon(actionType) {
+            const icons = {
+                pledge: '💵',
+                token_send: '📤',
+                token_receive: '📥',
+                pool_seed: '🏊',
+                pool_withdraw: '💧',
+                bridge: '🌉',
+                crosschain_withdraw: '🔄',
+                gateway_payout: '💰',
+                failed: '❌',
+                manual_review: '👀'
+            };
+            return icons[actionType] || '•';
+        }
+
+        function updatePagination() {
+            const hasMore = currentOffset + LIMIT < totalTransactions;
+            const pageNum = Math.floor(currentOffset / LIMIT) + 1;
+            const totalPages = Math.ceil(totalTransactions / LIMIT);
+
+            document.getElementById('pageInfo').textContent = `Page ${pageNum} of ${totalPages} (${totalTransactions} total)`;
+            document.getElementById('prevBtn').disabled = currentOffset === 0;
+            document.getElementById('nextBtn').disabled = !hasMore;
+            document.getElementById('pagination').style.display = totalPages > 1 ? 'flex' : 'none';
+        }
+
+        function previousPage() {
+            currentOffset = Math.max(0, currentOffset - LIMIT);
+            loadTransactions();
+            window.scrollTo(0, 0);
+        }
+
+        function nextPage() {
+            if (currentOffset + LIMIT < totalTransactions) {
+                currentOffset += LIMIT;
+                loadTransactions();
+                window.scrollTo(0, 0);
+            }
+        }
+
+        // Tab switching
+        document.querySelectorAll('.tab').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                currentTab = btn.dataset.tab;
+                currentOffset = 0;
+                loadTransactions();
+            });
+        });
+
+        // Search box
+        document.getElementById('searchBox').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                currentAddress = document.getElementById('searchBox').value.trim();
+                currentOffset = 0;
+                loadTransactions();
+            }
+        });
+
+        // Filters
+        document.getElementById('chainFilter').addEventListener('change', (e) => {
+            currentChain = e.target.value;
+            currentOffset = 0;
+            loadTransactions();
+        });
+
+        document.getElementById('statusFilter').addEventListener('change', (e) => {
+            currentStatus = e.target.value;
+            currentOffset = 0;
+            loadTransactions();
+        });
+
+        // Load on page load
+        window.addEventListener('DOMContentLoaded', loadTransactions);
+    </script>
+</body>
+</html>

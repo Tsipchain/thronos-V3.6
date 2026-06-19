@@ -417,7 +417,7 @@ async function showImport(addingExtra = false) {
       <p class="tagline">Thronos Chain Wallet</p>
 
       <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">
-        <button class="btn btn--ghost" id="tabCreate" style="flex:1;min-width:80px;padding:8px;font-size:.8rem;border-radius:10px">✨ New Wallet</button>
+        <button class="btn btn--ghost" id="tabCreate" style="flex:1;min-width:80px;padding:8px;font-size:.8rem;border-radius:10px;display:none">✨ New Wallet</button>
         <button class="btn" id="tabKit" style="flex:1;min-width:80px;padding:8px;font-size:.8rem;background:var(--accent);color:#fff;border-radius:10px">Recovery Kit</button>
         <button class="btn btn--ghost" id="tabBtcPledge" style="flex:1;min-width:80px;padding:8px;font-size:.8rem;border-radius:10px">₿ BTC Pledge</button>
         <button class="btn btn--ghost" id="tabUsdtPledge" style="flex:1;min-width:80px;padding:8px;font-size:.8rem;border-radius:10px">💵 USDT Pledge</button>

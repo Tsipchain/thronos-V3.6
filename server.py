@@ -20586,6 +20586,132 @@ def api_token_prices():
         }), 200
 
 
+@app.route("/api/evm/token-balance", methods=["POST"])
+def api_evm_token_balance():
+    """
+    Fetch ERC20 token balance for an address on an EVM chain.
+
+    POST body:
+    {
+        "chain": "bsc" | "arbitrum" | "base",
+        "address": "0x...",
+        "token_contract": "0x...",
+        "decimals": 18 | 6
+    }
+
+    Returns:
+    {
+        "ok": true,
+        "chain": "bsc",
+        "address": "0x...",
+        "token_contract": "0x...",
+        "balance": 0.1,
+        "balance_raw": "100000000000000000"
+    }
+
+    Error cases:
+    {
+        "ok": false,
+        "error": "missing_config" | "invalid_chain" | "rpc_error" | "parse_error",
+        "details": "..."
+    }
+    """
+    try:
+        data = request.get_json() or {}
+        chain = data.get("chain", "").lower()
+        address = data.get("address", "").strip()
+        token_contract = data.get("token_contract", "").strip()
+        decimals = int(data.get("decimals", 18))
+
+        if not chain or not address or not token_contract:
+            return jsonify({
+                "ok": False,
+                "error": "missing_params",
+                "details": "Missing chain, address, or token_contract"
+            }), 400
+
+        # Get RPC URL for chain
+        rpc_map = {
+            "bsc": BSC_RPC_URL,
+            "arbitrum": os.getenv("ARB_RPC_URL", "https://arb1.arbitrum.io/rpc"),
+            "base": os.getenv("BASE_RPC_URL", "https://mainnet.base.org"),
+        }
+
+        rpc_url = rpc_map.get(chain, "").strip()
+        if not rpc_url:
+            return jsonify({
+                "ok": False,
+                "error": "missing_config",
+                "details": f"No RPC configured for chain: {chain}"
+            }), 400
+
+        # Fetch balance via eth_call to balanceOf
+        try:
+            data_hex = "0x70a08231" + address.replace("0x", "").lower().zfill(64)
+            rpc_result = requests.post(
+                rpc_url,
+                json={
+                    "jsonrpc": "2.0",
+                    "method": "eth_call",
+                    "params": [{"to": token_contract, "data": data_hex}, "latest"],
+                    "id": 1
+                },
+                timeout=10
+            ).json()
+
+            if "error" in rpc_result and rpc_result["error"]:
+                return jsonify({
+                    "ok": False,
+                    "error": "rpc_error",
+                    "details": str(rpc_result.get("error", {}).get("message", "RPC call failed"))
+                }), 500
+
+            result = rpc_result.get("result", "0x0")
+            if not result or result == "0x":
+                result = "0x0"
+
+            # Parse as big integer to avoid precision loss
+            balance_raw = int(result, 16)
+            if balance_raw == 0:
+                return jsonify({
+                    "ok": True,
+                    "chain": chain,
+                    "address": address,
+                    "token_contract": token_contract,
+                    "balance": 0.0,
+                    "balance_raw": "0"
+                }), 200
+
+            # Convert to decimal
+            divisor = 10 ** decimals
+            balance_decimal = balance_raw / divisor
+
+            return jsonify({
+                "ok": True,
+                "chain": chain,
+                "address": address,
+                "token_contract": token_contract,
+                "balance": balance_decimal,
+                "balance_raw": str(balance_raw)
+            }), 200
+
+        except Exception as e:
+            logger.error(f"Error fetching EVM token balance: {e}")
+            return jsonify({
+                "ok": False,
+                "error": "rpc_error",
+                "details": str(e)
+            }), 500
+
+    except Exception as e:
+        logger.error(f"Error in api_evm_token_balance: {e}")
+        return jsonify({
+            "ok": False,
+            "error": "parse_error",
+            "details": str(e)
+        }), 400
+
+
 @app.route("/api/balance/<thr_addr>", methods=["GET"])
 def api_balance_alias(thr_addr: str):
     """Compatibility alias that exposes a consolidated balance snapshot."""

@@ -3790,15 +3790,59 @@ async function showWithdraw(address) {
 
 async function showAddLiquidity(poolId, tokenA, tokenB) {
   const address = getActiveAddr();
+  const acc = getAccount(address);
+  const authSecret = acc?.pledge_send_secret || '';
+
+  // Cross-chain: THR + USDT/USDC only handled by new endpoint
+  const isCrossChain = tokenA === 'THR' && (tokenB === 'USDT' || tokenB === 'USDC');
+
   const overlay = document.createElement('div');
-  overlay.style.cssText = 'position:fixed;inset:0;background:#000000aa;z-index:999;display:flex;align-items:flex-end;justify-content:center;';
+  overlay.style.cssText = 'position:fixed;inset:0;background:#000000aa;z-index:999;display:flex;align-items:flex-end;justify-content:center;overflow-y:auto;';
+
+  // Load pool external chains if cross-chain pool
+  let externalChains = [];
+  if (isCrossChain) {
+    try {
+      const av = await fetch(`${API_BASE}/api/v1/pools/available`).then(r => r.json()).catch(() => null);
+      const pl = av?.pools?.find(p => p.pool_id === poolId);
+      externalChains = pl?.external_chains || [];
+    } catch {}
+  }
+
+  function chainOptions() {
+    if (!externalChains.length) return `<option value="">— no chains available —</option>`;
+    return externalChains.map(c =>
+      `<option value="${c.chain}" data-contract="${c.token_contract}" data-decimals="${c.decimals}" data-label="${c.label}">${c.label} (${c.token_standard})</option>`
+    ).join('');
+  }
+
   overlay.innerHTML = `
-    <div style="background:#13112a;border-radius:16px 16px 0 0;width:100%;max-width:480px;padding:20px 20px 32px">
+    <div style="background:#13112a;border-radius:16px 16px 0 0;width:100%;max-width:480px;padding:20px 20px 32px;margin-top:auto">
       <div style="font-size:1rem;font-weight:700;color:#fff;margin-bottom:16px">💧 Add Liquidity: ${tokenA}/${tokenB}</div>
+
+      ${isCrossChain ? `
+      <label style="font-size:.82rem;color:var(--muted)">External Chain for ${tokenB}</label>
+      <select id="liqChain" class="input" style="margin-bottom:10px">
+        ${chainOptions()}
+      </select>
+      <label style="font-size:.82rem;color:var(--muted)">Your EVM Address (holding ${tokenB})</label>
+      <input type="text" id="liqEvm" class="input" placeholder="0x..." style="margin-bottom:10px;font-family:monospace;font-size:.8rem">
+      ` : ''}
+
       <label style="font-size:.82rem;color:var(--muted)">${tokenA} Amount</label>
       <input type="number" id="liqA" class="input" placeholder="0.00" min="0" step="0.000001" inputmode="decimal" style="margin-bottom:10px">
+
       <label style="font-size:.82rem;color:var(--muted)">${tokenB} Amount</label>
-      <input type="number" id="liqB" class="input" placeholder="0.00" min="0" step="0.000001" inputmode="decimal" style="margin-bottom:14px">
+      <input type="number" id="liqB" class="input" placeholder="0.00" min="0" step="0.000001" inputmode="decimal" style="margin-bottom:6px">
+
+      <div id="liqQuote" style="font-size:.78rem;color:var(--muted);margin-bottom:10px;min-height:18px"></div>
+      ${isCrossChain ? `<div style="font-size:.75rem;color:#ffb81c;margin-bottom:14px;padding:8px;background:#ffb81c10;border-radius:6px;border:1px solid #ffb81c30">⚠️ Gas required on external chain to send ${tokenB}.</div>` : ''}
+
+      ${!authSecret && isCrossChain ? `
+      <label style="font-size:.82rem;color:var(--muted)">Auth Secret (send_secret from pledge)</label>
+      <input type="password" id="liqAuth" class="input" placeholder="Enter your auth secret" style="margin-bottom:14px">
+      ` : ''}
+
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
         <button id="liqCancel" class="btn btn--ghost" style="padding:12px">Cancel</button>
         <button id="liqAdd" class="btn btn--primary" style="padding:12px">Add Liquidity</button>
@@ -3807,35 +3851,99 @@ async function showAddLiquidity(poolId, tokenA, tokenB) {
       <div id="liqOk" style="margin-top:10px;color:#00ff66;font-size:.82rem;display:none"></div>
     </div>`;
   document.body.appendChild(overlay);
+
+  // Auto-fill paired amount on input
+  let quoteTimer = null;
+  async function updateQuote() {
+    const amtA = parseFloat(overlay.querySelector('#liqA')?.value || '');
+    const quoteEl = overlay.querySelector('#liqQuote');
+    if (!amtA || amtA <= 0 || !isCrossChain) return;
+    try {
+      const q = await fetch(`${API_BASE}/api/v1/pools/quote-add-liquidity?pool_id=${poolId}&amount_a=${amtA}`).then(r => r.json()).catch(() => null);
+      if (q?.ok) {
+        const liqBEl = overlay.querySelector('#liqB');
+        if (liqBEl && !parseFloat(liqBEl.value)) liqBEl.value = q.amount_b;
+        if (quoteEl) quoteEl.textContent = `Ratio: 1 ${tokenA} ≈ ${q.pool_ratio} ${tokenB} · Est. LP shares: ${q.lp_shares_estimate} · Pool share: ${q.share_pct}%`;
+      }
+    } catch {}
+  }
+  overlay.querySelector('#liqA')?.addEventListener('input', () => {
+    clearTimeout(quoteTimer);
+    quoteTimer = setTimeout(updateQuote, 500);
+  });
+
   overlay.querySelector('#liqCancel').addEventListener('click', () => overlay.remove());
+
   overlay.querySelector('#liqAdd').addEventListener('click', async () => {
     const amtA = parseFloat(overlay.querySelector('#liqA').value);
     const amtB = parseFloat(overlay.querySelector('#liqB').value);
     const errEl = overlay.querySelector('#liqErr');
     const okEl = overlay.querySelector('#liqOk');
+    errEl.style.display = 'none';
+
     if (!amtA || amtA <= 0 || !amtB || amtB <= 0) {
       errEl.textContent = 'Enter valid amounts for both tokens';
       errEl.style.display = '';
       return;
     }
-    const { privHex } = unlocked.get(address) || {};
-    if (!privHex) { errEl.textContent = 'Wallet locked'; errEl.style.display = ''; return; }
 
     const btn = overlay.querySelector('#liqAdd');
     btn.disabled = true; btn.textContent = 'Adding…';
+
     try {
-      const r = await fetch(`${API_WRITE}/api/wallet/v1/add_liquidity`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ from: address, pool_id: poolId, amount_a: amtA, amount_b: amtB, private_key_hex: privHex })
-      });
-      const d = await r.json().catch(() => ({}));
-      if (r.ok && (d.ok || d.status === 'success')) {
-        okEl.textContent = '✅ Liquidity added!';
-        okEl.style.display = '';
-        setTimeout(() => overlay.remove(), 2000);
+      if (isCrossChain) {
+        const chainSel = overlay.querySelector('#liqChain');
+        const selOpt = chainSel?.selectedOptions[0];
+        const chain = selOpt?.value || '';
+        const tokenContract = selOpt?.dataset?.contract || '';
+        const decimals = parseInt(selOpt?.dataset?.decimals || '18', 10);
+        const evmAddress = (overlay.querySelector('#liqEvm')?.value || '').trim();
+        const secret = authSecret || (overlay.querySelector('#liqAuth')?.value || '').trim();
+
+        if (!chain) { throw new Error('Select an external chain'); }
+        if (!evmAddress) { throw new Error(`Enter your EVM address holding ${tokenB}`); }
+        if (!secret) { throw new Error('Auth secret required'); }
+
+        const r = await fetch(`${API_WRITE}/api/v1/pools/add-liquidity`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            pool_id: poolId,
+            amount_a: amtA,
+            amount_b: amtB,
+            chain,
+            token_contract: tokenContract,
+            decimals,
+            provider_thr: address,
+            evm_address: evmAddress,
+            auth_secret: secret,
+          }),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (r.ok && d.ok) {
+          okEl.innerHTML = `✅ THR locked in pool.<br>Send <strong>${amtB} ${tokenB}</strong> on ${selOpt?.dataset?.label || chain} to complete.<br><small style="color:var(--muted)">TX: ${d.tx_id}</small>`;
+          okEl.style.display = '';
+          setTimeout(() => overlay.remove(), 5000);
+        } else {
+          throw new Error(d.message || d.error || 'Add liquidity failed');
+        }
       } else {
-        throw new Error(d.message || d.error || 'failed');
+        // Legacy internal pool path (WBTC/L2E pairs)
+        const { privHex } = unlocked.get(address) || {};
+        if (!privHex) { throw new Error('Wallet locked'); }
+        const r = await fetch(`${API_WRITE}/api/wallet/v1/add_liquidity`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ from: address, pool_id: poolId, amount_a: amtA, amount_b: amtB, private_key_hex: privHex }),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (r.ok && (d.ok || d.status === 'success')) {
+          okEl.textContent = '✅ Liquidity added!';
+          okEl.style.display = '';
+          setTimeout(() => overlay.remove(), 2000);
+        } else {
+          throw new Error(d.message || d.error || 'failed');
+        }
       }
     } catch (e) {
       errEl.textContent = e.message || 'Add liquidity failed';

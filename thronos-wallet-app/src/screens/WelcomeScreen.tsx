@@ -52,6 +52,8 @@ export default function WelcomeScreen() {
 
           {/* Actions */}
           <View style={styles.actions}>
+            {/* Create New Wallet button is hidden — new users enter via BTC or USDT pledge only */}
+            {false && (
             <TouchableOpacity
               style={styles.createButton}
               onPress={() => navigation.navigate('CreateWallet')}
@@ -61,6 +63,7 @@ export default function WelcomeScreen() {
                 <Text style={styles.createButtonText}>Create New Wallet</Text>
               </LinearGradient>
             </TouchableOpacity>
+            )}
 
             <View style={styles.pledgeRow}>
               <TouchableOpacity

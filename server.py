@@ -33215,7 +33215,11 @@ def api_v1_pools_quote_add_liquidity():
 @app.route("/api/v1/pools/add-liquidity", methods=["POST"])
 def api_v1_pools_add_liquidity_crosschain():
     """
-    Cross-chain add-liquidity: THR (from Thronos ledger) + USDT/USDC (on external EVM chain).
+    Cross-chain add-liquidity: initiates a pending liquidity intent.
+
+    User must send USDT/USDC to vault address on external chain.
+    Watcher/gateway confirms external deposit via /confirm endpoint.
+    Only then: THR deducted, LP shares minted.
 
     Request body:
     {
@@ -33228,6 +33232,23 @@ def api_v1_pools_add_liquidity_crosschain():
         "provider_thr": "THR...",   // Thronos wallet
         "evm_address": "0x...",     // user's EVM wallet holding USDT/USDC
         "auth_secret": "..."
+    }
+
+    Returns:
+    {
+        "ok": true,
+        "intent_id": "...",
+        "pool_id": "...",
+        "token_a": "THR",
+        "token_b": "USDT",
+        "amount_a": 500.0,
+        "amount_b": 5.0,
+        "external_chain": "bsc",
+        "vault_address": "0x...",  // where user sends token_b
+        "token_contract": "0x...",
+        "status": "pending_external_deposit",
+        "expires_at": timestamp,
+        "message": "Send X amount_b to vault_address on external_chain to complete."
     }
     """
     data = request.get_json() or {}
@@ -33284,9 +33305,14 @@ def api_v1_pools_add_liquidity_crosschain():
     passphrase = (data.get("passphrase") or "").strip()
     auth_ok, _auth_state, auth_err = validate_effective_auth(provider, auth_secret, passphrase)
     if not auth_ok:
-        logger.warning("[add_liquidity_crosschain] invalid_credentials provider=%s err=%s",
+        logger.warning("[add_liquidity_intent] invalid_credentials provider=%s err=%s",
                        provider[:10] if provider else "", auth_err)
         return jsonify(ok=False, error="invalid_credentials", message="Invalid auth_secret"), 401
+
+    # Pledge access check
+    if not has_pledge_access(provider):
+        return jsonify(ok=False, error="no_pledge_access",
+                       message="Provider must have an active pledge"), 403
 
     # Load pool
     pools = load_pools()
@@ -33320,14 +33346,14 @@ def api_v1_pools_add_liquidity_crosschain():
                 deviation_pct=round(ratio_deviation * 100, 2),
             ), 400
 
-    # Check THR balance on Thronos ledger
+    # Check THR balance on Thronos ledger (for reservation, not deduction)
     thr_ledger = load_json(LEDGER_FILE, {})
     thr_balance = float(thr_ledger.get(provider, 0.0))
     if thr_balance < amt_a:
         return jsonify(ok=False, error="insufficient_thr",
                        message=f"Need {amt_a} THR, have {thr_balance}"), 400
 
-    # Check external USDT/USDC balance via balanceOf()
+    # Check external USDT/USDC balance via balanceOf() — read-only verification only
     ext_balance = _fetch_erc20_balance_internal(chain, evm_address, token_contract, decimals)
     if ext_balance is None:
         return jsonify(ok=False, error="external_balance_check_failed",
@@ -33337,16 +33363,162 @@ def api_v1_pools_add_liquidity_crosschain():
                        message=f"Need {amt_b} {ext_token} on {network_label}, have {ext_balance}",
                        balance=ext_balance), 400
 
-    # Pledge access check
-    if not has_pledge_access(provider):
-        return jsonify(ok=False, error="no_pledge_access",
-                       message="Provider must have an active pledge"), 403
+    # ── Create pending intent (no mutations yet) ──
+    import secrets as _secrets
+    intent_id = f"INTENT-{int(time.time())}-{_secrets.token_hex(6)}"
 
-    # ── Mutations ──
+    # Get pool vault address from WITHDRAW_CHAIN_CONFIG (same hot wallet for now)
+    chain_cfg = WITHDRAW_CHAIN_CONFIG.get(chain, {})
+    vault_address = chain_cfg.get("hot_wallet", "").strip()
+    if not vault_address:
+        return jsonify(ok=False, error="vault_not_configured",
+                       message=f"Pool vault not configured for chain {chain}"), 500
 
-    # Deduct THR from ledger
+    # Store intent in intents file
+    intents_file = os.path.join(DATA_DIR, "pool_liquidity_intents.json")
+    intents = load_json(intents_file, [])
+    expires_at = time.time() + 86400  # 24 hour expiry
+
+    intent = {
+        "intent_id": intent_id,
+        "pool_id": pool_id,
+        "provider_thr": provider,
+        "evm_address": evm_address,
+        "token_a": token_a,
+        "token_b": token_b,
+        "amount_a": amt_a,
+        "amount_b": amt_b,
+        "external_chain": chain,
+        "token_contract": token_contract,
+        "token_standard": token_standard,
+        "network_label": network_label,
+        "vault_address": vault_address,
+        "status": "pending_external_deposit",
+        "external_txid": None,
+        "created_at": time.time(),
+        "expires_at": expires_at,
+    }
+    intents.append(intent)
+    save_json(intents_file, intents)
+
+    # Record initial pending event in wallet history
+    add_wallet_history_event(
+        thr_address=provider,
+        event_type="pool_add_liquidity",
+        chain="thronos",
+        asset="THR",
+        amount=amt_a,
+        status="pending",
+        direction="pool",
+        internal_txid=intent_id,
+        token_standard="native",
+        network_label="Thronos",
+    )
+
+    logger.info(
+        "[pool_add_liquidity_intent] intent=%s provider=%s pool=%s thr=%.6f %s=%.6f chain=%s",
+        intent_id, provider, pool_id, amt_a, ext_token, amt_b, chain
+    )
+
+    return jsonify(
+        ok=True,
+        intent_id=intent_id,
+        pool_id=pool_id,
+        token_a=token_a,
+        token_b=token_b,
+        amount_a=amt_a,
+        amount_b=amt_b,
+        external_chain=chain,
+        vault_address=vault_address,
+        token_contract=token_contract,
+        status="pending_external_deposit",
+        expires_at=expires_at,
+        message=f"Send {amt_b} {ext_token} to {vault_address} on {network_label} to complete. Allow ~5 min for confirmation.",
+        gas_warning=f"You need gas ({network_label} native token) to send {ext_token}.",
+    ), 200
+
+
+@app.route("/api/v1/pools/add-liquidity/confirm", methods=["POST"])
+def api_v1_pools_add_liquidity_confirm():
+    """
+    Watcher/gateway confirms external deposit and commits liquidity.
+    Called by watcher after verifying external blockchain transaction.
+
+    Request body:
+    {
+        "intent_id": "INTENT-...",
+        "external_txid": "0x...",  // from external blockchain
+        "gateway_secret": "..."     // gateway authentication
+    }
+    """
+    data = request.get_json() or {}
+    intent_id = (data.get("intent_id") or "").strip()
+    external_txid = (data.get("external_txid") or "").strip()
+    gateway_secret = (data.get("gateway_secret") or "").strip()
+
+    if not intent_id or not external_txid:
+        return jsonify(ok=False, error="missing_fields"), 400
+
+    # TODO: Validate gateway_secret (environment-based gateway auth)
+    # For now, gate on GATEWAY_SECRET environment variable
+    configured_secret = os.getenv("GATEWAY_SECRET", "").strip()
+    if configured_secret and gateway_secret != configured_secret:
+        logger.warning("[add_liquidity_confirm] invalid_gateway_secret")
+        return jsonify(ok=False, error="invalid_gateway_secret"), 401
+
+    # Load intent
+    intents_file = os.path.join(DATA_DIR, "pool_liquidity_intents.json")
+    intents = load_json(intents_file, [])
+    intent = next((i for i in intents if i.get("intent_id") == intent_id), None)
+    if not intent:
+        return jsonify(ok=False, error="intent_not_found"), 404
+
+    # Verify intent is still pending and not expired
+    if intent.get("status") != "pending_external_deposit":
+        return jsonify(ok=False, error="intent_not_pending",
+                       message=f"Intent status is {intent.get('status')}"), 400
+    if time.time() > intent.get("expires_at", 0):
+        intent["status"] = "expired"
+        save_json(intents_file, intents)
+        return jsonify(ok=False, error="intent_expired"), 410
+
+    # Extract intent data
+    pool_id = intent.get("pool_id")
+    provider = intent.get("provider_thr")
+    amt_a = intent.get("amount_a", 0)
+    amt_b = intent.get("amount_b", 0)
+    token_a = intent.get("token_a", "")
+    token_b = intent.get("token_b", "")
+    chain = intent.get("external_chain", "")
+
+    # ── Commit mutations ──
+
+    # 1. Deduct THR from ledger
+    thr_ledger = load_json(LEDGER_FILE, {})
+    thr_balance = float(thr_ledger.get(provider, 0.0))
+    if thr_balance < amt_a:
+        intent["status"] = "manual_review"
+        intent["error"] = f"THR balance insufficient at confirmation time: had {thr_balance}, needed {amt_a}"
+        save_json(intents_file, intents)
+        logger.warning("[add_liquidity_confirm] insufficient_thr intent=%s provider=%s", intent_id, provider)
+        return jsonify(ok=False, error="insufficient_thr_at_confirm",
+                       message="THR balance changed since intent creation"), 400
     thr_ledger[provider] = round(thr_balance - amt_a, 6)
     save_json(LEDGER_FILE, thr_ledger)
+
+    # 2. Load pool and update reserves + mint LP shares
+    pools = load_pools()
+    pool = next((p for p in pools if p.get("id") == pool_id), None)
+    if not pool:
+        intent["status"] = "manual_review"
+        intent["error"] = "Pool not found at confirmation time"
+        save_json(intents_file, intents)
+        logger.warning("[add_liquidity_confirm] pool_not_found intent=%s", intent_id)
+        return jsonify(ok=False, error="pool_not_found_at_confirm"), 500
+
+    reserves_a = float(pool.get("reserves_a", 0))
+    reserves_b = float(pool.get("reserves_b", 0))
+    total_shares = float(pool.get("total_shares", 0))
 
     # Mint LP shares
     import math as _math
@@ -33362,9 +33534,7 @@ def api_v1_pools_add_liquidity_crosschain():
     providers[provider] = round(float(providers.get(provider, 0.0)) + shares_minted, 6)
     save_pools(pools)
 
-    # Record on-chain transaction
-    import secrets as _secrets
-    tx_id = f"POOL-ADD-{int(time.time())}-{_secrets.token_hex(4)}"
+    # 3. Record on-chain transaction
     chain_data = load_json(CHAIN_FILE, [])
     ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
     chain_data.append({
@@ -33372,23 +33542,26 @@ def api_v1_pools_add_liquidity_crosschain():
         "kind": "pool_add_liquidity",
         "pool_id": pool_id,
         "provider": provider,
-        "evm_address": evm_address,
+        "evm_address": intent.get("evm_address"),
         "token_a": token_a,
         "token_b": token_b,
         "amount_a": amt_a,
         "amount_b": amt_b,
         "external_chain": chain,
-        "token_contract": token_contract,
-        "token_standard": token_standard,
+        "token_contract": intent.get("token_contract"),
+        "token_standard": intent.get("token_standard"),
+        "external_txid": external_txid,
+        "intent_id": intent_id,
         "lp_shares_minted": shares_minted,
         "amount": amt_a,
         "symbol": "THR",
-        "tx_id": tx_id,
+        "tx_id": intent_id,
         "timestamp": ts,
     })
     save_json(CHAIN_FILE, chain_data)
 
-    # Wallet history: THR side (deducted from Thronos)
+    # 4. Update wallet history with confirmations
+    network_label = intent.get("network_label", "")
     add_wallet_history_event(
         thr_address=provider,
         event_type="pool_add_liquidity",
@@ -33397,46 +33570,47 @@ def api_v1_pools_add_liquidity_crosschain():
         amount=amt_a,
         status="confirmed",
         direction="pool",
-        internal_txid=tx_id,
+        internal_txid=intent_id,
+        external_txid=external_txid,
         token_standard="native",
         network_label="Thronos",
     )
-    # Wallet history: external token side (pending on external chain)
     add_wallet_history_event(
         thr_address=provider,
         event_type="pool_add_liquidity",
         chain=chain,
-        asset=ext_token,
+        asset=token_b,
         amount=amt_b,
-        status="pending",
+        status="confirmed",
         direction="pool",
-        internal_txid=tx_id,
-        token_contract=token_contract,
-        token_standard=token_standard,
+        internal_txid=intent_id,
+        external_txid=external_txid,
+        token_contract=intent.get("token_contract"),
+        token_standard=intent.get("token_standard"),
         network_label=network_label,
     )
 
+    # 5. Mark intent as confirmed
+    intent["status"] = "confirmed"
+    intent["external_txid"] = external_txid
+    intent["confirmed_at"] = time.time()
+    intent["lp_shares_minted"] = shares_minted
+    save_json(intents_file, intents)
+
     logger.info(
-        "[pool_add_liquidity_crosschain] provider=%s pool=%s thr=%.6f %s=%.6f chain=%s shares=%.6f",
-        provider, pool_id, amt_a, ext_token, amt_b, chain, shares_minted
+        "[add_liquidity_confirm] intent=%s provider=%s pool=%s confirmed thr=%.6f %s=%.6f shares=%.6f",
+        intent_id, provider, pool_id, amt_a, token_b, amt_b, shares_minted
     )
 
     return jsonify(
         ok=True,
-        tx_id=tx_id,
+        intent_id=intent_id,
+        status="confirmed",
         pool_id=pool_id,
-        provider=provider,
-        amount_a=amt_a,
-        amount_b=amt_b,
         lp_shares_minted=shares_minted,
         reserves_a=pool["reserves_a"],
         reserves_b=pool["reserves_b"],
-        external_chain=chain,
-        evm_address=evm_address,
-        token_contract=token_contract,
-        status="pending",
-        message=f"THR locked in pool. Confirm {amt_b} {ext_token} transfer on {network_label} to complete.",
-        gas_warning=f"You need gas on {network_label} to send {ext_token}.",
+        message=f"Liquidity confirmed. You have {shares_minted} LP shares.",
     ), 200
 
 

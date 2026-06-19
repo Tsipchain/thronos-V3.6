@@ -3836,7 +3836,7 @@ async function showAddLiquidity(poolId, tokenA, tokenB) {
       <input type="number" id="liqB" class="input" placeholder="0.00" min="0" step="0.000001" inputmode="decimal" style="margin-bottom:6px">
 
       <div id="liqQuote" style="font-size:.78rem;color:var(--muted);margin-bottom:10px;min-height:18px"></div>
-      ${isCrossChain ? `<div style="font-size:.75rem;color:#ffb81c;margin-bottom:14px;padding:8px;background:#ffb81c10;border-radius:6px;border:1px solid #ffb81c30">⚠️ Gas required on external chain to send ${tokenB}.</div>` : ''}
+      ${isCrossChain ? `<div style="font-size:.75rem;color:#ffb81c;margin-bottom:14px;padding:8px;background:#ffb81c10;border-radius:6px;border:1px solid #ffb81c30">⚠️ Gas required on external chain to send ${tokenB} to vault.</div>` : ''}
 
       ${!authSecret && isCrossChain ? `
       <label style="font-size:.82rem;color:var(--muted)">Auth Secret (send_secret from pledge)</label>
@@ -3845,7 +3845,7 @@ async function showAddLiquidity(poolId, tokenA, tokenB) {
 
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
         <button id="liqCancel" class="btn btn--ghost" style="padding:12px">Cancel</button>
-        <button id="liqAdd" class="btn btn--primary" style="padding:12px">Add Liquidity</button>
+        <button id="liqAdd" class="btn btn--primary" style="padding:12px">Create Intent</button>
       </div>
       <div id="liqErr" style="margin-top:10px;color:#ff6b6b;font-size:.82rem;display:none"></div>
       <div id="liqOk" style="margin-top:10px;color:#00ff66;font-size:.82rem;display:none"></div>
@@ -3888,7 +3888,7 @@ async function showAddLiquidity(poolId, tokenA, tokenB) {
     }
 
     const btn = overlay.querySelector('#liqAdd');
-    btn.disabled = true; btn.textContent = 'Adding…';
+    btn.disabled = true; btn.textContent = 'Creating Intent…';
 
     try {
       if (isCrossChain) {
@@ -3921,11 +3921,13 @@ async function showAddLiquidity(poolId, tokenA, tokenB) {
         });
         const d = await r.json().catch(() => ({}));
         if (r.ok && d.ok) {
-          okEl.innerHTML = `✅ THR locked in pool.<br>Send <strong>${amtB} ${tokenB}</strong> on ${selOpt?.dataset?.label || chain} to complete.<br><small style="color:var(--muted)">TX: ${d.tx_id}</small>`;
+          const vaultAddr = d.vault_address || '';
+          const chainLabel = selOpt?.dataset?.label || chain;
+          okEl.innerHTML = `✅ Intent created.<br><br>Send <strong>${amtB} ${tokenB}</strong> to:<br><code style="font-size:.7rem;word-break:break-all;display:block;background:#1a1a2e;padding:8px;border-radius:4px;margin:8px 0">${vaultAddr}</code>on ${chainLabel}.<br><br><small style="color:var(--muted)">Intent: ${d.intent_id}<br>Expires: ${new Date(d.expires_at * 1000).toLocaleString()}</small>`;
           okEl.style.display = '';
-          setTimeout(() => overlay.remove(), 5000);
+          setTimeout(() => overlay.remove(), 8000);
         } else {
-          throw new Error(d.message || d.error || 'Add liquidity failed');
+          throw new Error(d.message || d.error || 'Create intent failed');
         }
       } else {
         // Legacy internal pool path (WBTC/L2E pairs)
@@ -3946,9 +3948,9 @@ async function showAddLiquidity(poolId, tokenA, tokenB) {
         }
       }
     } catch (e) {
-      errEl.textContent = e.message || 'Add liquidity failed';
+      errEl.textContent = e.message || (isCrossChain ? 'Create intent failed' : 'Add liquidity failed');
       errEl.style.display = '';
-      btn.disabled = false; btn.textContent = 'Add Liquidity';
+      btn.disabled = false; btn.textContent = isCrossChain ? 'Create Intent' : 'Add Liquidity';
     }
   });
 }

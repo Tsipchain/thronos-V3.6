@@ -442,13 +442,17 @@ export async function quoteAddLiquidity(poolId: string, amountA: number, chain?:
 
 export interface CrossChainAddLiquidityResult {
   ok: boolean;
-  tx_id?: string;
+  intent_id?: string;
   pool_id?: string;
-  lp_shares_minted?: number;
-  reserves_a?: number;
-  reserves_b?: number;
+  token_a?: string;
+  token_b?: string;
+  amount_a?: number;
+  amount_b?: number;
   external_chain?: string;
+  vault_address?: string;
+  token_contract?: string;
   status?: string;
+  expires_at?: number;
   message?: string;
   gas_warning?: string;
   error?: string;

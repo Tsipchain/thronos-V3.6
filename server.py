@@ -20655,7 +20655,7 @@ def api_explorer_config():
 
 
 @app.route("/api/wallet/history/<thr_addr>", methods=["GET"])
-def api_wallet_history(thr_addr):
+def api_v1_wallet_history(thr_addr):
     """
     Returns transaction history for a wallet.
 

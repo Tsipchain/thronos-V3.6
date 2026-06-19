@@ -62,7 +62,16 @@ async function fetchErc20(evmAddr: string, tokenContract: string, rpcUrl: string
     });
     const d = await r.json();
     if (d.error || !d.result || d.result === '0x') return null;
-    return parseInt(d.result, 16) / Math.pow(10, decimals);
+
+    // Use BigInt to avoid precision loss on 256-bit ERC20 balances (e.g., 0.1 USDT = 100000000000000000 wei with 18 decimals)
+    const raw = BigInt(d.result);
+    // Return null if balance is zero (no token held)
+    if (raw === 0n) return null;
+
+    const divisor = BigInt(10 ** decimals);
+    const whole = Number(raw / divisor);
+    const frac = Number(raw % divisor) / Math.pow(10, decimals);
+    return whole + frac;
   } catch {
     return null;
   }

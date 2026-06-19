@@ -26,6 +26,39 @@ async function decryptBlob(blob, pin) {
   return bytesToHex(new Uint8Array(plain));
 }
 
+async function encryptBlob(dataHex, pin) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const key = await pbkdfKey(pin, salt);
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, hexToBytes(dataHex));
+  return { v: 1, salt: bytesToHex(salt), iv: bytesToHex(iv), ct: bytesToHex(new Uint8Array(ct)) };
+}
+
+// Generates a fresh secp256k1 keypair and derives a THR address using the
+// same scheme as the mobile app (thrAddressFromPubKey in wallet.ts):
+// THR + uppercase-hex(ripemd160(sha256(compressed_pubkey))).slice(0,40)
+let _nobleLibs = null;
+async function _loadNobleLibs() {
+  if (_nobleLibs) return _nobleLibs;
+  const [{ secp256k1 }, { sha256 }, { ripemd160 }] = await Promise.all([
+    import('https://esm.sh/@noble/curves@1.4.0/secp256k1'),
+    import('https://esm.sh/@noble/hashes@1.4.0/sha256'),
+    import('https://esm.sh/@noble/hashes@1.4.0/ripemd160'),
+  ]);
+  _nobleLibs = { secp256k1, sha256, ripemd160 };
+  return _nobleLibs;
+}
+
+async function generateThrKeypair() {
+  const { secp256k1, sha256, ripemd160 } = await _loadNobleLibs();
+  const privBytes = secp256k1.utils.randomPrivateKey();
+  const pubBytes = secp256k1.getPublicKey(privBytes, true); // compressed
+  const h1 = sha256(pubBytes);
+  const h2 = ripemd160(h1);
+  const address = 'THR' + bytesToHex(h2).substring(0, 40).toUpperCase();
+  return { privHex: bytesToHex(privBytes), pubHex: bytesToHex(pubBytes), address };
+}
+
 async function encryptWithKey(rawKey32, dataHex) {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const aesKey = await crypto.subtle.importKey('raw', rawKey32, 'AES-GCM', false, ['encrypt']);
@@ -119,10 +152,11 @@ function getAccount(address) {
   return getAccounts().find(a => a.address === address) || null;
 }
 
-function upsertAccount(address, kit, label) {
+function upsertAccount(address, kit, label, pledge_send_secret) {
   const accs = getAccounts();
   const idx = accs.findIndex(a => a.address === address);
   const entry = { address, kit: typeof kit === 'string' ? kit : JSON.stringify(kit), label: label || shortAddr(address) };
+  if (pledge_send_secret) entry.pledge_send_secret = pledge_send_secret;
   if (idx >= 0) accs[idx] = entry; else accs.push(entry);
   saveAccounts(accs);
 }
@@ -257,8 +291,14 @@ async function _fetchErc20(evmAddr, tokenContract, rpcUrl, decimals) {
       signal: AbortSignal.timeout(8000),
     });
     const d = await r.json();
-    if (d.error || !d.result || d.result === '0x') return null;
-    return parseInt(d.result, 16) / Math.pow(10, decimals);
+    if (d.error || !d.result || d.result === '0x' || d.result === '0x' + '0'.repeat(64)) return null;
+    // Use BigInt to avoid precision loss on 256-bit ERC20 balances
+    const raw = BigInt(d.result);
+    if (raw === 0n) return null;
+    const divisor = BigInt(10 ** decimals);
+    const whole = Number(raw / divisor);
+    const frac  = Number(raw % divisor) / (10 ** decimals);
+    return whole + frac;
   } catch { return null; }
 }
 
@@ -376,9 +416,29 @@ async function showImport(addingExtra = false) {
       <div class="logo">⬡ THR</div>
       <p class="tagline">Thronos Chain Wallet</p>
 
-      <div style="display:flex;gap:6px;margin-bottom:10px">
-        <button class="btn" id="tabKit" style="flex:1;padding:8px;font-size:.82rem;background:var(--accent);color:#fff;border-radius:10px">Recovery Kit</button>
-        <button class="btn btn--ghost" id="tabPledge" style="flex:1;padding:8px;font-size:.82rem;border-radius:10px">Pledge Secret</button>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">
+        <button class="btn btn--ghost" id="tabCreate" style="flex:1;min-width:80px;padding:8px;font-size:.8rem;border-radius:10px">✨ New Wallet</button>
+        <button class="btn" id="tabKit" style="flex:1;min-width:80px;padding:8px;font-size:.8rem;background:var(--accent);color:#fff;border-radius:10px">Recovery Kit</button>
+        <button class="btn btn--ghost" id="tabBtcPledge" style="flex:1;min-width:80px;padding:8px;font-size:.8rem;border-radius:10px">₿ BTC Pledge</button>
+        <button class="btn btn--ghost" id="tabUsdtPledge" style="flex:1;min-width:80px;padding:8px;font-size:.8rem;border-radius:10px">💵 USDT Pledge</button>
+      </div>
+
+      <!-- Create New Wallet tab -->
+      <div id="paneCreate" class="card" style="display:none">
+        <h2 style="font-size:1.1rem">Create New Wallet</h2>
+        <p style="color:var(--muted);font-size:.85rem">Generate a brand-new Thronos address on this device. Your private key never leaves the browser.</p>
+        <div id="createStep1">
+          <button class="btn btn--primary" id="generateWalletBtn">⚡ Generate New Wallet</button>
+        </div>
+        <div id="createStep2" style="display:none;margin-top:12px">
+          <div id="createAddrBox" style="background:#0d0a1a;border:1px solid var(--accent);border-radius:8px;padding:10px;font-size:.82rem;color:var(--accent);word-break:break-all;margin-bottom:10px"></div>
+          <p style="color:#ff6b6b;font-size:.78rem;margin-bottom:8px">⚠️ Set a PIN to protect this wallet. There is no recovery if you lose both your PIN and the Recovery Kit file you'll download next.</p>
+          <input type="text" id="createLabel" class="input" placeholder="Account label (optional)">
+          <input type="password" id="createPin" class="input mt8" placeholder="New PIN (4-8 digits)" autocomplete="new-password">
+          <input type="password" id="createPinConfirm" class="input mt8" placeholder="Confirm PIN" autocomplete="new-password">
+          <button class="btn btn--primary mt8" id="createConfirmBtn">✅ Create Wallet</button>
+        </div>
+        <div id="createErr" class="banner banner--error hidden"></div>
       </div>
 
       <!-- Recovery Kit tab -->
@@ -395,6 +455,53 @@ async function showImport(addingExtra = false) {
           <button class="btn btn--primary" id="importBtn">Unlock</button>
         </div>
         <div id="err" class="banner banner--error hidden"></div>
+        <p style="margin-top:14px;font-size:.78rem;color:var(--muted);text-align:center">Migrating from old pledge system? <button class="btn--link" id="showPledgeSecretBtn" style="color:var(--accent);background:none;border:none;cursor:pointer;font-size:.78rem;padding:0;text-decoration:underline">Use your Pledge Secret →</button></p>
+      </div>
+
+      <!-- BTC Pledge tab (new wallet via direct BTC payment) -->
+      <div id="paneBtcPledge" class="card" style="display:none">
+        <h2 style="font-size:1.1rem">₿ BTC Pledge</h2>
+        <p style="color:var(--muted);font-size:.85rem">Send a small BTC fee to the pledge address below, then submit your sending BTC address to claim a THR wallet.</p>
+        <div id="btcPledgeStep1">
+          <div style="background:#0d0a1a;border:1px solid #F7931A;border-radius:8px;padding:10px;font-size:.82rem;color:#F7931A;word-break:break-all;margin-bottom:10px" id="btcPledgeVaultBox">Loading vault address…</div>
+          <input type="text" id="btcPledgeAddr" class="input" placeholder="Your BTC address (sender)" autocomplete="off">
+          <input type="text" id="btcPledgeText" class="input mt8" placeholder="Pledge message (optional)">
+          <button class="btn btn--primary mt8" id="btcPledgeSubmitBtn">📤 Submit Pledge</button>
+        </div>
+        <div id="btcPledgeStep2" style="display:none;margin-top:12px">
+          <div id="btcPledgeInfo" style="background:#0d0a1a;border:1px solid var(--accent);border-radius:8px;padding:10px;font-size:.82rem;color:var(--accent);word-break:break-all;margin-bottom:10px"></div>
+          <div id="btcPledgeSecretBox" style="background:#1a0a0a;border:1px solid #ff6b6b;border-radius:8px;padding:10px;font-size:.8rem;color:#ff6b6b;word-break:break-all;margin-bottom:10px"></div>
+          <button class="btn btn--ghost" id="btcPledgeCheckBtn">🔄 Check Confirmation</button>
+        </div>
+        <div id="btcPledgeDone" style="display:none;margin-top:12px">
+          <p style="color:var(--muted);font-size:.85rem">✅ BTC confirmed! Set a PIN to create your V1 wallet — we'll generate your Recovery Kit and encrypted PDF contract with LSB steganography.</p>
+          <input type="password" id="btcPledgePin" class="input mt8" placeholder="New PIN (4-8 digits)" autocomplete="new-password">
+          <input type="password" id="btcPledgePinConfirm" class="input mt8" placeholder="Confirm PIN" autocomplete="new-password">
+          <button class="btn btn--primary mt8" id="btcPledgeCreateV1Btn">🔑 Create V1 Wallet</button>
+        </div>
+        <div id="btcPledgeErr" class="banner banner--error hidden"></div>
+      </div>
+
+      <!-- USDT/BNB Pledge tab (new wallet via USDT on BSC) -->
+      <div id="paneUsdtPledge" class="card" style="display:none">
+        <h2 style="font-size:1.1rem">💵 USDT Pledge (BNB Chain)</h2>
+        <p style="color:var(--muted);font-size:.85rem">Register your BNB sending address, send USDT (BEP20) to the vault, then check payment. Once confirmed you'll get a V1 wallet, Recovery Kit, and PDF contract.</p>
+        <div id="usdtPledgeStep1">
+          <div style="background:#0d0a1a;border:1px solid #26A17B;border-radius:8px;padding:10px;font-size:.82rem;color:#26A17B;word-break:break-all;margin-bottom:10px" id="usdtPledgeVaultBox">Loading vault address…</div>
+          <input type="text" id="usdtPledgeBnbAddr" class="input" placeholder="Your BNB sending address (0x...)" autocomplete="off">
+          <button class="btn btn--primary mt8" id="usdtPledgeRegisterBtn">📋 Register Address</button>
+        </div>
+        <div id="usdtPledgePending" style="display:none;margin-top:12px">
+          <div id="usdtPledgePendingInfo" style="background:#0d0a1a;border:1px solid #26A17B;border-radius:8px;padding:10px;font-size:.82rem;color:#26A17B;word-break:break-all;margin-bottom:10px"></div>
+          <button class="btn btn--ghost" id="usdtPledgeCheckBtn">🔄 Check Payment</button>
+        </div>
+        <div id="usdtPledgeSetupV1" style="display:none;margin-top:12px">
+          <p style="color:var(--muted);font-size:.85rem">✅ Payment confirmed! Set a PIN to create your V1 wallet — your Recovery Kit and PDF contract with LSB-embedded secret will be generated.</p>
+          <input type="password" id="usdtPledgePin" class="input mt8" placeholder="New PIN (4-8 digits)" autocomplete="new-password">
+          <input type="password" id="usdtPledgePinConfirm" class="input mt8" placeholder="Confirm PIN" autocomplete="new-password">
+          <button class="btn btn--primary mt8" id="usdtPledgeCreateV1Btn">🔑 Create V1 Wallet</button>
+        </div>
+        <div id="usdtPledgeErr" class="banner banner--error hidden"></div>
       </div>
 
       <!-- Pledge Secret tab (HMAC/v0 wallet migration) -->
@@ -420,22 +527,341 @@ async function showImport(addingExtra = false) {
     </div>
   `);
 
-  // Tab switching
-  document.getElementById('tabKit').addEventListener('click', () => {
-    document.getElementById('paneKit').style.display = '';
-    document.getElementById('panePledge').style.display = 'none';
-    document.getElementById('tabKit').style.background = 'var(--accent)';
-    document.getElementById('tabKit').style.color = '#fff';
-    document.getElementById('tabPledge').style.background = '';
-    document.getElementById('tabPledge').style.color = '';
+  // Tab switching (Create / Kit / Pledge)
+  function activateTab(name) {
+    const panes = { create: 'paneCreate', kit: 'paneKit', btcpledge: 'paneBtcPledge', usdtpledge: 'paneUsdtPledge', pledge: 'panePledge' };
+    const tabs  = { create: 'tabCreate',  kit: 'tabKit',  btcpledge: 'tabBtcPledge',  usdtpledge: 'tabUsdtPledge' };
+    for (const k of Object.keys(panes)) {
+      document.getElementById(panes[k]).style.display = (k === name) ? '' : 'none';
+    }
+    for (const k of Object.keys(tabs)) {
+      document.getElementById(tabs[k]).style.background = (k === name) ? 'var(--accent)' : '';
+      document.getElementById(tabs[k]).style.color = (k === name) ? '#fff' : '';
+    }
+  }
+  document.getElementById('tabCreate').addEventListener('click', () => activateTab('create'));
+  document.getElementById('tabKit').addEventListener('click', () => activateTab('kit'));
+  document.getElementById('tabBtcPledge').addEventListener('click', () => { activateTab('btcpledge'); loadBtcPledgeVault(); });
+  document.getElementById('tabUsdtPledge').addEventListener('click', () => { activateTab('usdtpledge'); loadUsdtPledgeVault(); });
+  document.getElementById('showPledgeSecretBtn').addEventListener('click', () => activateTab('pledge'));
+
+  // ── Create New Wallet ──
+  let generatedKeypair = null;
+  document.getElementById('generateWalletBtn').addEventListener('click', async () => {
+    const btn = document.getElementById('generateWalletBtn');
+    const errEl = document.getElementById('createErr');
+    errEl.classList.add('hidden');
+    btn.disabled = true; btn.textContent = 'Generating…';
+    try {
+      generatedKeypair = await generateThrKeypair();
+      document.getElementById('createAddrBox').innerHTML =
+        '✅ New address:<br><b>' + generatedKeypair.address + '</b>';
+      document.getElementById('createStep1').style.display = 'none';
+      document.getElementById('createStep2').style.display = '';
+    } catch (e) {
+      errEl.textContent = 'Could not generate wallet: ' + e.message;
+      errEl.classList.remove('hidden');
+    } finally {
+      btn.disabled = false; btn.textContent = '⚡ Generate New Wallet';
+    }
   });
-  document.getElementById('tabPledge').addEventListener('click', () => {
-    document.getElementById('paneKit').style.display = 'none';
-    document.getElementById('panePledge').style.display = '';
-    document.getElementById('tabPledge').style.background = 'var(--accent)';
-    document.getElementById('tabPledge').style.color = '#fff';
-    document.getElementById('tabKit').style.background = '';
-    document.getElementById('tabKit').style.color = '';
+
+  document.getElementById('createConfirmBtn').addEventListener('click', async () => {
+    const errEl = document.getElementById('createErr');
+    errEl.classList.add('hidden');
+    if (!generatedKeypair) { errEl.textContent = 'Generate a wallet first'; errEl.classList.remove('hidden'); return; }
+    const pin = document.getElementById('createPin')?.value?.trim();
+    const pinConfirm = document.getElementById('createPinConfirm')?.value?.trim();
+    const label = document.getElementById('createLabel')?.value?.trim();
+    if (!pin || pin.length < 4) { errEl.textContent = 'PIN must be 4-8 digits'; errEl.classList.remove('hidden'); return; }
+    if (pin !== pinConfirm) { errEl.textContent = 'PINs do not match'; errEl.classList.remove('hidden'); return; }
+
+    const btn = document.getElementById('createConfirmBtn');
+    btn.disabled = true; btn.textContent = 'Creating…';
+    try {
+      const { address, privHex, pubHex } = generatedKeypair;
+      const encrypted_private_key_backup = await encryptBlob(privHex, pin);
+      const kit = {
+        version: 'wallet-v1-recovery-kit',
+        canonical_v1_address: address,
+        public_key: pubHex,
+        encrypted_private_key_backup,
+        created_at: new Date().toISOString(),
+      };
+
+      upsertAccount(address, kit, label || shortAddr(address));
+      setActiveAddr(address);
+      unlocked.set(address, { privHex });
+
+      // Auto-download Recovery Kit so the user has an offline backup immediately
+      const blob = new Blob([JSON.stringify(kit, null, 2)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `thr-recovery-kit-${address.slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+
+      // Offer Face ID / passkey setup now that the wallet is unlocked in-memory
+      await promptFaceID(address, privHex);
+    } catch (e) {
+      btn.disabled = false; btn.textContent = '✅ Create Wallet';
+      errEl.textContent = 'Could not create wallet: ' + e.message;
+      errEl.classList.remove('hidden');
+    }
+  });
+
+  // ── BTC Pledge ──
+  let btcPledgeSecret = null;
+  let btcPledgeBtcAddr = null;
+  async function loadBtcPledgeVault() {
+    const box = document.getElementById('btcPledgeVaultBox');
+    if (!box || box.dataset.loaded) return;
+    try {
+      const r = await fetch(`${API_WRITE}/api/pledge/quote`);
+      const d = await r.json().catch(() => ({}));
+      if (r.ok && d.ok !== false) {
+        box.innerHTML = `Send <b>${d.required_btc ?? '0.00001'} BTC</b> to:<br>${d.vault_address || '—'}`;
+        box.dataset.loaded = '1';
+      } else {
+        box.textContent = 'Could not load vault address.';
+      }
+    } catch (e) {
+      box.textContent = 'Network error loading vault address.';
+    }
+  }
+
+  document.getElementById('btcPledgeSubmitBtn').addEventListener('click', async () => {
+    const btcAddr = document.getElementById('btcPledgeAddr')?.value?.trim();
+    const pledgeText = document.getElementById('btcPledgeText')?.value?.trim();
+    const errEl = document.getElementById('btcPledgeErr');
+    errEl.classList.add('hidden');
+    if (!btcAddr) { errEl.textContent = 'Enter your sending BTC address'; errEl.classList.remove('hidden'); return; }
+    const btn = document.getElementById('btcPledgeSubmitBtn');
+    btn.disabled = true; btn.textContent = 'Submitting…';
+    try {
+      const r = await fetch(`${API_WRITE}/api/pledge`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ btc_address: btcAddr, pledge_text: pledgeText || 'I pledge to the Thronos Network' })
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok) {
+        errEl.textContent = 'Pledge failed: ' + (d.error || 'make sure you already sent BTC to the vault address above');
+        errEl.classList.remove('hidden'); return;
+      }
+      btcPledgeBtcAddr = btcAddr;
+      document.getElementById('btcPledgeInfo').innerHTML = '⏳ THR Address (awaiting BTC confirmation):<br><b>' + (d.thr_address || '—') + '</b>';
+      document.getElementById('btcPledgeStep1').style.display = 'none';
+      document.getElementById('btcPledgeStep2').style.display = '';
+    } catch (e) {
+      errEl.textContent = 'Network error: ' + e.message; errEl.classList.remove('hidden');
+    } finally {
+      btn.disabled = false; btn.textContent = '📤 Submit Pledge';
+    }
+  });
+
+  document.getElementById('btcPledgeCheckBtn').addEventListener('click', async () => {
+    const errEl = document.getElementById('btcPledgeErr');
+    errEl.classList.add('hidden');
+    if (!btcPledgeBtcAddr) return;
+    const btn = document.getElementById('btcPledgeCheckBtn');
+    btn.disabled = true; btn.textContent = 'Checking…';
+    try {
+      const r = await fetch(`${API_WRITE}/api/pledge/status?btc=${encodeURIComponent(btcPledgeBtcAddr)}`);
+      const d = await r.json().catch(() => ({}));
+      if (d.ok && d.status === 'verified' && d.send_secret) {
+        btcPledgeSecret = d.send_secret;
+        document.getElementById('btcPledgeInfo').innerHTML = '✅ BTC Confirmed! THR Address:<br><b>' + (d.thr_address || '—') + '</b>';
+        document.getElementById('btcPledgeStep2').style.display = 'none';
+        document.getElementById('btcPledgeDone').style.display = '';
+      } else if (d.ok && d.status === 'verified' && !d.send_secret) {
+        errEl.textContent = 'Payment verified but secret not available — contact support';
+        errEl.classList.remove('hidden');
+      } else {
+        errEl.textContent = 'BTC payment not confirmed yet. The watcher checks every few minutes.';
+        errEl.classList.remove('hidden');
+      }
+    } catch (e) {
+      errEl.textContent = 'Network error: ' + e.message; errEl.classList.remove('hidden');
+    } finally {
+      btn.disabled = false; btn.textContent = '🔄 Check Confirmation';
+    }
+  });
+
+  document.getElementById('btcPledgeCreateV1Btn').addEventListener('click', async () => {
+    const pin = document.getElementById('btcPledgePin')?.value?.trim();
+    const pin2 = document.getElementById('btcPledgePinConfirm')?.value?.trim();
+    const errEl = document.getElementById('btcPledgeErr');
+    errEl.classList.add('hidden');
+    if (!pin || pin.length < 4) { errEl.textContent = 'PIN must be 4-8 digits'; errEl.classList.remove('hidden'); return; }
+    if (pin !== pin2) { errEl.textContent = 'PINs do not match'; errEl.classList.remove('hidden'); return; }
+    if (!btcPledgeSecret) { errEl.textContent = 'No pledge secret — submit your pledge first'; errEl.classList.remove('hidden'); return; }
+    const btn = document.getElementById('btcPledgeCreateV1Btn');
+    btn.disabled = true; btn.textContent = 'Creating…';
+    try {
+      const r = await fetch(`${API_WRITE}/api/wallet/v1/pledge-migrate`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ send_secret: btcPledgeSecret, pin })
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok) {
+        errEl.textContent = 'V1 creation failed: ' + (d.error || d.detail || 'unknown');
+        errEl.classList.remove('hidden'); return;
+      }
+      const canonical = d.canonical_v1_address;
+      const kitObj = d.recovery_kit ? (() => { try { return JSON.parse(d.recovery_kit); } catch { return { canonical_v1_address: canonical }; } })() : { canonical_v1_address: canonical };
+      upsertAccount(canonical, kitObj, shortAddr(canonical), btcPledgeSecret);
+      setActiveAddr(canonical);
+      let migratedPrivHex = null;
+      try {
+        const encBlob = kitObj.encrypted_private_key_backup ?? kitObj.wallet_v1_encrypted_priv ?? kitObj.encrypted_private_key ?? kitObj.enc_key;
+        if (encBlob) migratedPrivHex = await decryptBlob(encBlob, pin);
+      } catch {}
+      if (migratedPrivHex) unlocked.set(canonical, { privHex: migratedPrivHex });
+      if (d.recovery_kit) {
+        const blob = new Blob([d.recovery_kit], { type: 'application/json' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `thr-recovery-kit-${canonical.slice(0, 10)}.json`;
+        a.click();
+        URL.revokeObjectURL(a.href);
+      }
+      if (d.pdf_url) {
+        const pdfMsg = document.createElement('div');
+        pdfMsg.style.cssText = 'margin:8px 0;padding:8px;background:#0d0a1a;border:1px solid var(--accent);border-radius:6px;font-size:.82rem;text-align:center';
+        pdfMsg.innerHTML = `📄 <a href="${API_WRITE}${d.pdf_url}" target="_blank" style="color:var(--accent)">Download PDF Contract (LSB steganography)</a>`;
+        document.getElementById('btcPledgeErr')?.parentNode?.insertBefore(pdfMsg, document.getElementById('btcPledgeErr'));
+      }
+      await promptFaceID(canonical, migratedPrivHex);
+      showWallet();
+    } catch (e) {
+      errEl.textContent = 'Network error: ' + e.message; errEl.classList.remove('hidden');
+    } finally { btn.disabled = false; btn.textContent = '🔑 Create V1 Wallet'; }
+  });
+
+  // ── USDT / BNB Pledge (new wallet via USDT on BSC) ──
+  let usdtPledgeSecret = null;
+  let usdtPledgeBnbAddr = null;
+  async function loadUsdtPledgeVault() {
+    const box = document.getElementById('usdtPledgeVaultBox');
+    if (!box || box.dataset.loaded) return;
+    try {
+      const r = await fetch(`${API_WRITE}/api/pledge/bnb/quote`);
+      const d = await r.json().catch(() => ({}));
+      if (r.ok && d.ok !== false) {
+        box.innerHTML = `Send <b>min ${d.min_usdt ?? 10} USDT</b> (BEP20) to:<br><span style="word-break:break-all">${d.vault_address || '—'}</span><br><small style="color:var(--muted)">Rate: 1 USDT ≈ ${d.usdt_thr_rate ?? 100} THR</small>`;
+        box.dataset.loaded = '1';
+      } else {
+        box.textContent = 'Vault not configured yet.';
+      }
+    } catch (e) {
+      box.textContent = 'Network error loading vault.';
+    }
+  }
+
+  document.getElementById('usdtPledgeRegisterBtn').addEventListener('click', async () => {
+    const bnbAddr = document.getElementById('usdtPledgeBnbAddr')?.value?.trim();
+    const errEl = document.getElementById('usdtPledgeErr');
+    errEl.classList.add('hidden');
+    if (!bnbAddr || !/^0x[a-fA-F0-9]{40}$/.test(bnbAddr)) {
+      errEl.textContent = 'Enter a valid BNB address (0x...)'; errEl.classList.remove('hidden'); return;
+    }
+    const btn = document.getElementById('usdtPledgeRegisterBtn');
+    btn.disabled = true; btn.textContent = 'Registering…';
+    try {
+      const r = await fetch(`${API_WRITE}/api/pledge/bnb/register`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bnb_address: bnbAddr })
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok) {
+        errEl.textContent = 'Registration failed: ' + (d.error || 'unknown');
+        errEl.classList.remove('hidden'); return;
+      }
+      usdtPledgeBnbAddr = bnbAddr;
+      document.getElementById('usdtPledgePendingInfo').innerHTML =
+        '⏳ THR Address (awaiting USDT payment):<br><b>' + (d.thr_address || '—') + '</b><br>' +
+        '<small style="color:var(--muted)">Send USDT from <b>' + bnbAddr.slice(0,10) + '…</b> to the vault above, then click Check Payment.</small>';
+      document.getElementById('usdtPledgeStep1').style.display = 'none';
+      document.getElementById('usdtPledgePending').style.display = '';
+    } catch (e) {
+      errEl.textContent = 'Network error: ' + e.message; errEl.classList.remove('hidden');
+    } finally { btn.disabled = false; btn.textContent = '📋 Register Address'; }
+  });
+
+  document.getElementById('usdtPledgeCheckBtn').addEventListener('click', async () => {
+    const errEl = document.getElementById('usdtPledgeErr');
+    errEl.classList.add('hidden');
+    if (!usdtPledgeBnbAddr) return;
+    const btn = document.getElementById('usdtPledgeCheckBtn');
+    btn.disabled = true; btn.textContent = 'Checking…';
+    try {
+      const r = await fetch(`${API_WRITE}/api/pledge/bnb/status?bnb=${encodeURIComponent(usdtPledgeBnbAddr)}`);
+      const d = await r.json().catch(() => ({}));
+      if (d.ok && d.status === 'verified' && d.send_secret) {
+        usdtPledgeSecret = d.send_secret;
+        document.getElementById('usdtPledgePending').style.display = 'none';
+        document.getElementById('usdtPledgeSetupV1').style.display = '';
+      } else if (d.ok && d.status === 'verified' && !d.send_secret) {
+        errEl.textContent = 'Payment verified but secret not available — contact support';
+        errEl.classList.remove('hidden');
+      } else {
+        errEl.textContent = 'USDT payment not confirmed yet. Send USDT from your registered address, then try again in a few minutes.';
+        errEl.classList.remove('hidden');
+      }
+    } catch (e) {
+      errEl.textContent = 'Network error: ' + e.message; errEl.classList.remove('hidden');
+    } finally { btn.disabled = false; btn.textContent = '🔄 Check Payment'; }
+  });
+
+  document.getElementById('usdtPledgeCreateV1Btn').addEventListener('click', async () => {
+    const pin = document.getElementById('usdtPledgePin')?.value?.trim();
+    const pin2 = document.getElementById('usdtPledgePinConfirm')?.value?.trim();
+    const errEl = document.getElementById('usdtPledgeErr');
+    errEl.classList.add('hidden');
+    if (!pin || pin.length < 4) { errEl.textContent = 'PIN must be 4-8 digits'; errEl.classList.remove('hidden'); return; }
+    if (pin !== pin2) { errEl.textContent = 'PINs do not match'; errEl.classList.remove('hidden'); return; }
+    if (!usdtPledgeSecret) { errEl.textContent = 'No pledge secret — check payment status first'; errEl.classList.remove('hidden'); return; }
+    const btn = document.getElementById('usdtPledgeCreateV1Btn');
+    btn.disabled = true; btn.textContent = 'Creating…';
+    try {
+      const r = await fetch(`${API_WRITE}/api/wallet/v1/pledge-migrate`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ send_secret: usdtPledgeSecret, pin })
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok) {
+        errEl.textContent = 'V1 creation failed: ' + (d.error || d.detail || 'unknown');
+        errEl.classList.remove('hidden'); return;
+      }
+      const canonical = d.canonical_v1_address;
+      const kitObj = d.recovery_kit ? (() => { try { return JSON.parse(d.recovery_kit); } catch { return { canonical_v1_address: canonical }; } })() : { canonical_v1_address: canonical };
+      upsertAccount(canonical, kitObj, shortAddr(canonical), usdtPledgeSecret);
+      setActiveAddr(canonical);
+      let migratedPrivHex = null;
+      try {
+        const encBlob = kitObj.encrypted_private_key_backup ?? kitObj.wallet_v1_encrypted_priv ?? kitObj.encrypted_private_key ?? kitObj.enc_key;
+        if (encBlob) migratedPrivHex = await decryptBlob(encBlob, pin);
+      } catch {}
+      if (migratedPrivHex) unlocked.set(canonical, { privHex: migratedPrivHex });
+      if (d.recovery_kit) {
+        const blob = new Blob([d.recovery_kit], { type: 'application/json' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `thr-recovery-kit-${canonical.slice(0, 10)}.json`;
+        a.click();
+        URL.revokeObjectURL(a.href);
+      }
+      if (d.pdf_url) {
+        const pdfMsg = document.createElement('div');
+        pdfMsg.style.cssText = 'margin:8px 0;padding:8px;background:#0d0a1a;border:1px solid var(--accent);border-radius:6px;font-size:.82rem;text-align:center';
+        pdfMsg.innerHTML = `📄 <a href="${API_WRITE}${d.pdf_url}" target="_blank" style="color:var(--accent)">Download PDF Contract (LSB steganography)</a>`;
+        document.getElementById('usdtPledgeErr')?.parentNode?.insertBefore(pdfMsg, document.getElementById('usdtPledgeErr'));
+      }
+      await promptFaceID(canonical, migratedPrivHex);
+      showWallet();
+    } catch (e) {
+      errEl.textContent = 'Network error: ' + e.message; errEl.classList.remove('hidden');
+    } finally { btn.disabled = false; btn.textContent = '🔑 Create V1 Wallet'; }
   });
 
   // Pledge lookup
@@ -500,6 +926,14 @@ async function showImport(addingExtra = false) {
       upsertAccount(canonical, kitObj, shortAddr(canonical));
       setActiveAddr(canonical);
 
+      // Decrypt with the PIN just set so Face ID enrollment below has the real key
+      let migratedPrivHex = null;
+      try {
+        const encBlob = kitObj.encrypted_private_key_backup ?? kitObj.wallet_v1_encrypted_priv ?? kitObj.encrypted_private_key ?? kitObj.enc_key;
+        if (encBlob) migratedPrivHex = await decryptBlob(encBlob, pin);
+      } catch {}
+      if (migratedPrivHex) unlocked.set(canonical, { privHex: migratedPrivHex });
+
       // Auto-download Recovery Kit if server generated it
       if (d.recovery_kit) {
         const blob = new Blob([d.recovery_kit], { type: 'application/json' });
@@ -519,7 +953,7 @@ async function showImport(addingExtra = false) {
       }
 
       // Offer Face ID / fingerprint
-      await promptFaceID(canonical, null);
+      await promptFaceID(canonical, migratedPrivHex);
       showWallet();
     } catch(e) {
       errEl.textContent = 'Network error: ' + e.message; errEl.classList.remove('hidden');
@@ -727,7 +1161,12 @@ async function unlockPin(address, pin) {
       const envelope = await wrapForSession(address, privHex);
       LS.setObj(`thr_env_${address}`, envelope);
     }
-    await showWallet();
+    // Offer Face ID on first PIN unlock if not yet enrolled
+    if (!fid?.credId && await webauthnAvailable()) {
+      await promptFaceID(address, privHex);
+    } else {
+      await showWallet();
+    }
   } catch (err) {
     if (btn) { btn.disabled = false; btn.textContent = 'Unlock with PIN'; }
     setError(err.message);
@@ -800,7 +1239,16 @@ const HOME_NETWORKS = [
 ];
 
 function _renderHomeAssetRow(icon, label, sym, val, color, addr) {
-  const fmt = v => v == null ? '—' : Number(v).toFixed(8);
+  const fmt = v => {
+    if (v == null) return '—';
+    const n = Number(v);
+    if (n === 0) return '0';
+    // Show enough decimals to be meaningful without trailing zeros
+    if (n >= 1000) return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
+    if (n >= 1)    return n.toFixed(4);
+    if (n >= 0.0001) return n.toFixed(6);
+    return n.toFixed(8);
+  };
   return `<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid #ffffff10">
     <div style="width:28px;height:28px;border-radius:50%;background:${color}33;border:1px solid ${color};display:flex;align-items:center;justify-content:center;font-size:.8rem;flex-shrink:0">${icon}</div>
     <div style="flex:1;min-width:0">
@@ -852,6 +1300,10 @@ async function showWallet() {
 
       <!-- Balances + Token list -->
       <div class="card" style="padding:12px;margin-bottom:10px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+          <span style="font-size:.7rem;text-transform:uppercase;letter-spacing:1px;color:var(--accent)">Balance</span>
+          <button id="refreshBalBtn" title="Refresh balance" style="background:none;border:none;color:var(--muted);font-size:.95rem;cursor:pointer;padding:2px 6px;line-height:1" aria-label="Refresh">🔄</button>
+        </div>
         <div id="balancesArea">
           <div class="balance-amount balance-amount--loading">···</div>
         </div>
@@ -864,6 +1316,7 @@ async function showWallet() {
         <button class="action-btn" id="swapBtn"><span class="action-btn__icon">🔄</span>Swap</button>
         <button class="action-btn" id="poolsBtn"><span class="action-btn__icon">💧</span>Pools</button>
         <button class="action-btn" id="bridgeBtn"><span class="action-btn__icon">⚡</span>Bridge</button>
+        <button class="action-btn" id="usdtPledgeBtn"><span class="action-btn__icon">💵</span>USDT Pledge</button>
         <button class="action-btn" id="networksBtn"><span class="action-btn__icon">🌐</span>Networks</button>
         <button class="action-btn" id="tokensBtn"><span class="action-btn__icon">◈</span>Tokens</button>
         <button class="action-btn" id="connectBtn"><span class="action-btn__icon">⬡</span>Connect</button>
@@ -872,11 +1325,7 @@ async function showWallet() {
         <button class="action-btn" id="createTokenBtn"><span class="action-btn__icon">🪙</span>Create Token</button>
         <button class="action-btn" id="nftBtn"><span class="action-btn__icon">🖼️</span>NFTs</button>
         <button class="action-btn" id="epochBtn"><span class="action-btn__icon">⏳</span>Epoch</button>
-      </div>
-
-      <div class="tx-feed" id="txFeed" style="display:none">
-        <div class="tx-feed__title">Recent Activity</div>
-        <div id="txList"><p style="color:var(--muted);font-size:.88rem">Loading…</p></div>
+        <button class="action-btn" id="withdrawBtn"><span class="action-btn__icon">💰</span>Withdraw</button>
       </div>
     </div>
   `);
@@ -895,36 +1344,15 @@ async function showWallet() {
   document.getElementById('poolsBtn').addEventListener('click', showPools);
   document.getElementById('tokensBtn').addEventListener('click', showTokens);
   document.getElementById('bridgeBtn').addEventListener('click', () => showBridge('BTC', 'WBTC'));
+  document.getElementById('usdtPledgeBtn').addEventListener('click', () => showUsdtPledge(address));
   document.getElementById('networksBtn').addEventListener('click', showMultiChain);
   document.getElementById('connectBtn').addEventListener('click', showWalletConnect);
   document.getElementById('musicBtn').addEventListener('click', showMusic);
   document.getElementById('createTokenBtn').addEventListener('click', showCreateToken);
   document.getElementById('nftBtn').addEventListener('click', showNFTs);
   document.getElementById('epochBtn').addEventListener('click', showEpoch);
-  document.getElementById('historyBtn').addEventListener('click', () => {
-    const feed = document.getElementById('txFeed');
-    if (feed) feed.style.display = feed.style.display === 'none' ? '' : 'none';
-    if (feed?.style.display !== 'none') {
-      fetchHistory(address).then(txs => {
-        const el = document.getElementById('txList');
-        if (!el) return;
-        if (!txs.length) { el.innerHTML = '<p style="color:var(--muted);font-size:.88rem">No transactions yet.</p>'; return; }
-        el.innerHTML = txs.slice(0, 20).map(tx => {
-          const isIn = (tx.to || '').toUpperCase() === address;
-          const dir = isIn ? 'in' : 'out';
-          const peer = isIn ? (tx.from || '').slice(0, 10) : (tx.to || '').slice(0, 10);
-          const sym = tx.token || 'THR';
-          const amt = tx.amount ? `${isIn ? '+' : '-'}${tx.amount} ${sym}` : '';
-          const date = tx.timestamp ? new Date(tx.timestamp * 1000).toLocaleDateString() : '';
-          return `<div class="tx-item">
-            <div class="tx-item__dir tx-item__dir--${dir}">${isIn ? '↓' : '↑'}</div>
-            <div class="tx-item__info"><div class="tx-item__label">${isIn ? 'From' : 'To'} ${peer}…</div><div class="tx-item__date">${date}</div></div>
-            <div class="tx-item__amount tx-item__amount--${dir}">${amt}</div>
-          </div>`;
-        }).join('');
-      });
-    }
-  });
+  document.getElementById('historyBtn').addEventListener('click', () => showHistory(address));
+  document.getElementById('withdrawBtn').addEventListener('click', () => showWithdraw(address));
 
   const setAddrBarValue = (full) => {
     const lineEl = document.getElementById('addrLine');
@@ -1051,7 +1479,21 @@ async function showWallet() {
     el.innerHTML = `<div style="font-size:.7rem;text-transform:uppercase;letter-spacing:1px;color:var(--accent);margin-bottom:4px">Assets</div>${rows}`;
   };
 
+  const refreshCurrentNet = () => {
+    homeChainBalances = null; // force re-fetch
+    const netId = document.getElementById('homeNetSel')?.value || 'thronos';
+    if (netId === 'thronos') { loadThronosAssets(); return; }
+    loadOtherNetworkAssets(netId);
+  };
+
+  document.getElementById('refreshBalBtn').addEventListener('click', () => {
+    const btn = document.getElementById('refreshBalBtn');
+    if (btn) { btn.style.opacity = '.4'; setTimeout(() => { if (btn) btn.style.opacity = '1'; }, 800); }
+    refreshCurrentNet();
+  });
+
   document.getElementById('homeNetSel').addEventListener('change', (e) => {
+    homeChainBalances = null; // always re-fetch on network switch
     const netId = e.target.value;
     if (netId === 'thronos') { loadThronosAssets(); return; }
     loadOtherNetworkAssets(netId);
@@ -1059,6 +1501,15 @@ async function showWallet() {
 
   // Load balances — same API as web wallet
   loadThronosAssets();
+
+  // Auto-refresh every 30s while wallet is open
+  const _autoRefreshId = setInterval(() => {
+    if (!document.getElementById('refreshBalBtn')) { clearInterval(_autoRefreshId); return; }
+    const netId = document.getElementById('homeNetSel')?.value || 'thronos';
+    if (netId === 'thronos') { loadThronosAssets(); return; }
+    homeChainBalances = null;
+    loadOtherNetworkAssets(netId);
+  }, 30000);
 }
 
 // ─── Token detail modal ────────────────────────────────────────────────────────
@@ -1757,6 +2208,99 @@ async function showMultiChain() {
 }
 
 // ─── Bridge screen ─────────────────────────────────────────────────────────────
+
+// ─── USDT-on-BNB-Chain Pledge (PWA/mobile only) ────────────────────────────
+
+async function showUsdtPledge(address) {
+  render(`
+    <div class="screen">
+      <div class="header">
+        <button class="btn--icon" id="backBtn">←</button>
+        <span class="logo--sm">⬡ THR</span>
+        <span style="width:32px"></span>
+      </div>
+      <h2 style="font-size:1.1rem;margin-top:8px">💵 USDT Pledge (BNB Chain)</h2>
+      <p style="color:var(--muted);font-size:.85rem">Send USDT (BEP20) on Binance Smart Chain to the vault below. Once confirmed, your THR equivalent is credited automatically — half is paired into the THR/USDT liquidity pool. Minimum pledge applies.</p>
+
+      <div id="pledgeQuoteArea" class="card" style="padding:12px;margin-bottom:10px">
+        <div style="color:var(--muted);font-size:.85rem">Loading vault details…</div>
+      </div>
+
+      <div class="card" style="padding:12px;margin-bottom:10px">
+        <h3 style="font-size:.95rem;margin-bottom:6px">1. Register your sending BNB address</h3>
+        <p style="color:var(--muted);font-size:.8rem">Enter the BNB/BEP20 address you'll send USDT FROM — this links your pledge to your THR wallet.</p>
+        <input type="text" id="bnbAddrInput" class="input" placeholder="0x... (your BNB sending address)" autocomplete="off">
+        <button class="btn btn--primary mt8" id="bnbRegisterBtn">Register Address</button>
+        <div id="bnbRegisterMsg" style="margin-top:8px;font-size:.82rem"></div>
+      </div>
+
+      <div id="pledgeErr" class="banner banner--error hidden"></div>
+    </div>
+  `);
+
+  document.getElementById('backBtn').addEventListener('click', showWallet);
+
+  // Load quote (vault address, contract, min, rate)
+  try {
+    const r = await fetch(`${API_WRITE}/api/pledge/bnb/quote`);
+    const d = await r.json().catch(() => ({}));
+    const quoteEl = document.getElementById('pledgeQuoteArea');
+    if (r.ok && d.ok !== false) {
+      quoteEl.innerHTML = `
+        <div style="font-size:.78rem;color:var(--muted);margin-bottom:4px">Send USDT (BEP20) to:</div>
+        <div style="font-family:monospace;font-size:.82rem;color:var(--accent);word-break:break-all;background:#0d0a1a;border-radius:6px;padding:8px;margin-bottom:8px" id="vaultAddrLine">${d.vault_address || '—'}</div>
+        <button class="btn btn--ghost" id="copyVaultBtn" style="font-size:.75rem;padding:4px 10px;margin-bottom:8px">Copy Address</button>
+        <div style="font-size:.78rem;color:var(--muted)">Token contract: <span style="font-family:monospace">${d.token_contract || '—'}</span></div>
+        <div style="font-size:.78rem;color:var(--muted)">Network: ${d.chain || 'BNB Smart Chain (BEP20)'}</div>
+        <div style="font-size:.78rem;color:var(--muted)">Minimum pledge: ${d.min_usdt ?? 10} USDT</div>
+        <div style="font-size:.78rem;color:var(--muted)">Rate: 1 USDT ≈ ${d.usdt_thr_rate ?? 100} THR</div>
+      `;
+      document.getElementById('copyVaultBtn')?.addEventListener('click', async () => {
+        try { await navigator.clipboard.writeText(d.vault_address || ''); } catch {}
+        const b = document.getElementById('copyVaultBtn');
+        if (b) { b.textContent = '✓ Copied'; setTimeout(() => { if (b) b.textContent = 'Copy Address'; }, 1500); }
+      });
+    } else {
+      quoteEl.innerHTML = `<div style="color:#ff6b6b;font-size:.85rem">Pledge vault not configured yet. Try again later.</div>`;
+    }
+  } catch (e) {
+    document.getElementById('pledgeQuoteArea').innerHTML = `<div style="color:#ff6b6b;font-size:.85rem">Network error loading vault details.</div>`;
+  }
+
+  document.getElementById('bnbRegisterBtn').addEventListener('click', async () => {
+    const bnbAddr = document.getElementById('bnbAddrInput')?.value?.trim();
+    const msgEl = document.getElementById('bnbRegisterMsg');
+    const errEl = document.getElementById('pledgeErr');
+    errEl.classList.add('hidden');
+    msgEl.textContent = '';
+    if (!bnbAddr || !/^0x[a-fA-F0-9]{40}$/.test(bnbAddr)) {
+      errEl.textContent = 'Enter a valid BNB (0x...) address';
+      errEl.classList.remove('hidden');
+      return;
+    }
+    const btn = document.getElementById('bnbRegisterBtn');
+    btn.disabled = true; btn.textContent = 'Registering…';
+    try {
+      const r = await fetch(`${API_WRITE}/api/pledge/bnb/register`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ thr_address: address, bnb_address: bnbAddr })
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || d.ok === false) {
+        errEl.textContent = 'Registration failed: ' + (d.error || 'unknown');
+        errEl.classList.remove('hidden');
+        return;
+      }
+      msgEl.style.color = '#4ade80';
+      msgEl.textContent = '✅ Address registered. Send USDT from this address to the vault above — THR will be credited once confirmed (~5 min).';
+    } catch (e) {
+      errEl.textContent = 'Network error: ' + e.message;
+      errEl.classList.remove('hidden');
+    } finally {
+      btn.disabled = false; btn.textContent = 'Register Address';
+    }
+  });
+}
 
 const _BRIDGE_PAIRS = [
   { from:'BTC',  to:'WBTC', fee:0.1,  time:'~5 min',  label:'₿ BTC → WBTC',  available:true },
@@ -2763,6 +3307,139 @@ async function showSwap(preselectedIn = null) {
 
 // ─── Pools ────────────────────────────────────────────────────────────────────
 
+const HISTORY_FILTERS = [
+  { key: 'all', label: 'All' },
+  { key: 'thr_transfer', label: 'THR' },
+  { key: 'token_transfer', label: 'Tokens' },
+  { key: 'swap', label: 'Swaps' },
+  { key: 'liquidity', label: 'Liquidity' },
+  { key: 'mining_reward', label: 'Mining' },
+  { key: 'bridge', label: 'Bridge' },
+  { key: 'mint', label: 'Mint' },
+  { key: 'burn', label: 'Burn' },
+];
+
+function _parseTxDate(ts) {
+  if (ts === undefined || ts === null || ts === '') return null;
+  if (typeof ts === 'number') return new Date(ts > 1e12 ? ts : ts * 1000);
+  const s = String(ts).trim();
+  if (/^\d+$/.test(s)) {
+    const n = Number(s);
+    return new Date(n > 1e12 ? n : n * 1000);
+  }
+  const d = new Date(s.replace(' UTC', 'Z').replace(' ', 'T'));
+  if (!isNaN(d.getTime())) return d;
+  const d2 = new Date(s);
+  return isNaN(d2.getTime()) ? null : d2;
+}
+
+function _renderHistoryRow(tx) {
+  const kind = tx.kind || tx.type || tx.category || 'transfer';
+  const label = tx.category_label || kind.replace(/_/g, ' ');
+  const direction = tx.direction || (tx.kind === 'swap' ? 'swap' : 'out');
+  const symbol = (tx.asset_symbol || tx.symbol || 'THR').toUpperCase();
+  const amount = tx.display_amount !== undefined ? tx.display_amount : (tx.amount_in !== undefined ? tx.amount_in : tx.amount);
+  const date = _parseTxDate(tx.timestamp);
+  const dateStr = date ? date.toLocaleString() : (tx.timestamp || '—');
+  const status = tx.status || (tx.reject_reason ? 'failed' : 'confirmed');
+  const statusColor = status === 'failed' || status === 'rejected' ? '#ff6b6b' : (status === 'pending' ? '#ffb347' : '#00ff66');
+
+  let amountHtml;
+  if (kind === 'swap' && tx.amount_out !== undefined) {
+    const symOut = (tx.symbol_out || '').toUpperCase();
+    amountHtml = `<span style="color:#ff6b6b">-${Number(amount || 0).toLocaleString(undefined,{maximumFractionDigits:6})} ${symbol}</span>
+      <span style="color:var(--muted)"> → </span>
+      <span style="color:#00ff66">+${Number(tx.amount_out).toLocaleString(undefined,{maximumFractionDigits:6})} ${symOut}</span>`;
+  } else if (kind === 'liquidity' && Array.isArray(tx.amounts)) {
+    amountHtml = tx.amounts.map(a => `<span style="color:#fff">${Number(a.amount || a).toLocaleString(undefined,{maximumFractionDigits:6})} ${(a.symbol || '').toUpperCase()}</span>`).join(' / ');
+  } else {
+    const sign = direction === 'in' ? '+' : (direction === 'out' ? '-' : '');
+    const color = direction === 'in' ? '#00ff66' : (direction === 'out' ? '#ff6b6b' : '#fff');
+    amountHtml = `<span style="color:${color}">${sign}${Number(amount || 0).toLocaleString(undefined,{maximumFractionDigits:6})} ${symbol}</span>`;
+  }
+
+  const feeHtml = tx.fee_burned ? `<div style="font-size:.72rem;color:var(--muted)">Fee: ${Number(tx.fee_burned).toLocaleString(undefined,{maximumFractionDigits:6})} THR</div>` : '';
+  const noteHtml = tx.note ? `<div style="font-size:.72rem;color:var(--muted);margin-top:2px">${tx.note}</div>` : '';
+  const linkHtml = tx.explorer_link ? `<a href="${tx.explorer_link}" target="_blank" style="font-size:.72rem;color:#b08cf8">View ↗</a>` : '';
+
+  return `<div class="card" style="padding:10px 12px;margin-bottom:8px">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start">
+      <div>
+        <div style="font-size:.85rem;font-weight:700;color:#fff;text-transform:capitalize">${label}</div>
+        <div style="font-size:.72rem;color:var(--muted)">${dateStr}</div>
+      </div>
+      <div style="text-align:right;font-size:.85rem;font-weight:700">${amountHtml}</div>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px">
+      <div>${feeHtml}${noteHtml}</div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <span style="font-size:.7rem;color:${statusColor};text-transform:capitalize">${status}</span>
+        ${linkHtml}
+      </div>
+    </div>
+  </div>`;
+}
+
+async function showHistory(address) {
+  address = address || getActiveAddr();
+  if (!address || !unlocked.has(address)) { showUnlock(); return; }
+
+  render(`
+    <div class="screen">
+      <div class="header">
+        <button class="btn--icon" id="backBtn">←</button>
+        <span style="font-weight:700;color:#fff">📋 Transaction History</span>
+        <span></span>
+      </div>
+      <div id="historyFilters" style="display:flex;gap:6px;overflow-x:auto;padding:10px 0;white-space:nowrap"></div>
+      <div id="historyBody" style="margin-top:4px">
+        <p style="color:var(--muted);text-align:center;padding:20px">Loading history…</p>
+      </div>
+    </div>
+  `);
+
+  document.getElementById('backBtn').addEventListener('click', showWallet);
+
+  let allTx = [];
+  let activeFilter = 'all';
+
+  function renderFilters() {
+    const el = document.getElementById('historyFilters');
+    if (!el) return;
+    el.innerHTML = HISTORY_FILTERS.map(f => `
+      <button class="btn ${f.key === activeFilter ? 'btn--primary' : 'btn--ghost'}" data-filter="${f.key}" style="padding:6px 12px;font-size:.75rem;flex-shrink:0">${f.label}</button>
+    `).join('');
+    el.querySelectorAll('button[data-filter]').forEach(btn => {
+      btn.addEventListener('click', () => { activeFilter = btn.dataset.filter; renderFilters(); renderList(); });
+    });
+  }
+
+  function renderList() {
+    const el = document.getElementById('historyBody');
+    if (!el) return;
+    const filtered = activeFilter === 'all' ? allTx : allTx.filter(tx => (tx.kind || tx.type || tx.category) === activeFilter);
+    if (!filtered.length) {
+      el.innerHTML = '<p style="color:var(--muted);text-align:center;padding:20px">No transactions found.</p>';
+      return;
+    }
+    const sorted = [...filtered].sort((a, b) => {
+      const da = _parseTxDate(a.timestamp), db = _parseTxDate(b.timestamp);
+      return (db ? db.getTime() : 0) - (da ? da.getTime() : 0);
+    });
+    el.innerHTML = sorted.map(_renderHistoryRow).join('');
+  }
+
+  renderFilters();
+
+  try {
+    allTx = await fetchHistory(address);
+    renderList();
+  } catch (e) {
+    const el = document.getElementById('historyBody');
+    if (el) el.innerHTML = `<p style="color:#ff6b6b;text-align:center;padding:20px">Error: ${e.message}</p>`;
+  }
+}
+
 async function showPools() {
   const address = getActiveAddr();
   if (!address || !unlocked.has(address)) { showUnlock(); return; }
@@ -2846,6 +3523,269 @@ async function showPools() {
     const el = document.getElementById('poolsBody');
     if (el) el.innerHTML = `<p style="color:#ff6b6b;text-align:center;padding:20px">Error: ${e.message}</p>`;
   }
+}
+
+// ─── Withdraw USDT/USDC from Thronos pool ──────────────────────────────────
+
+async function showWithdraw(address) {
+  if (!address || !unlocked.has(address)) { showUnlock(); return; }
+
+  let poolInfo   = null;
+  let chainsInfo = null;    // { chains: [{id, label, tokens}], max_withdraw_usdt }
+  let sendSecret = null;    // pledge ownership proof
+  let submitting = false;
+
+  // ── helpers ──────────────────────────────────────────────────────────────
+
+  // Build chain <option> html filtered to those that support the selected token
+  const chainOpts = (selectedToken, selectedChain) => {
+    if (!chainsInfo?.chains?.length) return '<option value="">No chains available</option>';
+    return chainsInfo.chains
+      .filter(c => c.tokens.includes(selectedToken))
+      .map(c => `<option value="${c.id}" ${c.id === selectedChain ? 'selected' : ''}>${c.label}</option>`)
+      .join('');
+  };
+
+  // Build token <option> html for chains that have any supported token
+  const tokenOpts = (selectedToken) => {
+    if (!chainsInfo?.chains?.length) return '';
+    const tokens = [...new Set(chainsInfo.chains.flatMap(c => c.tokens))].sort();
+    return tokens.map(t => `<option value="${t}" ${t === selectedToken ? 'selected' : ''}>${t}</option>`).join('');
+  };
+
+  const renderPage = (err, state = {}) => {
+    const usdt_reserve  = poolInfo ? Number(poolInfo.usdt_reserve  || 0).toFixed(2) : '…';
+    const thr_price     = poolInfo ? `$${Number(poolInfo.thr_price_usd || 0).toFixed(4)}` : '…';
+    const pledge_count  = poolInfo ? poolInfo.pledge_count   : '…';
+    const next_at       = poolInfo ? poolInfo.next_level_at  : '…';
+    const max_wd        = poolInfo ? Number(poolInfo.max_withdraw_usdt || 0).toFixed(2) : '150.00';
+    const curToken      = state.token  || 'USDT';
+    const curChain      = state.chain  || (chainsInfo?.chains?.[0]?.id ?? 'bsc');
+    const hasChainsConfigured = chainsInfo?.chains?.length > 0;
+    // Old users who imported wallet may not have secret cached — show manual entry
+    const showSecretInput = !sendSecret;
+
+    render(`
+      <div class="screen">
+        <div class="header">
+          <button class="btn--icon" id="wdBackBtn">←</button>
+          <span style="font-weight:700;color:#fff">💰 Withdraw</span>
+          <span></span>
+        </div>
+
+        <!-- Pool info -->
+        <div class="card" style="padding:10px 12px;margin-bottom:8px;background:#0d0a1a;border:1px solid #2a2050">
+          <div style="font-size:.65rem;text-transform:uppercase;letter-spacing:1px;color:#b08cf8;margin-bottom:4px">THR/USDT Pool</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;font-size:.75rem">
+            <div><span style="color:var(--muted)">Reserve </span><span style="color:#fff">${usdt_reserve} USDT</span></div>
+            <div style="text-align:center"><span style="color:var(--muted)">THR </span><span style="color:#00ff66;font-weight:700">${thr_price}</span></div>
+            <div style="text-align:right"><span style="color:var(--muted)">Max </span><span style="color:#b08cf8;font-weight:700">$${max_wd}</span></div>
+          </div>
+        </div>
+
+        ${!hasChainsConfigured ? `
+          <div class="card" style="padding:16px;text-align:center">
+            <div style="font-size:1.4rem;margin-bottom:8px">🔧</div>
+            <div style="color:#ff6b6b;font-size:.85rem;font-weight:600;margin-bottom:4px">No Withdrawal Chains Configured</div>
+            <div style="color:var(--muted);font-size:.78rem">The operator hasn't enabled any outbound chains yet.<br>Contact support for assistance.</div>
+          </div>
+        ` : `
+          <div class="card" style="padding:12px">
+            <div style="font-size:.65rem;text-transform:uppercase;letter-spacing:1px;color:#b08cf8;margin-bottom:10px">Withdraw to External Wallet</div>
+
+            <!-- Old-user / imported-wallet secret entry -->
+            ${showSecretInput ? `
+              <div style="background:#1a0d30;border:1px solid #b08cf840;border-radius:8px;padding:10px;margin-bottom:10px">
+                <div style="font-size:.75rem;color:#b08cf8;font-weight:600;margin-bottom:6px">🔑 Pledge Secret</div>
+                <div style="font-size:.72rem;color:var(--muted);margin-bottom:6px">
+                  If you created your wallet via a BTC or USDT pledge, enter your <b>send secret</b> here.<br>
+                  New users: complete a pledge first.
+                </div>
+                <input id="wdSecret" class="input" placeholder="Pledge send secret (hex)…" autocomplete="off"
+                  style="font-family:monospace;font-size:.72rem;margin-bottom:0">
+              </div>
+            ` : `
+              <div style="background:#0a1a0a;border:1px solid #00ff6640;border-radius:8px;padding:7px 10px;margin-bottom:10px;font-size:.75rem;color:#00ff66">
+                ✓ Pledge credentials loaded
+              </div>
+            `}
+
+            <!-- Token selector (only tokens available on configured chains) -->
+            <label style="font-size:.75rem;color:var(--muted)">Token</label>
+            <select id="wdToken" class="input" style="margin-bottom:8px">${tokenOpts(curToken)}</select>
+
+            <!-- Chain selector (filtered by selected token) -->
+            <label style="font-size:.75rem;color:var(--muted)">Destination Chain</label>
+            <select id="wdChain" class="input" style="margin-bottom:8px">${chainOpts(curToken, curChain)}</select>
+
+            <!-- External EVM wallet address -->
+            <label style="font-size:.75rem;color:var(--muted)">External Wallet (EVM)</label>
+            <input id="wdDest" class="input" placeholder="0x…" autocomplete="off"
+              style="margin-bottom:8px;font-family:monospace;font-size:.75rem">
+
+            <!-- Amount -->
+            <label style="font-size:.75rem;color:var(--muted)">Amount (max $${max_wd})</label>
+            <div style="display:flex;gap:6px;margin-bottom:8px">
+              <input id="wdAmount" class="input" type="number" min="1" max="${max_wd}" step="0.01"
+                placeholder="e.g. 50" style="flex:1;margin-bottom:0">
+              <button class="btn btn--ghost" style="padding:6px 10px;font-size:.75rem;white-space:nowrap" id="wdMaxBtn">MAX</button>
+            </div>
+
+            <!-- Live fee preview -->
+            <div id="wdFeeRow" style="font-size:.75rem;color:var(--muted);margin-bottom:10px;min-height:18px"></div>
+
+            ${err ? `<div style="color:#ff6b6b;font-size:.8rem;margin-bottom:8px;padding:6px 8px;background:#ff6b6b10;border-radius:6px">${escHtml(err)}</div>` : ''}
+
+            <button class="btn btn--primary" id="wdSubmitBtn" style="width:100%;padding:11px;font-size:.9rem;font-weight:700">
+              Withdraw
+            </button>
+            <div style="font-size:.67rem;color:var(--muted);margin-top:6px;text-align:center">
+              1% fee · 0.5% in THR burned · 0.5% in-kind · ~5 min
+            </div>
+          </div>
+        `}
+      </div>
+    `);
+
+    document.getElementById('wdBackBtn').addEventListener('click', showWallet);
+    if (!hasChainsConfigured) return;
+
+    // Token change → rebuild chain options (token/chain compatibility)
+    const rebuildChainOpts = () => {
+      const tok = document.getElementById('wdToken')?.value || 'USDT';
+      const chainSel = document.getElementById('wdChain');
+      if (chainSel) chainSel.innerHTML = chainOpts(tok, chainSel.value);
+    };
+    document.getElementById('wdToken')?.addEventListener('change', () => { rebuildChainOpts(); updateFeeRow(); });
+
+    const updateFeeRow = () => {
+      const amount  = parseFloat(document.getElementById('wdAmount')?.value || 0);
+      const token   = document.getElementById('wdToken')?.value || 'USDT';
+      const feeRow  = document.getElementById('wdFeeRow');
+      if (!feeRow) return;
+      if (!amount || amount <= 0) { feeRow.textContent = ''; return; }
+      const feeTotalUsd  = amount * 0.01;
+      const feeInKind    = (feeTotalUsd * 0.5).toFixed(4);
+      const thrPrice     = poolInfo?.thr_price_usd || 10;
+      const feeThr       = ((feeTotalUsd * 0.5) / thrPrice).toFixed(6);
+      const net          = (amount - feeTotalUsd * 0.5).toFixed(4);
+      feeRow.innerHTML   = `You receive <b style="color:#00ff66">${net} ${token}</b> · Fee: ${feeInKind} ${token} + ${feeThr} THR`;
+    };
+    document.getElementById('wdAmount')?.addEventListener('input', updateFeeRow);
+
+    document.getElementById('wdMaxBtn')?.addEventListener('click', () => {
+      const inp = document.getElementById('wdAmount');
+      if (inp) { inp.value = parseFloat(max_wd).toFixed(2); updateFeeRow(); }
+    });
+
+    document.getElementById('wdSubmitBtn')?.addEventListener('click', async () => {
+      if (submitting) return;
+
+      // Resolve send_secret: cached or manually entered
+      const secret = sendSecret || (document.getElementById('wdSecret')?.value || '').trim();
+      if (!secret) return renderPage('Enter your pledge send secret to unlock withdrawals.', { token: curToken, chain: curChain });
+
+      const amount    = parseFloat(document.getElementById('wdAmount')?.value || 0);
+      const token     = document.getElementById('wdToken')?.value || 'USDT';
+      const destChain = document.getElementById('wdChain')?.value || curChain;
+      const destAddr  = (document.getElementById('wdDest')?.value || '').trim().toLowerCase();
+      const maxWd     = parseFloat(max_wd);
+
+      if (!amount || amount <= 0) return renderPage('Enter a valid amount.', { token, chain: destChain });
+      if (amount > maxWd) return renderPage(`Max withdrawal is $${max_wd}.`, { token, chain: destChain });
+      if (!/^0x[0-9a-f]{40}$/i.test(destAddr)) return renderPage('Enter a valid EVM wallet address (0x…).', { token, chain: destChain });
+
+      submitting = true;
+      document.getElementById('wdSubmitBtn').textContent = 'Processing…';
+      document.getElementById('wdSubmitBtn').disabled = true;
+
+      try {
+        const resp = await fetch(`${API_BASE}/api/v1/withdraw`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            address:      address,
+            send_secret:  secret,
+            amount,
+            token,
+            dest_chain:   destChain,
+            dest_address: destAddr,
+          }),
+        }).then(r => r.json());
+
+        if (resp.ok) {
+          // Cache secret in account metadata for future withdrawals (old-user path)
+          if (!sendSecret && secret) {
+            const acc = getAccount(address);
+            if (acc) upsertAccount(address, acc.kit, acc.label, secret);
+          }
+          // Success screen
+          render(`
+            <div class="screen">
+              <div class="header">
+                <button class="btn--icon" id="wdDoneBack">←</button>
+                <span style="font-weight:700;color:#fff">Withdrawal Submitted</span>
+                <span></span>
+              </div>
+              <div class="card" style="padding:20px;text-align:center;margin-top:16px">
+                <div style="font-size:2rem;margin-bottom:10px">✅</div>
+                <div style="font-size:1rem;font-weight:700;color:#00ff66;margin-bottom:6px">Pending</div>
+                <div style="font-size:.78rem;color:var(--muted);margin-bottom:14px">
+                  ID: <span style="color:#b08cf8;font-family:monospace">${resp.withdrawal_id}</span>
+                </div>
+                <div style="display:grid;gap:5px;font-size:.8rem;text-align:left;background:#0d0a1a;border-radius:8px;padding:12px;margin-bottom:14px">
+                  ${[
+                    ['Token',           resp.token],
+                    ['Requested',       `${resp.amount} ${resp.token}`],
+                    ['You receive',     `${resp.amount_net} ${resp.token}`],
+                    ['THR fee',         `${resp.fee_thr} THR`],
+                    ['THR price (oracle)', `$${Number(resp.oracle_price_usd || 0).toFixed(4)}`],
+                    ['Chain',           resp.dest_chain_label || resp.dest_chain],
+                    ['External wallet', `${destAddr.slice(0,10)}…${destAddr.slice(-6)}`],
+                  ].map(([k,v]) => `
+                    <div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid #ffffff08">
+                      <span style="color:var(--muted)">${k}</span>
+                      <span style="color:${k==='You receive'?'#00ff66':k==='THR fee'?'#b08cf8':'#fff'};font-weight:${k==='You receive'?700:400}">${escHtml(String(v))}</span>
+                    </div>`).join('')}
+                </div>
+                <div style="color:var(--muted);font-size:.75rem">~${resp.estimated_minutes || 5} min delivery</div>
+              </div>
+            </div>
+          `);
+          document.getElementById('wdDoneBack').addEventListener('click', showWallet);
+        } else {
+          submitting = false;
+          const errMsg = {
+            invalid_credentials:       'Invalid pledge secret. Check your send secret and try again.',
+            chain_not_configured:      `Chain not available. Available: ${resp.available?.join(', ') || '—'}`,
+            token_not_supported_on_chain: `${resp.token || 'Token'} is not supported on that chain.`,
+            insufficient_pool_liquidity: `Pool liquidity too low. Available: $${resp.available_usdt?.toFixed(2)}`,
+            insufficient_thr_for_fee:  `Need ${resp.required_thr} THR for fee (have ${resp.thr_balance}).`,
+            exceeds_max_withdrawal:    `Max withdrawal is $${resp.max_withdrawal}.`,
+          }[resp.error] || resp.error || 'Withdrawal failed. Please try again.';
+          renderPage(errMsg, { token, chain: destChain });
+        }
+      } catch (e) {
+        submitting = false;
+        renderPage('Network error. Please try again.', { token: curToken, chain: curChain });
+      }
+    });
+  };
+
+  // ── Load data ─────────────────────────────────────────────────────────────
+  render(`<div class="screen"><div style="text-align:center;padding:60px;color:var(--muted)">Loading…</div></div>`);
+  try {
+    const [pi, ci] = await Promise.all([
+      fetch(`${API_BASE}/api/v1/pool/thr-usdt`).then(r => r.json()).catch(() => null),
+      fetch(`${API_BASE}/api/v1/withdraw/chains`).then(r => r.json()).catch(() => null),
+    ]);
+    poolInfo   = pi?.ok ? pi : null;
+    chainsInfo = ci?.ok ? ci : null;
+    // Load secret from account metadata (new-user path after pledge migration)
+    const acc = getAccount(address);
+    if (acc?.pledge_send_secret) sendSecret = acc.pledge_send_secret;
+  } catch {}
+  renderPage(null);
 }
 
 async function showAddLiquidity(poolId, tokenA, tokenB) {

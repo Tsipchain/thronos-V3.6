@@ -259,16 +259,28 @@ export async function getBridgeStats(): Promise<{ total_burned_thr: number; tota
   return request('/api/bridge/stats');
 }
 
-export async function submitPledge(params: { btc_address: string; pledge_text: string; recovery_phrase?: string }): Promise<{ success: boolean; thr_address?: string; send_secret?: string; pledge_hash?: string; pdf_filename?: string; error?: string }> {
-  return request('/api/pledge/submit', { method: 'POST', body: JSON.stringify(params) });
+export async function submitPledge(params: { btc_address: string; pledge_text: string }): Promise<{ ok: boolean; status?: string; thr_address?: string; secret_seed?: string; pledge_hash?: string; pending_confirmation?: boolean; error?: string }> {
+  return request('/api/pledge', { method: 'POST', body: JSON.stringify({ btc_address: params.btc_address, pledge_text: params.pledge_text }) });
 }
 
-export async function verifyBtcPayment(btc_address: string): Promise<{ verified: boolean; amount?: number; txid?: string }> {
-  return request(`/api/pledge/verify_btc/${btc_address}`);
+export async function getPledgeStatus(btc_address: string): Promise<{ ok: boolean; status?: string; thr_address?: string; pledge_hash?: string; pdf_filename?: string; send_secret?: string; pending_confirmation?: boolean }> {
+  return request(`/api/pledge/status?btc=${encodeURIComponent(btc_address)}`);
 }
 
-export async function downloadPledgePdf(thr_address: string): Promise<{ pdf_url: string }> {
-  return request(`/api/pledge/pdf/${thr_address}`);
+export async function getBnbPledgeStatus(bnb_address: string): Promise<{ ok: boolean; status?: string; thr_address?: string; send_secret?: string; pdf_filename?: string; pending_confirmation?: boolean; error?: string }> {
+  return request(`/api/pledge/bnb/status?bnb=${encodeURIComponent(bnb_address)}`);
+}
+
+export async function pledgeMigrate(params: { send_secret: string; pin: string }): Promise<{ ok: boolean; canonical_v1_address?: string; recovery_kit?: string; pdf_url?: string; error?: string }> {
+  return request('/api/wallet/v1/pledge-migrate', { method: 'POST', body: JSON.stringify(params) });
+}
+
+export async function getBnbPledgeQuote(): Promise<{ ok: boolean; vault_address?: string; token_contract?: string; chain?: string; min_usdt?: number; usdt_thr_rate?: number }> {
+  return request('/api/pledge/bnb/quote');
+}
+
+export async function registerBnbAddress(params: { thr_address?: string; bnb_address: string; passphrase?: string }): Promise<{ ok: boolean; thr_address?: string; vault_address?: string; error?: string }> {
+  return request('/api/pledge/bnb/register', { method: 'POST', body: JSON.stringify(params) });
 }
 
 export async function recoverWallet(params: { pdf_filename?: string; recovery_phrase?: string }): Promise<{ success: boolean; thr_address?: string; send_secret?: string; error?: string }> {
@@ -285,6 +297,63 @@ export async function getPhantomNodeStatus(): Promise<{ nodes_online: number; ph
 
 export async function getLiquidityPools(): Promise<{ pools: Array<{ id: string; token_a: string; token_b: string; total_liquidity: number; apy: number; volume_24h: number }> }> {
   return request('/api/v1/pools');
+}
+
+export interface ThrUsdtPoolInfo {
+  ok: boolean;
+  pool_exists: boolean;
+  pool_id?: string;
+  thr_reserve: number;
+  usdt_reserve: number;
+  thr_price_usd: number;
+  usdt_thr_rate: number;
+  pledge_count: number;
+  next_level_at: number;
+  next_price_usd: number;
+  max_withdraw_usdt: number;
+}
+
+export async function getThrUsdtPoolInfo(): Promise<ThrUsdtPoolInfo> {
+  return request('/api/v1/pool/thr-usdt');
+}
+
+export interface WithdrawResult {
+  ok: boolean;
+  withdrawal_id?: string;
+  token?: string;
+  amount?: number;
+  amount_net?: number;
+  fee_thr?: number;
+  fee_pool_usdt?: number;
+  dest_chain?: string;
+  dest_address?: string;
+  status?: string;
+  estimated_minutes?: number;
+  error?: string;
+  available_usdt?: number;
+  required_thr?: number;
+  thr_balance?: number;
+}
+
+export async function requestWithdrawal(params: {
+  address: string;
+  send_secret: string;
+  amount: number;
+  token: 'USDT' | 'USDC';
+  dest_chain: string;
+  dest_address: string;
+}): Promise<WithdrawResult> {
+  return request('/api/v1/withdraw', { method: 'POST', body: JSON.stringify(params) });
+}
+
+export interface WithdrawChain {
+  chain: string;
+  label: string;
+  tokens: string[];
+}
+
+export async function getWithdrawChains(): Promise<{ ok: boolean; chains: WithdrawChain[] }> {
+  return request('/api/v1/withdraw/chains');
 }
 
 export async function getLPPositions(address: string): Promise<{ positions: Array<{ pool_id: string; token_a: string; token_b: string; liquidity_share: number; value: number; pending_rewards: number }> }> {

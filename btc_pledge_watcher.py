@@ -468,7 +468,7 @@ def clear_pending_confirmation(btc_address: str):
                 if pledge.get("btc_address") == btc_address and pledge.get("pending_confirmation"):
                     pledge["pending_confirmation"] = False
                     logger.info(f"Cleared pending_confirmation flag for {btc_address}")
-            with open(pledge_chain_file, 'w') as f:
+            with open(PLEDGE_CHAIN_FILE, 'w') as f:
                 json.dump(pledges, f, indent=2)
     except Exception as e:
         logger.error(f"Error clearing pending confirmation: {e}")

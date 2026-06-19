@@ -62,6 +62,23 @@ export default function WelcomeScreen() {
               </LinearGradient>
             </TouchableOpacity>
 
+            <View style={styles.pledgeRow}>
+              <TouchableOpacity
+                style={styles.pledgeBtn}
+                onPress={() => navigation.navigate('Pledge')}
+              >
+                <Ionicons name="logo-bitcoin" size={18} color="#F7931A" />
+                <Text style={styles.pledgeBtnText}>BTC Pledge</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.pledgeBtn, { borderColor: '#26A17B40' }]}
+                onPress={() => navigation.navigate('UsdtPledge')}
+              >
+                <Ionicons name="cash" size={18} color="#26A17B" />
+                <Text style={[styles.pledgeBtnText, { color: '#26A17B' }]}>USDT Pledge</Text>
+              </TouchableOpacity>
+            </View>
+
             <TouchableOpacity
               style={styles.importButton}
               onPress={() => navigation.navigate('ImportWallet')}
@@ -122,6 +139,15 @@ const styles = StyleSheet.create({
     paddingVertical: SPACING.md + 2, gap: SPACING.sm,
   },
   createButtonText: { fontSize: FONT_SIZES.lg, fontWeight: '700', color: COLORS.background },
+  pledgeRow: { flexDirection: 'row', gap: SPACING.sm },
+  pledgeBtn: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    paddingVertical: SPACING.md - 2, gap: SPACING.xs,
+    borderWidth: 1, borderColor: '#F7931A40', borderRadius: BORDER_RADIUS.xl,
+    backgroundColor: COLORS.surface,
+  },
+  pledgeBtnText: { fontSize: FONT_SIZES.md, fontWeight: '600', color: '#F7931A' },
+
   importButton: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
     paddingVertical: SPACING.md, gap: SPACING.sm,

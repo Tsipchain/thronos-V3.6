@@ -1395,6 +1395,25 @@ OPTIMISM_RPC_URL = os.getenv("OPTIMISM_RPC_URL", "https://mainnet.optimism.io")
 SOLANA_RPC_URL = os.getenv("SOLANA_RPC_URL", "https://api.mainnet-beta.solana.com")
 XRP_RPC_URL = os.getenv("XRP_RPC_URL", os.getenv("XRPL_RPC_URL", "https://xrplcluster.com"))
 
+# ─── USDT-on-BNB-Chain Pledge (mobile/PWA only) ────────────────────────────
+# Vault EVM address that watches for incoming USDT (BEP20) pledge deposits.
+# Uses BSC_RPC_URL above — no separate RPC needed.
+BNB_PLEDGE_VAULT = os.getenv("BNB_PLEDGE_VAULT", "")
+USDT_BNB_CONTRACT = os.getenv("USDT_BNB_CONTRACT", "0x55d398326f99059fF775485246999027B3197955")  # BEP20 USDT, 18 decimals
+USDT_THR_RATE = float(_strip_env_quotes(os.getenv("USDT_THR_RATE", "100")))  # legacy static rate (overridden by dynamic pricing)
+MIN_USDT_PLEDGE = float(_strip_env_quotes(os.getenv("MIN_USDT_PLEDGE", "10")))  # minimum 10 USDT
+# Fraction of each incoming USDT pledge that gets paired into the THR/USDT
+# liquidity pool (the rest of the THR equivalent is credited straight to the
+# user's wallet) — mirrors the existing BTC-bridge pool-seeding behavior.
+USDT_PLEDGE_POOL_SPLIT = float(_strip_env_quotes(os.getenv("USDT_PLEDGE_POOL_SPLIT", "0.5")))
+# Dynamic pricing: initial THR price = 10 USDT, +5% per 100 confirmed pledges (anti-rug)
+THR_INITIAL_PRICE_USD = float(_strip_env_quotes(os.getenv("THR_INITIAL_PRICE_USD", "10.0")))
+THR_PRICE_STEP_PLEDGES = int(_strip_env_quotes(os.getenv("THR_PRICE_STEP_PLEDGES", "100")))  # pledges per price step
+THR_PRICE_STEP_PCT = float(_strip_env_quotes(os.getenv("THR_PRICE_STEP_PCT", "0.05")))       # 5% per step
+# Withdrawal limits and fees
+MAX_USDT_WITHDRAW = float(_strip_env_quotes(os.getenv("MAX_USDT_WITHDRAW", "150.0")))
+WITHDRAW_SERVICE_FEE_PCT = float(_strip_env_quotes(os.getenv("WITHDRAW_SERVICE_FEE_PCT", "0.01")))  # 1% service fee
+
 # User profile storage file
 USER_PROFILES_FILE = os.path.join(DATA_DIR, "user_profiles.json")
 
@@ -16960,6 +16979,7 @@ async def api_pledge_submit(request: Request, db: Annotated[Session, Depends(get
             status="already_verified",
             thr_address=exists["thr_address"],
             pledge_hash=exists["pledge_hash"],
+            pdf_filename=exists.get("pdf_filename"),
             recovery_required=True,
             message="Pledge already exists for this BTC address"
         ), 200
@@ -16996,21 +17016,13 @@ async def api_pledge_submit(request: Request, db: Annotated[Session, Depends(get
         auth_string = f"{send_seed}:{passphrase}:auth" if passphrase else f"{send_seed}:auth"
         send_auth_hash = hashlib.sha256(auth_string.encode()).hexdigest()
 
-        pledge_entry = {
-            "btc_address": btc_address,
-            "pledge_text": pledge_text,
-            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
-            "pledge_hash": phash,
-            "thr_address": thr_addr,
-            "send_seed_hash": send_seed_hash,
-            "send_auth_hash": send_auth_hash,
-            "has_passphrase": bool(passphrase),
-            "pending_confirmation": pending_confirmation
-        }
-
         chain = load_json(CHAIN_FILE, [])
         height = len(chain)
 
+        # Generate send_seed now and store server-side.
+        # send_seed is NOT returned to the client at submission — the client
+        # receives it only from /api/pledge/status once the BTC watcher confirms
+        # the on-chain payment (gate: no payment confirmation → no wallet).
         try:
             pdf_name = create_secure_pdf_contract(
                 btc_address, pledge_text, thr_addr, phash, height, send_seed, CONTRACTS_DIR, passphrase
@@ -17019,7 +17031,19 @@ async def api_pledge_submit(request: Request, db: Annotated[Session, Depends(get
             logger.error(f"PDF generation failed: {pdf_err}")
             pdf_name = f"pledge_{thr_addr}.pdf"
 
-        pledge_entry["pdf_filename"] = pdf_name
+        pledge_entry = {
+            "btc_address": btc_address,
+            "pledge_text": pledge_text,
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+            "pledge_hash": phash,
+            "thr_address": thr_addr,
+            "send_seed": send_seed,          # stored; returned only after watcher confirms
+            "send_seed_hash": send_seed_hash,
+            "send_auth_hash": send_auth_hash,
+            "has_passphrase": bool(passphrase),
+            "pending_confirmation": pending_confirmation,
+            "pdf_filename": pdf_name,
+        }
         pledges.append(pledge_entry)
         save_json(PLEDGE_CHAIN, pledges)
 
@@ -17037,14 +17061,16 @@ async def api_pledge_submit(request: Request, db: Annotated[Session, Depends(get
         except Exception as exc:
             logger.warning(f"Failed to update btc_user_registry: {exc}")
 
+        # Return thr_address so client can show it as "pending" — but deliberately
+        # withhold send_seed until BTC watcher confirms on-chain payment.
+        # Client must poll /api/pledge/status to get send_secret + pdf_filename.
         return jsonify(
             ok=True,
             status="verified" if not pending_confirmation else "pending_confirmation",
             thr_address=thr_addr,
             pledge_hash=phash,
-            secret_seed=send_seed,
             pending_confirmation=pending_confirmation,
-            message="Pledge created successfully" if not pending_confirmation else "Pledge created, awaiting BTC confirmation"
+            message="Pledge registered — send_secret and PDF will be available after BTC confirmation" if pending_confirmation else "Pledge confirmed — check /api/pledge/status for your send_secret"
         ), 201
 
     except Exception as exc:
@@ -17312,11 +17338,17 @@ def api_pledge_status():
         status = "verified"
         if exists.get("pending_confirmation"):
             status = "pending_confirmation"
+        # Only reveal the send_secret once BTC watcher has confirmed on-chain payment
+        send_secret = None
+        if not exists.get("pending_confirmation"):
+            send_secret = exists.get("send_seed")
         return jsonify(
             ok=True,
             status=status,
             thr_address=exists["thr_address"],
             pledge_hash=exists["pledge_hash"],
+            pdf_filename=exists.get("pdf_filename"),
+            send_secret=send_secret,
             timestamp=exists.get("timestamp"),
             has_passphrase=exists.get("has_passphrase", False),
             pending_confirmation=exists.get("pending_confirmation", False),
@@ -19537,15 +19569,23 @@ def mining_center_page():
 def miner_kit_page():
     """Render miner kit download page (Phase 6B)"""
     return render_template("miner_kit_download.html")
+
+
+@app.route("/download/miner-kit", methods=["GET"])
+def download_miner_kit_zip():
     """
-    Download miner kit as JSON file (requires pledge verification)
+    Build a personalized miner kit zip with the user's THR address
+    pre-filled into every config — CPU (HTTP miner), ASIC/USB stick
+    (Stratum proxy + cgminer.conf). User just extracts and runs, no
+    manual editing required. Requires a confirmed pledge.
 
     GET /download/miner-kit?address=THR7c...
     """
     try:
-        thr_address = request.args.get("address", "")
+        thr_address = (request.args.get("address") or "").strip()
+        if not validate_thr_address(thr_address):
+            return jsonify(status="error", error="valid THR address required"), 400
 
-        # Check if user has made a pledge
         pledge_entry = get_mining_whitelist_entry(thr_address)
         if not pledge_entry or not pledge_entry.get("pledge_ok", False):
             return jsonify(
@@ -19553,25 +19593,83 @@ def miner_kit_page():
                 error="Complete a THR pledge to download miner kit"
             ), 403
 
-        # Load miner kit configuration
-        kit_file = Path("/home/user/thronos-V3.6/miner-kit-config.json")
-        if not kit_file.exists():
-            kit_file = Path(DATA_DIR) / "miner-kit-config.json"
+        base_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "miner_kit")
 
-        if kit_file.exists():
-            kit_data = json.loads(kit_file.read_text())
-            return jsonify({
-                **kit_data,
-                "pledge_verified": True,
-                "miner_address": thr_address,
-                "download_timestamp": datetime.utcnow().isoformat()
-            }), 200
-        else:
-            return jsonify(status="error", error="Miner kit not available"), 404
+        def _read(name):
+            with open(os.path.join(base_dir, name), "r", encoding="utf-8") as f:
+                return f.read()
+
+        server_url = os.getenv("THRONOS_SERVER_URL", os.getenv("THRONOS_SERVER", "https://thrchain.up.railway.app"))
+
+        cgminer_conf = _read("cgminer.conf").replace("YOUR_V1_WALLET_ADDRESS", thr_address)
+        pow_miner_cpu = _read("pow_miner_cpu.py").replace(
+            'THR_ADDRESS = "THR_PUT_YOUR_ADDRESS_HERE"', f'THR_ADDRESS = "{thr_address}"'
+        )
+        stratum_proxy = _read("stratum_proxy.py").replace(
+            'STRATUM_PROXY_ADDRESS = os.getenv("STRATUM_PROXY_ADDRESS", "")',
+            f'STRATUM_PROXY_ADDRESS = os.getenv("STRATUM_PROXY_ADDRESS", "{thr_address}")',
+        )
+
+        readme = f"""Thronos Miner Kit — pre-configured for {thr_address}
+=====================================================================
+
+This kit already has your THR address filled in everywhere it's
+needed. Extract the zip and pick the mining method that matches your
+hardware:
+
+CPU MINING
+----------
+1. pip install requests
+2. python pow_miner_cpu.py
+(Uses the HTTP mining contract: GET /api/miner/work, POST /api/miner/submit)
+
+GPU MINING
+----------
+No dedicated GPU binary is shipped yet — the CPU script's HTTP contract
+(GET /api/miner/work, POST /api/miner/submit) is hardware-agnostic, so a
+GPU miner can reuse it by submitting nonce/pow_hash/address the same way.
+
+ASIC MINING (Stratum)
+----------------------
+1. python stratum_proxy.py        (bridges Stratum -> Thronos HTTP API)
+2. run_miner.bat                  (Windows, requires cgminer.exe)
+   or: cgminer -c cgminer.conf    (Linux/Mac)
+
+USB STICK MINERS (e.g. GekkoScience, Antminer USB)
+----------------------------------------------------
+Same as ASIC above — plug in the USB miner, run stratum_proxy.py, then
+point cgminer at cgminer.conf. USB stick miners are detected by cgminer
+automatically; no separate config is required.
+
+DUAL MINING (Thronos + NiceHash, Windows only)
+------------------------------------------------
+start_dual_mining.bat
+
+Your THR address: {thr_address}
+Server: {server_url}
+"""
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("README.txt", readme)
+            zf.writestr("cgminer.conf", cgminer_conf)
+            zf.writestr("pow_miner_cpu.py", pow_miner_cpu)
+            zf.writestr("stratum_proxy.py", stratum_proxy)
+            zf.writestr("run_miner.bat", _read("run_miner.bat"))
+            zf.writestr("start_dual_mining.bat", _read("start_dual_mining.bat"))
+            zf.writestr("job_sniffer.py", _read("job_sniffer.py"))
+        buf.seek(0)
+
+        return send_file(
+            buf,
+            mimetype="application/zip",
+            as_attachment=True,
+            download_name=f"thronos_miner_kit_{thr_address[:12]}.zip",
+        )
 
     except Exception as e:
         logger = logging.getLogger("thronos")
-        logger.error(f"Error downloading miner kit: {e}")
+        logger.error(f"Error building miner kit zip: {e}")
         return jsonify(status="error", error=str(e)), 500
 
 
@@ -26437,6 +26535,15 @@ if NODE_ROLE == "master" and SCHEDULER_ENABLED and ENABLE_CHAIN:
     except ImportError as e:
         print(f"[SCHEDULER] BTC pledge watcher unavailable: {e}")
 
+    # BNB/USDT Pledge Watcher – polls BSC for USDT vault deposits via eth_getLogs
+    try:
+        from bnb_pledge_watcher import watch_bnb_pledges
+        scheduler.add_job(_with_app_context(watch_bnb_pledges), "interval", minutes=5,
+                         coalesce=True, max_instances=1, id="bnb_pledge_watcher")
+        print("[SCHEDULER] BNB/USDT pledge watcher scheduled (every 5 min)")
+    except ImportError as e:
+        print(f"[SCHEDULER] BNB/USDT pledge watcher unavailable: {e}")
+
     # PYTHEIA Worker – system health monitoring & governance advice
     try:
         os.makedirs("/app/logs", exist_ok=True)
@@ -26715,6 +26822,607 @@ def api_btc_pledge():
         thr_address=thr_address,
         new_balance=new_balance,
         btc_txid=btc_txid
+    ), 201
+
+
+def get_confirmed_pledge_count() -> int:
+    """Count confirmed pledges (both BTC and USDT) for dynamic price calculation."""
+    try:
+        pledges = load_json(PLEDGE_CHAIN, [])
+        return sum(1 for p in pledges if not p.get("pending_confirmation", True))
+    except Exception:
+        return 0
+
+
+def get_thr_price_usd() -> float:
+    """Current THR price in USD: starts at THR_INITIAL_PRICE_USD, +5% per 100 confirmed pledges."""
+    count = get_confirmed_pledge_count()
+    steps = count // THR_PRICE_STEP_PLEDGES
+    return round(THR_INITIAL_PRICE_USD * ((1 + THR_PRICE_STEP_PCT) ** steps), 6)
+
+
+def get_usdt_thr_rate_dynamic() -> float:
+    """THR per 1 USDT at current dynamic price (inverse of USD price)."""
+    price = get_thr_price_usd()
+    if price <= 0:
+        return 1.0 / THR_INITIAL_PRICE_USD
+    return round(1.0 / price, 8)
+
+
+def _seed_usdt_thr_pool(usdt_amount: float, thr_amount: float) -> dict | None:
+    """
+    Pair fresh USDT pledge inflow with newly-minted THR into the THR/USDT
+    liquidity pool (auto-created if missing). Mirrors the existing
+    BTC-bridge behavior of seeding pool liquidity from external deposits —
+    no user balance is debited since this capital is new to the chain.
+    """
+    try:
+        pools = load_pools()
+        pool = None
+        for p in pools:
+            a = (p.get("token_a") or "").upper()
+            b = (p.get("token_b") or "").upper()
+            if {a, b} == {"THR", "USDT"}:
+                pool = p
+                break
+        if pool is None:
+            pool = {
+                "id": f"pool-thr-usdt-{secrets.token_hex(4)}",
+                "token_a": "THR",
+                "token_b": "USDT",
+                "reserves_a": 0.0,
+                "reserves_b": 0.0,
+                "fee_bps": 30,
+                "created_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+                "auto_seeded": True,
+            }
+            pools.append(pool)
+        pool["reserves_a"] = round(float(pool.get("reserves_a", 0.0) or 0.0) + thr_amount, 6)
+        pool["reserves_b"] = round(float(pool.get("reserves_b", 0.0) or 0.0) + usdt_amount, 6)
+        save_pools(pools)
+        return pool
+    except Exception:
+        app.logger.exception("Failed to seed THR/USDT pool from pledge")
+        return None
+
+
+@app.route("/api/pledge/bnb/quote")
+def api_pledge_bnb_quote():
+    """Return current USDT-on-BNB-Chain pledge requirements (mobile/PWA only)."""
+    dynamic_rate = get_usdt_thr_rate_dynamic()
+    thr_price = get_thr_price_usd()
+    pledge_count = get_confirmed_pledge_count()
+    return jsonify(
+        ok=True,
+        vault_address=BNB_PLEDGE_VAULT,
+        token_contract=USDT_BNB_CONTRACT,
+        chain="bnb",
+        min_usdt=MIN_USDT_PLEDGE,
+        usdt_thr_rate=dynamic_rate,
+        thr_price_usd=thr_price,
+        thr_per_min_pledge=round(MIN_USDT_PLEDGE * dynamic_rate, 6),
+        pledge_count=pledge_count,
+        next_level_at=((pledge_count // THR_PRICE_STEP_PLEDGES) + 1) * THR_PRICE_STEP_PLEDGES,
+    ), 200
+
+
+@app.route("/api/pledge/bnb/register", methods=["POST"])
+def api_pledge_bnb_register():
+    """
+    Register the BNB-chain (BSC) address a user will send USDT from.
+
+    Stores the mapping in bnb_user_registry.json so the watcher knows
+    which THR address to credit when USDT arrives from this BNB address.
+
+    For new users (no thr_address supplied) a provisional THR address is
+    generated here.  The pledge record + send_seed + PDF are created LATER
+    by /api/usdt/pledge when the watcher confirms the USDT payment.
+    """
+    data = request.get_json() or {}
+    thr_address = (data.get("thr_address") or "").strip().upper()
+    bnb_address = (data.get("bnb_address") or "").strip().lower()
+
+    if not re.match(r"^0x[a-f0-9]{40}$", bnb_address):
+        return jsonify(ok=False, error="invalid_bnb_address"), 400
+    if thr_address and not validate_thr_address(thr_address):
+        return jsonify(ok=False, error="invalid_thr_address"), 400
+
+    if not thr_address:
+        timestamp   = str(int(time.time() * 1000))
+        thr_address = generate_thr_address(bnb_address, timestamp)
+
+    registry_file = os.path.join(DATA_DIR, "bnb_user_registry.json")
+    registry = load_json(registry_file, {})
+    registry[bnb_address] = {
+        "thr_address":   thr_address,
+        "registered_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+    }
+    save_json(registry_file, registry)
+
+    return jsonify(ok=True, thr_address=thr_address, bnb_address=bnb_address, vault_address=BNB_PLEDGE_VAULT), 200
+
+
+@app.route("/api/usdt/pledge", methods=["POST"])
+def api_usdt_pledge():
+    """
+    Create a USDT-on-BNB-Chain pledge transaction (called by bnb_pledge_watcher
+    on Node 2). Requires ADMIN_SECRET for authentication. Mirrors /api/btc/pledge,
+    plus seeds half the pledge into the THR/USDT liquidity pool.
+
+    Expected payload:
+    {
+        "secret": "ADMIN_SECRET",
+        "thr_address": "THR...",
+        "bnb_address": "0x...",
+        "usdt_amount": 10.0,
+        "bnb_txid": "0x...",
+    }
+    """
+    data = request.get_json() or {}
+    secret = data.get("secret")
+    if secret != ADMIN_SECRET:
+        return jsonify(ok=False, error="Unauthorized"), 403
+
+    thr_address = data.get("thr_address")
+    bnb_address = data.get("bnb_address")
+    usdt_amount = float(data.get("usdt_amount", 0))
+    bnb_txid = data.get("bnb_txid")
+
+    if not all([thr_address, bnb_address, bnb_txid]):
+        return jsonify(ok=False, error="Missing required fields"), 400
+    if usdt_amount < MIN_USDT_PLEDGE:
+        return jsonify(ok=False, error="below_minimum_pledge"), 400
+
+    dynamic_rate = get_usdt_thr_rate_dynamic()
+    thr_amount = round(usdt_amount * dynamic_rate, 6)
+    pool_usdt = round(usdt_amount * USDT_PLEDGE_POOL_SPLIT, 6)
+    pool_thr = round(pool_usdt * dynamic_rate, 6)
+
+    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+
+    # Generate send_seed + PDF + pledge record now that payment is confirmed.
+    # Only create a new pledge record if one doesn't already exist for this BNB address.
+    pledges = load_json(PLEDGE_CHAIN, [])
+    existing_pledge = next(
+        (p for p in pledges if p.get("bnb_address") == bnb_address and p.get("pledge_type") == "usdt_bnb"),
+        None
+    )
+    if not existing_pledge:
+        pledge_text    = "USDT/BNB Pledge — Thronos Network"
+        phash          = hashlib.sha256((bnb_address + pledge_text).encode()).hexdigest()
+        send_seed      = secrets.token_hex(16)
+        send_seed_hash = hashlib.sha256(send_seed.encode()).hexdigest()
+        auth_string    = f"{send_seed}:auth"
+        send_auth_hash = hashlib.sha256(auth_string.encode()).hexdigest()
+        chain_for_height = load_json(CHAIN_FILE, [])
+        height = len(chain_for_height)
+
+        try:
+            pdf_name = create_secure_pdf_contract(
+                bnb_address, pledge_text, thr_address, phash, height,
+                send_seed, CONTRACTS_DIR, None
+            )
+        except Exception as _pdf_err:
+            logger.error(f"USDT pledge PDF generation failed: {_pdf_err}")
+            pdf_name = f"pledge_{thr_address}.pdf"
+
+        pledge_entry = {
+            "bnb_address":          bnb_address,
+            "pledge_type":          "usdt_bnb",
+            "pledge_text":          pledge_text,
+            "timestamp":            ts,
+            "pledge_hash":          phash,
+            "thr_address":          thr_address,
+            "send_seed":            send_seed,
+            "send_seed_hash":       send_seed_hash,
+            "send_auth_hash":       send_auth_hash,
+            "has_passphrase":       False,
+            "pending_confirmation": False,
+            "pdf_filename":         pdf_name,
+        }
+        pledges.append(pledge_entry)
+        save_json(PLEDGE_CHAIN, pledges)
+    else:
+        # Already confirmed — just clear the flag if it was pending
+        if existing_pledge.get("pending_confirmation"):
+            existing_pledge["pending_confirmation"] = False
+            save_json(PLEDGE_CHAIN, pledges)
+
+    # Credit THR to the user's wallet
+    ledger = load_json(LEDGER_FILE, {})
+    current_balance = float(ledger.get(thr_address, 0.0))
+    new_balance = round(current_balance + thr_amount, 6)
+    ledger[thr_address] = new_balance
+    save_json(LEDGER_FILE, ledger)
+
+    # Seed THR/USDT pool with half the pledge (new external capital, no debit)
+    _seed_usdt_thr_pool(pool_usdt, pool_thr)
+
+    # Create pledge transaction on the chain
+    chain = load_json(CHAIN_FILE, [])
+    tx_id = f"USDT_PLEDGE-{int(time.time())}-{secrets.token_hex(4)}"
+
+    tx = {
+        "type": "usdt_pledge",
+        "tx_id": tx_id,
+        "from": bnb_address,
+        "to": thr_address,
+        "thr_address": thr_address,
+        "bnb_address": bnb_address,
+        "usdt_amount": usdt_amount,
+        "thr_amount": thr_amount,
+        "pool_usdt_seeded": pool_usdt,
+        "pool_thr_seeded": pool_thr,
+        "bnb_txid": bnb_txid,
+        "timestamp": ts,
+        "status": "confirmed",
+    }
+
+    chain.append(tx)
+    save_json(CHAIN_FILE, chain)
+    update_last_block(tx, is_block=False)
+
+    try:
+        broadcast_tx(tx)
+    except Exception:
+        pass
+
+    return jsonify(
+        ok=True,
+        tx_id=tx_id,
+        thr_address=thr_address,
+        new_balance=new_balance,
+        bnb_txid=bnb_txid,
+        pool_usdt_seeded=pool_usdt,
+        pool_thr_seeded=pool_thr,
+    ), 201
+
+
+@app.route("/api/pledge/bnb/status", methods=["GET"])
+def api_pledge_bnb_status():
+    """
+    Check USDT/BNB pledge confirmation status for a given BNB sender address.
+    Returns send_secret only after the watcher has confirmed payment
+    (i.e. /api/usdt/pledge has been called and pledge record exists with
+    pending_confirmation=False).
+    """
+    bnb_address = (request.args.get("bnb") or "").strip().lower()
+    if not re.match(r"^0x[a-f0-9]{40}$", bnb_address):
+        return jsonify(ok=False, error="invalid_bnb_address"), 400
+
+    pledges = load_json(PLEDGE_CHAIN, [])
+    entry = next(
+        (p for p in pledges if p.get("bnb_address") == bnb_address and p.get("pledge_type") == "usdt_bnb"),
+        None
+    )
+
+    if not entry:
+        # Check registry — address is registered but watcher hasn't confirmed yet
+        registry_file = os.path.join(DATA_DIR, "bnb_user_registry.json")
+        registry = load_json(registry_file, {})
+        if bnb_address in registry:
+            return jsonify(
+                ok=True,
+                status="pending_payment",
+                thr_address=registry[bnb_address].get("thr_address"),
+                send_secret=None,
+                pending_confirmation=True,
+            ), 200
+        return jsonify(ok=False, error="not_found"), 404
+
+    send_secret = None
+    if not entry.get("pending_confirmation", True):
+        send_secret = entry.get("send_seed")
+
+    status = "verified" if send_secret else "pending_confirmation"
+    return jsonify(
+        ok=True,
+        status=status,
+        thr_address=entry.get("thr_address"),
+        pledge_hash=entry.get("pledge_hash"),
+        pdf_filename=entry.get("pdf_filename"),
+        send_secret=send_secret,
+        pending_confirmation=entry.get("pending_confirmation", True),
+    ), 200
+
+
+# ─── THR/USDT Pool Info ──────────────────────────────────────────────────────
+
+@app.route("/api/v1/pool/thr-usdt", methods=["GET"])
+def api_pool_thr_usdt_info():
+    """Return THR/USDT pool state, current price and withdrawal capacity."""
+    pools = load_pools()
+    pool = next(
+        (p for p in pools if {(p.get("token_a") or "").upper(), (p.get("token_b") or "").upper()} == {"THR", "USDT"}),
+        None,
+    )
+    pledge_count = get_confirmed_pledge_count()
+    thr_price = get_thr_price_usd()
+    dynamic_rate = get_usdt_thr_rate_dynamic()
+    steps = pledge_count // THR_PRICE_STEP_PLEDGES
+    next_level_at = (steps + 1) * THR_PRICE_STEP_PLEDGES
+
+    usdt_reserve = float(pool.get("reserves_b", 0) if pool else 0)
+    thr_reserve  = float(pool.get("reserves_a", 0) if pool else 0)
+
+    return jsonify(
+        ok=True,
+        pool_exists=pool is not None,
+        pool_id=pool.get("id") if pool else None,
+        thr_reserve=thr_reserve,
+        usdt_reserve=usdt_reserve,
+        thr_price_usd=thr_price,
+        usdt_thr_rate=dynamic_rate,
+        pledge_count=pledge_count,
+        next_level_at=next_level_at,
+        next_price_usd=round(THR_INITIAL_PRICE_USD * ((1 + THR_PRICE_STEP_PCT) ** (steps + 1)), 6),
+        max_withdraw_usdt=min(MAX_USDT_WITHDRAW, usdt_reserve * 0.9),  # anti-rug: max 90% of reserve
+    ), 200
+
+
+# ─── Admin: Seed Initial Pool ────────────────────────────────────────────────
+
+@app.route("/api/v1/admin/seed-pool", methods=["POST"])
+def api_admin_seed_pool():
+    """
+    Admin: seed the THR/USDT pool with the initial 10 USDT + 1 THR capital.
+    Sets the genesis price of 10 USDT per THR.
+
+    Body: { "secret": ADMIN_SECRET, "usdt_amount": 10.0, "thr_amount": 1.0 }
+    """
+    data = request.get_json() or {}
+    if data.get("secret") != ADMIN_SECRET:
+        return jsonify(ok=False, error="Unauthorized"), 403
+
+    usdt_amount = float(data.get("usdt_amount", 10.0))
+    thr_amount  = float(data.get("thr_amount", 1.0))
+
+    if usdt_amount <= 0 or thr_amount <= 0:
+        return jsonify(ok=False, error="amounts must be positive"), 400
+
+    pool = _seed_usdt_thr_pool(usdt_amount, thr_amount)
+    if not pool:
+        return jsonify(ok=False, error="pool seeding failed"), 500
+
+    return jsonify(
+        ok=True,
+        pool_id=pool.get("id"),
+        thr_reserve=pool.get("reserves_a"),
+        usdt_reserve=pool.get("reserves_b"),
+        thr_price_usd=round(usdt_amount / thr_amount, 6),
+    ), 200
+
+
+# ─── USDT Withdrawal (cross-chain: Thronos → BSC/Base/Arbitrum) ──────────────
+
+# Per-chain configuration — a chain is available only when both RPC URL and
+# hot wallet address are set in the environment.  Missing vars → chain disabled
+# and rejected cleanly rather than producing a runtime error mid-withdrawal.
+WITHDRAW_CHAIN_CONFIG: dict = {
+    "bsc": {
+        "label":          "BNB Chain (BSC)",
+        "tokens":         ["USDT"],
+        "rpc_url":        BSC_RPC_URL,  # defined globally above
+        "hot_wallet":     _strip_env_quotes(os.getenv("BNB_HOT_WALLET", "")),
+        "usdt_contract":  USDT_BNB_CONTRACT,
+    },
+    "base": {
+        "label":          "Base",
+        "tokens":         ["USDC"],
+        "rpc_url":        _strip_env_quotes(os.getenv("BASE_RPC_URL", "")),
+        "hot_wallet":     _strip_env_quotes(os.getenv("BASE_HOT_WALLET", "")),
+        "usdc_contract":  _strip_env_quotes(os.getenv("BASE_USDC_CONTRACT", "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913")),
+    },
+    "arbitrum": {
+        "label":          "Arbitrum",
+        "tokens":         ["USDT", "USDC"],
+        "rpc_url":        _strip_env_quotes(os.getenv("ARB_RPC_URL", "")),
+        "hot_wallet":     _strip_env_quotes(os.getenv("ARB_HOT_WALLET", "")),
+        "usdt_contract":  _strip_env_quotes(os.getenv("ARB_USDT_CONTRACT", "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9")),
+        "usdc_contract":  _strip_env_quotes(os.getenv("ARB_USDC_CONTRACT", "0xaf88d065e77c8cC2239327C5EDb3A432268e5831")),
+    },
+}
+
+WITHDRAW_SUPPORTED_TOKENS = {"USDT", "USDC"}
+WITHDRAW_QUEUE_FILE = os.path.join(DATA_DIR, "withdraw_queue.json")
+
+
+def get_available_withdraw_chains() -> dict:
+    """Return chains that have both rpc_url and hot_wallet configured."""
+    available = {}
+    for chain_id, cfg in WITHDRAW_CHAIN_CONFIG.items():
+        if cfg.get("rpc_url") and cfg.get("hot_wallet"):
+            available[chain_id] = {
+                "id":     chain_id,
+                "label":  cfg["label"],
+                "tokens": cfg["tokens"],
+            }
+    return available
+
+
+@app.route("/api/v1/withdraw/chains", methods=["GET"])
+def api_withdraw_chains():
+    """Return currently configured and available withdrawal chains + tokens."""
+    available = get_available_withdraw_chains()
+    return jsonify(
+        ok=True,
+        chains=list(available.values()),
+        max_withdraw_usdt=MAX_USDT_WITHDRAW,
+    ), 200
+
+
+@app.route("/api/v1/withdraw", methods=["POST"])
+def api_v1_withdraw():
+    """
+    Request a USDT/USDC withdrawal from the Thronos pool to an EVM address.
+
+    Body:
+    {
+      "address":      "THR...",    Thronos sender address
+      "send_secret":  "hex...",    pledge send_secret (proof of ownership)
+      "amount":       100.0,       gross amount to withdraw
+      "token":        "USDT",      "USDT" or "USDC"
+      "dest_chain":   "bsc",       must be a configured chain
+      "dest_address": "0x..."      external EVM wallet
+    }
+
+    Fee: 1% — 0.5% in THR (burned), 0.5% in-kind (pool gas reserve).
+    User receives amount − 0.5% to dest_address on dest_chain.
+    Maximum 150 USDT/USDC per withdrawal.
+    """
+    data = request.get_json() or {}
+    thr_address  = (data.get("address") or "").strip().upper()
+    send_secret  = (data.get("send_secret") or "").strip()
+    amount       = float(data.get("amount", 0) or 0)
+    token        = (data.get("token") or "USDT").strip().upper()
+    dest_chain   = (data.get("dest_chain") or "bsc").strip().lower()
+    dest_address = (data.get("dest_address") or "").strip().lower()
+
+    # ── 1. Basic input validation ─────────────────────────────────────────────
+    if not validate_thr_address(thr_address):
+        return jsonify(ok=False, error="invalid_thr_address"), 400
+    if token not in WITHDRAW_SUPPORTED_TOKENS:
+        return jsonify(ok=False, error="unsupported_token",
+                       supported=list(WITHDRAW_SUPPORTED_TOKENS)), 400
+    if not re.match(r"^0x[a-f0-9]{40}$", dest_address):
+        return jsonify(ok=False, error="invalid_dest_address"), 400
+    if amount <= 0:
+        return jsonify(ok=False, error="amount_must_be_positive"), 400
+    if amount > MAX_USDT_WITHDRAW:
+        return jsonify(ok=False, error="exceeds_max_withdrawal",
+                       max_withdrawal=MAX_USDT_WITHDRAW, token=token), 400
+
+    # ── 2. Chain + token compatibility (only configured chains accepted) ──────
+    available_chains = get_available_withdraw_chains()
+    if dest_chain not in WITHDRAW_CHAIN_CONFIG:
+        return jsonify(ok=False, error="unknown_chain",
+                       available=list(available_chains.keys())), 400
+    if dest_chain not in available_chains:
+        return jsonify(ok=False, error="chain_not_configured",
+                       detail=f"{dest_chain} is not enabled on this node",
+                       available=list(available_chains.keys())), 503
+    chain_cfg = WITHDRAW_CHAIN_CONFIG[dest_chain]
+    if token not in chain_cfg.get("tokens", []):
+        return jsonify(ok=False, error="token_not_supported_on_chain",
+                       chain=dest_chain, supported_tokens=chain_cfg["tokens"]), 400
+
+    # ── 3. Pool liquidity check BEFORE anything is debited ───────────────────
+    pools = load_pools()
+    pool = next(
+        (p for p in pools
+         if {(p.get("token_a") or "").upper(), (p.get("token_b") or "").upper()} == {"THR", "USDT"}),
+        None,
+    )
+    if not pool:
+        return jsonify(ok=False, error="pool_not_initialized"), 503
+
+    usdt_reserve = float(pool.get("reserves_b", 0))
+    max_allowed  = round(usdt_reserve * 0.9, 6)   # anti-rug: keep ≥10% reserve
+    if amount > max_allowed:
+        return jsonify(ok=False, error="insufficient_pool_liquidity",
+                       available_usdt=max_allowed), 400
+
+    # ── 4. Verify send_secret (pledge ownership proof) ────────────────────────
+    if not send_secret:
+        return jsonify(ok=False, error="send_secret_required"), 400
+    pledges = load_json(PLEDGE_CHAIN, [])
+    pledge = next(
+        (p for p in pledges
+         if p.get("thr_address", "").upper() == thr_address
+         and p.get("send_seed") == send_secret
+         and not p.get("pending_confirmation", True)),
+        None,
+    )
+    if not pledge:
+        return jsonify(ok=False, error="invalid_credentials"), 403
+
+    # ── 5. Fee calculation ────────────────────────────────────────────────────
+    thr_price       = get_thr_price_usd()           # pythia / oracle price at withdrawal time
+    dynamic_rate    = get_usdt_thr_rate_dynamic()
+    service_fee_usd = round(amount * WITHDRAW_SERVICE_FEE_PCT, 6)     # 1%
+    fee_thr         = round(service_fee_usd * 0.5 * dynamic_rate, 6)  # 0.5% in THR
+    fee_pool_usdt   = round(service_fee_usd * 0.5, 6)                 # 0.5% in-kind
+    amount_net      = round(amount - fee_pool_usdt, 6)                # user receives
+
+    # ── 6. THR fee balance check ──────────────────────────────────────────────
+    ledger = load_json(LEDGER_FILE, {})
+    thr_balance = float(ledger.get(thr_address, 0))
+    if thr_balance < fee_thr:
+        return jsonify(ok=False, error="insufficient_thr_for_fee",
+                       required_thr=fee_thr,
+                       thr_balance=round(thr_balance, 6)), 400
+
+    # ── 7. Mutate state (all checks passed) ───────────────────────────────────
+    # Deduct THR fee → burn address (deflationary)
+    ledger[thr_address] = round(thr_balance - fee_thr, 6)
+    ledger[BURN_ADDRESS] = round(float(ledger.get(BURN_ADDRESS, 0)) + fee_thr, 6)
+    save_json(LEDGER_FILE, ledger)
+
+    # Deduct net USDT from pool (fee_pool_usdt stays in reserves as gas buffer)
+    pool["reserves_b"] = round(usdt_reserve - amount_net, 6)
+    save_pools(pools)
+
+    # ── 8. Withdrawal queue entry ─────────────────────────────────────────────
+    withdraw_id = f"WD-{int(time.time())}-{secrets.token_hex(4).upper()}"
+    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    queue_entry = {
+        "id":                withdraw_id,
+        "thr_address":       thr_address,        # Thronos sender
+        "dest_chain":        dest_chain,          # e.g. "bsc"
+        "dest_chain_label":  chain_cfg["label"],  # e.g. "BNB Chain (BSC)"
+        "external_wallet":   dest_address,        # EVM destination
+        "token":             token,               # "USDT" / "USDC"
+        "amount":            amount,              # gross requested
+        "amount_net":        amount_net,          # user receives
+        "fee_thr":           fee_thr,             # THR burned (our 0.5% cut)
+        "fee_pool_usdt":     fee_pool_usdt,       # in-kind (gas buffer, 0.5%)
+        "oracle_price_usd":  thr_price,           # pythia: THR/USD at request time
+        "status":            "pending",           # → executor updates to "processing"/"done"/"failed"
+        "created_at":        ts,
+    }
+    queue = load_json(WITHDRAW_QUEUE_FILE, [])
+    queue.append(queue_entry)
+    save_json(WITHDRAW_QUEUE_FILE, queue)
+
+    # ── 9. Chain record ───────────────────────────────────────────────────────
+    chain = load_json(CHAIN_FILE, [])
+    tx = {
+        "type":            "usdt_withdraw",
+        "tx_id":           withdraw_id,
+        "from":            thr_address,
+        "to":              dest_address,
+        "token":           token,
+        "amount":          amount,
+        "amount_net":      amount_net,
+        "fee_thr":         fee_thr,
+        "dest_chain":      dest_chain,
+        "oracle_price_usd": thr_price,
+        "status":          "pending",
+        "timestamp":       ts,
+    }
+    chain.append(tx)
+    save_json(CHAIN_FILE, chain)
+    update_last_block(tx, is_block=False)
+
+    try:
+        broadcast_tx(tx)
+    except Exception:
+        pass
+
+    return jsonify(
+        ok=True,
+        withdrawal_id=withdraw_id,
+        token=token,
+        amount=amount,
+        amount_net=amount_net,
+        fee_thr=fee_thr,
+        fee_pool_usdt=fee_pool_usdt,
+        oracle_price_usd=thr_price,
+        dest_chain=dest_chain,
+        dest_chain_label=chain_cfg["label"],
+        external_wallet=dest_address,
+        status="pending",
+        estimated_minutes=5,
     ), 201
 
 

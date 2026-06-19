@@ -24,6 +24,8 @@ import T2EDashboardScreen from './src/screens/T2EDashboardScreen';
 import BridgeScreen from './src/screens/BridgeScreen';
 import MusicScreen from './src/screens/MusicScreen';
 import PledgeScreen from './src/screens/PledgeScreen';
+import UsdtPledgeScreen from './src/screens/UsdtPledgeScreen';
+import WithdrawScreen from './src/screens/WithdrawScreen';
 import PoolsScreen from './src/screens/PoolsScreen';
 import CreateTokenScreen from './src/screens/CreateTokenScreen';
 import NFTScreen from './src/screens/NFTScreen';
@@ -47,10 +49,12 @@ export type RootStackParamList = {
   Bridge: undefined;
   Music: undefined;
   Pledge: undefined;
+  UsdtPledge: undefined;
   Pools: undefined;
   CreateToken: undefined;
   NFT: undefined;
   Epoch: undefined;
+  Withdraw: undefined;
 };
 
 export type TabParamList = {
@@ -171,9 +175,11 @@ export default function App() {
               <Stack.Screen name="Bridge" component={BridgeScreen} options={{ presentation: 'modal' }} />
               <Stack.Screen name="Music" component={MusicScreen} options={{ presentation: 'modal' }} />
               <Stack.Screen name="Pledge" component={PledgeScreen} options={{ presentation: 'modal' }} />
+              <Stack.Screen name="UsdtPledge" component={UsdtPledgeScreen} options={{ presentation: 'modal' }} />
               <Stack.Screen name="Pools" component={PoolsScreen} options={{ presentation: 'modal' }} />
               <Stack.Screen name="CreateToken" component={CreateTokenScreen} options={{ presentation: 'modal' }} />
               <Stack.Screen name="NFT" component={NFTScreen} options={{ presentation: 'modal' }} />
+              <Stack.Screen name="Withdraw" component={WithdrawScreen} options={{ presentation: 'modal' }} />
               <Stack.Screen name="Epoch" component={EpochScreen} options={{ presentation: 'modal' }} />
             </>
           )}

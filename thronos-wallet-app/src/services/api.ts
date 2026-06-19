@@ -263,8 +263,12 @@ export async function submitPledge(params: { btc_address: string; pledge_text: s
   return request('/api/pledge', { method: 'POST', body: JSON.stringify({ btc_address: params.btc_address, pledge_text: params.pledge_text }) });
 }
 
-export async function getPledgeStatus(btc_address: string): Promise<{ ok: boolean; status?: string; thr_address?: string; pledge_hash?: string; pending_confirmation?: boolean }> {
+export async function getPledgeStatus(btc_address: string): Promise<{ ok: boolean; status?: string; thr_address?: string; pledge_hash?: string; pdf_filename?: string; send_secret?: string; pending_confirmation?: boolean }> {
   return request(`/api/pledge/status?btc=${encodeURIComponent(btc_address)}`);
+}
+
+export async function getBnbPledgeStatus(bnb_address: string): Promise<{ ok: boolean; status?: string; thr_address?: string; send_secret?: string; pdf_filename?: string; pending_confirmation?: boolean; error?: string }> {
+  return request(`/api/pledge/bnb/status?bnb=${encodeURIComponent(bnb_address)}`);
 }
 
 export async function pledgeMigrate(params: { send_secret: string; pin: string }): Promise<{ ok: boolean; canonical_v1_address?: string; recovery_kit?: string; pdf_url?: string; error?: string }> {
@@ -275,7 +279,7 @@ export async function getBnbPledgeQuote(): Promise<{ ok: boolean; vault_address?
   return request('/api/pledge/bnb/quote');
 }
 
-export async function registerBnbAddress(params: { thr_address?: string; bnb_address: string; passphrase?: string }): Promise<{ ok: boolean; thr_address?: string; vault_address?: string; secret_seed?: string; pdf_filename?: string; error?: string }> {
+export async function registerBnbAddress(params: { thr_address?: string; bnb_address: string; passphrase?: string }): Promise<{ ok: boolean; thr_address?: string; vault_address?: string; error?: string }> {
   return request('/api/pledge/bnb/register', { method: 'POST', body: JSON.stringify(params) });
 }
 

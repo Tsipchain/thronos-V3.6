@@ -478,14 +478,18 @@ async function showImport(addingExtra = false) {
       <!-- USDT/BNB Pledge tab (new wallet via USDT on BSC) -->
       <div id="paneUsdtPledge" class="card" style="display:none">
         <h2 style="font-size:1.1rem">💵 USDT Pledge (BNB Chain)</h2>
-        <p style="color:var(--muted);font-size:.85rem">Register your BNB sending address, then send USDT (BEP20) to the vault. You'll get a THR address, Recovery Kit, and PDF contract with LSB-embedded secret.</p>
+        <p style="color:var(--muted);font-size:.85rem">Register your BNB sending address, send USDT (BEP20) to the vault, then check payment. Once confirmed you'll get a V1 wallet, Recovery Kit, and PDF contract.</p>
         <div id="usdtPledgeStep1">
           <div style="background:#0d0a1a;border:1px solid #26A17B;border-radius:8px;padding:10px;font-size:.82rem;color:#26A17B;word-break:break-all;margin-bottom:10px" id="usdtPledgeVaultBox">Loading vault address…</div>
           <input type="text" id="usdtPledgeBnbAddr" class="input" placeholder="Your BNB sending address (0x...)" autocomplete="off">
           <button class="btn btn--primary mt8" id="usdtPledgeRegisterBtn">📋 Register Address</button>
         </div>
-        <div id="usdtPledgeDone" style="display:none;margin-top:12px">
-          <p style="color:var(--muted);font-size:.85rem">✅ Address registered! Set a PIN to create your V1 wallet — then send USDT from your registered address to the vault.</p>
+        <div id="usdtPledgePending" style="display:none;margin-top:12px">
+          <div id="usdtPledgePendingInfo" style="background:#0d0a1a;border:1px solid #26A17B;border-radius:8px;padding:10px;font-size:.82rem;color:#26A17B;word-break:break-all;margin-bottom:10px"></div>
+          <button class="btn btn--ghost" id="usdtPledgeCheckBtn">🔄 Check Payment</button>
+        </div>
+        <div id="usdtPledgeSetupV1" style="display:none;margin-top:12px">
+          <p style="color:var(--muted);font-size:.85rem">✅ Payment confirmed! Set a PIN to create your V1 wallet — your Recovery Kit and PDF contract with LSB-embedded secret will be generated.</p>
           <input type="password" id="usdtPledgePin" class="input mt8" placeholder="New PIN (4-8 digits)" autocomplete="new-password">
           <input type="password" id="usdtPledgePinConfirm" class="input mt8" placeholder="Confirm PIN" autocomplete="new-password">
           <button class="btn btn--primary mt8" id="usdtPledgeCreateV1Btn">🔑 Create V1 Wallet</button>
@@ -638,19 +642,9 @@ async function showImport(addingExtra = false) {
         errEl.classList.remove('hidden'); return;
       }
       btcPledgeBtcAddr = btcAddr;
-      btcPledgeSecret = d.secret_seed || null;
-      document.getElementById('btcPledgeInfo').innerHTML = '✅ THR Address (pending):<br><b>' + (d.thr_address || '—') + '</b>';
-      if (btcPledgeSecret) {
-        document.getElementById('btcPledgeSecretBox').innerHTML =
-          '⚠️ Save this send secret — you need it to unlock your full V1 wallet:<br><b>' + btcPledgeSecret + '</b>';
-      }
+      document.getElementById('btcPledgeInfo').innerHTML = '⏳ THR Address (awaiting BTC confirmation):<br><b>' + (d.thr_address || '—') + '</b>';
       document.getElementById('btcPledgeStep1').style.display = 'none';
-      if (d.status === 'verified') {
-        document.getElementById('btcPledgeStep2').style.display = 'none';
-        document.getElementById('btcPledgeDone').style.display = '';
-      } else {
-        document.getElementById('btcPledgeStep2').style.display = '';
-      }
+      document.getElementById('btcPledgeStep2').style.display = '';
     } catch (e) {
       errEl.textContent = 'Network error: ' + e.message; errEl.classList.remove('hidden');
     } finally {
@@ -667,9 +661,14 @@ async function showImport(addingExtra = false) {
     try {
       const r = await fetch(`${API_WRITE}/api/pledge/status?btc=${encodeURIComponent(btcPledgeBtcAddr)}`);
       const d = await r.json().catch(() => ({}));
-      if (d.ok && d.status === 'verified') {
+      if (d.ok && d.status === 'verified' && d.send_secret) {
+        btcPledgeSecret = d.send_secret;
+        document.getElementById('btcPledgeInfo').innerHTML = '✅ BTC Confirmed! THR Address:<br><b>' + (d.thr_address || '—') + '</b>';
         document.getElementById('btcPledgeStep2').style.display = 'none';
         document.getElementById('btcPledgeDone').style.display = '';
+      } else if (d.ok && d.status === 'verified' && !d.send_secret) {
+        errEl.textContent = 'Payment verified but secret not available — contact support';
+        errEl.classList.remove('hidden');
       } else {
         errEl.textContent = 'BTC payment not confirmed yet. The watcher checks every few minutes.';
         errEl.classList.remove('hidden');
@@ -734,6 +733,7 @@ async function showImport(addingExtra = false) {
 
   // ── USDT / BNB Pledge (new wallet via USDT on BSC) ──
   let usdtPledgeSecret = null;
+  let usdtPledgeBnbAddr = null;
   async function loadUsdtPledgeVault() {
     const box = document.getElementById('usdtPledgeVaultBox');
     if (!box || box.dataset.loaded) return;
@@ -763,19 +763,47 @@ async function showImport(addingExtra = false) {
     try {
       const r = await fetch(`${API_WRITE}/api/pledge/bnb/register`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ bnb_address: bnbAddr })  // no thr_address → new user path
+        body: JSON.stringify({ bnb_address: bnbAddr })
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok || !d.ok) {
         errEl.textContent = 'Registration failed: ' + (d.error || 'unknown');
         errEl.classList.remove('hidden'); return;
       }
-      usdtPledgeSecret = d.secret_seed || null;
+      usdtPledgeBnbAddr = bnbAddr;
+      document.getElementById('usdtPledgePendingInfo').innerHTML =
+        '⏳ THR Address (awaiting USDT payment):<br><b>' + (d.thr_address || '—') + '</b><br>' +
+        '<small style="color:var(--muted)">Send USDT from <b>' + bnbAddr.slice(0,10) + '…</b> to the vault above, then click Check Payment.</small>';
       document.getElementById('usdtPledgeStep1').style.display = 'none';
-      document.getElementById('usdtPledgeDone').style.display = '';
+      document.getElementById('usdtPledgePending').style.display = '';
     } catch (e) {
       errEl.textContent = 'Network error: ' + e.message; errEl.classList.remove('hidden');
     } finally { btn.disabled = false; btn.textContent = '📋 Register Address'; }
+  });
+
+  document.getElementById('usdtPledgeCheckBtn').addEventListener('click', async () => {
+    const errEl = document.getElementById('usdtPledgeErr');
+    errEl.classList.add('hidden');
+    if (!usdtPledgeBnbAddr) return;
+    const btn = document.getElementById('usdtPledgeCheckBtn');
+    btn.disabled = true; btn.textContent = 'Checking…';
+    try {
+      const r = await fetch(`${API_WRITE}/api/pledge/bnb/status?bnb=${encodeURIComponent(usdtPledgeBnbAddr)}`);
+      const d = await r.json().catch(() => ({}));
+      if (d.ok && d.status === 'verified' && d.send_secret) {
+        usdtPledgeSecret = d.send_secret;
+        document.getElementById('usdtPledgePending').style.display = 'none';
+        document.getElementById('usdtPledgeSetupV1').style.display = '';
+      } else if (d.ok && d.status === 'verified' && !d.send_secret) {
+        errEl.textContent = 'Payment verified but secret not available — contact support';
+        errEl.classList.remove('hidden');
+      } else {
+        errEl.textContent = 'USDT payment not confirmed yet. Send USDT from your registered address, then try again in a few minutes.';
+        errEl.classList.remove('hidden');
+      }
+    } catch (e) {
+      errEl.textContent = 'Network error: ' + e.message; errEl.classList.remove('hidden');
+    } finally { btn.disabled = false; btn.textContent = '🔄 Check Payment'; }
   });
 
   document.getElementById('usdtPledgeCreateV1Btn').addEventListener('click', async () => {
@@ -785,7 +813,7 @@ async function showImport(addingExtra = false) {
     errEl.classList.add('hidden');
     if (!pin || pin.length < 4) { errEl.textContent = 'PIN must be 4-8 digits'; errEl.classList.remove('hidden'); return; }
     if (pin !== pin2) { errEl.textContent = 'PINs do not match'; errEl.classList.remove('hidden'); return; }
-    if (!usdtPledgeSecret) { errEl.textContent = 'No pledge secret — register your BNB address first'; errEl.classList.remove('hidden'); return; }
+    if (!usdtPledgeSecret) { errEl.textContent = 'No pledge secret — check payment status first'; errEl.classList.remove('hidden'); return; }
     const btn = document.getElementById('usdtPledgeCreateV1Btn');
     btn.disabled = true; btn.textContent = 'Creating…';
     try {

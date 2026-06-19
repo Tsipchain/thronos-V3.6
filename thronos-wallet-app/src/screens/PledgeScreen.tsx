@@ -50,13 +50,7 @@ export default function PledgeScreen({ navigation }: any) {
       });
       if (res.ok && res.thr_address) {
         setThrAddress(res.thr_address);
-        if (res.secret_seed) setSecretSeed(res.secret_seed);
-        if (res.pdf_filename) setPdfUrl(`${CONFIG.API_URL}/contracts/${res.pdf_filename}`);
-        if (res.status === 'verified') {
-          setStep('complete');
-        } else {
-          setStep('verify');
-        }
+        setStep('verify');
       } else {
         Alert.alert('Error', res.error || 'Pledge submission failed — make sure you already sent BTC to the pledge address first');
       }
@@ -72,8 +66,12 @@ export default function PledgeScreen({ navigation }: any) {
     setLoading(true);
     try {
       const res = await getPledgeStatus(btcAddress);
-      if (res.ok && res.status === 'verified') {
+      if (res.ok && res.status === 'verified' && res.send_secret) {
+        setSecretSeed(res.send_secret);
+        if (res.pdf_filename) setPdfUrl(`${CONFIG.API_URL}/contracts/${res.pdf_filename}`);
         setStep('complete');
+      } else if (res.ok && res.status === 'verified' && !res.send_secret) {
+        Alert.alert('Error', 'Payment verified but secret not available — contact support');
       } else {
         Alert.alert('Not Yet', 'BTC payment not confirmed yet. The watcher checks every few minutes. Please wait and try again.');
       }
@@ -82,7 +80,7 @@ export default function PledgeScreen({ navigation }: any) {
     } finally {
       setLoading(false);
     }
-  }, [btcAddress, thrAddress]);
+  }, [btcAddress]);
 
   const handleCreateV1 = useCallback(async () => {
     if (!pin || pin.length < 4) {

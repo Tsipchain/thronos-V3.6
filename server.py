@@ -17009,21 +17009,13 @@ async def api_pledge_submit(request: Request, db: Annotated[Session, Depends(get
         auth_string = f"{send_seed}:{passphrase}:auth" if passphrase else f"{send_seed}:auth"
         send_auth_hash = hashlib.sha256(auth_string.encode()).hexdigest()
 
-        pledge_entry = {
-            "btc_address": btc_address,
-            "pledge_text": pledge_text,
-            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
-            "pledge_hash": phash,
-            "thr_address": thr_addr,
-            "send_seed_hash": send_seed_hash,
-            "send_auth_hash": send_auth_hash,
-            "has_passphrase": bool(passphrase),
-            "pending_confirmation": pending_confirmation
-        }
-
         chain = load_json(CHAIN_FILE, [])
         height = len(chain)
 
+        # Generate send_seed now and store server-side.
+        # send_seed is NOT returned to the client at submission — the client
+        # receives it only from /api/pledge/status once the BTC watcher confirms
+        # the on-chain payment (gate: no payment confirmation → no wallet).
         try:
             pdf_name = create_secure_pdf_contract(
                 btc_address, pledge_text, thr_addr, phash, height, send_seed, CONTRACTS_DIR, passphrase
@@ -17032,7 +17024,19 @@ async def api_pledge_submit(request: Request, db: Annotated[Session, Depends(get
             logger.error(f"PDF generation failed: {pdf_err}")
             pdf_name = f"pledge_{thr_addr}.pdf"
 
-        pledge_entry["pdf_filename"] = pdf_name
+        pledge_entry = {
+            "btc_address": btc_address,
+            "pledge_text": pledge_text,
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+            "pledge_hash": phash,
+            "thr_address": thr_addr,
+            "send_seed": send_seed,          # stored; returned only after watcher confirms
+            "send_seed_hash": send_seed_hash,
+            "send_auth_hash": send_auth_hash,
+            "has_passphrase": bool(passphrase),
+            "pending_confirmation": pending_confirmation,
+            "pdf_filename": pdf_name,
+        }
         pledges.append(pledge_entry)
         save_json(PLEDGE_CHAIN, pledges)
 
@@ -17050,15 +17054,16 @@ async def api_pledge_submit(request: Request, db: Annotated[Session, Depends(get
         except Exception as exc:
             logger.warning(f"Failed to update btc_user_registry: {exc}")
 
+        # Return thr_address so client can show it as "pending" — but deliberately
+        # withhold send_seed until BTC watcher confirms on-chain payment.
+        # Client must poll /api/pledge/status to get send_secret + pdf_filename.
         return jsonify(
             ok=True,
             status="verified" if not pending_confirmation else "pending_confirmation",
             thr_address=thr_addr,
             pledge_hash=phash,
-            pdf_filename=pdf_name,
-            secret_seed=send_seed,
             pending_confirmation=pending_confirmation,
-            message="Pledge created successfully" if not pending_confirmation else "Pledge created, awaiting BTC confirmation"
+            message="Pledge registered — send_secret and PDF will be available after BTC confirmation" if pending_confirmation else "Pledge confirmed — check /api/pledge/status for your send_secret"
         ), 201
 
     except Exception as exc:
@@ -17301,12 +17306,17 @@ def api_pledge_status():
         status = "verified"
         if exists.get("pending_confirmation"):
             status = "pending_confirmation"
+        # Only reveal the send_secret once BTC watcher has confirmed on-chain payment
+        send_secret = None
+        if not exists.get("pending_confirmation"):
+            send_secret = exists.get("send_seed")
         return jsonify(
             ok=True,
             status=status,
             thr_address=exists["thr_address"],
             pledge_hash=exists["pledge_hash"],
             pdf_filename=exists.get("pdf_filename"),
+            send_secret=send_secret,
             timestamp=exists.get("timestamp"),
             has_passphrase=exists.get("has_passphrase", False),
             pending_confirmation=exists.get("pending_confirmation", False),
@@ -26839,67 +26849,25 @@ def api_pledge_bnb_register():
     """
     Register the BNB-chain (BSC) address a user will send USDT from.
 
-    Two modes:
-    - thr_address provided  → existing wallet holder (just registers BNB→THR mapping)
-    - thr_address omitted   → new user: generates v0 THR address, send_secret, PDF
-                              contract with LSB-embedded secret, and pledge record so
-                              pledge-migrate can create a V1 wallet inline.
+    Stores the mapping in bnb_user_registry.json so the watcher knows
+    which THR address to credit when USDT arrives from this BNB address.
+
+    For new users (no thr_address supplied) a provisional THR address is
+    generated here.  The pledge record + send_seed + PDF are created LATER
+    by /api/usdt/pledge when the watcher confirms the USDT payment.
     """
     data = request.get_json() or {}
     thr_address = (data.get("thr_address") or "").strip().upper()
     bnb_address = (data.get("bnb_address") or "").strip().lower()
-    passphrase  = (data.get("passphrase") or "").strip() or None
 
     if not re.match(r"^0x[a-f0-9]{40}$", bnb_address):
         return jsonify(ok=False, error="invalid_bnb_address"), 400
     if thr_address and not validate_thr_address(thr_address):
         return jsonify(ok=False, error="invalid_thr_address"), 400
 
-    secret_seed  = None
-    pdf_filename = None
-
     if not thr_address:
-        # New-user path: generate deterministic v0 THR address + pledge record + PDF
-        timestamp    = str(int(time.time() * 1000))
-        thr_address  = generate_thr_address(bnb_address, timestamp)
-        pledge_text  = "USDT/BNB Pledge — Thronos Network"
-        phash        = hashlib.sha256((bnb_address + pledge_text).encode()).hexdigest()
-        send_seed    = secrets.token_hex(16)
-        send_seed_hash  = hashlib.sha256(send_seed.encode()).hexdigest()
-        auth_string     = f"{send_seed}:{passphrase}:auth" if passphrase else f"{send_seed}:auth"
-        send_auth_hash  = hashlib.sha256(auth_string.encode()).hexdigest()
-
-        chain  = load_json(CHAIN_FILE, [])
-        height = len(chain)
-
-        try:
-            pdf_name = create_secure_pdf_contract(
-                bnb_address, pledge_text, thr_address, phash, height,
-                send_seed, CONTRACTS_DIR, passphrase
-            )
-        except Exception as _pdf_err:
-            logger.error(f"USDT pledge PDF generation failed: {_pdf_err}")
-            pdf_name = f"pledge_{thr_address}.pdf"
-
-        pledge_entry = {
-            "bnb_address":         bnb_address,
-            "pledge_type":         "usdt_bnb",
-            "pledge_text":         pledge_text,
-            "timestamp":           time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
-            "pledge_hash":         phash,
-            "thr_address":         thr_address,
-            "send_seed_hash":      send_seed_hash,
-            "send_auth_hash":      send_auth_hash,
-            "has_passphrase":      bool(passphrase),
-            "pending_confirmation": True,
-            "pdf_filename":        pdf_name,
-        }
-        pledges = load_json(PLEDGE_CHAIN, [])
-        pledges.append(pledge_entry)
-        save_json(PLEDGE_CHAIN, pledges)
-
-        secret_seed  = send_seed
-        pdf_filename = pdf_name
+        timestamp   = str(int(time.time() * 1000))
+        thr_address = generate_thr_address(bnb_address, timestamp)
 
     registry_file = os.path.join(DATA_DIR, "bnb_user_registry.json")
     registry = load_json(registry_file, {})
@@ -26909,12 +26877,7 @@ def api_pledge_bnb_register():
     }
     save_json(registry_file, registry)
 
-    resp = dict(ok=True, thr_address=thr_address, bnb_address=bnb_address, vault_address=BNB_PLEDGE_VAULT)
-    if secret_seed:
-        resp["secret_seed"]  = secret_seed
-    if pdf_filename:
-        resp["pdf_filename"] = pdf_filename
-    return jsonify(**resp), 200
+    return jsonify(ok=True, thr_address=thr_address, bnb_address=bnb_address, vault_address=BNB_PLEDGE_VAULT), 200
 
 
 @app.route("/api/usdt/pledge", methods=["POST"])
@@ -26952,6 +26915,56 @@ def api_usdt_pledge():
     pool_usdt = round(usdt_amount * USDT_PLEDGE_POOL_SPLIT, 6)
     pool_thr = round(pool_usdt * USDT_THR_RATE, 6)
 
+    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+
+    # Generate send_seed + PDF + pledge record now that payment is confirmed.
+    # Only create a new pledge record if one doesn't already exist for this BNB address.
+    pledges = load_json(PLEDGE_CHAIN, [])
+    existing_pledge = next(
+        (p for p in pledges if p.get("bnb_address") == bnb_address and p.get("pledge_type") == "usdt_bnb"),
+        None
+    )
+    if not existing_pledge:
+        pledge_text    = "USDT/BNB Pledge — Thronos Network"
+        phash          = hashlib.sha256((bnb_address + pledge_text).encode()).hexdigest()
+        send_seed      = secrets.token_hex(16)
+        send_seed_hash = hashlib.sha256(send_seed.encode()).hexdigest()
+        auth_string    = f"{send_seed}:auth"
+        send_auth_hash = hashlib.sha256(auth_string.encode()).hexdigest()
+        chain_for_height = load_json(CHAIN_FILE, [])
+        height = len(chain_for_height)
+
+        try:
+            pdf_name = create_secure_pdf_contract(
+                bnb_address, pledge_text, thr_address, phash, height,
+                send_seed, CONTRACTS_DIR, None
+            )
+        except Exception as _pdf_err:
+            logger.error(f"USDT pledge PDF generation failed: {_pdf_err}")
+            pdf_name = f"pledge_{thr_address}.pdf"
+
+        pledge_entry = {
+            "bnb_address":          bnb_address,
+            "pledge_type":          "usdt_bnb",
+            "pledge_text":          pledge_text,
+            "timestamp":            ts,
+            "pledge_hash":          phash,
+            "thr_address":          thr_address,
+            "send_seed":            send_seed,
+            "send_seed_hash":       send_seed_hash,
+            "send_auth_hash":       send_auth_hash,
+            "has_passphrase":       False,
+            "pending_confirmation": False,
+            "pdf_filename":         pdf_name,
+        }
+        pledges.append(pledge_entry)
+        save_json(PLEDGE_CHAIN, pledges)
+    else:
+        # Already confirmed — just clear the flag if it was pending
+        if existing_pledge.get("pending_confirmation"):
+            existing_pledge["pending_confirmation"] = False
+            save_json(PLEDGE_CHAIN, pledges)
+
     # Credit THR to the user's wallet
     ledger = load_json(LEDGER_FILE, {})
     current_balance = float(ledger.get(thr_address, 0.0))
@@ -26964,7 +26977,6 @@ def api_usdt_pledge():
 
     # Create pledge transaction on the chain
     chain = load_json(CHAIN_FILE, [])
-    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
     tx_id = f"USDT_PLEDGE-{int(time.time())}-{secrets.token_hex(4)}"
 
     tx = {
@@ -27001,6 +27013,54 @@ def api_usdt_pledge():
         pool_usdt_seeded=pool_usdt,
         pool_thr_seeded=pool_thr,
     ), 201
+
+
+@app.route("/api/pledge/bnb/status", methods=["GET"])
+def api_pledge_bnb_status():
+    """
+    Check USDT/BNB pledge confirmation status for a given BNB sender address.
+    Returns send_secret only after the watcher has confirmed payment
+    (i.e. /api/usdt/pledge has been called and pledge record exists with
+    pending_confirmation=False).
+    """
+    bnb_address = (request.args.get("bnb") or "").strip().lower()
+    if not re.match(r"^0x[a-f0-9]{40}$", bnb_address):
+        return jsonify(ok=False, error="invalid_bnb_address"), 400
+
+    pledges = load_json(PLEDGE_CHAIN, [])
+    entry = next(
+        (p for p in pledges if p.get("bnb_address") == bnb_address and p.get("pledge_type") == "usdt_bnb"),
+        None
+    )
+
+    if not entry:
+        # Check registry — address is registered but watcher hasn't confirmed yet
+        registry_file = os.path.join(DATA_DIR, "bnb_user_registry.json")
+        registry = load_json(registry_file, {})
+        if bnb_address in registry:
+            return jsonify(
+                ok=True,
+                status="pending_payment",
+                thr_address=registry[bnb_address].get("thr_address"),
+                send_secret=None,
+                pending_confirmation=True,
+            ), 200
+        return jsonify(ok=False, error="not_found"), 404
+
+    send_secret = None
+    if not entry.get("pending_confirmation", True):
+        send_secret = entry.get("send_seed")
+
+    status = "verified" if send_secret else "pending_confirmation"
+    return jsonify(
+        ok=True,
+        status=status,
+        thr_address=entry.get("thr_address"),
+        pledge_hash=entry.get("pledge_hash"),
+        pdf_filename=entry.get("pdf_filename"),
+        send_secret=send_secret,
+        pending_confirmation=entry.get("pending_confirmation", True),
+    ), 200
 
 
 @app.route("/api/wallet/activate", methods=["POST"])

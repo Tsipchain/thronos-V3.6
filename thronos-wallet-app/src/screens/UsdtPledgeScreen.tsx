@@ -9,17 +9,20 @@ import { LinearGradient } from 'expo-linear-gradient';
 import * as Clipboard from 'expo-clipboard';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS } from '../constants/theme';
 import { CONFIG } from '../constants/config';
-import { getBnbPledgeQuote, registerBnbAddress, pledgeMigrate } from '../services/api';
+import { getBnbPledgeQuote, registerBnbAddress, getBnbPledgeStatus, pledgeMigrate } from '../services/api';
 import { useStore } from '../store/useStore';
 
 // USDT-on-BNB-Chain Pledge — gateway to Thronos Network.
 //
-// Two modes:
-//  - Existing wallet: registers BNB address so the watcher can credit THR
-//  - New user (no wallet): generates THR address + send_secret + PDF, then
-//    creates V1 wallet inline via pledge-migrate (same as BTC pledge flow).
+// Gate: payment must be confirmed by the BSC watcher BEFORE credentials
+// (send_secret + PDF) are released to the client.
+//
+// New-user flow:
+//   intro → register → pending_payment → setup_v1 → v1_ready
+// Existing-user flow:
+//   intro → register → done
 
-type Step = 'intro' | 'register' | 'setup_v1' | 'v1_ready' | 'done';
+type Step = 'intro' | 'register' | 'pending_payment' | 'setup_v1' | 'v1_ready' | 'done';
 
 export default function UsdtPledgeScreen({ navigation }: any) {
   const { wallet } = useStore();
@@ -31,7 +34,7 @@ export default function UsdtPledgeScreen({ navigation }: any) {
   const [copied, setCopied] = useState(false);
   const [quote, setQuote] = useState<{ vault_address?: string; token_contract?: string; min_usdt?: number; usdt_thr_rate?: number } | null>(null);
 
-  // new-user state
+  // new-user V1 creation state (set after payment confirmed)
   const [secretSeed, setSecretSeed] = useState<string | null>(null);
   const [pendingThrAddress, setPendingThrAddress] = useState<string | null>(null);
   const [pin, setPin] = useState('');
@@ -59,6 +62,7 @@ export default function UsdtPledgeScreen({ navigation }: any) {
     setTimeout(() => setCopied(false), 2000);
   };
 
+  // Step 1: register the BNB address (KYC for watcher)
   const handleRegister = useCallback(async () => {
     if (!bnbAddress.trim() || !/^0x[a-fA-F0-9]{40}$/.test(bnbAddress.trim())) {
       Alert.alert('Required', 'Enter a valid BNB (0x...) sending address');
@@ -76,10 +80,9 @@ export default function UsdtPledgeScreen({ navigation }: any) {
         return;
       }
 
-      if (isNewUser && res.secret_seed) {
-        setSecretSeed(res.secret_seed);
+      if (isNewUser) {
         setPendingThrAddress(res.thr_address || null);
-        setStep('setup_v1');
+        setStep('pending_payment');
       } else {
         setStep('done');
       }
@@ -90,6 +93,31 @@ export default function UsdtPledgeScreen({ navigation }: any) {
     }
   }, [bnbAddress, wallet.address, isNewUser]);
 
+  // Step 2 (new users): poll watcher for USDT payment confirmation
+  const handleCheckPayment = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await getBnbPledgeStatus(bnbAddress.trim());
+      if (res.ok && res.status === 'verified' && res.send_secret) {
+        setSecretSeed(res.send_secret);
+        if (res.thr_address) setPendingThrAddress(res.thr_address);
+        setStep('setup_v1');
+      } else if (res.ok && res.status === 'verified' && !res.send_secret) {
+        Alert.alert('Error', 'Payment verified but secret not available — contact support');
+      } else {
+        Alert.alert(
+          'Not Yet',
+          'USDT payment not confirmed yet. Send at least ' + minUsdt + ' USDT from your registered BNB address, then check again in a few minutes.',
+        );
+      }
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Network error');
+    } finally {
+      setLoading(false);
+    }
+  }, [bnbAddress, minUsdt]);
+
+  // Step 3 (new users): set PIN → create V1 wallet via pledge-migrate
   const handleCreateV1 = useCallback(async () => {
     if (!pin || pin.length < 4) {
       Alert.alert('PIN Required', 'Enter a PIN of at least 4 digits');
@@ -100,7 +128,7 @@ export default function UsdtPledgeScreen({ navigation }: any) {
       return;
     }
     if (!secretSeed) {
-      Alert.alert('Error', 'No pledge secret — please re-register your BNB address');
+      Alert.alert('Error', 'No pledge secret — please check payment status again');
       return;
     }
     setLoading(true);
@@ -140,7 +168,7 @@ export default function UsdtPledgeScreen({ navigation }: any) {
               <Text style={styles.introTitle}>Pledge USDT on BNB Chain</Text>
               <Text style={styles.introDesc}>
                 {isNewUser
-                  ? 'Send USDT (BEP20) to our vault to create your THR wallet. You\'ll get a V1 address, Recovery Kit, and PDF contract with your secret embedded via LSB steganography.'
+                  ? 'Send USDT (BEP20) to our vault to enter Thronos. Once the watcher confirms your payment, you\'ll set a PIN and receive a V1 wallet, Recovery Kit, and PDF contract with your secret embedded via LSB steganography.'
                   : 'Send USDT (BEP20) on Binance Smart Chain to our vault. The watcher detects your transfer and credits the THR equivalent to your wallet — half is paired into the THR/USDT liquidity pool.'}
               </Text>
             </LinearGradient>
@@ -158,27 +186,27 @@ export default function UsdtPledgeScreen({ navigation }: any) {
                   <Text style={styles.stepDesc}>Link the BNB address you'll send USDT from (KYC for the watcher)</Text>
                 </View>
               </View>
+              <View style={styles.stepItem}>
+                <View style={styles.stepNum}><Text style={styles.stepNumText}>2</Text></View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.stepTitle}>Send USDT</Text>
+                  <Text style={styles.stepDesc}>Send minimum {minUsdt} USDT (BEP20) to the vault address</Text>
+                </View>
+              </View>
               {isNewUser && (
                 <View style={styles.stepItem}>
-                  <View style={styles.stepNum}><Text style={styles.stepNumText}>2</Text></View>
+                  <View style={styles.stepNum}><Text style={styles.stepNumText}>3</Text></View>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.stepTitle}>Create V1 Wallet</Text>
-                    <Text style={styles.stepDesc}>Set a PIN — generates your Recovery Kit + PDF with embedded secret</Text>
+                    <Text style={styles.stepDesc}>After watcher confirms payment, set a PIN — generates Recovery Kit + PDF</Text>
                   </View>
                 </View>
               )}
               <View style={styles.stepItem}>
-                <View style={styles.stepNum}><Text style={styles.stepNumText}>{isNewUser ? '3' : '2'}</Text></View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.stepTitle}>Send USDT</Text>
-                  <Text style={styles.stepDesc}>Send minimum {minUsdt} USDT (BEP20) to the vault</Text>
-                </View>
-              </View>
-              <View style={styles.stepItem}>
                 <View style={styles.stepNum}><Text style={styles.stepNumText}>{isNewUser ? '4' : '3'}</Text></View>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.stepTitle}>THR Credited Automatically</Text>
-                  <Text style={styles.stepDesc}>Our BSC watcher detects your transfer and credits THR (~5 min)</Text>
+                  <Text style={styles.stepDesc}>Our BSC watcher credits THR to your wallet automatically (~5 min)</Text>
                 </View>
               </View>
             </View>
@@ -190,7 +218,7 @@ export default function UsdtPledgeScreen({ navigation }: any) {
           </>
         )}
 
-        {/* Step: Register address + show vault */}
+        {/* Step: Register BNB address + show vault */}
         {step === 'register' && (
           <>
             <Text style={styles.sectionTitle}>Send USDT to Vault</Text>
@@ -243,19 +271,58 @@ export default function UsdtPledgeScreen({ navigation }: any) {
           </>
         )}
 
-        {/* Step: Setup V1 Wallet (new users only) */}
+        {/* Step: Pending payment (new users only) — wait for watcher */}
+        {step === 'pending_payment' && (
+          <>
+            <LinearGradient colors={['#0A1A0A', '#0D0D00']} style={styles.verifyCard}>
+              <Ionicons name="time" size={48} color={COLORS.gold} />
+              <Text style={styles.verifyTitle}>Waiting for USDT Payment</Text>
+              <Text style={styles.verifyDesc}>
+                Send at least {minUsdt} USDT (BEP20) from your registered address to the vault.
+                Once the watcher confirms your payment, your V1 wallet will be generated.
+              </Text>
+              {pendingThrAddress && (
+                <View style={styles.thrPreview}>
+                  <Text style={styles.thrPreviewLabel}>Reserved THR Address</Text>
+                  <Text style={styles.thrPreviewAddr}>{pendingThrAddress}</Text>
+                </View>
+              )}
+              <View style={styles.thrPreview}>
+                <Text style={styles.thrPreviewLabel}>Your Sending Address</Text>
+                <Text style={styles.thrPreviewAddr}>{bnbAddress}</Text>
+              </View>
+            </LinearGradient>
+
+            <TouchableOpacity
+              style={[styles.primaryBtn, loading && styles.btnDisabled]}
+              onPress={handleCheckPayment}
+              disabled={loading}
+            >
+              {loading ? (
+                <ActivityIndicator color={COLORS.background} />
+              ) : (
+                <>
+                  <Ionicons name="checkmark-circle" size={20} color={COLORS.background} />
+                  <Text style={styles.primaryBtnText}>Check Payment</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </>
+        )}
+
+        {/* Step: Setup V1 Wallet (new users — payment confirmed) */}
         {step === 'setup_v1' && (
           <>
             <LinearGradient colors={['#001A0A', '#000D05']} style={styles.completeCard}>
               <Ionicons name="key" size={48} color={COLORS.gold} />
-              <Text style={styles.completeTitle}>Address Registered!</Text>
+              <Text style={styles.completeTitle}>Payment Confirmed!</Text>
               <Text style={styles.completeDesc}>
                 Set a PIN to create your V1 wallet. Your Recovery Kit and a PDF contract
-                (with your secret embedded via LSB steganography) will be generated.
+                (with your secret embedded via LSB steganography) will be generated now.
               </Text>
               {pendingThrAddress && (
                 <View style={styles.thrFinal}>
-                  <Text style={styles.thrFinalLabel}>Reserved THR Address</Text>
+                  <Text style={styles.thrFinalLabel}>Your THR Address</Text>
                   <Text style={styles.thrFinalAddr}>{pendingThrAddress}</Text>
                 </View>
               )}
@@ -309,8 +376,8 @@ export default function UsdtPledgeScreen({ navigation }: any) {
               <Ionicons name="shield-checkmark" size={56} color={COLORS.success} />
               <Text style={styles.completeTitle}>Welcome to Thronos!</Text>
               <Text style={styles.completeDesc}>
-                Your V1 wallet is ready. Now send at least {minUsdt} USDT from your registered
-                BNB address to the vault — THR will be credited automatically once confirmed.
+                Your V1 wallet is ready. THR will be credited to your address automatically
+                once the BSC watcher confirms your USDT transfer.
               </Text>
               {v1Address && (
                 <View style={styles.thrFinal}>
@@ -430,6 +497,20 @@ const styles = StyleSheet.create({
     padding: SPACING.md, fontSize: FONT_SIZES.md, color: COLORS.text,
     borderWidth: 1, borderColor: COLORS.border, marginBottom: SPACING.md,
   },
+
+  verifyCard: {
+    borderRadius: BORDER_RADIUS.xl, padding: SPACING.xl,
+    alignItems: 'center', gap: SPACING.md, marginBottom: SPACING.lg,
+    borderWidth: 1, borderColor: COLORS.gold + '30',
+  },
+  verifyTitle: { fontSize: FONT_SIZES.xl, fontWeight: '700', color: COLORS.gold, textAlign: 'center' },
+  verifyDesc: { fontSize: FONT_SIZES.md, color: COLORS.textSecondary, textAlign: 'center', lineHeight: 22 },
+  thrPreview: {
+    backgroundColor: COLORS.background, borderRadius: BORDER_RADIUS.md,
+    padding: SPACING.md, width: '100%', marginTop: SPACING.xs,
+  },
+  thrPreviewLabel: { fontSize: FONT_SIZES.xs, color: COLORS.textMuted, marginBottom: 4 },
+  thrPreviewAddr: { fontSize: FONT_SIZES.sm, color: COLORS.gold, fontFamily: 'monospace' },
 
   completeCard: {
     borderRadius: BORDER_RADIUS.xl, padding: SPACING.xl,

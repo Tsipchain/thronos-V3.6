@@ -1284,6 +1284,10 @@ async function showWallet() {
 
       <!-- Balances + Token list -->
       <div class="card" style="padding:12px;margin-bottom:10px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+          <span style="font-size:.7rem;text-transform:uppercase;letter-spacing:1px;color:var(--accent)">Balance</span>
+          <button id="refreshBalBtn" title="Refresh balance" style="background:none;border:none;color:var(--muted);font-size:.95rem;cursor:pointer;padding:2px 6px;line-height:1" aria-label="Refresh">🔄</button>
+        </div>
         <div id="balancesArea">
           <div class="balance-amount balance-amount--loading">···</div>
         </div>
@@ -1457,7 +1461,21 @@ async function showWallet() {
     el.innerHTML = `<div style="font-size:.7rem;text-transform:uppercase;letter-spacing:1px;color:var(--accent);margin-bottom:4px">Assets</div>${rows}`;
   };
 
+  const refreshCurrentNet = () => {
+    homeChainBalances = null; // force re-fetch
+    const netId = document.getElementById('homeNetSel')?.value || 'thronos';
+    if (netId === 'thronos') { loadThronosAssets(); return; }
+    loadOtherNetworkAssets(netId);
+  };
+
+  document.getElementById('refreshBalBtn').addEventListener('click', () => {
+    const btn = document.getElementById('refreshBalBtn');
+    if (btn) { btn.style.opacity = '.4'; setTimeout(() => { if (btn) btn.style.opacity = '1'; }, 800); }
+    refreshCurrentNet();
+  });
+
   document.getElementById('homeNetSel').addEventListener('change', (e) => {
+    homeChainBalances = null; // always re-fetch on network switch
     const netId = e.target.value;
     if (netId === 'thronos') { loadThronosAssets(); return; }
     loadOtherNetworkAssets(netId);
@@ -1465,6 +1483,15 @@ async function showWallet() {
 
   // Load balances — same API as web wallet
   loadThronosAssets();
+
+  // Auto-refresh every 30s while wallet is open
+  const _autoRefreshId = setInterval(() => {
+    if (!document.getElementById('refreshBalBtn')) { clearInterval(_autoRefreshId); return; }
+    const netId = document.getElementById('homeNetSel')?.value || 'thronos';
+    if (netId === 'thronos') { loadThronosAssets(); return; }
+    homeChainBalances = null;
+    loadOtherNetworkAssets(netId);
+  }, 30000);
 }
 
 // ─── Token detail modal ────────────────────────────────────────────────────────

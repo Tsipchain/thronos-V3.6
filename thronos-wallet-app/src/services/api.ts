@@ -340,10 +340,20 @@ export async function requestWithdrawal(params: {
   send_secret: string;
   amount: number;
   token: 'USDT' | 'USDC';
-  dest_chain: 'bsc' | 'base' | 'arbitrum';
+  dest_chain: string;
   dest_address: string;
 }): Promise<WithdrawResult> {
   return request('/api/v1/withdraw', { method: 'POST', body: JSON.stringify(params) });
+}
+
+export interface WithdrawChain {
+  chain: string;
+  label: string;
+  tokens: string[];
+}
+
+export async function getWithdrawChains(): Promise<{ ok: boolean; chains: WithdrawChain[] }> {
+  return request('/api/v1/withdraw/chains');
 }
 
 export async function getLPPositions(address: string): Promise<{ positions: Array<{ pool_id: string; token_a: string; token_b: string; liquidity_share: number; value: number; pending_rewards: number }> }> {

@@ -27170,9 +27170,60 @@ def api_admin_seed_pool():
 
 # ─── USDT Withdrawal (cross-chain: Thronos → BSC/Base/Arbitrum) ──────────────
 
-WITHDRAW_SUPPORTED_TOKENS  = {"USDT", "USDC"}
-WITHDRAW_SUPPORTED_CHAINS  = {"bsc", "base", "arbitrum"}
+# Per-chain configuration — a chain is available only when both RPC URL and
+# hot wallet address are set in the environment.  Missing vars → chain disabled
+# and rejected cleanly rather than producing a runtime error mid-withdrawal.
+WITHDRAW_CHAIN_CONFIG: dict = {
+    "bsc": {
+        "label":          "BNB Chain (BSC)",
+        "tokens":         ["USDT"],
+        "rpc_url":        BSC_RPC_URL,  # defined globally above
+        "hot_wallet":     _strip_env_quotes(os.getenv("BNB_HOT_WALLET", "")),
+        "usdt_contract":  USDT_BNB_CONTRACT,
+    },
+    "base": {
+        "label":          "Base",
+        "tokens":         ["USDC"],
+        "rpc_url":        _strip_env_quotes(os.getenv("BASE_RPC_URL", "")),
+        "hot_wallet":     _strip_env_quotes(os.getenv("BASE_HOT_WALLET", "")),
+        "usdc_contract":  _strip_env_quotes(os.getenv("BASE_USDC_CONTRACT", "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913")),
+    },
+    "arbitrum": {
+        "label":          "Arbitrum",
+        "tokens":         ["USDT", "USDC"],
+        "rpc_url":        _strip_env_quotes(os.getenv("ARB_RPC_URL", "")),
+        "hot_wallet":     _strip_env_quotes(os.getenv("ARB_HOT_WALLET", "")),
+        "usdt_contract":  _strip_env_quotes(os.getenv("ARB_USDT_CONTRACT", "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9")),
+        "usdc_contract":  _strip_env_quotes(os.getenv("ARB_USDC_CONTRACT", "0xaf88d065e77c8cC2239327C5EDb3A432268e5831")),
+    },
+}
+
+WITHDRAW_SUPPORTED_TOKENS = {"USDT", "USDC"}
 WITHDRAW_QUEUE_FILE = os.path.join(DATA_DIR, "withdraw_queue.json")
+
+
+def get_available_withdraw_chains() -> dict:
+    """Return chains that have both rpc_url and hot_wallet configured."""
+    available = {}
+    for chain_id, cfg in WITHDRAW_CHAIN_CONFIG.items():
+        if cfg.get("rpc_url") and cfg.get("hot_wallet"):
+            available[chain_id] = {
+                "id":     chain_id,
+                "label":  cfg["label"],
+                "tokens": cfg["tokens"],
+            }
+    return available
+
+
+@app.route("/api/v1/withdraw/chains", methods=["GET"])
+def api_withdraw_chains():
+    """Return currently configured and available withdrawal chains + tokens."""
+    available = get_available_withdraw_chains()
+    return jsonify(
+        ok=True,
+        chains=list(available.values()),
+        max_withdraw_usdt=MAX_USDT_WITHDRAW,
+    ), 200
 
 
 @app.route("/api/v1/withdraw", methods=["POST"])
@@ -27182,18 +27233,16 @@ def api_v1_withdraw():
 
     Body:
     {
-      "address":      "THR...",         Thronos sender address
-      "send_secret":  "hex...",         pledge send_secret (proof of ownership)
-      "amount":       100.0,            USDT/USDC to receive
-      "token":        "USDT",           "USDT" or "USDC"
-      "dest_chain":   "bsc",            "bsc" | "base" | "arbitrum"
-      "dest_address": "0x..."           EVM destination address
+      "address":      "THR...",    Thronos sender address
+      "send_secret":  "hex...",    pledge send_secret (proof of ownership)
+      "amount":       100.0,       gross amount to withdraw
+      "token":        "USDT",      "USDT" or "USDC"
+      "dest_chain":   "bsc",       must be a configured chain
+      "dest_address": "0x..."      external EVM wallet
     }
 
-    Fee structure (1% service fee):
-      • 0.5% of amount deducted from user's THR balance (our network fee)
-      • 0.5% of amount kept in pool (covers gas + liquidity maintenance)
-    User receives: amount - 0.5% to dest_address on dest_chain.
+    Fee: 1% — 0.5% in THR (burned), 0.5% in-kind (pool gas reserve).
+    User receives amount − 0.5% to dest_address on dest_chain.
     Maximum 150 USDT/USDC per withdrawal.
     """
     data = request.get_json() or {}
@@ -27204,26 +27253,57 @@ def api_v1_withdraw():
     dest_chain   = (data.get("dest_chain") or "bsc").strip().lower()
     dest_address = (data.get("dest_address") or "").strip().lower()
 
-    # ── Validate inputs ──────────────────────────────────────────────────────
+    # ── 1. Basic input validation ─────────────────────────────────────────────
     if not validate_thr_address(thr_address):
         return jsonify(ok=False, error="invalid_thr_address"), 400
     if token not in WITHDRAW_SUPPORTED_TOKENS:
-        return jsonify(ok=False, error=f"unsupported_token; supported: {', '.join(WITHDRAW_SUPPORTED_TOKENS)}"), 400
-    if dest_chain not in WITHDRAW_SUPPORTED_CHAINS:
-        return jsonify(ok=False, error=f"unsupported_chain; supported: {', '.join(WITHDRAW_SUPPORTED_CHAINS)}"), 400
+        return jsonify(ok=False, error="unsupported_token",
+                       supported=list(WITHDRAW_SUPPORTED_TOKENS)), 400
     if not re.match(r"^0x[a-f0-9]{40}$", dest_address):
         return jsonify(ok=False, error="invalid_dest_address"), 400
     if amount <= 0:
-        return jsonify(ok=False, error="amount must be positive"), 400
+        return jsonify(ok=False, error="amount_must_be_positive"), 400
     if amount > MAX_USDT_WITHDRAW:
-        return jsonify(ok=False, error=f"exceeds_max_withdrawal of {MAX_USDT_WITHDRAW} {token}"), 400
+        return jsonify(ok=False, error="exceeds_max_withdrawal",
+                       max_withdrawal=MAX_USDT_WITHDRAW, token=token), 400
 
-    # ── Verify send_secret (pledge ownership proof) ───────────────────────────
+    # ── 2. Chain + token compatibility (only configured chains accepted) ──────
+    available_chains = get_available_withdraw_chains()
+    if dest_chain not in WITHDRAW_CHAIN_CONFIG:
+        return jsonify(ok=False, error="unknown_chain",
+                       available=list(available_chains.keys())), 400
+    if dest_chain not in available_chains:
+        return jsonify(ok=False, error="chain_not_configured",
+                       detail=f"{dest_chain} is not enabled on this node",
+                       available=list(available_chains.keys())), 503
+    chain_cfg = WITHDRAW_CHAIN_CONFIG[dest_chain]
+    if token not in chain_cfg.get("tokens", []):
+        return jsonify(ok=False, error="token_not_supported_on_chain",
+                       chain=dest_chain, supported_tokens=chain_cfg["tokens"]), 400
+
+    # ── 3. Pool liquidity check BEFORE anything is debited ───────────────────
+    pools = load_pools()
+    pool = next(
+        (p for p in pools
+         if {(p.get("token_a") or "").upper(), (p.get("token_b") or "").upper()} == {"THR", "USDT"}),
+        None,
+    )
+    if not pool:
+        return jsonify(ok=False, error="pool_not_initialized"), 503
+
+    usdt_reserve = float(pool.get("reserves_b", 0))
+    max_allowed  = round(usdt_reserve * 0.9, 6)   # anti-rug: keep ≥10% reserve
+    if amount > max_allowed:
+        return jsonify(ok=False, error="insufficient_pool_liquidity",
+                       available_usdt=max_allowed), 400
+
+    # ── 4. Verify send_secret (pledge ownership proof) ────────────────────────
     if not send_secret:
-        return jsonify(ok=False, error="send_secret required"), 400
+        return jsonify(ok=False, error="send_secret_required"), 400
     pledges = load_json(PLEDGE_CHAIN, [])
     pledge = next(
-        (p for p in pledges if p.get("thr_address", "").upper() == thr_address
+        (p for p in pledges
+         if p.get("thr_address", "").upper() == thr_address
          and p.get("send_seed") == send_secret
          and not p.get("pending_confirmation", True)),
         None,
@@ -27231,88 +27311,69 @@ def api_v1_withdraw():
     if not pledge:
         return jsonify(ok=False, error="invalid_credentials"), 403
 
-    # ── Check pool liquidity (anti-rug: keep ≥10% reserve) ───────────────────
-    pools = load_pools()
-    pool = next(
-        (p for p in pools if {(p.get("token_a") or "").upper(), (p.get("token_b") or "").upper()} == {"THR", "USDT"}),
-        None,
-    )
-    if not pool:
-        return jsonify(ok=False, error="pool_not_initialized"), 503
+    # ── 5. Fee calculation ────────────────────────────────────────────────────
+    thr_price       = get_thr_price_usd()           # pythia / oracle price at withdrawal time
+    dynamic_rate    = get_usdt_thr_rate_dynamic()
+    service_fee_usd = round(amount * WITHDRAW_SERVICE_FEE_PCT, 6)     # 1%
+    fee_thr         = round(service_fee_usd * 0.5 * dynamic_rate, 6)  # 0.5% in THR
+    fee_pool_usdt   = round(service_fee_usd * 0.5, 6)                 # 0.5% in-kind
+    amount_net      = round(amount - fee_pool_usdt, 6)                # user receives
 
-    usdt_reserve = float(pool.get("reserves_b", 0))
-    max_allowed  = usdt_reserve * 0.9  # never drain more than 90% of reserves
-    if amount > max_allowed:
-        return jsonify(
-            ok=False,
-            error="insufficient_pool_liquidity",
-            available_usdt=round(max_allowed, 6),
-        ), 400
-
-    # ── Fee calculation ───────────────────────────────────────────────────────
-    thr_price         = get_thr_price_usd()
-    dynamic_rate      = get_usdt_thr_rate_dynamic()
-    service_fee_usd   = round(amount * WITHDRAW_SERVICE_FEE_PCT, 6)        # 1% of amount
-    fee_thr           = round(service_fee_usd * 0.5 * dynamic_rate, 6)     # 0.5% in THR from balance
-    fee_pool_usdt     = round(service_fee_usd * 0.5, 6)                    # 0.5% stays in pool for gas
-    amount_net        = round(amount - fee_pool_usdt, 6)                   # user receives this
-
-    # ── Verify user has enough THR for the fee ────────────────────────────────
+    # ── 6. THR fee balance check ──────────────────────────────────────────────
     ledger = load_json(LEDGER_FILE, {})
     thr_balance = float(ledger.get(thr_address, 0))
     if thr_balance < fee_thr:
-        return jsonify(
-            ok=False,
-            error="insufficient_thr_for_fee",
-            required_thr=fee_thr,
-            thr_balance=round(thr_balance, 6),
-        ), 400
+        return jsonify(ok=False, error="insufficient_thr_for_fee",
+                       required_thr=fee_thr,
+                       thr_balance=round(thr_balance, 6)), 400
 
-    # ── Deduct fee from user's THR balance ────────────────────────────────────
+    # ── 7. Mutate state (all checks passed) ───────────────────────────────────
+    # Deduct THR fee → burn address (deflationary)
     ledger[thr_address] = round(thr_balance - fee_thr, 6)
-    # Fee THR goes to burn address (deflationary)
     ledger[BURN_ADDRESS] = round(float(ledger.get(BURN_ADDRESS, 0)) + fee_thr, 6)
     save_json(LEDGER_FILE, ledger)
 
-    # ── Deduct from pool (net amount + pool portion of fee stays in reserves) ─
+    # Deduct net USDT from pool (fee_pool_usdt stays in reserves as gas buffer)
     pool["reserves_b"] = round(usdt_reserve - amount_net, 6)
     save_pools(pools)
 
-    # ── Record withdrawal ──────────────────────────────────────────────────────
+    # ── 8. Withdrawal queue entry ─────────────────────────────────────────────
     withdraw_id = f"WD-{int(time.time())}-{secrets.token_hex(4).upper()}"
     ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
-    entry = {
-        "id":            withdraw_id,
-        "thr_address":   thr_address,
-        "dest_chain":    dest_chain,
-        "dest_address":  dest_address,
-        "token":         token,
-        "amount":        amount,
-        "amount_net":    amount_net,
-        "fee_thr":       fee_thr,
-        "fee_pool_usdt": fee_pool_usdt,
-        "thr_price_usd": thr_price,
-        "status":        "processing",
-        "created_at":    ts,
+    queue_entry = {
+        "id":                withdraw_id,
+        "thr_address":       thr_address,        # Thronos sender
+        "dest_chain":        dest_chain,          # e.g. "bsc"
+        "dest_chain_label":  chain_cfg["label"],  # e.g. "BNB Chain (BSC)"
+        "external_wallet":   dest_address,        # EVM destination
+        "token":             token,               # "USDT" / "USDC"
+        "amount":            amount,              # gross requested
+        "amount_net":        amount_net,          # user receives
+        "fee_thr":           fee_thr,             # THR burned (our 0.5% cut)
+        "fee_pool_usdt":     fee_pool_usdt,       # in-kind (gas buffer, 0.5%)
+        "oracle_price_usd":  thr_price,           # pythia: THR/USD at request time
+        "status":            "pending",           # → executor updates to "processing"/"done"/"failed"
+        "created_at":        ts,
     }
     queue = load_json(WITHDRAW_QUEUE_FILE, [])
-    queue.append(entry)
+    queue.append(queue_entry)
     save_json(WITHDRAW_QUEUE_FILE, queue)
 
-    # ── Chain record ──────────────────────────────────────────────────────────
+    # ── 9. Chain record ───────────────────────────────────────────────────────
     chain = load_json(CHAIN_FILE, [])
     tx = {
-        "type":         "usdt_withdraw",
-        "tx_id":        withdraw_id,
-        "from":         thr_address,
-        "to":           dest_address,
-        "token":        token,
-        "amount":       amount,
-        "amount_net":   amount_net,
-        "fee_thr":      fee_thr,
-        "dest_chain":   dest_chain,
-        "status":       "processing",
-        "timestamp":    ts,
+        "type":            "usdt_withdraw",
+        "tx_id":           withdraw_id,
+        "from":            thr_address,
+        "to":              dest_address,
+        "token":           token,
+        "amount":          amount,
+        "amount_net":      amount_net,
+        "fee_thr":         fee_thr,
+        "dest_chain":      dest_chain,
+        "oracle_price_usd": thr_price,
+        "status":          "pending",
+        "timestamp":       ts,
     }
     chain.append(tx)
     save_json(CHAIN_FILE, chain)
@@ -27331,9 +27392,11 @@ def api_v1_withdraw():
         amount_net=amount_net,
         fee_thr=fee_thr,
         fee_pool_usdt=fee_pool_usdt,
+        oracle_price_usd=thr_price,
         dest_chain=dest_chain,
-        dest_address=dest_address,
-        status="processing",
+        dest_chain_label=chain_cfg["label"],
+        external_wallet=dest_address,
+        status="pending",
         estimated_minutes=5,
     ), 201
 

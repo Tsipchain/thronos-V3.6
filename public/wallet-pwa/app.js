@@ -1324,6 +1324,7 @@ async function showWallet() {
         <button class="action-btn" id="createTokenBtn"><span class="action-btn__icon">🪙</span>Create Token</button>
         <button class="action-btn" id="nftBtn"><span class="action-btn__icon">🖼️</span>NFTs</button>
         <button class="action-btn" id="epochBtn"><span class="action-btn__icon">⏳</span>Epoch</button>
+        <button class="action-btn" id="withdrawBtn"><span class="action-btn__icon">💰</span>Withdraw</button>
       </div>
     </div>
   `);
@@ -1350,6 +1351,7 @@ async function showWallet() {
   document.getElementById('nftBtn').addEventListener('click', showNFTs);
   document.getElementById('epochBtn').addEventListener('click', showEpoch);
   document.getElementById('historyBtn').addEventListener('click', () => showHistory(address));
+  document.getElementById('withdrawBtn').addEventListener('click', () => showWithdraw(address));
 
   const setAddrBarValue = (full) => {
     const lineEl = document.getElementById('addrLine');
@@ -3520,6 +3522,199 @@ async function showPools() {
     const el = document.getElementById('poolsBody');
     if (el) el.innerHTML = `<p style="color:#ff6b6b;text-align:center;padding:20px">Error: ${e.message}</p>`;
   }
+}
+
+// ─── Withdraw USDT/USDC from Thronos pool ──────────────────────────────────
+
+async function showWithdraw(address) {
+  if (!address || !unlocked.has(address)) { showUnlock(); return; }
+
+  let poolInfo = null;
+  let pledgeData = null;
+  let submitting = false;
+
+  const renderPage = (err) => {
+    const usdt_reserve = poolInfo ? Number(poolInfo.usdt_reserve || 0).toFixed(2) : '…';
+    const thr_price    = poolInfo ? `$${Number(poolInfo.thr_price_usd || 0).toFixed(4)}` : '…';
+    const max_wd       = poolInfo ? Number(poolInfo.max_withdraw_usdt || 0).toFixed(2) : '150.00';
+    const pledge_count = poolInfo ? poolInfo.pledge_count : '…';
+    const next_at      = poolInfo ? poolInfo.next_level_at : '…';
+    const hasPledge    = !!pledgeData?.send_secret;
+
+    render(`
+      <div class="screen">
+        <div class="header">
+          <button class="btn--icon" id="wdBackBtn">←</button>
+          <span style="font-weight:700;color:#fff">💰 Withdraw</span>
+          <span></span>
+        </div>
+
+        <!-- Pool info card -->
+        <div class="card" style="padding:12px;margin-bottom:10px;background:#0d0a1a;border:1px solid #2a2050">
+          <div style="font-size:.7rem;text-transform:uppercase;letter-spacing:1px;color:#b08cf8;margin-bottom:6px">THR/USDT Pool</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:.78rem">
+            <div style="color:var(--muted)">USDT Reserve</div><div style="color:#fff;text-align:right">${usdt_reserve} USDT</div>
+            <div style="color:var(--muted)">THR Price</div><div style="color:#00ff66;text-align:right;font-weight:700">${thr_price}</div>
+            <div style="color:var(--muted)">Pledges</div><div style="color:#fff;text-align:right">${pledge_count} (next level at ${next_at})</div>
+            <div style="color:var(--muted)">Max per TX</div><div style="color:#b08cf8;text-align:right;font-weight:700">$${max_wd}</div>
+          </div>
+        </div>
+
+        ${!hasPledge ? `
+          <div class="card" style="padding:14px;text-align:center;color:#ff6b6b;font-size:.85rem">
+            Withdrawal requires a verified pledge.<br>Complete a BTC or USDT pledge first.
+          </div>
+        ` : `
+          <div class="card" style="padding:14px">
+            <div style="font-size:.7rem;text-transform:uppercase;letter-spacing:1px;color:#b08cf8;margin-bottom:10px">Withdraw USDT / USDC</div>
+
+            <label style="font-size:.78rem;color:var(--muted)">Token</label>
+            <select id="wdToken" class="input" style="margin-bottom:10px">
+              <option value="USDT">USDT (BEP-20 on BSC)</option>
+              <option value="USDC">USDC (on Base)</option>
+            </select>
+
+            <label style="font-size:.78rem;color:var(--muted)">Destination Chain</label>
+            <select id="wdChain" class="input" style="margin-bottom:10px">
+              <option value="bsc">BNB Chain (BSC)</option>
+              <option value="base">Base</option>
+              <option value="arbitrum">Arbitrum</option>
+            </select>
+
+            <label style="font-size:.78rem;color:var(--muted)">Destination Address (EVM)</label>
+            <input id="wdDest" class="input" placeholder="0x..." autocomplete="off" style="margin-bottom:10px;font-family:monospace;font-size:.78rem">
+
+            <label style="font-size:.78rem;color:var(--muted)">Amount (max $${max_wd})</label>
+            <div style="display:flex;gap:6px;margin-bottom:10px">
+              <input id="wdAmount" class="input" type="number" min="1" max="${max_wd}" step="0.01" placeholder="e.g. 50" style="flex:1">
+              <button class="btn btn--ghost" style="padding:6px 10px;font-size:.78rem;white-space:nowrap" id="wdMaxBtn">MAX</button>
+            </div>
+
+            <div id="wdFeeRow" style="font-size:.78rem;color:var(--muted);margin-bottom:10px;display:none"></div>
+
+            ${err ? `<div style="color:#ff6b6b;font-size:.82rem;margin-bottom:8px">${err}</div>` : ''}
+
+            <button class="btn btn--primary" id="wdSubmitBtn" style="width:100%;padding:12px;font-size:.9rem;font-weight:700">Withdraw</button>
+            <div style="font-size:.7rem;color:var(--muted);margin-top:8px;text-align:center">
+              1% service fee · 0.5% in THR from your balance · 0.5% in-kind<br>Processed within ~5 minutes
+            </div>
+          </div>
+        `}
+      </div>
+    `);
+
+    document.getElementById('wdBackBtn').addEventListener('click', showWallet);
+
+    if (hasPledge) {
+      document.getElementById('wdMaxBtn').addEventListener('click', () => {
+        const max = parseFloat(max_wd);
+        const inp = document.getElementById('wdAmount');
+        if (inp) inp.value = isNaN(max) ? '' : max.toFixed(2);
+        updateFeeRow();
+      });
+
+      const updateFeeRow = () => {
+        const amount = parseFloat(document.getElementById('wdAmount')?.value || 0);
+        const feeRow = document.getElementById('wdFeeRow');
+        if (!feeRow) return;
+        if (!amount || amount <= 0) { feeRow.style.display = 'none'; return; }
+        const feeTotalUsd = amount * 0.01;
+        const feeUsdtKept = (feeTotalUsd * 0.5).toFixed(4);
+        const thrPrice    = poolInfo?.thr_price_usd || 10;
+        const feeThrAmt   = ((feeTotalUsd * 0.5) / thrPrice).toFixed(6);
+        const netAmount   = (amount - feeTotalUsd * 0.5).toFixed(4);
+        feeRow.style.display = '';
+        feeRow.innerHTML = `You receive <b style="color:#00ff66">${netAmount} USDT</b> · Fee: ${feeUsdtKept} USDT + ${feeThrAmt} THR`;
+      };
+
+      document.getElementById('wdAmount')?.addEventListener('input', updateFeeRow);
+      document.getElementById('wdToken')?.addEventListener('change', updateFeeRow);
+
+      document.getElementById('wdSubmitBtn').addEventListener('click', async () => {
+        if (submitting) return;
+        const amount     = parseFloat(document.getElementById('wdAmount')?.value || 0);
+        const token      = document.getElementById('wdToken')?.value || 'USDT';
+        const destChain  = document.getElementById('wdChain')?.value || 'bsc';
+        const destAddr   = (document.getElementById('wdDest')?.value || '').trim().toLowerCase();
+        const maxWd      = parseFloat(max_wd);
+
+        if (!amount || amount <= 0) return renderPage('Enter a valid amount.');
+        if (amount > maxWd) return renderPage(`Max withdrawal is $${max_wd}.`);
+        if (!/^0x[0-9a-f]{40}$/i.test(destAddr)) return renderPage('Enter a valid EVM destination address (0x…).');
+
+        submitting = true;
+        document.getElementById('wdSubmitBtn').textContent = 'Processing…';
+        document.getElementById('wdSubmitBtn').disabled = true;
+
+        try {
+          const resp = await fetch(`${API_BASE}/api/v1/withdraw`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              address:      address,
+              send_secret:  pledgeData.send_secret,
+              amount:       amount,
+              token:        token,
+              dest_chain:   destChain,
+              dest_address: destAddr,
+            }),
+          }).then(r => r.json());
+
+          if (resp.ok) {
+            render(`
+              <div class="screen">
+                <div class="header">
+                  <button class="btn--icon" id="wdDoneBack">←</button>
+                  <span style="font-weight:700;color:#fff">Withdrawal Submitted</span>
+                  <span></span>
+                </div>
+                <div class="card" style="padding:20px;text-align:center;margin-top:20px">
+                  <div style="font-size:2rem;margin-bottom:12px">✅</div>
+                  <div style="font-size:1rem;font-weight:700;color:#00ff66;margin-bottom:8px">Withdrawal Processing</div>
+                  <div style="font-size:.82rem;color:var(--muted);margin-bottom:16px">
+                    ID: <span style="color:#b08cf8;font-family:monospace">${resp.withdrawal_id}</span>
+                  </div>
+                  <div style="display:grid;gap:6px;font-size:.82rem;text-align:left;background:#0d0a1a;border-radius:8px;padding:12px;margin-bottom:16px">
+                    <div style="display:flex;justify-content:space-between"><span style="color:var(--muted)">Token</span><span style="color:#fff">${resp.token}</span></div>
+                    <div style="display:flex;justify-content:space-between"><span style="color:var(--muted)">Requested</span><span style="color:#fff">${resp.amount} ${resp.token}</span></div>
+                    <div style="display:flex;justify-content:space-between"><span style="color:var(--muted)">You receive</span><span style="color:#00ff66;font-weight:700">${resp.amount_net} ${resp.token}</span></div>
+                    <div style="display:flex;justify-content:space-between"><span style="color:var(--muted)">THR fee</span><span style="color:#b08cf8">${resp.fee_thr} THR</span></div>
+                    <div style="display:flex;justify-content:space-between"><span style="color:var(--muted)">Destination</span><span style="color:#fff;font-family:monospace;font-size:.72rem">${destAddr.slice(0,10)}…${destAddr.slice(-6)}</span></div>
+                    <div style="display:flex;justify-content:space-between"><span style="color:var(--muted)">Chain</span><span style="color:#fff">${resp.dest_chain.toUpperCase()}</span></div>
+                  </div>
+                  <div style="color:var(--muted);font-size:.78rem">Estimated delivery: ~${resp.estimated_minutes || 5} minutes</div>
+                </div>
+              </div>
+            `);
+            document.getElementById('wdDoneBack').addEventListener('click', showWallet);
+          } else {
+            submitting = false;
+            renderPage(resp.error || 'Withdrawal failed. Please try again.');
+          }
+        } catch (e) {
+          submitting = false;
+          renderPage('Network error. Please try again.');
+        }
+      });
+    }
+  };
+
+  // Load pool info and pledge status in parallel
+  render(`<div class="screen"><div style="text-align:center;padding:60px;color:var(--muted)">Loading…</div></div>`);
+  try {
+    const [pi, pd] = await Promise.all([
+      fetch(`${API_BASE}/api/v1/pool/thr-usdt`).then(r => r.json()).catch(() => null),
+      fetch(`${API_BASE}/api/pledge/status?address=${encodeURIComponent(address)}`).then(r => r.json()).catch(() => null),
+    ]);
+    poolInfo = pi?.ok ? pi : null;
+    // pledge status: send_secret available if pledge is confirmed
+    pledgeData = (pd?.ok && pd?.send_secret) ? pd : null;
+    if (!pledgeData?.send_secret) {
+      // Try BNB pledge status too — look up by any stored bnb address
+      // If no send_secret from either, show gate message
+    }
+  } catch {}
+  renderPage(null);
 }
 
 async function showAddLiquidity(poolId, tokenA, tokenB) {

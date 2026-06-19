@@ -299,6 +299,53 @@ export async function getLiquidityPools(): Promise<{ pools: Array<{ id: string; 
   return request('/api/v1/pools');
 }
 
+export interface ThrUsdtPoolInfo {
+  ok: boolean;
+  pool_exists: boolean;
+  pool_id?: string;
+  thr_reserve: number;
+  usdt_reserve: number;
+  thr_price_usd: number;
+  usdt_thr_rate: number;
+  pledge_count: number;
+  next_level_at: number;
+  next_price_usd: number;
+  max_withdraw_usdt: number;
+}
+
+export async function getThrUsdtPoolInfo(): Promise<ThrUsdtPoolInfo> {
+  return request('/api/v1/pool/thr-usdt');
+}
+
+export interface WithdrawResult {
+  ok: boolean;
+  withdrawal_id?: string;
+  token?: string;
+  amount?: number;
+  amount_net?: number;
+  fee_thr?: number;
+  fee_pool_usdt?: number;
+  dest_chain?: string;
+  dest_address?: string;
+  status?: string;
+  estimated_minutes?: number;
+  error?: string;
+  available_usdt?: number;
+  required_thr?: number;
+  thr_balance?: number;
+}
+
+export async function requestWithdrawal(params: {
+  address: string;
+  send_secret: string;
+  amount: number;
+  token: 'USDT' | 'USDC';
+  dest_chain: 'bsc' | 'base' | 'arbitrum';
+  dest_address: string;
+}): Promise<WithdrawResult> {
+  return request('/api/v1/withdraw', { method: 'POST', body: JSON.stringify(params) });
+}
+
 export async function getLPPositions(address: string): Promise<{ positions: Array<{ pool_id: string; token_a: string; token_b: string; liquidity_share: number; value: number; pending_rewards: number }> }> {
   return request(`/api/v1/pools/positions/${address}`);
 }

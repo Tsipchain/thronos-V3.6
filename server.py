@@ -1400,12 +1400,19 @@ XRP_RPC_URL = os.getenv("XRP_RPC_URL", os.getenv("XRPL_RPC_URL", "https://xrplcl
 # Uses BSC_RPC_URL above — no separate RPC needed.
 BNB_PLEDGE_VAULT = os.getenv("BNB_PLEDGE_VAULT", "")
 USDT_BNB_CONTRACT = os.getenv("USDT_BNB_CONTRACT", "0x55d398326f99059fF775485246999027B3197955")  # BEP20 USDT, 18 decimals
-USDT_THR_RATE = float(_strip_env_quotes(os.getenv("USDT_THR_RATE", "100")))  # 1 USDT = 100 THR
+USDT_THR_RATE = float(_strip_env_quotes(os.getenv("USDT_THR_RATE", "100")))  # legacy static rate (overridden by dynamic pricing)
 MIN_USDT_PLEDGE = float(_strip_env_quotes(os.getenv("MIN_USDT_PLEDGE", "10")))  # minimum 10 USDT
 # Fraction of each incoming USDT pledge that gets paired into the THR/USDT
 # liquidity pool (the rest of the THR equivalent is credited straight to the
 # user's wallet) — mirrors the existing BTC-bridge pool-seeding behavior.
 USDT_PLEDGE_POOL_SPLIT = float(_strip_env_quotes(os.getenv("USDT_PLEDGE_POOL_SPLIT", "0.5")))
+# Dynamic pricing: initial THR price = 10 USDT, +5% per 100 confirmed pledges (anti-rug)
+THR_INITIAL_PRICE_USD = float(_strip_env_quotes(os.getenv("THR_INITIAL_PRICE_USD", "10.0")))
+THR_PRICE_STEP_PLEDGES = int(_strip_env_quotes(os.getenv("THR_PRICE_STEP_PLEDGES", "100")))  # pledges per price step
+THR_PRICE_STEP_PCT = float(_strip_env_quotes(os.getenv("THR_PRICE_STEP_PCT", "0.05")))       # 5% per step
+# Withdrawal limits and fees
+MAX_USDT_WITHDRAW = float(_strip_env_quotes(os.getenv("MAX_USDT_WITHDRAW", "150.0")))
+WITHDRAW_SERVICE_FEE_PCT = float(_strip_env_quotes(os.getenv("WITHDRAW_SERVICE_FEE_PCT", "0.01")))  # 1% service fee
 
 # User profile storage file
 USER_PROFILES_FILE = os.path.join(DATA_DIR, "user_profiles.json")
@@ -26793,6 +26800,30 @@ def api_btc_pledge():
     ), 201
 
 
+def get_confirmed_pledge_count() -> int:
+    """Count confirmed pledges (both BTC and USDT) for dynamic price calculation."""
+    try:
+        pledges = load_json(PLEDGE_CHAIN, [])
+        return sum(1 for p in pledges if not p.get("pending_confirmation", True))
+    except Exception:
+        return 0
+
+
+def get_thr_price_usd() -> float:
+    """Current THR price in USD: starts at THR_INITIAL_PRICE_USD, +5% per 100 confirmed pledges."""
+    count = get_confirmed_pledge_count()
+    steps = count // THR_PRICE_STEP_PLEDGES
+    return round(THR_INITIAL_PRICE_USD * ((1 + THR_PRICE_STEP_PCT) ** steps), 6)
+
+
+def get_usdt_thr_rate_dynamic() -> float:
+    """THR per 1 USDT at current dynamic price (inverse of USD price)."""
+    price = get_thr_price_usd()
+    if price <= 0:
+        return 1.0 / THR_INITIAL_PRICE_USD
+    return round(1.0 / price, 8)
+
+
 def _seed_usdt_thr_pool(usdt_amount: float, thr_amount: float) -> dict | None:
     """
     Pair fresh USDT pledge inflow with newly-minted THR into the THR/USDT
@@ -26833,14 +26864,20 @@ def _seed_usdt_thr_pool(usdt_amount: float, thr_amount: float) -> dict | None:
 @app.route("/api/pledge/bnb/quote")
 def api_pledge_bnb_quote():
     """Return current USDT-on-BNB-Chain pledge requirements (mobile/PWA only)."""
+    dynamic_rate = get_usdt_thr_rate_dynamic()
+    thr_price = get_thr_price_usd()
+    pledge_count = get_confirmed_pledge_count()
     return jsonify(
         ok=True,
         vault_address=BNB_PLEDGE_VAULT,
         token_contract=USDT_BNB_CONTRACT,
         chain="bnb",
         min_usdt=MIN_USDT_PLEDGE,
-        usdt_thr_rate=USDT_THR_RATE,
-        thr_per_min_pledge=round(MIN_USDT_PLEDGE * USDT_THR_RATE, 6),
+        usdt_thr_rate=dynamic_rate,
+        thr_price_usd=thr_price,
+        thr_per_min_pledge=round(MIN_USDT_PLEDGE * dynamic_rate, 6),
+        pledge_count=pledge_count,
+        next_level_at=((pledge_count // THR_PRICE_STEP_PLEDGES) + 1) * THR_PRICE_STEP_PLEDGES,
     ), 200
 
 
@@ -26911,9 +26948,10 @@ def api_usdt_pledge():
     if usdt_amount < MIN_USDT_PLEDGE:
         return jsonify(ok=False, error="below_minimum_pledge"), 400
 
-    thr_amount = round(usdt_amount * USDT_THR_RATE, 6)
+    dynamic_rate = get_usdt_thr_rate_dynamic()
+    thr_amount = round(usdt_amount * dynamic_rate, 6)
     pool_usdt = round(usdt_amount * USDT_PLEDGE_POOL_SPLIT, 6)
-    pool_thr = round(pool_usdt * USDT_THR_RATE, 6)
+    pool_thr = round(pool_usdt * dynamic_rate, 6)
 
     ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
 
@@ -27061,6 +27099,243 @@ def api_pledge_bnb_status():
         send_secret=send_secret,
         pending_confirmation=entry.get("pending_confirmation", True),
     ), 200
+
+
+# ─── THR/USDT Pool Info ──────────────────────────────────────────────────────
+
+@app.route("/api/v1/pool/thr-usdt", methods=["GET"])
+def api_pool_thr_usdt_info():
+    """Return THR/USDT pool state, current price and withdrawal capacity."""
+    pools = load_pools()
+    pool = next(
+        (p for p in pools if {(p.get("token_a") or "").upper(), (p.get("token_b") or "").upper()} == {"THR", "USDT"}),
+        None,
+    )
+    pledge_count = get_confirmed_pledge_count()
+    thr_price = get_thr_price_usd()
+    dynamic_rate = get_usdt_thr_rate_dynamic()
+    steps = pledge_count // THR_PRICE_STEP_PLEDGES
+    next_level_at = (steps + 1) * THR_PRICE_STEP_PLEDGES
+
+    usdt_reserve = float(pool.get("reserves_b", 0) if pool else 0)
+    thr_reserve  = float(pool.get("reserves_a", 0) if pool else 0)
+
+    return jsonify(
+        ok=True,
+        pool_exists=pool is not None,
+        pool_id=pool.get("id") if pool else None,
+        thr_reserve=thr_reserve,
+        usdt_reserve=usdt_reserve,
+        thr_price_usd=thr_price,
+        usdt_thr_rate=dynamic_rate,
+        pledge_count=pledge_count,
+        next_level_at=next_level_at,
+        next_price_usd=round(THR_INITIAL_PRICE_USD * ((1 + THR_PRICE_STEP_PCT) ** (steps + 1)), 6),
+        max_withdraw_usdt=min(MAX_USDT_WITHDRAW, usdt_reserve * 0.9),  # anti-rug: max 90% of reserve
+    ), 200
+
+
+# ─── Admin: Seed Initial Pool ────────────────────────────────────────────────
+
+@app.route("/api/v1/admin/seed-pool", methods=["POST"])
+def api_admin_seed_pool():
+    """
+    Admin: seed the THR/USDT pool with the initial 10 USDT + 1 THR capital.
+    Sets the genesis price of 10 USDT per THR.
+
+    Body: { "secret": ADMIN_SECRET, "usdt_amount": 10.0, "thr_amount": 1.0 }
+    """
+    data = request.get_json() or {}
+    if data.get("secret") != ADMIN_SECRET:
+        return jsonify(ok=False, error="Unauthorized"), 403
+
+    usdt_amount = float(data.get("usdt_amount", 10.0))
+    thr_amount  = float(data.get("thr_amount", 1.0))
+
+    if usdt_amount <= 0 or thr_amount <= 0:
+        return jsonify(ok=False, error="amounts must be positive"), 400
+
+    pool = _seed_usdt_thr_pool(usdt_amount, thr_amount)
+    if not pool:
+        return jsonify(ok=False, error="pool seeding failed"), 500
+
+    return jsonify(
+        ok=True,
+        pool_id=pool.get("id"),
+        thr_reserve=pool.get("reserves_a"),
+        usdt_reserve=pool.get("reserves_b"),
+        thr_price_usd=round(usdt_amount / thr_amount, 6),
+    ), 200
+
+
+# ─── USDT Withdrawal (cross-chain: Thronos → BSC/Base/Arbitrum) ──────────────
+
+WITHDRAW_SUPPORTED_TOKENS  = {"USDT", "USDC"}
+WITHDRAW_SUPPORTED_CHAINS  = {"bsc", "base", "arbitrum"}
+WITHDRAW_QUEUE_FILE = os.path.join(DATA_DIR, "withdraw_queue.json")
+
+
+@app.route("/api/v1/withdraw", methods=["POST"])
+def api_v1_withdraw():
+    """
+    Request a USDT/USDC withdrawal from the Thronos pool to an EVM address.
+
+    Body:
+    {
+      "address":      "THR...",         Thronos sender address
+      "send_secret":  "hex...",         pledge send_secret (proof of ownership)
+      "amount":       100.0,            USDT/USDC to receive
+      "token":        "USDT",           "USDT" or "USDC"
+      "dest_chain":   "bsc",            "bsc" | "base" | "arbitrum"
+      "dest_address": "0x..."           EVM destination address
+    }
+
+    Fee structure (1% service fee):
+      • 0.5% of amount deducted from user's THR balance (our network fee)
+      • 0.5% of amount kept in pool (covers gas + liquidity maintenance)
+    User receives: amount - 0.5% to dest_address on dest_chain.
+    Maximum 150 USDT/USDC per withdrawal.
+    """
+    data = request.get_json() or {}
+    thr_address  = (data.get("address") or "").strip().upper()
+    send_secret  = (data.get("send_secret") or "").strip()
+    amount       = float(data.get("amount", 0) or 0)
+    token        = (data.get("token") or "USDT").strip().upper()
+    dest_chain   = (data.get("dest_chain") or "bsc").strip().lower()
+    dest_address = (data.get("dest_address") or "").strip().lower()
+
+    # ── Validate inputs ──────────────────────────────────────────────────────
+    if not validate_thr_address(thr_address):
+        return jsonify(ok=False, error="invalid_thr_address"), 400
+    if token not in WITHDRAW_SUPPORTED_TOKENS:
+        return jsonify(ok=False, error=f"unsupported_token; supported: {', '.join(WITHDRAW_SUPPORTED_TOKENS)}"), 400
+    if dest_chain not in WITHDRAW_SUPPORTED_CHAINS:
+        return jsonify(ok=False, error=f"unsupported_chain; supported: {', '.join(WITHDRAW_SUPPORTED_CHAINS)}"), 400
+    if not re.match(r"^0x[a-f0-9]{40}$", dest_address):
+        return jsonify(ok=False, error="invalid_dest_address"), 400
+    if amount <= 0:
+        return jsonify(ok=False, error="amount must be positive"), 400
+    if amount > MAX_USDT_WITHDRAW:
+        return jsonify(ok=False, error=f"exceeds_max_withdrawal of {MAX_USDT_WITHDRAW} {token}"), 400
+
+    # ── Verify send_secret (pledge ownership proof) ───────────────────────────
+    if not send_secret:
+        return jsonify(ok=False, error="send_secret required"), 400
+    pledges = load_json(PLEDGE_CHAIN, [])
+    pledge = next(
+        (p for p in pledges if p.get("thr_address", "").upper() == thr_address
+         and p.get("send_seed") == send_secret
+         and not p.get("pending_confirmation", True)),
+        None,
+    )
+    if not pledge:
+        return jsonify(ok=False, error="invalid_credentials"), 403
+
+    # ── Check pool liquidity (anti-rug: keep ≥10% reserve) ───────────────────
+    pools = load_pools()
+    pool = next(
+        (p for p in pools if {(p.get("token_a") or "").upper(), (p.get("token_b") or "").upper()} == {"THR", "USDT"}),
+        None,
+    )
+    if not pool:
+        return jsonify(ok=False, error="pool_not_initialized"), 503
+
+    usdt_reserve = float(pool.get("reserves_b", 0))
+    max_allowed  = usdt_reserve * 0.9  # never drain more than 90% of reserves
+    if amount > max_allowed:
+        return jsonify(
+            ok=False,
+            error="insufficient_pool_liquidity",
+            available_usdt=round(max_allowed, 6),
+        ), 400
+
+    # ── Fee calculation ───────────────────────────────────────────────────────
+    thr_price         = get_thr_price_usd()
+    dynamic_rate      = get_usdt_thr_rate_dynamic()
+    service_fee_usd   = round(amount * WITHDRAW_SERVICE_FEE_PCT, 6)        # 1% of amount
+    fee_thr           = round(service_fee_usd * 0.5 * dynamic_rate, 6)     # 0.5% in THR from balance
+    fee_pool_usdt     = round(service_fee_usd * 0.5, 6)                    # 0.5% stays in pool for gas
+    amount_net        = round(amount - fee_pool_usdt, 6)                   # user receives this
+
+    # ── Verify user has enough THR for the fee ────────────────────────────────
+    ledger = load_json(LEDGER_FILE, {})
+    thr_balance = float(ledger.get(thr_address, 0))
+    if thr_balance < fee_thr:
+        return jsonify(
+            ok=False,
+            error="insufficient_thr_for_fee",
+            required_thr=fee_thr,
+            thr_balance=round(thr_balance, 6),
+        ), 400
+
+    # ── Deduct fee from user's THR balance ────────────────────────────────────
+    ledger[thr_address] = round(thr_balance - fee_thr, 6)
+    # Fee THR goes to burn address (deflationary)
+    ledger[BURN_ADDRESS] = round(float(ledger.get(BURN_ADDRESS, 0)) + fee_thr, 6)
+    save_json(LEDGER_FILE, ledger)
+
+    # ── Deduct from pool (net amount + pool portion of fee stays in reserves) ─
+    pool["reserves_b"] = round(usdt_reserve - amount_net, 6)
+    save_pools(pools)
+
+    # ── Record withdrawal ──────────────────────────────────────────────────────
+    withdraw_id = f"WD-{int(time.time())}-{secrets.token_hex(4).upper()}"
+    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    entry = {
+        "id":            withdraw_id,
+        "thr_address":   thr_address,
+        "dest_chain":    dest_chain,
+        "dest_address":  dest_address,
+        "token":         token,
+        "amount":        amount,
+        "amount_net":    amount_net,
+        "fee_thr":       fee_thr,
+        "fee_pool_usdt": fee_pool_usdt,
+        "thr_price_usd": thr_price,
+        "status":        "processing",
+        "created_at":    ts,
+    }
+    queue = load_json(WITHDRAW_QUEUE_FILE, [])
+    queue.append(entry)
+    save_json(WITHDRAW_QUEUE_FILE, queue)
+
+    # ── Chain record ──────────────────────────────────────────────────────────
+    chain = load_json(CHAIN_FILE, [])
+    tx = {
+        "type":         "usdt_withdraw",
+        "tx_id":        withdraw_id,
+        "from":         thr_address,
+        "to":           dest_address,
+        "token":        token,
+        "amount":       amount,
+        "amount_net":   amount_net,
+        "fee_thr":      fee_thr,
+        "dest_chain":   dest_chain,
+        "status":       "processing",
+        "timestamp":    ts,
+    }
+    chain.append(tx)
+    save_json(CHAIN_FILE, chain)
+    update_last_block(tx, is_block=False)
+
+    try:
+        broadcast_tx(tx)
+    except Exception:
+        pass
+
+    return jsonify(
+        ok=True,
+        withdrawal_id=withdraw_id,
+        token=token,
+        amount=amount,
+        amount_net=amount_net,
+        fee_thr=fee_thr,
+        fee_pool_usdt=fee_pool_usdt,
+        dest_chain=dest_chain,
+        dest_address=dest_address,
+        status="processing",
+        estimated_minutes=5,
+    ), 201
 
 
 @app.route("/api/wallet/activate", methods=["POST"])

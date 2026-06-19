@@ -10,9 +10,8 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS } from '../constants/theme';
 import { getThrUsdtPoolInfo, requestWithdrawal, ThrUsdtPoolInfo } from '../services/api';
-import { getPledgeStatus, getBnbPledgeStatus } from '../services/api';
 import { useStore } from '../store/useStore';
-import { getAuthSecret, getMnemonic } from '../services/wallet';
+import { getAuthSecret } from '../services/wallet';
 import type { RootStackParamList } from '../../App';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;

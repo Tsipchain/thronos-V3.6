@@ -221,6 +221,11 @@ export async function getAuthSecret(): Promise<string | null> {
   return SecureStore.getItemAsync(KEY_SECRET);
 }
 
+export async function saveAuthSecret(secret: string): Promise<void> {
+  if (!secret || secret.length < 8) throw new Error('Invalid auth secret');
+  await store(KEY_SECRET, secret);
+}
+
 export async function getMnemonic(): Promise<string | null> {
   return SecureStore.getItemAsync(KEY_MNEMONIC);
 }

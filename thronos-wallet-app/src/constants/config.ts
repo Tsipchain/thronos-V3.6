@@ -33,9 +33,10 @@ export const CONFIG = {
   MIN_BTC_PLEDGE: 0.00001,  // minimum BTC to activate wallet
 
   // USDT-on-BNB-Chain Pledge — fetched live from /api/pledge/bnb/quote,
-  // these are just fallback defaults shown before the quote loads
+  // these are just fallback defaults shown before the quote loads.
+  // NOTE: server quote (dynamic pricing) overrides this fallback.
   MIN_USDT_PLEDGE: 10,
-  USDT_THR_RATE: 100,
+  USDT_THR_RATE: 0.1,  // fallback: 1 USDT ≈ 0.1 THR (dynamic pricing sets actual rate)
 
   // Token Registry (matches data/tokens_registry.json)
   TOKENS: {

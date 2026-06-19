@@ -44,9 +44,12 @@ USDT_PLEDGE_POOL_SPLIT = float(os.getenv("USDT_PLEDGE_POOL_SPLIT", "0.5"))
 MASTER_NODE_URL = os.getenv("MASTER_NODE_URL", "http://localhost:5000")
 ADMIN_SECRET = os.getenv("ADMIN_SECRET", "CHANGE_ME_NOW")
 DATA_DIR = os.getenv("DATA_DIR", "./data")
+BSC_CONFIRMATIONS = int(os.getenv("BSC_CONFIRMATIONS", "15"))  # only scan confirmed blocks
+BSC_BACKFILL_BLOCKS = int(os.getenv("BSC_BACKFILL_BLOCKS", "5000"))  # max backfill on startup
 
 # State file to track processed transactions
 PROCESSED_TXS_FILE = os.path.join(DATA_DIR, "bnb_pledge_processed.json")
+LAST_SCANNED_BLOCK_FILE = os.path.join(DATA_DIR, "bnb_last_scanned_block.json")
 
 # User registry file (maps BNB addresses to THR addresses)
 # Format: {"bnb_address_lowercase": {"thr_address": "THR...", "registered_at": timestamp}}
@@ -76,6 +79,29 @@ def save_processed_txs(txs: List[str]):
             json.dump(txs, f, indent=2)
     except Exception as e:
         logger.error(f"Failed to save processed txs: {e}")
+
+
+def load_last_scanned_block() -> int:
+    """Load the last successfully scanned block number"""
+    try:
+        if os.path.exists(LAST_SCANNED_BLOCK_FILE):
+            with open(LAST_SCANNED_BLOCK_FILE, 'r') as f:
+                data = json.load(f)
+                return int(data.get('block', 0))
+        return 0
+    except Exception as e:
+        logger.error(f"Failed to load last scanned block: {e}")
+        return 0
+
+
+def save_last_scanned_block(block: int):
+    """Save the last successfully scanned block number"""
+    try:
+        os.makedirs(os.path.dirname(LAST_SCANNED_BLOCK_FILE), exist_ok=True)
+        with open(LAST_SCANNED_BLOCK_FILE, 'w') as f:
+            json.dump({'block': block, 'timestamp': time.time()}, f, indent=2)
+    except Exception as e:
+        logger.error(f"Failed to save last scanned block: {e}")
 
 
 def load_user_registry() -> Dict:
@@ -125,7 +151,7 @@ def bsc_rpc_call(method: str, params: List = None) -> Optional[Dict]:
         return None
 
 
-def get_vault_transfers() -> List[Dict]:
+def get_vault_transfers(from_block: int = None) -> List[Dict]:
     """
     Get USDT Transfer events to the pledge vault address via eth_getLogs.
 
@@ -151,10 +177,15 @@ def get_vault_transfers() -> List[Dict]:
             return []
 
         latest_block = int(latest_block_resp, 16)
-        # Look back 100 blocks (rough estimate: ~5 mins at 3s blocks)
-        from_block = max(0, latest_block - 100)
+        # Only scan confirmed blocks (safe from reorg)
+        safe_block = max(0, latest_block - BSC_CONFIRMATIONS)
 
-        logger.info(f"Querying blocks {from_block} to {latest_block}")
+        # Use provided from_block or load from persistent state (with backfill limit)
+        if from_block is None:
+            last_scanned = load_last_scanned_block()
+            from_block = max(0, last_scanned + 1, safe_block - BSC_BACKFILL_BLOCKS)
+
+        logger.info(f"Querying blocks {from_block} to {safe_block}")
 
         # eth_getLogs: filter for Transfer events to vault address
         # topic0 = Transfer event signature
@@ -167,7 +198,7 @@ def get_vault_transfers() -> List[Dict]:
                 "0x" + BNB_PLEDGE_VAULT[2:].zfill(64)  # topic2: 'to' (vault)
             ],
             "fromBlock": hex(from_block),
-            "toBlock": hex(latest_block),
+            "toBlock": hex(safe_block),
         }])
 
         if not logs:
@@ -225,11 +256,12 @@ def get_vault_transfers() -> List[Dict]:
                 continue
 
         logger.info(f"Found {len(result)} valid USDT transfers to vault")
-        return result
+        # Return both transfers and the safe block we scanned up to
+        return result, safe_block
 
     except Exception as e:
         logger.error(f"Failed to get vault transfers: {e}")
-        return []
+        return [], 0
 
 
 def resolve_user_from_bnb_address(bnb_address: str) -> Optional[Dict]:
@@ -341,7 +373,7 @@ def watch_bnb_pledges():
     processed_txs = load_processed_txs()
 
     # Get new USDT transfers to the vault
-    vault_transfers = get_vault_transfers()
+    vault_transfers, last_safe_block = get_vault_transfers()
 
     for transfer in vault_transfers:
         txhash = transfer.get("txhash", "")
@@ -374,10 +406,12 @@ def watch_bnb_pledges():
             logger.error(f"Failed to process USDT pledge: {txhash}")
             # Don't mark as processed so we can retry later
 
-    # Save processed txs
+    # Save processed txs and last scanned block (only after successful scan)
     save_processed_txs(processed_txs)
+    if last_safe_block > 0:
+        save_last_scanned_block(last_safe_block)
 
-    logger.info(f"Watcher cycle complete. Processed {len(vault_transfers)} USDT transfers.")
+    logger.info(f"Watcher cycle complete. Processed {len(vault_transfers)} USDT transfers. Last scanned block: {last_safe_block}")
 
 
 # Export the watcher function to be called by the scheduler

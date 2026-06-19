@@ -152,10 +152,11 @@ function getAccount(address) {
   return getAccounts().find(a => a.address === address) || null;
 }
 
-function upsertAccount(address, kit, label) {
+function upsertAccount(address, kit, label, pledge_send_secret) {
   const accs = getAccounts();
   const idx = accs.findIndex(a => a.address === address);
   const entry = { address, kit: typeof kit === 'string' ? kit : JSON.stringify(kit), label: label || shortAddr(address) };
+  if (pledge_send_secret) entry.pledge_send_secret = pledge_send_secret;
   if (idx >= 0) accs[idx] = entry; else accs.push(entry);
   saveAccounts(accs);
 }
@@ -708,7 +709,7 @@ async function showImport(addingExtra = false) {
       }
       const canonical = d.canonical_v1_address;
       const kitObj = d.recovery_kit ? (() => { try { return JSON.parse(d.recovery_kit); } catch { return { canonical_v1_address: canonical }; } })() : { canonical_v1_address: canonical };
-      upsertAccount(canonical, kitObj, shortAddr(canonical));
+      upsertAccount(canonical, kitObj, shortAddr(canonical), btcPledgeSecret);
       setActiveAddr(canonical);
       let migratedPrivHex = null;
       try {
@@ -834,7 +835,7 @@ async function showImport(addingExtra = false) {
       }
       const canonical = d.canonical_v1_address;
       const kitObj = d.recovery_kit ? (() => { try { return JSON.parse(d.recovery_kit); } catch { return { canonical_v1_address: canonical }; } })() : { canonical_v1_address: canonical };
-      upsertAccount(canonical, kitObj, shortAddr(canonical));
+      upsertAccount(canonical, kitObj, shortAddr(canonical), usdtPledgeSecret);
       setActiveAddr(canonical);
       let migratedPrivHex = null;
       try {
@@ -3699,19 +3700,15 @@ async function showWithdraw(address) {
     }
   };
 
-  // Load pool info and pledge status in parallel
+  // Load pool info; pledge data from local account metadata
   render(`<div class="screen"><div style="text-align:center;padding:60px;color:var(--muted)">Loading…</div></div>`);
   try {
-    const [pi, pd] = await Promise.all([
-      fetch(`${API_BASE}/api/v1/pool/thr-usdt`).then(r => r.json()).catch(() => null),
-      fetch(`${API_BASE}/api/pledge/status?address=${encodeURIComponent(address)}`).then(r => r.json()).catch(() => null),
-    ]);
+    const pi = await fetch(`${API_BASE}/api/v1/pool/thr-usdt`).then(r => r.json()).catch(() => null);
     poolInfo = pi?.ok ? pi : null;
-    // pledge status: send_secret available if pledge is confirmed
-    pledgeData = (pd?.ok && pd?.send_secret) ? pd : null;
-    if (!pledgeData?.send_secret) {
-      // Try BNB pledge status too — look up by any stored bnb address
-      // If no send_secret from either, show gate message
+    // Load send_secret from local account metadata (stored after pledge migration)
+    const acc = getAccount(address);
+    if (acc?.pledge_send_secret) {
+      pledgeData = { send_secret: acc.pledge_send_secret };
     }
   } catch {}
   renderPage(null);

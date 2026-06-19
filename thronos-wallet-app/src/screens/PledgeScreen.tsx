@@ -11,7 +11,7 @@ import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS } from '../constants/theme';
 import { CONFIG } from '../constants/config';
 import { submitPledge, getPledgeStatus, pledgeMigrate } from '../services/api';
 import {
-  importWalletFromRecoveryJson,
+  importWalletFromRecoveryJson, saveAuthSecret,
   isBiometricAvailable, authenticateWithBiometrics, setBiometricEnabled,
 } from '../services/wallet';
 import { useStore } from '../store/useStore';
@@ -109,6 +109,8 @@ export default function PledgeScreen({ navigation }: any) {
         if (res.recovery_kit) {
           try { await importWalletFromRecoveryJson(res.recovery_kit, pin); } catch {}
         }
+        // Persist send_secret for future withdrawals
+        try { await saveAuthSecret(secretSeed); } catch {}
         setWallet({ isConnected: true, address: res.canonical_v1_address, backedUp: true });
         setV1Address(res.canonical_v1_address);
         if (res.pdf_url) setV1PdfUrl(`${CONFIG.API_URL}${res.pdf_url}`);

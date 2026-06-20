@@ -16238,6 +16238,320 @@ def api_admin_pythia_addresses():
     }), 200
 
 
+@app.route("/api/admin/pythia/vault-registry", methods=["GET"])
+def api_admin_pythia_vault_registry():
+    """
+    Admin endpoint — Pythia managed vault registry (Phase 2.3).
+
+    Returns public-only vault addresses and their status per chain.
+    No private keys, seeds, or signer secrets exposed.
+
+    Response includes:
+    - pythia_system_thr_address: System wallet on Thronos
+    - chains: {bsc, base, arbitrum, eth}
+    - Per-chain: pool_vault, payout_wallet, gas_wallet, fee_collector
+    - Per-chain status: configured | pending_config | invalid_config
+    """
+    denied = require_admin()
+    if denied:
+        return denied
+
+    def _live(key: str) -> str:
+        return _strip_env_quotes(os.getenv(key, "")).strip()
+
+    pythia_thr = _live("PYTHIA_SYSTEM_THR_ADDRESS") or PYTHIA_SYSTEM_THR_ADDRESS
+
+    def _get_chain_registry(chain: str) -> dict:
+        """Get vault registry for a single chain (validated addresses only)."""
+        cfg = WITHDRAW_CHAIN_CONFIG.get(chain, {})
+        vault_status, _ = _pool_vault_status(chain)
+
+        # Extract all role-specific addresses (None if not set or invalid)
+        pythia_pub = (_live(f"PYTHIA_SYSTEM_EVM_{chain.upper()}_ADDRESS") or "").strip()
+        payout_addr = (cfg.get("payout_wallet") or "").strip()
+        pool_vault_addr = (cfg.get("pool_vault") or "").strip()
+        fee_collector_addr = (cfg.get("fee_collector") or "").strip()
+        gas_wallet_addr = (cfg.get("gas_wallet") or "").strip()
+
+        # Only expose if they pass EVM validation
+        pythia_pub = pythia_pub if _is_valid_evm_address(pythia_pub) else None
+        payout_addr = payout_addr if _is_valid_evm_address(payout_addr) else None
+        pool_vault_addr = pool_vault_addr if _is_valid_evm_address(pool_vault_addr) else None
+        fee_collector_addr = fee_collector_addr if _is_valid_evm_address(fee_collector_addr) else None
+        gas_wallet_addr = gas_wallet_addr if _is_valid_evm_address(gas_wallet_addr) else None
+
+        return {
+            "chain": chain,
+            "label": cfg.get("label", chain.upper()),
+            "pythia_public_address": pythia_pub,
+            "pool_vault": pool_vault_addr,
+            "payout_wallet": payout_addr,
+            "gas_wallet": gas_wallet_addr,
+            "fee_collector": fee_collector_addr,
+            "status": vault_status,
+            "signer_available": bool(_live("GATEWAY_SECRET")),
+        }
+
+    return jsonify({
+        "ok": True,
+        "pythia_system_thr_address": pythia_thr,
+        "chains": {
+            "bsc": _get_chain_registry("bsc"),
+            "base": _get_chain_registry("base"),
+            "arbitrum": _get_chain_registry("arbitrum"),
+            "eth": _get_chain_registry("eth"),
+        },
+    }), 200
+
+
+@app.route("/api/admin/pythia/action-intent", methods=["POST"])
+def api_admin_pythia_action_intent():
+    """
+    Admin endpoint — create a Pythia-managed action intent (Phase 2.3).
+
+    Supported action_type:
+    - gas_topup: Replenish native coin for transactions
+    - swap_to_gas: Swap token → native coin (prep phase, not execution)
+    - pool_topup: Top up pool liquidity
+    - withdrawal_payout: Send user withdrawal
+    - pool_rebalance: Rebalance pool reserves
+    - gateway_fee_sweep: Collect fees
+    - external_service_payment_collection: Allocate external service fees
+
+    Body:
+    {
+      "action_type": "gas_topup",
+      "chain": "bsc",
+      "token": "BNB",
+      "amount": 5.0,
+      "from_address": "0x...",  (public address only)
+      "to_address": "0x...",    (public address only)
+      "reason": "Gas reserve critical on BSC",
+      "policy_limits": {
+        "max_amount": 10.0,
+        "timeout_minutes": 60
+      }
+    }
+
+    Returns action_id and status=intent (not yet approved).
+    """
+    denied = require_admin()
+    if denied:
+        return denied
+
+    data = request.get_json() or {}
+    action_type = (data.get("action_type") or "").strip().lower()
+    chain = (data.get("chain") or "").strip().lower()
+    token = (data.get("token") or "").strip().upper()
+    from_address = (data.get("from_address") or "").strip()
+    to_address = (data.get("to_address") or "").strip()
+    reason = (data.get("reason") or "").strip()
+    policy_limits = data.get("policy_limits") or {}
+
+    try:
+        amount = float(data.get("amount", 0))
+    except (TypeError, ValueError):
+        return jsonify(ok=False, error="invalid_amount"), 400
+
+    # Validate inputs
+    if action_type not in PYTHIA_ACTION_TYPES:
+        return jsonify(ok=False, error="unknown_action_type",
+                       supported=list(PYTHIA_ACTION_TYPES.keys())), 400
+    if chain not in WITHDRAW_CHAIN_CONFIG:
+        return jsonify(ok=False, error="unknown_chain",
+                       available=list(WITHDRAW_CHAIN_CONFIG.keys())), 400
+    if amount <= 0:
+        return jsonify(ok=False, error="amount_must_be_positive"), 400
+    if not from_address or not to_address:
+        return jsonify(ok=False, error="missing_address"), 400
+
+    # Do NOT validate addresses as EVM yet — they may be Thronos addresses for internal ops
+    # But log a warning if they look like placeholders
+    for addr in [from_address, to_address]:
+        if "PYTHIA" in addr.upper() or "PLACEHOLDER" in addr.upper():
+            logger.warning(f"[action-intent] placeholder address detected: {addr}")
+
+    intent = create_pythia_action_intent(
+        action_type=action_type,
+        chain=chain,
+        token=token,
+        amount=amount,
+        from_address=from_address,
+        to_address=to_address,
+        reason=reason,
+        policy_limits=policy_limits,
+    )
+
+    return jsonify({
+        "ok": True,
+        "action_id": intent["action_id"],
+        "status": intent["status"],
+        "created_at": intent["created_at"],
+    }), 201
+
+
+@app.route("/api/admin/pythia/action-approve", methods=["POST"])
+def api_admin_pythia_action_approve():
+    """
+    Admin endpoint — approve a Pythia action intent (Phase 2.3).
+
+    Moves action from 'intent' → 'approved' status.
+    System signer will execute only after explicit admin approval.
+
+    Body:
+    {
+      "action_id": "PACT-1234567890-ABCDEF"
+    }
+
+    Returns updated action with status=approved, approved_at, approved_by.
+    """
+    denied = require_admin()
+    if denied:
+        return denied
+
+    data = request.get_json() or {}
+    action_id = (data.get("action_id") or "").strip()
+
+    if not action_id:
+        return jsonify(ok=False, error="missing_action_id"), 400
+
+    result = approve_pythia_action(action_id, approved_by="admin")
+
+    if "error" in result:
+        return jsonify(ok=False, **result), 400
+
+    return jsonify({
+        "ok": True,
+        "action_id": result["action_id"],
+        "status": result["status"],
+        "approved_at": result["approved_at"],
+        "approved_by": result["approved_by"],
+    }), 200
+
+
+@app.route("/api/admin/pythia/actions", methods=["GET"])
+def api_admin_pythia_actions():
+    """
+    Admin endpoint — list Pythia action intents with filters (Phase 2.3).
+
+    Query params (all optional):
+    - status: intent | approved | signed | broadcasted | confirmed | failed
+    - chain: bsc | base | arbitrum | eth
+    - action_type: gas_topup | pool_topup | withdrawal_payout | etc.
+    - limit: max results (default 100)
+
+    Returns paginated list of actions (most recent first).
+    """
+    denied = require_admin()
+    if denied:
+        return denied
+
+    status = request.args.get("status", "").strip().lower() or None
+    chain = request.args.get("chain", "").strip().lower() or None
+    action_type = request.args.get("action_type", "").strip().lower() or None
+
+    try:
+        limit = int(request.args.get("limit", 100))
+    except (TypeError, ValueError):
+        limit = 100
+
+    actions = get_pythia_actions(
+        status=status,
+        chain=chain,
+        action_type=action_type,
+        limit=limit,
+    )
+
+    return jsonify({
+        "ok": True,
+        "actions": actions,
+        "total": len(actions),
+    }), 200
+
+
+@app.route("/api/admin/gateway/event", methods=["POST"])
+def api_admin_gateway_event():
+    """
+    Admin endpoint — record Thronos Gateway events (Phase 2.3).
+
+    Supported event_type:
+    - gateway_payment_received: External payment arrived at gateway
+    - gateway_fee_collected: Protocol fee collected
+    - gateway_pool_topup_allocated: External fee split allocated to pool
+    - gateway_gas_reserve_allocated: External fee split allocated to gas
+    - gateway_payout_requested: User payout initiated by gateway
+
+    Body:
+    {
+      "event_type": "gateway_payment_received",
+      "chain": "bsc",
+      "asset": "USDT",
+      "amount": 100.0,
+      "from_address": "0x...",
+      "to_address": "0x...",
+      "external_txid": "0x...",
+      "reason": "Payment from user"
+    }
+
+    Records in wallet_history and returns event_id.
+    """
+    denied = require_admin()
+    if denied:
+        return denied
+
+    data = request.get_json() or {}
+    event_type = (data.get("event_type") or "").strip().lower()
+    chain = (data.get("chain") or "").strip().lower()
+    asset = (data.get("asset") or "").strip().upper()
+    from_address = (data.get("from_address") or "").strip()
+    to_address = (data.get("to_address") or "").strip()
+    external_txid = (data.get("external_txid") or "").strip()
+    reason = (data.get("reason") or "").strip()
+
+    try:
+        amount = float(data.get("amount", 0))
+    except (TypeError, ValueError):
+        return jsonify(ok=False, error="invalid_amount"), 400
+
+    # Validate event_type
+    valid_gateway_events = [
+        "gateway_payment_received",
+        "gateway_fee_collected",
+        "gateway_pool_topup_allocated",
+        "gateway_gas_reserve_allocated",
+        "gateway_payout_requested",
+    ]
+    if event_type not in valid_gateway_events:
+        return jsonify(ok=False, error="unknown_gateway_event",
+                       supported=valid_gateway_events), 400
+
+    if not chain or not asset or amount <= 0:
+        return jsonify(ok=False, error="missing_required_fields",
+                       detail="chain, asset, and amount (>0) are required"), 400
+
+    # Record in wallet history (system audit trail)
+    event = add_wallet_history_event(
+        thr_address="GATEWAY_SYSTEM",
+        event_type=event_type,
+        chain=chain,
+        asset=asset,
+        amount=amount,
+        status="confirmed",
+        direction="gateway",
+        external_from=from_address,
+        external_to=to_address,
+        external_txid=external_txid,
+        network_label=WITHDRAW_CHAIN_CONFIG.get(chain, {}).get("label", chain.upper()),
+    )
+
+    return jsonify({
+        "ok": True,
+        "event_id": event["id"],
+        "event_type": event_type,
+        "recorded_at": event["created_at"],
+    }), 201
+
+
 @app.route("/api/admin/pool/seed-from-pledge-vault", methods=["POST"])
 def api_admin_pool_seed_from_pledge_vault():
     """
@@ -28790,7 +29104,23 @@ WITHDRAW_QUEUE_FILE = os.path.join(DATA_DIR, "withdraw_queue.json")
 
 # Wallet history and cross-chain audit ledger
 WALLET_HISTORY_FILE = os.path.join(DATA_DIR, "wallet_history.json")
+
+# Pythia managed action intents and approvals (Phase 2.3)
+PYTHIA_ACTION_INTENTS_FILE = os.path.join(DATA_DIR, "pythia_action_intents.json")
+PYTHIA_ACTION_APPROVALS_FILE = os.path.join(DATA_DIR, "pythia_action_approvals.json")
+
 EXPLORER_CONFIG_FILE = os.path.join(BASE_DIR, "explorer_config.json")
+
+# Pythia-managed action types and their policy constraints
+PYTHIA_ACTION_TYPES = {
+    "gas_topup": "Replenish native coin gas reserve on a chain",
+    "swap_to_gas": "Swap USDT/USDC → native coin for gas (prep phase, not execution)",
+    "pool_topup": "Top up pool liquidity from external service fee allocation",
+    "withdrawal_payout": "Send user withdrawal from pool_vault → destination_address",
+    "pool_rebalance": "Rebalance pool reserves between chains",
+    "gateway_fee_sweep": "Collect accumulated fees from gateway",
+    "external_service_payment_collection": "Record external service provider fee allocation",
+}
 
 
 def load_explorer_config() -> dict:
@@ -28835,31 +29165,29 @@ def add_wallet_history_event(
     pair: str = "",
 ) -> dict:
     """
-    Write a wallet history event (transaction, pledge, pool seed, withdrawal, etc).
+    Write a wallet history event (transaction, pledge, pool seed, withdrawal, action, gateway, etc).
 
     Args:
-        thr_address: Thronos wallet address
-        event_type: pledge, token_receive, token_send, pool_seed, pool_withdraw,
-                    bridge, crosschain_withdraw, gateway_payout, failed, manual_review,
-                    pool_add_liquidity_intent_created, pool_add_liquidity_external_tx_confirmed,
-                    pool_add_liquidity_lp_minted, pledge_usdt_bnb_confirmed,
-                    crosschain_deposit_detected, crosschain_transfer_received,
-                    crosschain_withdrawal_* (requested/signed/broadcasted/confirmed/failed),
-                    external_service_fee_collected, external_fee_split_recorded,
-                    pool_topup_from_service_fee, gas_reserve_accounted
+        thr_address: Thronos wallet address or system actor (GATEWAY_SYSTEM, SYSTEM_PYTHIA_ACTIONS, etc.)
+        event_type: Phase 2.0: pledge, token_receive, token_send, pool_seed, pool_withdraw, bridge
+                    Phase 2: crosschain_withdrawal_* (requested/fee_charged/signed/broadcasted/confirmed/failed)
+                    Phase 2.2: external_service_fee_collected, external_fee_split_recorded, pool_topup_from_service_fee, gas_reserve_accounted
+                    Phase 2.3: pythia_action_intent_created, pythia_action_approved, pythia_action_signed, pythia_action_broadcasted, pythia_action_confirmed, pythia_action_failed
+                              gas_wallet_topped_up, swap_to_gas_requested, swap_to_gas_confirmed
+                              gateway_payment_received, gateway_fee_collected, gateway_pool_topup_allocated, gateway_gas_reserve_allocated, gateway_payout_requested
         chain: thronos, bsc, base, arbitrum, eth, btc
-        asset: THR, BTC, WBTC, USDT, USDC, BNB, ETH
+        asset: THR, BTC, WBTC, USDT, USDC, BNB, ETH, native
         amount: Transaction amount
-        status: pending, confirmed, credited, pool_seeded, queued, sent, failed, manual_review
-        direction: in, out, pool, bridge, crosschain
-        internal_txid: Thronos transaction ID if applicable
+        status: pending, confirmed, credited, pool_seeded, queued, sent, failed, manual_review, intent, approved, signed, broadcasted
+        direction: in, out, pool, bridge, crosschain, system, gateway
+        internal_txid: Thronos transaction ID or action_id (PACT-*) if applicable
         external_txid: External chain tx hash if applicable
         token_contract: Token contract address (for ERC20/BEP20)
         token_standard: native, BEP20, ERC20
         network_label: Human-readable chain name
         timestamp: Unix timestamp (defaults to now)
-        external_from: EVM sender address
-        external_to: EVM recipient/vault address
+        external_from: EVM sender address or vault source
+        external_to: EVM recipient/vault destination
         pool_id: Pool identifier for LP events
         lp_shares: LP shares minted (for pool_add_liquidity_lp_minted events)
         pair: Token pair string e.g. "THR/USDT" (for LP events)
@@ -28919,6 +29247,173 @@ def get_wallet_history(thr_address: str, limit: int = 100) -> list:
         return wallet_events[:limit]
     except Exception as e:
         logger.error(f"Failed to get wallet history: {e}")
+        return []
+
+
+def create_pythia_action_intent(
+    action_type: str,
+    chain: str,
+    token: str,
+    amount: float,
+    from_address: str,
+    to_address: str,
+    reason: str = "",
+    policy_limits: dict = None,
+) -> dict:
+    """
+    Create a Pythia-managed action intent (Phase 2.3).
+
+    Records an intent to perform a system operation (gas topup, fee sweep, etc.)
+    without executing it yet. Admin must explicitly approve before execution.
+
+    Args:
+        action_type: One of PYTHIA_ACTION_TYPES keys
+        chain: Target chain (bsc, base, arbitrum, eth)
+        token: Token/asset (THR, USDT, USDC, BNB, ETH, etc.)
+        amount: Amount in token decimals
+        from_address: Source vault/wallet (public address only)
+        to_address: Destination vault/wallet (public address only)
+        reason: Human-readable reason for the action
+        policy_limits: Optional dict with max_amount, gas_limit, timeout_minutes, etc.
+
+    Returns:
+        Action intent record with action_id, status=intent, created_at
+    """
+    action_id = f"PACT-{int(time.time())}-{secrets.token_hex(5).upper()}"
+    timestamp = time.time()
+
+    intent = {
+        "action_id": action_id,
+        "action_type": action_type,
+        "chain": chain,
+        "token": token,
+        "amount": amount,
+        "from_address": from_address,
+        "to_address": to_address,
+        "reason": reason,
+        "policy_limits": policy_limits or {},
+        "status": "intent",
+        "created_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(timestamp)),
+        "created_timestamp": timestamp,
+        "approved_at": None,
+        "approved_by": None,
+        "signed_at": None,
+        "broadcasted_at": None,
+        "confirmed_at": None,
+        "failed_at": None,
+        "failure_reason": None,
+        "external_txid": None,
+    }
+
+    # Persist intent
+    try:
+        intents = load_json(PYTHIA_ACTION_INTENTS_FILE, [])
+        intents.append(intent)
+        save_json(PYTHIA_ACTION_INTENTS_FILE, intents)
+        logger.info(f"Created Pythia action intent {action_id}: {action_type} {amount} {token} on {chain}")
+    except Exception as e:
+        logger.error(f"Failed to save Pythia action intent: {e}")
+
+    # Record in wallet history (system audit trail)
+    add_wallet_history_event(
+        thr_address="SYSTEM_PYTHIA_ACTIONS",
+        event_type="pythia_action_intent_created",
+        chain=chain,
+        asset=token,
+        amount=amount,
+        status="intent",
+        direction="system",
+        internal_txid=action_id,
+        external_from=from_address,
+        external_to=to_address,
+        network_label=WITHDRAW_CHAIN_CONFIG.get(chain, {}).get("label", chain.upper()),
+        timestamp=timestamp,
+    )
+
+    return intent
+
+
+def approve_pythia_action(action_id: str, approved_by: str = "admin") -> dict:
+    """
+    Approve a Pythia action intent (Phase 2.3).
+
+    Moves an action from 'intent' → 'approved' status.
+    Admin review required before system signer can execute.
+
+    Args:
+        action_id: The PACT-* action ID to approve
+        approved_by: Admin identifier (for audit trail)
+
+    Returns:
+        Updated action record with status=approved, approved_at, approved_by
+    """
+    timestamp = time.time()
+    intents = load_json(PYTHIA_ACTION_INTENTS_FILE, [])
+
+    action = next((a for a in intents if a.get("action_id") == action_id), None)
+    if not action:
+        return {"error": "action_not_found", "action_id": action_id}
+
+    if action["status"] != "intent":
+        return {"error": "action_not_in_intent_status", "current_status": action["status"]}
+
+    action["status"] = "approved"
+    action["approved_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(timestamp))
+    action["approved_by"] = approved_by
+
+    try:
+        save_json(PYTHIA_ACTION_INTENTS_FILE, intents)
+        logger.info(f"Approved Pythia action {action_id} by {approved_by}")
+    except Exception as e:
+        logger.error(f"Failed to approve Pythia action: {e}")
+        return {"error": "failed_to_save"}
+
+    # Record approval in wallet history
+    add_wallet_history_event(
+        thr_address="SYSTEM_PYTHIA_ACTIONS",
+        event_type="pythia_action_approved",
+        chain=action.get("chain", ""),
+        asset=action.get("token", ""),
+        amount=action.get("amount", 0.0),
+        status="approved",
+        direction="system",
+        internal_txid=action_id,
+        network_label=WITHDRAW_CHAIN_CONFIG.get(action.get("chain", ""), {}).get("label", action.get("chain", "").upper()),
+        timestamp=timestamp,
+    )
+
+    return action
+
+
+def get_pythia_actions(status: str = None, chain: str = None, action_type: str = None, limit: int = 100) -> list:
+    """
+    Get Pythia action intents filtered by status, chain, action_type (Phase 2.3).
+
+    Args:
+        status: Filter by status (intent, approved, signed, broadcasted, confirmed, failed)
+        chain: Filter by chain (bsc, base, arbitrum, eth)
+        action_type: Filter by action_type
+        limit: Max results
+
+    Returns:
+        List of action records (most recent first)
+    """
+    try:
+        intents = load_json(PYTHIA_ACTION_INTENTS_FILE, [])
+        filtered = intents
+
+        if status:
+            filtered = [a for a in filtered if a.get("status") == status]
+        if chain:
+            filtered = [a for a in filtered if a.get("chain") == chain]
+        if action_type:
+            filtered = [a for a in filtered if a.get("action_type") == action_type]
+
+        # Sort by created_timestamp descending (most recent first)
+        filtered.sort(key=lambda a: a.get("created_timestamp", 0), reverse=True)
+        return filtered[:limit]
+    except Exception as e:
+        logger.error(f"Failed to get Pythia actions: {e}")
         return []
 
 

@@ -1392,6 +1392,13 @@ ETH_POOL_VAULT_ADDRESS_EXPLICIT = _strip_env_quotes(os.getenv("ETH_POOL_VAULT_AD
 MIN_USDT_WITHDRAWAL = float(_strip_env_quotes(os.getenv("MIN_USDT_WITHDRAWAL", "10.0")))
 MIN_USDC_WITHDRAWAL = float(_strip_env_quotes(os.getenv("MIN_USDC_WITHDRAWAL", "10.0")))
 
+# Phase 2.4: Pythia signer public address derivation & registration
+# Temporary role address flag: if TRUE, allows BSC_USDT_PLEDGE_VAULT to be reused
+# as a fallback pool_vault address when real Pythia addresses are not yet configured.
+# Production: MUST be FALSE.
+PYTHIA_ALLOW_TEMPORARY_ROLE_ADDRESS = _strip_env_quotes(os.getenv("PYTHIA_ALLOW_TEMPORARY_ROLE_ADDRESS", "false")).lower() in ("1", "true", "yes")
+PYTHIA_TEMPORARY_ROLE_ADDRESS_NOTE = "MVP only — temporary test address. Real Pythia signer address required for production."
+
 # THR per 1 BTC exchange rate
 THR_BTC_RATE = float(_strip_env_quotes(os.getenv("THR_BTC_RATE", "33333.33")))  # 1 BTC = 33,333.33 THR
 
@@ -16266,28 +16273,40 @@ def api_admin_pythia_vault_registry():
         cfg = WITHDRAW_CHAIN_CONFIG.get(chain, {})
         vault_status, _ = _pool_vault_status(chain)
 
+        # Phase 2.4: Distinguish real Pythia signer address from configured role addresses
+        signer_addr, signer_source = _derive_pythia_signer_address(chain)
+        signer_addr = signer_addr if signer_addr else None
+
         # Extract all role-specific addresses (None if not set or invalid)
-        pythia_pub = (_live(f"PYTHIA_SYSTEM_EVM_{chain.upper()}_ADDRESS") or "").strip()
         payout_addr = (cfg.get("payout_wallet") or "").strip()
         pool_vault_addr = (cfg.get("pool_vault") or "").strip()
         fee_collector_addr = (cfg.get("fee_collector") or "").strip()
         gas_wallet_addr = (cfg.get("gas_wallet") or "").strip()
 
         # Only expose if they pass EVM validation
-        pythia_pub = pythia_pub if _is_valid_evm_address(pythia_pub) else None
         payout_addr = payout_addr if _is_valid_evm_address(payout_addr) else None
         pool_vault_addr = pool_vault_addr if _is_valid_evm_address(pool_vault_addr) else None
         fee_collector_addr = fee_collector_addr if _is_valid_evm_address(fee_collector_addr) else None
         gas_wallet_addr = gas_wallet_addr if _is_valid_evm_address(gas_wallet_addr) else None
 
+        # Check if using temporary test address (e.g., pledge vault as pool fallback)
+        # This is OK for MVP/testing but should NOT be used for real operations
+        is_temporary = False
+        if pool_vault_addr and PYTHIA_ALLOW_TEMPORARY_ROLE_ADDRESS:
+            pledge_vault = (cfg.get("usdt_pledge_vault") or "").strip()
+            if pledge_vault and pool_vault_addr == pledge_vault:
+                is_temporary = True
+
         return {
             "chain": chain,
             "label": cfg.get("label", chain.upper()),
-            "pythia_public_address": pythia_pub,
-            "pool_vault": pool_vault_addr,
+            "real_pythia_public_address": signer_addr,
+            "pythia_signer_source": signer_source if signer_addr else None,
             "payout_wallet": payout_addr,
+            "pool_vault": pool_vault_addr,
             "gas_wallet": gas_wallet_addr,
             "fee_collector": fee_collector_addr,
+            "temporary_test_address": is_temporary,
             "status": vault_status,
             "signer_available": bool(_live("GATEWAY_SECRET")),
         }
@@ -16550,6 +16569,86 @@ def api_admin_gateway_event():
         "event_type": event_type,
         "recorded_at": event["created_at"],
     }), 201
+
+
+def _derive_pythia_signer_address(chain: str) -> tuple[str, str]:
+    """
+    Derive Pythia signer public EVM address for a chain (Phase 2.4 prep).
+
+    Returns (address, source) where source is one of:
+    - derived_from_signer: Derived from secure signer material in runtime
+    - env: Set explicitly via PYTHIA_SYSTEM_EVM_*_ADDRESS env var
+    - missing: No signer material or env var found
+
+    NEVER returns private keys, seeds, mnemonics, or decrypted material.
+    Only public addresses that can be freely shared.
+    """
+    # TODO Phase 2.4: If secure signer material exists in runtime (HSM, KMS, secure enclave):
+    # derive the public EVM address for the given chain and return (address, "derived_from_signer")
+    # For now, return empty (not yet implemented).
+    derived_addr = ""
+
+    # Fallback to env var if no derived address
+    if derived_addr:
+        return derived_addr, "derived_from_signer"
+
+    env_key = f"PYTHIA_SYSTEM_EVM_{chain.upper()}_ADDRESS"
+    env_addr = _strip_env_quotes(os.getenv(env_key, "")).strip()
+    if env_addr and _is_valid_evm_address(env_addr):
+        return env_addr, "env"
+
+    return "", "missing"
+
+
+@app.route("/api/admin/pythia/signer-public-addresses", methods=["GET"])
+def api_admin_pythia_signer_public_addresses():
+    """
+    Admin endpoint — Pythia signer public EVM addresses (Phase 2.4 prep).
+
+    Returns only public addresses controlled by the Pythia signer.
+    Never exposes private keys, seeds, mnemonics, or decrypted material.
+
+    Response includes:
+    - pythia_system_thr_address: System wallet on Thronos (public address only)
+    - evm.{chain}: Public address, source (derived_from_signer|env|missing)
+    - Per-chain action_required if source=missing
+
+    No signing or fund movement—discovery/registration only.
+    """
+    denied = require_admin()
+    if denied:
+        return denied
+
+    pythia_thr = PYTHIA_SYSTEM_THR_ADDRESS or ""
+
+    evm_addrs = {}
+    for chain in ["bsc", "base", "arbitrum", "eth"]:
+        addr, source = _derive_pythia_signer_address(chain)
+
+        evm_addrs[chain] = {
+            "chain": chain,
+            "label": WITHDRAW_CHAIN_CONFIG.get(chain, {}).get("label", chain.upper()),
+            "address": addr or None,
+            "source": source,
+            "action_required": (
+                "Create or register a dedicated Pythia EVM wallet for this chain. "
+                "If using secure signer material (HSM/KMS), ensure it is accessible to the runtime."
+                if source == "missing"
+                else None
+            ),
+        }
+
+    return jsonify({
+        "ok": True,
+        "pythia_system_thr_address": pythia_thr or None,
+        "evm": evm_addrs,
+        "note": (
+            "Pythia signer public addresses only—never private keys or seeds. "
+            "Source 'derived_from_signer' indicates addresses derived from secure signer material. "
+            "Source 'env' indicates explicit configuration via PYTHIA_SYSTEM_EVM_*_ADDRESS. "
+            "Source 'missing' indicates no signer or configuration found."
+        ),
+    }), 200
 
 
 @app.route("/api/admin/pool/seed-from-pledge-vault", methods=["POST"])

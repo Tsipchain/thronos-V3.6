@@ -5233,6 +5233,167 @@ def calculate_external_fee_split(gas_fee_usd: float) -> dict:
     }
 
 
+def record_external_service_fee_collection(
+    withdrawal_id: str,
+    thr_address: str,
+    chain: str,
+    token: str,
+    gas_fee_usd: float,
+    fee_collector_address: str = ""
+) -> dict:
+    """
+    Record when external service fee is collected to fee_collector address.
+
+    Phase 2.2: When user requests cross-chain withdrawal, the system:
+    1. Records external_service_fee_collected event
+    2. Splits the fee ($2.00 → $1.75 collector + $0.25 pool)
+    3. Records external_fee_split_recorded event
+    4. Records pool_topup_from_service_fee event
+
+    Args:
+        withdrawal_id: Request ID (WDREQ-*)
+        thr_address: User's THR address
+        chain: Destination chain (bsc, base, arbitrum, eth)
+        token: Token being withdrawn (USDT, USDC)
+        gas_fee_usd: Total external gas fee in USD
+        fee_collector_address: EVM address that collects the fee
+
+    Returns:
+        Event record with split breakdown
+    """
+    split = calculate_external_fee_split(gas_fee_usd)
+    timestamp = time.time()
+
+    event = add_wallet_history_event(
+        thr_address=thr_address,
+        event_type="external_service_fee_collected",
+        chain=chain,
+        asset=token,
+        amount=gas_fee_usd,
+        status="confirmed",
+        direction="fee",
+        internal_txid=withdrawal_id,
+        external_to=fee_collector_address,
+        network_label=WITHDRAW_CHAIN_CONFIG.get(chain, {}).get("label", chain.upper()),
+        timestamp=timestamp,
+    )
+
+    # Record the split breakdown
+    split_event = add_wallet_history_event(
+        thr_address=thr_address,
+        event_type="external_fee_split_recorded",
+        chain=chain,
+        asset=token,
+        amount=gas_fee_usd,
+        status="confirmed",
+        direction="accounting",
+        internal_txid=withdrawal_id,
+        network_label=WITHDRAW_CHAIN_CONFIG.get(chain, {}).get("label", chain.upper()),
+        timestamp=timestamp,
+    )
+    # Attach split breakdown to the event
+    split_event["fee_collector_usd"] = split["fee_collector_usd"]
+    split_event["pool_topup_usd"] = split["pool_topup_usd"]
+
+    # Record pool top-up from service fee
+    pool_topup_event = add_wallet_history_event(
+        thr_address="SYSTEM_POOL_TOPUP",  # System accounting, not user-specific
+        event_type="pool_topup_from_service_fee",
+        chain=chain,
+        asset=token,
+        amount=split["pool_topup_usd"],
+        status="confirmed",
+        direction="pool",
+        internal_txid=withdrawal_id,
+        network_label=WITHDRAW_CHAIN_CONFIG.get(chain, {}).get("label", chain.upper()),
+        timestamp=timestamp,
+    )
+
+    return {
+        "withdrawal_id": withdrawal_id,
+        "fee_collection_event": event,
+        "split_event": split_event,
+        "pool_topup_event": pool_topup_event,
+        "split": split,
+    }
+
+
+def record_gas_reserve_accounting(
+    chain: str,
+    asset: str,
+    amount_usd: float,
+    gas_wallet_address: str = "",
+    reference_withdrawal_id: str = ""
+) -> dict:
+    """
+    Record gas reserve accounting (system operation, not user-specific).
+
+    Phase 2.2: Track gas replenishment operations for operational visibility.
+
+    Args:
+        chain: Chain requiring gas (bsc, base, arbitrum, eth)
+        asset: Native coin (BNB, ETH, etc.) or gas token
+        amount_usd: Gas reserve replenishment in USD equivalent
+        gas_wallet_address: Gas wallet receiving replenishment
+        reference_withdrawal_id: Related withdrawal request ID if applicable
+
+    Returns:
+        Event record for audit trail
+    """
+    timestamp = time.time()
+
+    event = add_wallet_history_event(
+        thr_address="SYSTEM_GAS_ACCOUNTING",
+        event_type="gas_reserve_accounted",
+        chain=chain,
+        asset=asset,
+        amount=amount_usd,
+        status="confirmed",
+        direction="accounting",
+        external_to=gas_wallet_address,
+        internal_txid=reference_withdrawal_id,
+        network_label=WITHDRAW_CHAIN_CONFIG.get(chain, {}).get("label", chain.upper()),
+        timestamp=timestamp,
+    )
+
+    return event
+
+
+def get_withdrawal_fee_distinction(dest_chain: str) -> dict:
+    """
+    Determine fee model distinction for withdrawal operations.
+
+    Phase 2.2: Distinguishes internal vs external fees:
+    - Internal (Thronos→Thronos): THR-only protocol fee
+    - External (Thronos→EVM): HYBRID fee (THR protocol + external service fee)
+
+    Args:
+        dest_chain: Destination chain (thronos, bsc, base, arbitrum, eth, btc)
+
+    Returns dict with:
+        is_external: True if external chain withdrawal
+        fee_model: "thr_only" | "hybrid" | "external_token_only"
+        applies_external_fee: True if external service fee applies
+        description: Human-readable fee model
+    """
+    is_external_chain = dest_chain.lower() not in ("thronos", "thr")
+
+    return {
+        "is_external": is_external_chain,
+        "dest_chain": dest_chain,
+        "fee_model": WITHDRAWAL_FEE_MODE if is_external_chain else "thr_only",
+        "applies_external_fee": is_external_chain and WITHDRAWAL_FEE_MODE in ("hybrid", "external_token_only"),
+        "applies_protocol_fee_thr": is_external_chain and WITHDRAWAL_FEE_MODE in ("hybrid", "thr_only"),
+        "description": (
+            "External cross-chain withdrawal (HYBRID: THR protocol fee + external service fee)"
+            if is_external_chain and WITHDRAWAL_FEE_MODE == "hybrid"
+            else "Internal Thronos transfer (THR protocol fee only)"
+            if not is_external_chain
+            else f"External cross-chain withdrawal ({WITHDRAWAL_FEE_MODE})"
+        ),
+    }
+
+
 def get_wallet_balances(wallet: str):
     thr_balance = round(get_balance_from_store(wallet, "thr", 0.0), 6)
     wbtc_balance = round(get_balance_from_store(wallet, "wbtc", 0.0), 8)

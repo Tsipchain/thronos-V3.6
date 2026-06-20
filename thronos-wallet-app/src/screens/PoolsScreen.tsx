@@ -34,6 +34,8 @@ interface Pool {
   total_liquidity: number;
   apy: number;
   volume_24h: number;
+  reserves_a?: number;
+  reserves_b?: number;
 }
 
 interface Position {
@@ -105,6 +107,13 @@ export default function PoolsScreen({ navigation }: { navigation: any }) {
     setSelectedAvailable(avail);
   };
 
+  const getLocalRatio = (): number | null => {
+    const src = selectedAvailable || null;
+    const resA = src?.reserves_a ?? selectedPool?.reserves_a ?? 0;
+    const resB = src?.reserves_b ?? selectedPool?.reserves_b ?? 0;
+    return resA > 0 && resB > 0 ? resB / resA : null;
+  };
+
   const fetchQuote = async (poolId: string, amtA: string) => {
     const a = parseFloat(amtA);
     if (!a || a <= 0) { setQuoteInfo(''); return; }
@@ -112,16 +121,35 @@ export default function PoolsScreen({ navigation }: { navigation: any }) {
       const q = await quoteAddLiquidity(poolId, a);
       if (q.ok && q.amount_b !== undefined) {
         setAmountB(String(q.amount_b));
-        setQuoteInfo(`Ratio: 1 THR ≈ ${q.pool_ratio} ${selectedPool?.token_b} · Est. LP: ${q.lp_shares_estimate} shares (${q.share_pct}%)`);
+        const tolMin = (q.amount_b * 0.98).toFixed(6);
+        const tolMax = (q.amount_b * 1.02).toFixed(6);
+        setQuoteInfo(
+          `Required: ${q.amount_b} ${selectedPool?.token_b} (±2%: ${tolMin}–${tolMax})\n` +
+          `Est. LP: ${q.lp_shares_estimate} shares · Pool share: ${q.share_pct}%`
+        );
       }
     } catch {}
   };
 
   const handleAmountAChange = (val: string) => {
     setAmountA(val);
-    if (selectedPool && isCrossChainPool(selectedPool)) {
+    const ratio = getLocalRatio();
+    if (ratio) {
+      const a = parseFloat(val);
+      if (a > 0) setAmountB((a * ratio).toFixed(6));
+    }
+    if (selectedPool) {
       if (quoteTimer.current) clearTimeout(quoteTimer.current);
-      quoteTimer.current = setTimeout(() => fetchQuote(selectedPool.id, val), 600);
+      quoteTimer.current = setTimeout(() => fetchQuote(selectedPool.id, val), 400);
+    }
+  };
+
+  const handleAmountBChange = (val: string) => {
+    setAmountB(val);
+    const ratio = getLocalRatio();
+    if (ratio) {
+      const b = parseFloat(val);
+      if (b > 0) setAmountA((b / ratio).toFixed(6));
     }
   };
 
@@ -312,6 +340,30 @@ export default function PoolsScreen({ navigation }: { navigation: any }) {
                 <>
                   <Text style={styles.modalSubtitle}>{selectedPool.token_a}/{selectedPool.token_b} Pool</Text>
 
+                  {/* Pool reserves panel */}
+                  {(() => {
+                    const resA = selectedAvailable?.reserves_a ?? selectedPool.reserves_a ?? 0;
+                    const resB = selectedAvailable?.reserves_b ?? selectedPool.reserves_b ?? 0;
+                    const ratio = selectedAvailable?.pool_ratio ?? (resA > 0 && resB > 0 ? resB / resA : null);
+                    if (!resA) return null;
+                    return (
+                      <View style={styles.reservesPanel}>
+                        <View style={styles.reservesRow}>
+                          <Text style={styles.reservesLabel}>Pool Reserves</Text>
+                          <Text style={styles.reservesLabel}>Ratio</Text>
+                        </View>
+                        <View style={styles.reservesRow}>
+                          <Text style={styles.reservesValue}>
+                            {resA.toLocaleString(undefined, { maximumFractionDigits: 4 })} {selectedPool.token_a} / {resB.toLocaleString(undefined, { maximumFractionDigits: 4 })} {selectedPool.token_b}
+                          </Text>
+                          <Text style={styles.reservesRatio}>
+                            1 {selectedPool.token_a} = {ratio ? ratio.toFixed(4) : '—'} {selectedPool.token_b}
+                          </Text>
+                        </View>
+                      </View>
+                    );
+                  })()}
+
                   {/* Cross-chain UI: chain picker + EVM address */}
                   {isCrossChainPool(selectedPool) && selectedAvailable?.external_chains.length ? (
                     <>
@@ -347,7 +399,7 @@ export default function PoolsScreen({ navigation }: { navigation: any }) {
                     placeholder="0.00"
                     placeholderTextColor={COLORS.textMuted}
                     value={amountB}
-                    onChangeText={setAmountB}
+                    onChangeText={handleAmountBChange}
                     keyboardType="decimal-pad"
                   />
 
@@ -436,6 +488,12 @@ const styles = StyleSheet.create({
   chainChipActive: { borderColor: COLORS.gold, backgroundColor: COLORS.gold + '18' },
   chainChipText: { fontSize: FONT_SIZES.xs, color: COLORS.textSecondary, fontWeight: '600' },
   chainChipTextActive: { color: COLORS.gold },
+
+  reservesPanel: { backgroundColor: COLORS.surface, borderRadius: BORDER_RADIUS.md, padding: SPACING.sm, marginBottom: SPACING.md, borderWidth: 1, borderColor: COLORS.border },
+  reservesRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 2 },
+  reservesLabel: { fontSize: FONT_SIZES.xs, color: COLORS.textMuted },
+  reservesValue: { fontSize: FONT_SIZES.xs, color: COLORS.text, flex: 1, marginRight: SPACING.sm },
+  reservesRatio: { fontSize: FONT_SIZES.xs, color: COLORS.info, fontWeight: '600' },
 
   quoteText: { fontSize: FONT_SIZES.xs, color: COLORS.textSecondary, marginBottom: SPACING.sm, fontStyle: 'italic' },
   gasWarning: { flexDirection: 'row', alignItems: 'center', gap: SPACING.xs, backgroundColor: COLORS.warning + '12', borderRadius: BORDER_RADIUS.md, padding: SPACING.sm, marginBottom: SPACING.md, borderWidth: 1, borderColor: COLORS.warning + '30' },

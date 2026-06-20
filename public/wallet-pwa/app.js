@@ -3363,10 +3363,30 @@ const HISTORY_FILTERS = [
   { key: 'swap', label: 'Swaps' },
   { key: 'liquidity', label: 'Liquidity' },
   { key: 'mining_reward', label: 'Mining' },
+  { key: 'pledge', label: 'Pledges' },
+  { key: 'crosschain', label: 'Cross-Chain' },
   { key: 'bridge', label: 'Bridge' },
   { key: 'mint', label: 'Mint' },
   { key: 'burn', label: 'Burn' },
 ];
+
+// Event types that belong to "pledge" filter category
+const _PLEDGE_EVENT_TYPES = new Set([
+  'pledge', 'pledge_usdt_bnb_confirmed',
+]);
+
+// Event types that belong to "crosschain" filter category
+const _CROSSCHAIN_FILTER_TYPES = new Set([
+  'pool_add_liquidity_intent_created',
+  'pool_add_liquidity_external_tx_confirmed',
+  'pool_add_liquidity_lp_minted',
+  'crosschain_deposit_detected',
+  'crosschain_transfer_received',
+  'crosschain_transfer_sent',
+  'crosschain_withdraw',
+  'bridge_deposit_detected',
+  'bridge',
+]);
 
 // Map from app network ID to chain IDs stored in wallet history events
 const HISTORY_CHAIN_MAP = {
@@ -3541,13 +3561,25 @@ async function showHistory(address) {
     const el = document.getElementById('historyBody');
     if (!el) return;
     // Filter by active category
-    let filtered = activeFilter === 'all' ? allTx : allTx.filter(tx => (tx.kind || tx.type || tx.category || tx.event_type) === activeFilter);
-    // Network filter: keep events matching selected network chains, or all if chains unknown
+    let filtered = allTx;
+    if (activeFilter !== 'all') {
+      const et = tx => tx.event_type || tx.kind || tx.type || tx.category || '';
+      if (activeFilter === 'pledge') {
+        filtered = allTx.filter(tx => _PLEDGE_EVENT_TYPES.has(et(tx)));
+      } else if (activeFilter === 'crosschain') {
+        filtered = allTx.filter(tx => _CROSSCHAIN_FILTER_TYPES.has(et(tx)));
+      } else {
+        filtered = allTx.filter(tx => et(tx) === activeFilter);
+      }
+    }
+    // Network filter: strict — only show events whose chain matches the selected network.
+    // Exception: if chain field is empty/missing (legacy events), show on Thronos view only.
     const netChains = HISTORY_CHAIN_MAP[activeNetwork] || [];
     if (netChains.length) {
       filtered = filtered.filter(tx => {
-        const c = tx.chain || '';
-        return !c || netChains.includes(c); // show if chain matches or chain unknown (legacy)
+        const c = (tx.chain || '').toLowerCase();
+        if (!c) return activeNetwork === 'thronos'; // legacy events with no chain → Thronos only
+        return netChains.includes(c);
       });
     }
     if (!filtered.length) {

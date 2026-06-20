@@ -224,11 +224,11 @@
         <div class="tabs" id="tabs">
             <button class="tab {% if default_tab == 'all' %}active{% endif %}" data-tab="all">All</button>
             <button class="tab {% if default_tab == 'native_thr' %}active{% endif %}" data-tab="native_thr">Native THR</button>
+            <button class="tab {% if default_tab == 'pledges' %}active{% endif %}" data-tab="pledges">💵 Pledges</button>
+            <button class="tab {% if default_tab == 'crosschain' %}active{% endif %}" data-tab="crosschain">🌉 Cross-Chain</button>
+            <button class="tab {% if default_tab == 'pools' %}active{% endif %}" data-tab="pools">💧 Pools</button>
             <button class="tab {% if default_tab == 'tokens' %}active{% endif %}" data-tab="tokens">Tokens</button>
-            <button class="tab {% if default_tab == 'pledges' %}active{% endif %}" data-tab="pledges">Pledges</button>
-            <button class="tab {% if default_tab == 'pools' %}active{% endif %}" data-tab="pools">Pools</button>
             <button class="tab {% if default_tab == 'bridge' %}active{% endif %}" data-tab="bridge">Bridge</button>
-            <button class="tab {% if default_tab == 'crosschain' %}active{% endif %}" data-tab="crosschain">Cross-Chain</button>
             <button class="tab {% if default_tab == 'withdrawals' %}active{% endif %}" data-tab="withdrawals">Withdrawals</button>
             <button class="tab {% if default_tab == 'failed' %}active{% endif %}" data-tab="failed">Failed/Review</button>
         </div>
@@ -382,15 +382,25 @@
         function getActionIcon(actionType) {
             const icons = {
                 pledge: '💵',
+                pledge_usdt_bnb_confirmed: '💵',
                 token_send: '📤',
                 token_receive: '📥',
+                token_receive_crosschain: '📥',
                 pool_seed: '🏊',
                 pool_withdraw: '💧',
+                pool_add_liquidity: '💧',
+                pool_add_liquidity_intent_created: '⏳',
+                pool_add_liquidity_external_tx_confirmed: '✅',
+                pool_add_liquidity_lp_minted: '🌱',
                 bridge: '🌉',
+                bridge_deposit_detected: '⚡',
+                crosschain_deposit_detected: '📥',
+                crosschain_transfer_received: '📥',
+                crosschain_transfer_sent: '📤',
                 crosschain_withdraw: '🔄',
                 gateway_payout: '💰',
                 failed: '❌',
-                manual_review: '👀'
+                manual_review: '👀',
             };
             return icons[actionType] || '•';
         }

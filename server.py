@@ -1361,6 +1361,22 @@ MAX_BTC_WITHDRAWAL = float(_strip_env_quotes(os.getenv("MAX_BTC_WITHDRAWAL", "0.
 # Withdrawal fee as percentage (0.5 = 0.5%, factor = value / 100.0)
 WITHDRAWAL_FEE_PERCENT = float(_strip_env_quotes(os.getenv("WITHDRAWAL_FEE_PERCENT", "0.5")))
 
+# Cross-chain withdrawal fee policy (issue #695)
+# CROSSCHAIN_PROTOCOL_FEE_PERCENT: fixed protocol fee on withdrawal amount (separate from gas)
+CROSSCHAIN_PROTOCOL_FEE_PERCENT = float(_strip_env_quotes(os.getenv("CROSSCHAIN_PROTOCOL_FEE_PERCENT", "0.5")))
+# CROSSCHAIN_GAS_FEE_USD: estimated gas cost in USD deducted separately (not % based)
+CROSSCHAIN_GAS_FEE_USD = float(_strip_env_quotes(os.getenv("CROSSCHAIN_GAS_FEE_USD", "2.0")))
+# FEE_COLLECTOR_THR_ADDRESS: THR address that accumulates protocol fees
+FEE_COLLECTOR_THR_ADDRESS = _strip_env_quotes(os.getenv("FEE_COLLECTOR_THR_ADDRESS", ""))
+# Per-chain fee collector EVM addresses (optional; fallback to PYTHIA_SYSTEM_EVM_* if unset)
+BSC_FEE_COLLECTOR_ADDRESS    = _strip_env_quotes(os.getenv("BSC_FEE_COLLECTOR_ADDRESS", ""))
+BASE_FEE_COLLECTOR_ADDRESS   = _strip_env_quotes(os.getenv("BASE_FEE_COLLECTOR_ADDRESS", ""))
+ARB_FEE_COLLECTOR_ADDRESS    = _strip_env_quotes(os.getenv("ARB_FEE_COLLECTOR_ADDRESS", ""))
+ETH_FEE_COLLECTOR_ADDRESS    = _strip_env_quotes(os.getenv("ETH_FEE_COLLECTOR_ADDRESS", ""))
+# Minimum withdrawal amounts per token
+MIN_USDT_WITHDRAWAL = float(_strip_env_quotes(os.getenv("MIN_USDT_WITHDRAWAL", "10.0")))
+MIN_USDC_WITHDRAWAL = float(_strip_env_quotes(os.getenv("MIN_USDC_WITHDRAWAL", "10.0")))
+
 # THR per 1 BTC exchange rate
 THR_BTC_RATE = float(_strip_env_quotes(os.getenv("THR_BTC_RATE", "33333.33")))  # 1 BTC = 33,333.33 THR
 
@@ -15728,42 +15744,362 @@ def api_admin_bnb_watcher_reprocess():
         return jsonify(ok=False, error="already_processed",
                        message="This tx is already in the processed list. Pass force=true to reprocess."), 409
 
-    # Call /api/usdt/pledge directly (same as watcher would)
+    # Call shared helper directly (no test_request_context needed)
     try:
-        result = api_usdt_pledge.__wrapped__() if hasattr(api_usdt_pledge, '__wrapped__') else None
-    except Exception:
-        result = None
-
-    # Call the pledge function directly with a fake request context
-    with app.test_request_context(
-        '/api/usdt/pledge', method='POST',
-        json={
-            "secret":      os.getenv("ADMIN_SECRET", ""),
-            "thr_address": thr_address,
-            "bnb_address": bnb_address,
-            "usdt_amount": usdt_amount,
-            "bnb_txid":    bnb_txid,
-        }
-    ):
-        resp = api_usdt_pledge()
-        if isinstance(resp, tuple):
-            resp_data, status_code = resp[0], resp[1]
+        success, result, error = process_usdt_pledge_credit(thr_address, bnb_address, usdt_amount, bnb_txid, source="admin")
+        if success:
+            # Mark as processed
+            if bnb_txid not in processed_txs:
+                processed_txs.append(bnb_txid)
+                save_json(processed_file, processed_txs)
+            logger.info("[bnb_watcher] admin reprocessed tx %s -> THR %s ok", bnb_txid, thr_address)
+            return jsonify(ok=True, bnb_txid=bnb_txid, thr_address=thr_address, result=result), 200
         else:
-            resp_data, status_code = resp, 200
+            logger.warning("[bnb_watcher] admin reprocess failed tx %s: %s", bnb_txid, error)
+            return jsonify(ok=False, bnb_txid=bnb_txid, error=error), 400
+    except Exception as e:
+        logger.error("[bnb_watcher] admin reprocess exception for tx %s: %s", bnb_txid, str(e), exc_info=True)
+        return jsonify(ok=False, bnb_txid=bnb_txid, error="internal_server_error", detail=str(e)), 500
 
-        resp_json = resp_data.get_json() if hasattr(resp_data, 'get_json') else {}
-        success = status_code == 200 and resp_json.get("ok")
 
-    if success:
-        # Mark as processed
-        if bnb_txid not in processed_txs:
-            processed_txs.append(bnb_txid)
-            save_json(processed_file, processed_txs)
-        logger.info("[bnb_watcher] admin reprocessed tx %s -> THR %s ok", bnb_txid, thr_address)
-        return jsonify(ok=True, bnb_txid=bnb_txid, thr_address=thr_address, result=resp_json), 200
-    else:
-        logger.warning("[bnb_watcher] admin reprocess failed tx %s: %s", bnb_txid, resp_json)
-        return jsonify(ok=False, bnb_txid=bnb_txid, error="pledge_call_failed", detail=resp_json), 400
+# ─── ISSUE #695: PYTHIA ADDRESS RESOLVER + POOL/WITHDRAWAL ARCHITECTURE ───────
+
+def _pythia_address_source(addr: str, env_key: str) -> str:
+    """Classify the source of a Pythia EVM address for admin visibility."""
+    if not addr:
+        return "missing"
+    if os.getenv(env_key, "").strip():
+        return "env"
+    return "derived_public_only"
+
+
+def _chain_pool_liquidity(chain: str) -> dict:
+    """
+    Returns available pool liquidity info for a chain.
+    Reads from pool state file; returns zeros if not yet seeded.
+    """
+    pool_file = os.path.join(DATA_DIR, "usdt_thr_pool.json")
+    pool = load_json(pool_file, {})
+    cfg = WITHDRAW_CHAIN_CONFIG.get(chain, {})
+    vault, _ = _pool_vault_status(chain)
+    tokens = cfg.get("tokens", [])
+    return {
+        "chain": chain,
+        "label": cfg.get("label", chain),
+        "tokens": tokens,
+        "pool_vault": cfg.get("pool_vault", "").strip() or None,
+        "pool_vault_status": vault,
+        "liquidity_available": vault == "configured",
+        "pool_usdt_reserve": pool.get("usdt_reserve", 0.0),
+        "pool_thr_reserve": pool.get("thr_reserve", 0.0),
+        "pool_lp_total": pool.get("total_lp_shares", 0.0),
+    }
+
+
+@app.route("/api/admin/pythia/addresses", methods=["GET"])
+def api_admin_pythia_addresses():
+    """
+    Admin endpoint — returns Pythia system wallet public addresses and signer status.
+    NEVER exposes private keys, seeds, mnemonics, signer secrets, or decrypted material.
+
+    Response includes source classification per address:
+      env                = set via PYTHIA_SYSTEM_EVM_* env var (preferred)
+      derived_public_only = resolved from pool vault config (MVP fallback)
+      missing            = not configured
+
+    Protected by admin auth.
+    """
+    denied = require_admin()
+    if denied:
+        return denied
+
+    bsc_cfg = WITHDRAW_CHAIN_CONFIG.get("bsc", {})
+    base_cfg = WITHDRAW_CHAIN_CONFIG.get("base", {})
+    arb_cfg = WITHDRAW_CHAIN_CONFIG.get("arbitrum", {})
+
+    def _vault_addr(cfg: dict) -> str:
+        return (cfg.get("pool_vault") or "").strip()
+
+    pythia_bsc = PYTHIA_SYSTEM_EVM_BSC_ADDRESS or _vault_addr(bsc_cfg)
+    pythia_base = PYTHIA_SYSTEM_EVM_BASE_ADDRESS or _vault_addr(base_cfg)
+    pythia_arb = PYTHIA_SYSTEM_EVM_ARBITRUM_ADDRESS or _vault_addr(arb_cfg)
+    pythia_eth = PYTHIA_SYSTEM_EVM_ETHEREUM_ADDRESS or ""
+
+    signer_available = bool(os.getenv("GATEWAY_SECRET", "").strip())
+
+    return jsonify({
+        "ok": True,
+        "pythia_system_thr_address": PYTHIA_SYSTEM_THR_ADDRESS,
+        "pythia_evm_bsc_address":       pythia_bsc or None,
+        "pythia_evm_base_address":      pythia_base or None,
+        "pythia_evm_arbitrum_address":  pythia_arb or None,
+        "pythia_evm_ethereum_address":  pythia_eth or None,
+        "signer_available": signer_available,
+        "sources": {
+            "bsc":      _pythia_address_source(pythia_bsc, "PYTHIA_SYSTEM_EVM_BSC_ADDRESS"),
+            "base":     _pythia_address_source(pythia_base, "PYTHIA_SYSTEM_EVM_BASE_ADDRESS"),
+            "arbitrum": _pythia_address_source(pythia_arb, "PYTHIA_SYSTEM_EVM_ARBITRUM_ADDRESS"),
+            "ethereum": _pythia_address_source(pythia_eth, "PYTHIA_SYSTEM_EVM_ETHEREUM_ADDRESS"),
+        },
+        "vault_model": {
+            "bsc": {
+                "pledge_vault":  (bsc_cfg.get("usdt_pledge_vault") or "").strip() or None,
+                "pool_vault":    (bsc_cfg.get("pool_vault") or "").strip() or None,
+                "fee_collector": (bsc_cfg.get("fee_collector") or BSC_FEE_COLLECTOR_ADDRESS or "").strip() or None,
+                "gas_wallet":    (bsc_cfg.get("gas_wallet") or "").strip() or None,
+                "treasury":      (bsc_cfg.get("treasury") or "").strip() or None,
+                "payout_wallet": (bsc_cfg.get("hot_wallet") or "").strip() or None,
+                "pythia_signer_public_address": pythia_bsc or None,
+                "pool_vault_status": _pool_vault_status("bsc")[0],
+                "pool_vault_source": (
+                    "BSC_POOL_VAULT_ADDRESS" if os.getenv("BSC_POOL_VAULT_ADDRESS", "").strip()
+                    else "PYTHIA_SYSTEM_EVM_BSC_ADDRESS (fallback)"
+                ),
+            },
+            "base": {
+                "pledge_vault":  None,
+                "pool_vault":    (base_cfg.get("pool_vault") or "").strip() or None,
+                "fee_collector": (BASE_FEE_COLLECTOR_ADDRESS or "").strip() or None,
+                "gas_wallet":    None,
+                "treasury":      None,
+                "payout_wallet": (base_cfg.get("hot_wallet") or "").strip() or None,
+                "pythia_signer_public_address": pythia_base or None,
+                "pool_vault_status": _pool_vault_status("base")[0],
+                "pool_vault_source": (
+                    "BASE_POOL_VAULT_ADDRESS" if os.getenv("BASE_POOL_VAULT_ADDRESS", "").strip()
+                    else "PYTHIA_SYSTEM_EVM_BASE_ADDRESS (fallback)"
+                ),
+            },
+            "arbitrum": {
+                "pledge_vault":  None,
+                "pool_vault":    (arb_cfg.get("pool_vault") or "").strip() or None,
+                "fee_collector": (ARB_FEE_COLLECTOR_ADDRESS or "").strip() or None,
+                "gas_wallet":    None,
+                "treasury":      None,
+                "payout_wallet": (arb_cfg.get("hot_wallet") or "").strip() or None,
+                "pythia_signer_public_address": pythia_arb or None,
+                "pool_vault_status": _pool_vault_status("arbitrum")[0],
+                "pool_vault_source": (
+                    "ARB_POOL_VAULT_ADDRESS" if os.getenv("ARB_POOL_VAULT_ADDRESS", "").strip()
+                    else "PYTHIA_SYSTEM_EVM_ARBITRUM_ADDRESS (fallback)"
+                ),
+            },
+        },
+        "fee_policy": {
+            "protocol_fee_percent": CROSSCHAIN_PROTOCOL_FEE_PERCENT,
+            "gas_fee_usd_estimate": CROSSCHAIN_GAS_FEE_USD,
+            "fee_collector_thr":    FEE_COLLECTOR_THR_ADDRESS or None,
+            "note": (
+                "protocol_fee_percent is charged on withdrawal amount. "
+                "gas_fee_usd_estimate is a separate fixed deduction covering on-chain gas. "
+                "Set via CROSSCHAIN_PROTOCOL_FEE_PERCENT / CROSSCHAIN_GAS_FEE_USD / "
+                "FEE_COLLECTOR_THR_ADDRESS env vars."
+            ),
+        },
+        "note": (
+            "Set PYTHIA_SYSTEM_EVM_BSC/BASE/ARB/ETHEREUM_ADDRESS to the public EVM address "
+            "of the Pythia system signer. Pledge vault (BSC_USDT_PLEDGE_VAULT) must remain "
+            "SEPARATE from pool vault (BSC_POOL_VAULT_ADDRESS). "
+            "Never expose private keys, seeds, or signer secrets."
+        ),
+    }), 200
+
+
+@app.route("/api/admin/pool/seed-from-pledge-vault", methods=["POST"])
+def api_admin_pool_seed_from_pledge_vault():
+    """
+    Admin endpoint to record a declared/manual movement of funds
+    from the pledge vault to the pool vault.
+
+    Does NOT move funds automatically. Records the declared event in:
+    - wallet_history.json (as system actor event)
+    - phantom_tx_chain.json (as ledger tx)
+
+    POST body:
+    {
+        "token":           "USDT",
+        "amount":          500.0,
+        "chain":           "bsc",
+        "external_txid":   "0x...",   // the on-chain tx confirming the move
+        "from_vault":      "0x...",   // pledge vault address (source)
+        "to_pool_vault":   "0x...",   // pool vault address (destination)
+        "note":            "optional admin note"
+    }
+    """
+    denied = require_admin()
+    if denied:
+        return denied
+
+    data = request.get_json() or {}
+    token        = (data.get("token") or "").upper().strip()
+    chain        = (data.get("chain") or "").lower().strip()
+    external_txid = (data.get("external_txid") or "").strip()
+    from_vault   = (data.get("from_vault") or "").strip()
+    to_pool_vault = (data.get("to_pool_vault") or "").strip()
+    note         = (data.get("note") or "").strip()[:500]
+
+    try:
+        amount = float(data.get("amount", 0))
+    except (TypeError, ValueError):
+        return jsonify(ok=False, error="invalid_amount"), 400
+
+    if not token or token not in ("USDT", "USDC", "BTC", "THR"):
+        return jsonify(ok=False, error="invalid_or_missing_token"), 400
+    if not chain or chain not in WITHDRAW_CHAIN_CONFIG:
+        return jsonify(ok=False, error="invalid_or_missing_chain"), 400
+    if amount <= 0:
+        return jsonify(ok=False, error="amount_must_be_positive"), 400
+    if not external_txid:
+        return jsonify(ok=False, error="missing_external_txid"), 400
+    if not from_vault or not to_pool_vault:
+        return jsonify(ok=False, error="missing_from_vault_or_to_pool_vault"), 400
+
+    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    current_ts = time.time()
+    event_id = f"POOL_SEED_FROM_PLEDGE-{int(current_ts)}-{secrets.token_hex(4)}"
+
+    cfg = WITHDRAW_CHAIN_CONFIG.get(chain, {})
+    label = cfg.get("label", chain.upper())
+
+    # Record on chain ledger
+    chain_data = load_json(CHAIN_FILE, [])
+    tx = {
+        "type": "pool_seeded_from_pledge_vault",
+        "tx_id": event_id,
+        "from": from_vault,
+        "to": to_pool_vault,
+        "token": token,
+        "amount": amount,
+        "chain": chain,
+        "external_txid": external_txid,
+        "from_vault": from_vault,
+        "to_pool_vault": to_pool_vault,
+        "actor": "admin",
+        "note": note,
+        "timestamp": ts,
+        "status": "declared",
+    }
+    chain_data.append(tx)
+    save_json(CHAIN_FILE, chain_data)
+
+    # Record in wallet history under system/Pythia actor
+    system_actor = PYTHIA_SYSTEM_THR_ADDRESS or AI_WALLET_ADDRESS
+    add_wallet_history_event(
+        thr_address=system_actor,
+        event_type="pool_seeded_from_pledge_vault",
+        chain=chain,
+        asset=token,
+        amount=amount,
+        status="declared",
+        direction="pool",
+        internal_txid=event_id,
+        external_txid=external_txid,
+        network_label=label,
+        external_from=from_vault,
+        external_to=to_pool_vault,
+        timestamp=current_ts,
+    )
+
+    logger.info(
+        "[admin/pool] pool_seeded_from_pledge_vault: %s %s on %s from %s -> %s (tx: %s)",
+        amount, token, chain, from_vault, to_pool_vault, external_txid
+    )
+
+    return jsonify({
+        "ok": True,
+        "event_id": event_id,
+        "event_type": "pool_seeded_from_pledge_vault",
+        "token": token,
+        "amount": amount,
+        "chain": chain,
+        "external_txid": external_txid,
+        "from_vault": from_vault,
+        "to_pool_vault": to_pool_vault,
+        "actor": "admin",
+        "timestamp": ts,
+        "note": note or None,
+    }), 200
+
+
+@app.route("/api/admin/withdrawal-liquidity/status", methods=["GET"])
+def api_admin_withdrawal_liquidity_status():
+    """
+    Admin endpoint — returns per-chain withdrawal liquidity status, fee policy,
+    payout wallet configuration, and signer availability.
+
+    Withdrawals remain DISABLED until:
+    - Pool vault is configured per chain (valid 0x address)
+    - GATEWAY_SECRET (signer) is set
+    - Sufficient pool liquidity exists (pool reserve > 0)
+
+    Protected by admin auth. NEVER exposes private keys or secrets.
+    """
+    denied = require_admin()
+    if denied:
+        return denied
+
+    signer_available = bool(os.getenv("GATEWAY_SECRET", "").strip())
+
+    chains_status = {}
+    for chain_key in ("bsc", "base", "arbitrum"):
+        cfg = WITHDRAW_CHAIN_CONFIG.get(chain_key, {})
+        vault_status, vault_addr = _pool_vault_status(chain_key)
+        liq = _chain_pool_liquidity(chain_key)
+
+        fee_collector_addr = (
+            cfg.get("fee_collector")
+            or (BSC_FEE_COLLECTOR_ADDRESS if chain_key == "bsc" else "")
+            or (BASE_FEE_COLLECTOR_ADDRESS if chain_key == "base" else "")
+            or (ARB_FEE_COLLECTOR_ADDRESS if chain_key == "arbitrum" else "")
+            or ""
+        ).strip() or None
+
+        withdrawal_enabled = (
+            vault_status == "configured"
+            and signer_available
+            and liq["pool_usdt_reserve"] > 0
+        )
+
+        reasons_disabled = []
+        if vault_status != "configured":
+            reasons_disabled.append("pool_vault_not_configured")
+        if not signer_available:
+            reasons_disabled.append("signer_gateway_secret_missing")
+        if liq["pool_usdt_reserve"] <= 0:
+            reasons_disabled.append("no_pool_liquidity")
+        if chain_key == "bsc" and not _BNB_WATCHER_AVAILABLE:
+            reasons_disabled.append("bnb_watcher_unavailable")
+
+        chains_status[chain_key] = {
+            "label": cfg.get("label", chain_key),
+            "tokens": cfg.get("tokens", []),
+            "pool_vault": vault_addr or None,
+            "pool_vault_status": vault_status,
+            "payout_wallet": (cfg.get("hot_wallet") or "").strip() or None,
+            "fee_collector": fee_collector_addr,
+            "pool_usdt_reserve": liq["pool_usdt_reserve"],
+            "pool_thr_reserve": liq["pool_thr_reserve"],
+            "withdrawal_enabled": withdrawal_enabled,
+            "disabled_reasons": reasons_disabled if not withdrawal_enabled else [],
+        }
+
+    return jsonify({
+        "ok": True,
+        "signer_available": signer_available,
+        "fee_policy": {
+            "protocol_fee_percent": CROSSCHAIN_PROTOCOL_FEE_PERCENT,
+            "gas_fee_usd_estimate": CROSSCHAIN_GAS_FEE_USD,
+            "fee_collector_thr": FEE_COLLECTOR_THR_ADDRESS or None,
+            "min_usdt_withdrawal": MIN_USDT_WITHDRAWAL,
+            "min_usdc_withdrawal": MIN_USDC_WITHDRAWAL,
+        },
+        "chains": chains_status,
+        "note": (
+            "withdrawal_enabled=true per chain requires: configured pool vault + "
+            "GATEWAY_SECRET set + pool liquidity > 0. "
+            "Live outbound signing is not yet active — this endpoint is status/architecture only."
+        ),
+    }), 200
 
 
 @app.route("/d3lfoi", methods=["GET"])
@@ -20930,25 +21266,41 @@ def api_viewer_transactions():
             "pool_add_liquidity_external_tx_confirmed",
             "pool_add_liquidity_lp_minted",
         }
-        _CROSSCHAIN_EVENT_TYPES = _LP_EVENT_TYPES | {
+        _POOL_SEED_EVENT_TYPES = {
+            "pool_seed",
+            "pool_seeded_from_pledge_vault",
+            "treasury_to_pool_seed",
+            "pool_withdraw",
+            "pool_add_liquidity",
+            "pool_add_liquidity_lp_minted",
+        }
+        _WITHDRAWAL_EVENT_TYPES = {
             "crosschain_withdraw",
+            "gateway_payout",
+            "crosschain_withdrawal_requested",
+            "crosschain_withdrawal_fee_charged",
+            "crosschain_withdrawal_signed",
+            "crosschain_withdrawal_broadcasted",
+            "crosschain_withdrawal_confirmed",
+            "crosschain_withdrawal_failed",
+        }
+        _CROSSCHAIN_EVENT_TYPES = _LP_EVENT_TYPES | _WITHDRAWAL_EVENT_TYPES | {
             "crosschain_deposit_detected",
             "crosschain_transfer_received",
             "crosschain_transfer_sent",
             "bridge_deposit_detected",
             "pledge_usdt_bnb_confirmed",
+            "pool_seeded_from_pledge_vault",
+            "treasury_to_pool_seed",
         }
         tab_filters = {
             "native_thr": lambda e: e.get("asset") == "THR" and e.get("chain") == "thronos",
             "tokens": lambda e: e.get("asset") != "THR" and e.get("event_type") in ("token_send", "token_receive"),
             "pledges": lambda e: e.get("event_type") in ("pledge", "pledge_usdt_bnb_confirmed"),
-            "pools": lambda e: e.get("event_type") in (
-                "pool_seed", "pool_withdraw", "pool_add_liquidity",
-                "pool_add_liquidity_lp_minted",
-            ),
+            "pools": lambda e: e.get("event_type") in _POOL_SEED_EVENT_TYPES,
             "bridge": lambda e: e.get("event_type") in ("bridge", "bridge_deposit_detected"),
             "crosschain": lambda e: e.get("event_type") in _CROSSCHAIN_EVENT_TYPES,
-            "withdrawals": lambda e: e.get("event_type") in ("crosschain_withdraw", "gateway_payout"),
+            "withdrawals": lambda e: e.get("event_type") in _WITHDRAWAL_EVENT_TYPES,
             "failed": lambda e: e.get("status") in ("failed", "manual_review", "expired"),
         }
 
@@ -27611,6 +27963,199 @@ def api_pledge_bnb_register():
     return jsonify(ok=True, thr_address=thr_address, bnb_address=bnb_address, vault_address=BNB_PLEDGE_VAULT), 200
 
 
+def process_usdt_pledge_credit(thr_address, bnb_address, usdt_amount, bnb_txid, source="watcher"):
+    """
+    Shared logic for crediting a USDT pledge to a THR wallet.
+
+    Args:
+        thr_address: THR address to credit
+        bnb_address: BNB sender address
+        usdt_amount: amount in USDT
+        bnb_txid: BSC transaction hash
+        source: "watcher" or "admin" for logging
+
+    Returns:
+        (success: bool, result_data: dict, error_msg: str or None)
+    """
+    try:
+        # Validation
+        if not all([thr_address, bnb_address, bnb_txid]):
+            return False, {}, "Missing required fields"
+        if usdt_amount < MIN_USDT_PLEDGE:
+            return False, {}, f"below_minimum_pledge (minimum {MIN_USDT_PLEDGE} USDT)"
+
+        # Check for duplicate tx in wallet history
+        wallet_hist_file = os.path.join(DATA_DIR, "wallet_history.json")
+        wallet_hist = load_json(wallet_hist_file, [])
+        if any(evt.get("external_txid") == bnb_txid for evt in wallet_hist):
+            return False, {}, "duplicate_tx_already_processed"
+
+        dynamic_rate = get_usdt_thr_rate_dynamic()
+        thr_amount = round(usdt_amount * dynamic_rate, 6)
+        pool_usdt = round(usdt_amount * USDT_PLEDGE_POOL_SPLIT, 6)
+        pool_thr = round(pool_usdt * dynamic_rate, 6)
+
+        ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+
+        # Generate send_seed + PDF + pledge record now that payment is confirmed.
+        pledges = load_json(PLEDGE_CHAIN, [])
+        existing_pledge = next(
+            (p for p in pledges if p.get("bnb_address") == bnb_address and p.get("pledge_type") == "usdt_bnb"),
+            None
+        )
+        if not existing_pledge:
+            pledge_text    = "USDT/BNB Pledge — Thronos Network"
+            phash          = hashlib.sha256((bnb_address + pledge_text).encode()).hexdigest()
+            send_seed      = secrets.token_hex(16)
+            send_seed_hash = hashlib.sha256(send_seed.encode()).hexdigest()
+            auth_string    = f"{send_seed}:auth"
+            send_auth_hash = hashlib.sha256(auth_string.encode()).hexdigest()
+            chain_for_height = load_json(CHAIN_FILE, [])
+            height = len(chain_for_height)
+
+            try:
+                pdf_name = create_secure_pdf_contract(
+                    bnb_address, pledge_text, thr_address, phash, height,
+                    send_seed, CONTRACTS_DIR, None
+                )
+            except Exception as _pdf_err:
+                logger.error(f"USDT pledge PDF generation failed: {_pdf_err}")
+                pdf_name = f"pledge_{thr_address}.pdf"
+
+            pledge_entry = {
+                "bnb_address":          bnb_address,
+                "pledge_type":          "usdt_bnb",
+                "pledge_text":          pledge_text,
+                "timestamp":            ts,
+                "pledge_hash":          phash,
+                "thr_address":          thr_address,
+                "send_seed":            send_seed,
+                "send_seed_hash":       send_seed_hash,
+                "send_auth_hash":       send_auth_hash,
+                "has_passphrase":       False,
+                "pending_confirmation": False,
+                "pdf_filename":         pdf_name,
+            }
+            pledges.append(pledge_entry)
+            save_json(PLEDGE_CHAIN, pledges)
+        else:
+            # Already confirmed — just clear the flag if it was pending
+            if existing_pledge.get("pending_confirmation"):
+                existing_pledge["pending_confirmation"] = False
+                save_json(PLEDGE_CHAIN, pledges)
+
+        # Credit THR to the user's wallet
+        ledger = load_json(LEDGER_FILE, {})
+        current_balance = float(ledger.get(thr_address, 0.0))
+        new_balance = round(current_balance + thr_amount, 6)
+        ledger[thr_address] = new_balance
+        save_json(LEDGER_FILE, ledger)
+
+        # Seed THR/USDT pool with half the pledge (new external capital, no debit)
+        _seed_usdt_thr_pool(pool_usdt, pool_thr)
+
+        # Create pledge transaction on the chain
+        chain = load_json(CHAIN_FILE, [])
+        tx_id = f"USDT_PLEDGE-{int(time.time())}-{secrets.token_hex(4)}"
+
+        tx = {
+            "type": "usdt_pledge",
+            "tx_id": tx_id,
+            "from": bnb_address,
+            "to": thr_address,
+            "thr_address": thr_address,
+            "bnb_address": bnb_address,
+            "usdt_amount": usdt_amount,
+            "thr_amount": thr_amount,
+            "pool_usdt_seeded": pool_usdt,
+            "pool_thr_seeded": pool_thr,
+            "bnb_txid": bnb_txid,
+            "timestamp": ts,
+            "status": "confirmed",
+        }
+
+        chain.append(tx)
+        save_json(CHAIN_FILE, chain)
+        update_last_block(tx, is_block=False)
+
+        try:
+            broadcast_tx(tx)
+        except Exception:
+            pass
+
+        # Add wallet history events
+        current_ts = time.time()
+
+        # 1. Primary pledge event: USDT-on-BSC confirmed (visible on BNB network in history)
+        add_wallet_history_event(
+            thr_address=thr_address,
+            event_type="pledge_usdt_bnb_confirmed",
+            chain="bsc",
+            asset="USDT",
+            amount=usdt_amount,
+            status="confirmed",
+            direction="in",
+            internal_txid=tx_id,
+            external_txid=bnb_txid,
+            token_contract=USDT_BNB_CONTRACT,
+            token_standard="BEP20",
+            network_label="BNB Smart Chain",
+            external_from=bnb_address,
+            external_to=BNB_PLEDGE_VAULT,
+            timestamp=current_ts,
+        )
+
+        # 2. Record THR credit (internal Thronos transaction)
+        add_wallet_history_event(
+            thr_address=thr_address,
+            event_type="token_receive",
+            chain="thronos",
+            asset="THR",
+            amount=thr_amount,
+            status="credited",
+            direction="in",
+            internal_txid=tx_id,
+            external_txid=bnb_txid,
+            token_standard="native",
+            network_label="Thronos",
+            timestamp=current_ts,
+        )
+
+        # 3. Record pool seed event (if pool received funds)
+        if pool_thr > 0:
+            add_wallet_history_event(
+                thr_address=thr_address,
+                event_type="pool_seed",
+                chain="thronos",
+                asset="THR",
+                amount=pool_thr,
+                status="pool_seeded",
+                direction="pool",
+                internal_txid=tx_id,
+                token_standard="native",
+                network_label="Thronos",
+                timestamp=current_ts,
+            )
+
+        result_data = {
+            "tx_id": tx_id,
+            "thr_address": thr_address,
+            "new_balance": new_balance,
+            "bnb_txid": bnb_txid,
+            "pool_usdt_seeded": pool_usdt,
+            "pool_thr_seeded": pool_thr,
+        }
+
+        logger.info("[usdt_pledge] %s processed tx %s -> THR %s (amount: %f USDT, source: %s)",
+                   bnb_address, bnb_txid, thr_address, usdt_amount, source)
+
+        return True, result_data, None
+
+    except Exception as e:
+        logger.error("[usdt_pledge] process_usdt_pledge_credit failed: %s", str(e), exc_info=True)
+        return False, {}, str(e)
+
+
 @app.route("/api/usdt/pledge", methods=["POST"])
 def api_usdt_pledge():
     """
@@ -27634,171 +28179,17 @@ def api_usdt_pledge():
 
     thr_address = data.get("thr_address")
     bnb_address = data.get("bnb_address")
-    usdt_amount = float(data.get("usdt_amount", 0))
+    try:
+        usdt_amount = float(data.get("usdt_amount", 0))
+    except (TypeError, ValueError):
+        return jsonify(ok=False, error="invalid_usdt_amount"), 400
     bnb_txid = data.get("bnb_txid")
 
-    if not all([thr_address, bnb_address, bnb_txid]):
-        return jsonify(ok=False, error="Missing required fields"), 400
-    if usdt_amount < MIN_USDT_PLEDGE:
-        return jsonify(ok=False, error="below_minimum_pledge"), 400
-
-    dynamic_rate = get_usdt_thr_rate_dynamic()
-    thr_amount = round(usdt_amount * dynamic_rate, 6)
-    pool_usdt = round(usdt_amount * USDT_PLEDGE_POOL_SPLIT, 6)
-    pool_thr = round(pool_usdt * dynamic_rate, 6)
-
-    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
-
-    # Generate send_seed + PDF + pledge record now that payment is confirmed.
-    # Only create a new pledge record if one doesn't already exist for this BNB address.
-    pledges = load_json(PLEDGE_CHAIN, [])
-    existing_pledge = next(
-        (p for p in pledges if p.get("bnb_address") == bnb_address and p.get("pledge_type") == "usdt_bnb"),
-        None
-    )
-    if not existing_pledge:
-        pledge_text    = "USDT/BNB Pledge — Thronos Network"
-        phash          = hashlib.sha256((bnb_address + pledge_text).encode()).hexdigest()
-        send_seed      = secrets.token_hex(16)
-        send_seed_hash = hashlib.sha256(send_seed.encode()).hexdigest()
-        auth_string    = f"{send_seed}:auth"
-        send_auth_hash = hashlib.sha256(auth_string.encode()).hexdigest()
-        chain_for_height = load_json(CHAIN_FILE, [])
-        height = len(chain_for_height)
-
-        try:
-            pdf_name = create_secure_pdf_contract(
-                bnb_address, pledge_text, thr_address, phash, height,
-                send_seed, CONTRACTS_DIR, None
-            )
-        except Exception as _pdf_err:
-            logger.error(f"USDT pledge PDF generation failed: {_pdf_err}")
-            pdf_name = f"pledge_{thr_address}.pdf"
-
-        pledge_entry = {
-            "bnb_address":          bnb_address,
-            "pledge_type":          "usdt_bnb",
-            "pledge_text":          pledge_text,
-            "timestamp":            ts,
-            "pledge_hash":          phash,
-            "thr_address":          thr_address,
-            "send_seed":            send_seed,
-            "send_seed_hash":       send_seed_hash,
-            "send_auth_hash":       send_auth_hash,
-            "has_passphrase":       False,
-            "pending_confirmation": False,
-            "pdf_filename":         pdf_name,
-        }
-        pledges.append(pledge_entry)
-        save_json(PLEDGE_CHAIN, pledges)
+    success, result, error = process_usdt_pledge_credit(thr_address, bnb_address, usdt_amount, bnb_txid, source="watcher")
+    if success:
+        return jsonify(ok=True, **result), 201
     else:
-        # Already confirmed — just clear the flag if it was pending
-        if existing_pledge.get("pending_confirmation"):
-            existing_pledge["pending_confirmation"] = False
-            save_json(PLEDGE_CHAIN, pledges)
-
-    # Credit THR to the user's wallet
-    ledger = load_json(LEDGER_FILE, {})
-    current_balance = float(ledger.get(thr_address, 0.0))
-    new_balance = round(current_balance + thr_amount, 6)
-    ledger[thr_address] = new_balance
-    save_json(LEDGER_FILE, ledger)
-
-    # Seed THR/USDT pool with half the pledge (new external capital, no debit)
-    _seed_usdt_thr_pool(pool_usdt, pool_thr)
-
-    # Create pledge transaction on the chain
-    chain = load_json(CHAIN_FILE, [])
-    tx_id = f"USDT_PLEDGE-{int(time.time())}-{secrets.token_hex(4)}"
-
-    tx = {
-        "type": "usdt_pledge",
-        "tx_id": tx_id,
-        "from": bnb_address,
-        "to": thr_address,
-        "thr_address": thr_address,
-        "bnb_address": bnb_address,
-        "usdt_amount": usdt_amount,
-        "thr_amount": thr_amount,
-        "pool_usdt_seeded": pool_usdt,
-        "pool_thr_seeded": pool_thr,
-        "bnb_txid": bnb_txid,
-        "timestamp": ts,
-        "status": "confirmed",
-    }
-
-    chain.append(tx)
-    save_json(CHAIN_FILE, chain)
-    update_last_block(tx, is_block=False)
-
-    try:
-        broadcast_tx(tx)
-    except Exception:
-        pass
-
-    # Add wallet history events
-    current_ts = time.time()
-
-    # 1. Primary pledge event: USDT-on-BSC confirmed (visible on BNB network in history)
-    add_wallet_history_event(
-        thr_address=thr_address,
-        event_type="pledge_usdt_bnb_confirmed",
-        chain="bsc",
-        asset="USDT",
-        amount=usdt_amount,
-        status="confirmed",
-        direction="in",
-        internal_txid=tx_id,
-        external_txid=bnb_txid,
-        token_contract=USDT_BNB_CONTRACT,
-        token_standard="BEP20",
-        network_label="BNB Smart Chain",
-        external_from=bnb_address,
-        external_to=BNB_PLEDGE_VAULT,
-        timestamp=current_ts,
-    )
-
-    # 2. Record THR credit (internal Thronos transaction)
-    add_wallet_history_event(
-        thr_address=thr_address,
-        event_type="token_receive",
-        chain="thronos",
-        asset="THR",
-        amount=thr_amount,
-        status="credited",
-        direction="in",
-        internal_txid=tx_id,
-        external_txid=bnb_txid,
-        token_standard="native",
-        network_label="Thronos",
-        timestamp=current_ts,
-    )
-
-    # 3. Record pool seed event (if pool received funds)
-    if pool_thr > 0:
-        add_wallet_history_event(
-            thr_address=thr_address,
-            event_type="pool_seed",
-            chain="thronos",
-            asset="THR",
-            amount=pool_thr,
-            status="pool_seeded",
-            direction="pool",
-            internal_txid=tx_id,
-            token_standard="native",
-            network_label="Thronos",
-            timestamp=current_ts,
-        )
-
-    return jsonify(
-        ok=True,
-        tx_id=tx_id,
-        thr_address=thr_address,
-        new_balance=new_balance,
-        bnb_txid=bnb_txid,
-        pool_usdt_seeded=pool_usdt,
-        pool_thr_seeded=pool_thr,
-    ), 201
+        return jsonify(ok=False, error=error), 400
 
 
 @app.route("/api/pledge/bnb/status", methods=["GET"])

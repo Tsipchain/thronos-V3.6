@@ -15608,6 +15608,164 @@ def api_admin_system_addresses():
     }), 200
 
 
+@app.route("/api/admin/bnb-watcher/status", methods=["GET"])
+def api_admin_bnb_watcher_status():
+    """
+    Returns BNB pledge watcher state: processed tx count, last scanned block,
+    unresolved pending tx hashes, and watcher availability.
+    Protected by admin auth.
+    """
+    denied = require_admin()
+    if denied:
+        return denied
+
+    processed_file = os.path.join(DATA_DIR, "bnb_pledge_processed.json")
+    last_block_file = os.path.join(DATA_DIR, "bnb_last_scanned_block.json")
+    registry_file  = os.path.join(DATA_DIR, "bnb_user_registry.json")
+
+    processed_txs = load_json(processed_file, [])
+    last_block_data = load_json(last_block_file, {})
+    registry = load_json(registry_file, {})
+
+    vault = os.getenv("BSC_USDT_PLEDGE_VAULT") or os.getenv("BNB_PLEDGE_VAULT", "")
+    usdt_contract = os.getenv("BSC_USDT_CONTRACT") or os.getenv("USDT_BNB_CONTRACT", "0x55d398326f99059fF775485246999027B3197955")
+
+    return jsonify({
+        "ok": True,
+        "watcher_available": _BNB_WATCHER_AVAILABLE,
+        "vault_address":     vault or None,
+        "usdt_contract":     usdt_contract,
+        "vault_configured":  bool(vault and vault.startswith("0x")),
+        "processed_tx_count": len(processed_txs) if isinstance(processed_txs, list) else 0,
+        "last_scanned_block": last_block_data.get("block"),
+        "last_scanned_at":    last_block_data.get("timestamp"),
+        "registered_bnb_addresses": len(registry),
+        "note": (
+            "Use POST /api/admin/bnb-watcher/reprocess to force-reprocess a specific tx. "
+            "Use POST /api/admin/bnb-watcher/register to map a BNB address to a THR address."
+        ),
+    }), 200
+
+
+@app.route("/api/admin/bnb-watcher/register", methods=["POST"])
+def api_admin_bnb_watcher_register():
+    """
+    Register or update a BNB address → THR address mapping in the watcher's user registry.
+    This allows the watcher to credit deposits from exchange/hot-wallet addresses.
+
+    POST body: { "bnb_address": "0x...", "thr_address": "THR...", "note": "optional" }
+    """
+    denied = require_admin()
+    if denied:
+        return denied
+
+    data = request.get_json() or {}
+    bnb_address = (data.get("bnb_address") or "").lower().strip()
+    thr_address = (data.get("thr_address") or "").strip()
+
+    if not bnb_address or not bnb_address.startswith("0x"):
+        return jsonify(ok=False, error="invalid_bnb_address"), 400
+    if not thr_address or not thr_address.startswith("THR"):
+        return jsonify(ok=False, error="invalid_thr_address"), 400
+
+    registry_file = os.path.join(DATA_DIR, "bnb_user_registry.json")
+    registry = load_json(registry_file, {})
+    registry[bnb_address] = {
+        "thr_address": thr_address,
+        "registered_at": time.time(),
+        "registered_by": "admin",
+        "note": (data.get("note") or "")[:200],
+    }
+    save_json(registry_file, registry)
+    logger.info("[bnb_watcher] admin registered BNB %s -> THR %s", bnb_address, thr_address)
+
+    return jsonify(ok=True, bnb_address=bnb_address, thr_address=thr_address), 200
+
+
+@app.route("/api/admin/bnb-watcher/reprocess", methods=["POST"])
+def api_admin_bnb_watcher_reprocess():
+    """
+    Admin endpoint to reprocess a specific BNB tx that the watcher skipped
+    (typically because the sender was unresolved at the time).
+
+    POST body:
+    {
+        "bnb_txid":    "0x...",     // the BSC tx hash to reprocess
+        "thr_address": "THR...",    // the THR wallet to credit
+        "bnb_address": "0x...",     // the sender BNB address
+        "usdt_amount": 10.5,        // amount in USDT (18-decimal USDT float)
+        "force":       true         // set true to reprocess even if already in processed list
+    }
+    """
+    denied = require_admin()
+    if denied:
+        return denied
+
+    data = request.get_json() or {}
+    bnb_txid    = (data.get("bnb_txid") or "").strip()
+    thr_address = (data.get("thr_address") or "").strip()
+    bnb_address = (data.get("bnb_address") or "").lower().strip()
+    force       = bool(data.get("force", False))
+
+    try:
+        usdt_amount = float(data.get("usdt_amount", 0))
+    except (TypeError, ValueError):
+        return jsonify(ok=False, error="invalid_usdt_amount"), 400
+
+    if not bnb_txid or not bnb_txid.startswith("0x"):
+        return jsonify(ok=False, error="missing_or_invalid_bnb_txid"), 400
+    if not thr_address or not thr_address.startswith("THR"):
+        return jsonify(ok=False, error="missing_or_invalid_thr_address"), 400
+    if not bnb_address or not bnb_address.startswith("0x"):
+        return jsonify(ok=False, error="missing_or_invalid_bnb_address"), 400
+    if usdt_amount <= 0:
+        return jsonify(ok=False, error="usdt_amount_must_be_positive"), 400
+
+    # Check if already processed
+    processed_file = os.path.join(DATA_DIR, "bnb_pledge_processed.json")
+    processed_txs = load_json(processed_file, [])
+    if bnb_txid in processed_txs and not force:
+        return jsonify(ok=False, error="already_processed",
+                       message="This tx is already in the processed list. Pass force=true to reprocess."), 409
+
+    # Call /api/usdt/pledge directly (same as watcher would)
+    try:
+        result = api_usdt_pledge.__wrapped__() if hasattr(api_usdt_pledge, '__wrapped__') else None
+    except Exception:
+        result = None
+
+    # Call the pledge function directly with a fake request context
+    with app.test_request_context(
+        '/api/usdt/pledge', method='POST',
+        json={
+            "secret":      os.getenv("ADMIN_SECRET", ""),
+            "thr_address": thr_address,
+            "bnb_address": bnb_address,
+            "usdt_amount": usdt_amount,
+            "bnb_txid":    bnb_txid,
+        }
+    ):
+        resp = api_usdt_pledge()
+        if isinstance(resp, tuple):
+            resp_data, status_code = resp[0], resp[1]
+        else:
+            resp_data, status_code = resp, 200
+
+        resp_json = resp_data.get_json() if hasattr(resp_data, 'get_json') else {}
+        success = status_code == 200 and resp_json.get("ok")
+
+    if success:
+        # Mark as processed
+        if bnb_txid not in processed_txs:
+            processed_txs.append(bnb_txid)
+            save_json(processed_file, processed_txs)
+        logger.info("[bnb_watcher] admin reprocessed tx %s -> THR %s ok", bnb_txid, thr_address)
+        return jsonify(ok=True, bnb_txid=bnb_txid, thr_address=thr_address, result=resp_json), 200
+    else:
+        logger.warning("[bnb_watcher] admin reprocess failed tx %s: %s", bnb_txid, resp_json)
+        return jsonify(ok=False, bnb_txid=bnb_txid, error="pledge_call_failed", detail=resp_json), 400
+
+
 @app.route("/d3lfoi", methods=["GET"])
 @app.route("/d3lfoi_admin", methods=["GET"])
 def d3lfoi_admin_console():

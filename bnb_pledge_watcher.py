@@ -36,8 +36,10 @@ logger = logging.getLogger(__name__)
 
 # Environment configuration
 BSC_RPC_URL = os.getenv("BSC_RPC_URL", "https://bsc-dataseed.binance.org")
-BNB_PLEDGE_VAULT = os.getenv("BNB_PLEDGE_VAULT", "").lower()
-USDT_BNB_CONTRACT = os.getenv("USDT_BNB_CONTRACT", "0x55d398326f99059ff775485246999027b3197955").lower()
+# Vault address: prefer BSC_USDT_PLEDGE_VAULT, fall back to BNB_PLEDGE_VAULT (legacy)
+BNB_PLEDGE_VAULT = (os.getenv("BSC_USDT_PLEDGE_VAULT") or os.getenv("BNB_PLEDGE_VAULT", "")).lower()
+# USDT contract: prefer BSC_USDT_CONTRACT, fall back to USDT_BNB_CONTRACT (legacy)
+USDT_BNB_CONTRACT = (os.getenv("BSC_USDT_CONTRACT") or os.getenv("USDT_BNB_CONTRACT", "0x55d398326f99059ff775485246999027b3197955")).lower()
 USDT_THR_RATE = float(os.getenv("USDT_THR_RATE", "100"))
 MIN_USDT_PLEDGE = float(os.getenv("MIN_USDT_PLEDGE", "10"))
 USDT_PLEDGE_POOL_SPLIT = float(os.getenv("USDT_PLEDGE_POOL_SPLIT", "0.5"))
@@ -399,8 +401,14 @@ def watch_bnb_pledges():
         bnb_address = transfer.get("from", "")
         user_info = resolve_user_from_bnb_address(bnb_address)
         if not user_info:
-            logger.warning(f"Could not resolve user for BNB address {bnb_address} (tx {txhash})")
-            processed_txs.append(txhash)
+            # Do NOT mark as processed — leave for admin reprocess once user registers BNB address.
+            # Log with structured info so admin can manually reprocess.
+            logger.warning(
+                f"[UNRESOLVED] Cannot resolve user for BNB address {bnb_address} in tx {txhash}. "
+                f"Amount: {usdt_amount} USDT. Will retry next cycle. "
+                f"Use POST /api/admin/bnb-watcher/reprocess to force process after user registers."
+            )
+            had_processing_failure = True
             continue
 
         # Create USDT pledge transaction on master node

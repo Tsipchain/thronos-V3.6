@@ -5112,6 +5112,54 @@ def get_balance_from_store(wallet: str, ledger_type: str, default: float = 0.0) 
     return float(ledger.get(wallet, default))
 
 
+def get_thr_balance(address: str) -> tuple[float, str]:
+    """
+    Case-insensitive THR balance lookup.
+
+    Tries (in order):
+    1. Exact match (fastest path)
+    2. Uppercase address (most wallets canonicalize to upper)
+    3. Case-insensitive scan (for mixed-case legacy records)
+    4. SQLite UPPER() match (when USE_SQLITE_LEDGER=True)
+
+    Returns (balance, source) where source is one of:
+      ledger_exact | ledger_upper | ledger_case_insensitive |
+      sqlite_exact | sqlite_upper | zero
+    """
+    if not address:
+        return 0.0, "zero"
+
+    addr_upper = address.upper()
+
+    if USE_SQLITE_LEDGER:
+        with _get_ledger_db_connection() as conn:
+            row = conn.execute(
+                "SELECT balance FROM balances WHERE ledger_type = 'thr' AND address = ?",
+                (address,),
+            ).fetchone()
+            if row:
+                return float(row["balance"]), "sqlite_exact"
+            row = conn.execute(
+                "SELECT balance FROM balances WHERE ledger_type = 'thr' AND UPPER(address) = UPPER(?)",
+                (address,),
+            ).fetchone()
+            if row:
+                return float(row["balance"]), "sqlite_upper"
+        return 0.0, "zero"
+
+    # JSON ledger fallback
+    ledger = load_json(LEDGER_FILE, {})
+    if address in ledger:
+        return float(ledger[address]), "ledger_exact"
+    if addr_upper in ledger:
+        return float(ledger[addr_upper]), "ledger_upper"
+    # Case-insensitive scan (O(n) but only reached for legacy mixed-case records)
+    for k, v in ledger.items():
+        if k.upper() == addr_upper:
+            return float(v), "ledger_case_insensitive"
+    return 0.0, "zero"
+
+
 def get_wallet_balances(wallet: str):
     thr_balance = round(get_balance_from_store(wallet, "thr", 0.0), 6)
     wbtc_balance = round(get_balance_from_store(wallet, "wbtc", 0.0), 8)
@@ -15802,10 +15850,13 @@ def api_admin_pythia_addresses():
     Admin endpoint — returns Pythia system wallet public addresses and signer status.
     NEVER exposes private keys, seeds, mnemonics, signer secrets, or decrypted material.
 
+    Re-reads env at request time (not module-level cache) so Railway Variables
+    updates are reflected immediately without restart.
+
     Response includes source classification per address:
-      env                = set via PYTHIA_SYSTEM_EVM_* env var (preferred)
-      derived_public_only = resolved from pool vault config (MVP fallback)
-      missing            = not configured
+      env                 = set via PYTHIA_SYSTEM_EVM_* env var (preferred)
+      pool_vault_fallback = resolved from chain pool vault config (MVP fallback)
+      missing             = not configured; see action_required for instructions
 
     Protected by admin auth.
     """
@@ -15820,26 +15871,59 @@ def api_admin_pythia_addresses():
     def _vault_addr(cfg: dict) -> str:
         return (cfg.get("pool_vault") or "").strip()
 
-    pythia_bsc = PYTHIA_SYSTEM_EVM_BSC_ADDRESS or _vault_addr(bsc_cfg)
-    pythia_base = PYTHIA_SYSTEM_EVM_BASE_ADDRESS or _vault_addr(base_cfg)
-    pythia_arb = PYTHIA_SYSTEM_EVM_ARBITRUM_ADDRESS or _vault_addr(arb_cfg)
-    pythia_eth = PYTHIA_SYSTEM_EVM_ETHEREUM_ADDRESS or ""
+    def _env_live(key: str) -> str:
+        """Re-read env at request time to catch Railway Variables updates post-startup."""
+        return _strip_env_quotes(os.getenv(key, "")).strip()
 
-    signer_available = bool(os.getenv("GATEWAY_SECRET", "").strip())
+    def _resolve_pythia_addr(env_key: str, pool_vault_fallback: str) -> tuple[str, str]:
+        """Returns (address, source) for a Pythia EVM address."""
+        live = _env_live(env_key)
+        if live:
+            return live, "env"
+        if pool_vault_fallback:
+            return pool_vault_fallback, "pool_vault_fallback"
+        return "", "missing"
+
+    pythia_bsc,  src_bsc  = _resolve_pythia_addr("PYTHIA_SYSTEM_EVM_BSC_ADDRESS",       _vault_addr(bsc_cfg))
+    pythia_base, src_base = _resolve_pythia_addr("PYTHIA_SYSTEM_EVM_BASE_ADDRESS",      _vault_addr(base_cfg))
+    pythia_arb,  src_arb  = _resolve_pythia_addr("PYTHIA_SYSTEM_EVM_ARBITRUM_ADDRESS",  _vault_addr(arb_cfg))
+    pythia_eth,  src_eth  = _resolve_pythia_addr("PYTHIA_SYSTEM_EVM_ETHEREUM_ADDRESS",  "")
+
+    signer_available = bool(_env_live("GATEWAY_SECRET"))
+
+    # Build per-chain action_required instructions for missing addresses
+    def _action_required(env_key: str, src: str) -> str | None:
+        if src != "missing":
+            return None
+        return (
+            f"Set {env_key} in Railway Variables to the public EVM address of the Pythia signer. "
+            "This is the 0x address that sends funds on this chain. "
+            "NEVER set a private key — only the public address. "
+            "Redeploy is NOT required; Railway env vars are re-read per request."
+        )
+
+    # Also re-read THR address from env at request time
+    pythia_thr = _env_live("PYTHIA_SYSTEM_THR_ADDRESS") or PYTHIA_SYSTEM_THR_ADDRESS
 
     return jsonify({
         "ok": True,
-        "pythia_system_thr_address": PYTHIA_SYSTEM_THR_ADDRESS,
+        "pythia_system_thr_address": pythia_thr,
         "pythia_evm_bsc_address":       pythia_bsc or None,
         "pythia_evm_base_address":      pythia_base or None,
         "pythia_evm_arbitrum_address":  pythia_arb or None,
         "pythia_evm_ethereum_address":  pythia_eth or None,
         "signer_available": signer_available,
         "sources": {
-            "bsc":      _pythia_address_source(pythia_bsc, "PYTHIA_SYSTEM_EVM_BSC_ADDRESS"),
-            "base":     _pythia_address_source(pythia_base, "PYTHIA_SYSTEM_EVM_BASE_ADDRESS"),
-            "arbitrum": _pythia_address_source(pythia_arb, "PYTHIA_SYSTEM_EVM_ARBITRUM_ADDRESS"),
-            "ethereum": _pythia_address_source(pythia_eth, "PYTHIA_SYSTEM_EVM_ETHEREUM_ADDRESS"),
+            "bsc":      src_bsc,
+            "base":     src_base,
+            "arbitrum": src_arb,
+            "ethereum": src_eth,
+        },
+        "action_required": {
+            "bsc":      _action_required("PYTHIA_SYSTEM_EVM_BSC_ADDRESS",      src_bsc),
+            "base":     _action_required("PYTHIA_SYSTEM_EVM_BASE_ADDRESS",     src_base),
+            "arbitrum": _action_required("PYTHIA_SYSTEM_EVM_ARBITRUM_ADDRESS", src_arb),
+            "ethereum": _action_required("PYTHIA_SYSTEM_EVM_ETHEREUM_ADDRESS", src_eth),
         },
         "vault_model": {
             "bsc": {
@@ -15852,35 +15936,35 @@ def api_admin_pythia_addresses():
                 "pythia_signer_public_address": pythia_bsc or None,
                 "pool_vault_status": _pool_vault_status("bsc")[0],
                 "pool_vault_source": (
-                    "BSC_POOL_VAULT_ADDRESS" if os.getenv("BSC_POOL_VAULT_ADDRESS", "").strip()
+                    "BSC_POOL_VAULT_ADDRESS" if _env_live("BSC_POOL_VAULT_ADDRESS")
                     else "PYTHIA_SYSTEM_EVM_BSC_ADDRESS (fallback)"
                 ),
             },
             "base": {
                 "pledge_vault":  None,
                 "pool_vault":    (base_cfg.get("pool_vault") or "").strip() or None,
-                "fee_collector": (BASE_FEE_COLLECTOR_ADDRESS or "").strip() or None,
+                "fee_collector": (_env_live("BASE_FEE_COLLECTOR_ADDRESS") or BASE_FEE_COLLECTOR_ADDRESS or "").strip() or None,
                 "gas_wallet":    None,
                 "treasury":      None,
                 "payout_wallet": (base_cfg.get("hot_wallet") or "").strip() or None,
                 "pythia_signer_public_address": pythia_base or None,
                 "pool_vault_status": _pool_vault_status("base")[0],
                 "pool_vault_source": (
-                    "BASE_POOL_VAULT_ADDRESS" if os.getenv("BASE_POOL_VAULT_ADDRESS", "").strip()
+                    "BASE_POOL_VAULT_ADDRESS" if _env_live("BASE_POOL_VAULT_ADDRESS")
                     else "PYTHIA_SYSTEM_EVM_BASE_ADDRESS (fallback)"
                 ),
             },
             "arbitrum": {
                 "pledge_vault":  None,
                 "pool_vault":    (arb_cfg.get("pool_vault") or "").strip() or None,
-                "fee_collector": (ARB_FEE_COLLECTOR_ADDRESS or "").strip() or None,
+                "fee_collector": (_env_live("ARB_FEE_COLLECTOR_ADDRESS") or ARB_FEE_COLLECTOR_ADDRESS or "").strip() or None,
                 "gas_wallet":    None,
                 "treasury":      None,
                 "payout_wallet": (arb_cfg.get("hot_wallet") or "").strip() or None,
                 "pythia_signer_public_address": pythia_arb or None,
                 "pool_vault_status": _pool_vault_status("arbitrum")[0],
                 "pool_vault_source": (
-                    "ARB_POOL_VAULT_ADDRESS" if os.getenv("ARB_POOL_VAULT_ADDRESS", "").strip()
+                    "ARB_POOL_VAULT_ADDRESS" if _env_live("ARB_POOL_VAULT_ADDRESS")
                     else "PYTHIA_SYSTEM_EVM_ARBITRUM_ADDRESS (fallback)"
                 ),
             },
@@ -15888,7 +15972,7 @@ def api_admin_pythia_addresses():
         "fee_policy": {
             "protocol_fee_percent": CROSSCHAIN_PROTOCOL_FEE_PERCENT,
             "gas_fee_usd_estimate": CROSSCHAIN_GAS_FEE_USD,
-            "fee_collector_thr":    FEE_COLLECTOR_THR_ADDRESS or None,
+            "fee_collector_thr":    _env_live("FEE_COLLECTOR_THR_ADDRESS") or FEE_COLLECTOR_THR_ADDRESS or None,
             "note": (
                 "protocol_fee_percent is charged on withdrawal amount. "
                 "gas_fee_usd_estimate is a separate fixed deduction covering on-chain gas. "
@@ -15897,10 +15981,10 @@ def api_admin_pythia_addresses():
             ),
         },
         "note": (
-            "Set PYTHIA_SYSTEM_EVM_BSC/BASE/ARB/ETHEREUM_ADDRESS to the public EVM address "
-            "of the Pythia system signer. Pledge vault (BSC_USDT_PLEDGE_VAULT) must remain "
-            "SEPARATE from pool vault (BSC_POOL_VAULT_ADDRESS). "
-            "Never expose private keys, seeds, or signer secrets."
+            "Env vars are re-read per request — no restart needed after Railway Variables update. "
+            "Set PYTHIA_SYSTEM_EVM_BSC/BASE/ARB/ETHEREUM_ADDRESS to the PUBLIC EVM address only. "
+            "Pledge vault (BSC_USDT_PLEDGE_VAULT) must remain SEPARATE from pool vault. "
+            "Never expose private keys, seeds, or signer secrets in any env var exposed here."
         ),
     }), 200
 
@@ -28903,7 +28987,10 @@ def api_v1_withdrawal_quote():
     Returns fee breakdown, net amount user receives, payout wallet (NOT user's destination),
     and withdrawal_available flag with disabled_reasons if not available.
     """
-    thr_address = (request.args.get("address") or "").strip().upper()
+    # Preserve original address as supplied; do NOT force uppercase here.
+    # Case-insensitive ledger lookup handles mixed-case legacy records.
+    thr_address_raw = (request.args.get("address") or "").strip()
+    thr_address = thr_address_raw  # passed to quote and lookup as-is
     token       = (request.args.get("token") or "USDT").strip().upper()
     dest_chain  = (request.args.get("dest_chain") or "bsc").strip().lower()
     fee_mode_req = (request.args.get("fee_mode") or WITHDRAWAL_FEE_MODE).strip().upper()
@@ -28913,8 +29000,8 @@ def api_v1_withdrawal_quote():
     except (TypeError, ValueError):
         return jsonify(ok=False, error="invalid_amount"), 400
 
-    # Validate inputs
-    if not thr_address or not thr_address.startswith("THR"):
+    # Validate inputs (case-insensitive prefix check)
+    if not thr_address or not thr_address.upper().startswith("THR"):
         return jsonify(ok=False, error="missing_or_invalid_address"), 400
     if token not in WITHDRAW_SUPPORTED_TOKENS:
         return jsonify(ok=False, error="unsupported_token",
@@ -28965,9 +29052,8 @@ def api_v1_withdrawal_quote():
     # Compute fees (even if withdrawal is not yet available — useful for display)
     fee_breakdown = _compute_withdrawal_fee(amount, token, dest_chain, fee_mode=fee_mode_req)
 
-    # User THR balance for pre-check (informational)
-    ledger = load_json(LEDGER_FILE, {})
-    thr_balance = float(ledger.get(thr_address, 0.0))
+    # User THR balance — case-insensitive lookup so mixed-case stored addresses match
+    thr_balance, balance_source = get_thr_balance(thr_address)
     thr_sufficient = thr_balance >= fee_breakdown["protocol_fee_thr"]
 
     # Balance buckets (informational)
@@ -29002,6 +29088,7 @@ def api_v1_withdrawal_quote():
         },
         "user": {
             "thr_balance":         round(thr_balance, 6),
+            "thr_balance_source":  balance_source,
             "thr_fee_sufficient":  thr_sufficient,
             "thr_fee_required":    fee_breakdown["protocol_fee_thr"],
             "buckets":             buckets,
@@ -29046,7 +29133,8 @@ def api_v1_withdrawal_request():
     - Records crosschain_withdrawal_fee_charged event for THR fee
     """
     data = request.get_json() or {}
-    thr_address = (data.get("address") or "").strip().upper()
+    # Preserve address as-is; case-insensitive lookup handles legacy mixed-case records
+    thr_address = (data.get("address") or "").strip()
     auth_secret = (data.get("auth_secret") or "").strip()
     token       = (data.get("token") or "USDT").strip().upper()
     dest_chain  = (data.get("dest_chain") or "bsc").strip().lower()
@@ -29113,9 +29201,8 @@ def api_v1_withdrawal_request():
     # ── 4. Fee computation ────────────────────────────────────────────────────
     fee = _compute_withdrawal_fee(amount, token, dest_chain, fee_mode=fee_mode_req)
 
-    # ── 5. THR balance check for protocol_fee_thr ────────────────────────────
-    ledger = load_json(LEDGER_FILE, {})
-    thr_balance = float(ledger.get(thr_address, 0.0))
+    # ── 5. THR balance check for protocol_fee_thr (case-insensitive lookup) ───
+    thr_balance, _ = get_thr_balance(thr_address)
     if fee["protocol_fee_thr"] > 0 and thr_balance < fee["protocol_fee_thr"]:
         return jsonify(
             ok=False, error="insufficient_thr_for_fee",
@@ -29225,9 +29312,21 @@ def api_v1_withdrawal_request():
     # ── 12. Deduct THR fee AFTER all persistence succeeds (atomic, no orphaned fee) ──
     if fee["protocol_fee_thr"] > 0:
         fee_dest = fee["fee_collector_thr"] or BURN_ADDRESS
-        ledger[thr_address] = round(thr_balance - fee["protocol_fee_thr"], 6)
-        ledger[fee_dest]    = round(float(ledger.get(fee_dest, 0.0)) + fee["protocol_fee_thr"], 6)
-        save_json(LEDGER_FILE, ledger)
+        ledger_for_fee = load_json(LEDGER_FILE, {})
+        # Locate the actual stored key (may be mixed-case — must deduct from same key)
+        stored_key = thr_address
+        addr_upper = thr_address.upper()
+        if stored_key not in ledger_for_fee:
+            if addr_upper in ledger_for_fee:
+                stored_key = addr_upper
+            else:
+                for k in ledger_for_fee:
+                    if k.upper() == addr_upper:
+                        stored_key = k
+                        break
+        ledger_for_fee[stored_key] = round(thr_balance - fee["protocol_fee_thr"], 6)
+        ledger_for_fee[fee_dest]   = round(float(ledger_for_fee.get(fee_dest, 0.0)) + fee["protocol_fee_thr"], 6)
+        save_json(LEDGER_FILE, ledger_for_fee)
 
         # Record fee charge event in history
         add_wallet_history_event(

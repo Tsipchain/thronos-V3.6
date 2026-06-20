@@ -29123,30 +29123,10 @@ def api_v1_withdrawal_request():
             thr_balance=round(thr_balance, 6),
         ), 400
 
-    # ── 6. Deduct THR fee immediately (locks it in fee collector / burn) ──────
+    # ── 6. Prepare IDs and timestamps (before persistence) ────────────────────
     ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
     current_ts = time.time()
     withdraw_id = f"WDREQ-{int(current_ts)}-{secrets.token_hex(5).upper()}"
-
-    if fee["protocol_fee_thr"] > 0:
-        fee_dest = fee["fee_collector_thr"] or BURN_ADDRESS
-        ledger[thr_address] = round(thr_balance - fee["protocol_fee_thr"], 6)
-        ledger[fee_dest]    = round(float(ledger.get(fee_dest, 0.0)) + fee["protocol_fee_thr"], 6)
-        save_json(LEDGER_FILE, ledger)
-
-        # Record fee charge event in history
-        add_wallet_history_event(
-            thr_address=thr_address,
-            event_type="crosschain_withdrawal_fee_charged",
-            chain="thronos",
-            asset="THR",
-            amount=fee["protocol_fee_thr"],
-            status="confirmed",
-            direction="out",
-            internal_txid=withdraw_id,
-            network_label="Thronos",
-            timestamp=current_ts,
-        )
 
     # ── 7. Build queued request record ────────────────────────────────────────
     payout_wallet = (chain_cfg.get("hot_wallet") or "").strip() or None
@@ -29180,6 +29160,7 @@ def api_v1_withdrawal_request():
         "failure_reason":      None,
     }
 
+    # ── 8. Persist request records (withdraw_requests.json + legacy queue) ───────
     requests_list = load_json(WITHDRAW_REQUESTS_FILE, [])
     requests_list.append(request_record)
     save_json(WITHDRAW_REQUESTS_FILE, requests_list)
@@ -29203,7 +29184,7 @@ def api_v1_withdrawal_request():
     queue.append(legacy_entry)
     save_json(WITHDRAW_QUEUE_FILE, queue)
 
-    # ── 8. Record wallet history event ────────────────────────────────────────
+    # ── 9. Record wallet history events (request + fee charged) ─────────────────
     add_wallet_history_event(
         thr_address=thr_address,
         event_type="crosschain_withdrawal_requested",
@@ -29218,7 +29199,7 @@ def api_v1_withdrawal_request():
         timestamp=current_ts,
     )
 
-    # ── 9. Chain ledger record ────────────────────────────────────────────────
+    # ── 11. Chain ledger record ───────────────────────────────────────────────
     chain_data = load_json(CHAIN_FILE, [])
     tx_record = {
         "type":              "crosschain_withdrawal_requested",
@@ -29240,6 +29221,27 @@ def api_v1_withdrawal_request():
     chain_data.append(tx_record)
     save_json(CHAIN_FILE, chain_data)
     update_last_block(tx_record, is_block=False)
+
+    # ── 12. Deduct THR fee AFTER all persistence succeeds (atomic, no orphaned fee) ──
+    if fee["protocol_fee_thr"] > 0:
+        fee_dest = fee["fee_collector_thr"] or BURN_ADDRESS
+        ledger[thr_address] = round(thr_balance - fee["protocol_fee_thr"], 6)
+        ledger[fee_dest]    = round(float(ledger.get(fee_dest, 0.0)) + fee["protocol_fee_thr"], 6)
+        save_json(LEDGER_FILE, ledger)
+
+        # Record fee charge event in history
+        add_wallet_history_event(
+            thr_address=thr_address,
+            event_type="crosschain_withdrawal_fee_charged",
+            chain="thronos",
+            asset="THR",
+            amount=fee["protocol_fee_thr"],
+            status="confirmed",
+            direction="out",
+            internal_txid=withdraw_id,
+            network_label="Thronos",
+            timestamp=current_ts,
+        )
 
     try:
         broadcast_tx(tx_record)

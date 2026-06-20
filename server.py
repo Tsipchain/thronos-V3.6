@@ -28731,6 +28731,628 @@ def api_v1_withdraw():
     ), 201
 
 
+# ─── ISSUE #695 PHASE 2: WITHDRAWAL QUOTE / REQUEST SKELETON ─────────────────
+#
+# Architecture:
+#   - HYBRID fee mode (default): user pays protocol_fee_thr + external_service_fee_token
+#   - THR_ONLY: protocol_fee_thr only, no external token fee
+#   - EXTERNAL_TOKEN_ONLY: no THR fee, external_service_fee_token only
+#   - Internal THR transfers: THR fee only, no external gas
+#   - payout_wallet = system/Pythia gateway (NOT the user's destination)
+#   - destination_address = user's recipient EVM wallet
+#   - No live signing or broadcasting in this phase
+
+# Fee mode constants
+WITHDRAWAL_FEE_MODE_HYBRID   = "HYBRID"
+WITHDRAWAL_FEE_MODE_THR_ONLY = "THR_ONLY"
+WITHDRAWAL_FEE_MODE_EXTERNAL = "EXTERNAL_TOKEN_ONLY"
+WITHDRAWAL_FEE_MODE = _strip_env_quotes(
+    os.getenv("WITHDRAWAL_FEE_MODE", WITHDRAWAL_FEE_MODE_HYBRID)
+).upper()
+
+# Balance bucket ledger files
+BALANCE_BUCKETS_FILE = os.path.join(DATA_DIR, "balance_buckets.json")
+WITHDRAW_REQUESTS_FILE = os.path.join(DATA_DIR, "withdraw_requests.json")
+
+# Max anti-rug fraction of pool reserve available for withdrawal
+WITHDRAWAL_MAX_POOL_FRACTION = float(
+    _strip_env_quotes(os.getenv("WITHDRAWAL_MAX_POOL_FRACTION", "0.90"))
+)
+
+
+def _load_balance_buckets() -> dict:
+    return load_json(BALANCE_BUCKETS_FILE, {})
+
+
+def _save_balance_buckets(data: dict) -> None:
+    save_json(BALANCE_BUCKETS_FILE, data)
+
+
+def _get_address_buckets(thr_address: str) -> dict:
+    """
+    Returns per-address balance buckets. All values are non-negative floats.
+
+    Buckets:
+      pledge_reserve_balance  — locked pledge principal; NOT withdrawable
+      user_liquid_balance     — earned/received USDT/USDC; freely withdrawable
+      lp_position_balance     — LP position; released only by remove-liquidity flow
+      protocol_pool_reserve   — Pythia/system liquidity (system wallets only)
+    """
+    buckets = _load_balance_buckets()
+    addr_buckets = buckets.get(thr_address, {})
+    return {
+        "pledge_reserve_balance": float(addr_buckets.get("pledge_reserve_balance", 0.0)),
+        "user_liquid_balance":    float(addr_buckets.get("user_liquid_balance", 0.0)),
+        "lp_position_balance":    float(addr_buckets.get("lp_position_balance", 0.0)),
+        "protocol_pool_reserve":  float(addr_buckets.get("protocol_pool_reserve", 0.0)),
+    }
+
+
+def _update_address_bucket(thr_address: str, bucket: str, delta: float) -> float:
+    """
+    Atomically apply delta to a named bucket for thr_address.
+    Returns new bucket value. Raises ValueError on underflow.
+    """
+    buckets = _load_balance_buckets()
+    addr = buckets.setdefault(thr_address, {})
+    current = float(addr.get(bucket, 0.0))
+    new_val = round(current + delta, 6)
+    if new_val < 0:
+        raise ValueError(f"Bucket underflow: {bucket} would be {new_val} for {thr_address}")
+    addr[bucket] = new_val
+    _save_balance_buckets(buckets)
+    return new_val
+
+
+def _compute_withdrawal_fee(
+    amount: float,
+    token: str,
+    chain: str,
+    fee_mode: str = None,
+    is_internal: bool = False,
+) -> dict:
+    """
+    Compute withdrawal fee breakdown for HYBRID, THR_ONLY, or EXTERNAL_TOKEN_ONLY modes.
+
+    For internal Thronos transfers: THR fee only, no external gas or token fee.
+    For external withdrawals:
+      HYBRID           = protocol_fee_thr + external_service_fee_token
+      THR_ONLY         = protocol_fee_thr only
+      EXTERNAL_TOKEN_ONLY = external_service_fee_token only (no THR)
+
+    Returns:
+      protocol_fee_thr         — THR burned/sent to fee collector
+      external_service_fee     — token amount charged as service fee (USDT/USDC)
+      gas_fee_usd_estimate     — fixed gas estimate in USD (informational)
+      amount_net               — amount user receives after all deductions
+      fee_mode                 — resolved fee mode string
+      fee_collector_thr        — THR fee collector address (or BURN_ADDRESS if unset)
+      fee_collector_ext        — EVM fee collector for chain (or pool vault as fallback)
+    """
+    if fee_mode is None:
+        fee_mode = WITHDRAWAL_FEE_MODE
+
+    thr_price_usd  = get_thr_price_usd()
+    dynamic_rate   = get_usdt_thr_rate_dynamic()
+
+    chain_cfg = WITHDRAW_CHAIN_CONFIG.get(chain, {})
+    fee_collector_ext = (
+        chain_cfg.get("fee_collector", "")
+        or (BSC_FEE_COLLECTOR_ADDRESS if chain == "bsc" else "")
+        or (BASE_FEE_COLLECTOR_ADDRESS if chain == "base" else "")
+        or (ARB_FEE_COLLECTOR_ADDRESS if chain == "arbitrum" else "")
+        or chain_cfg.get("pool_vault", "")
+    ).strip() or None
+
+    fee_collector_thr = (FEE_COLLECTOR_THR_ADDRESS or BURN_ADDRESS).strip()
+
+    if is_internal:
+        # Internal Thronos transfers: THR fee only
+        thr_fee_usd = round(amount * (CROSSCHAIN_PROTOCOL_FEE_PERCENT / 100.0), 6)
+        protocol_fee_thr = round(thr_fee_usd * dynamic_rate, 6)
+        external_service_fee = 0.0
+        amount_net = round(amount - 0.0, 6)  # no external deduction on internal
+        resolved_mode = WITHDRAWAL_FEE_MODE_THR_ONLY
+    elif fee_mode == WITHDRAWAL_FEE_MODE_THR_ONLY:
+        thr_fee_usd = round(amount * (CROSSCHAIN_PROTOCOL_FEE_PERCENT / 100.0), 6)
+        protocol_fee_thr = round(thr_fee_usd * dynamic_rate, 6)
+        external_service_fee = 0.0
+        amount_net = round(amount, 6)
+        resolved_mode = WITHDRAWAL_FEE_MODE_THR_ONLY
+    elif fee_mode == WITHDRAWAL_FEE_MODE_EXTERNAL:
+        protocol_fee_thr = 0.0
+        external_service_fee = round(amount * (CROSSCHAIN_PROTOCOL_FEE_PERCENT / 100.0), 6)
+        amount_net = round(amount - external_service_fee, 6)
+        resolved_mode = WITHDRAWAL_FEE_MODE_EXTERNAL
+    else:
+        # HYBRID (default): both THR fee and small external token fee
+        # THR covers protocol revenue; external token covers gas subsidy
+        thr_fee_usd = round(amount * (CROSSCHAIN_PROTOCOL_FEE_PERCENT / 200.0), 6)  # half rate in THR
+        protocol_fee_thr = round(thr_fee_usd * dynamic_rate, 6)
+        external_service_fee = round(amount * (CROSSCHAIN_PROTOCOL_FEE_PERCENT / 200.0), 6)  # other half in token
+        amount_net = round(amount - external_service_fee, 6)
+        resolved_mode = WITHDRAWAL_FEE_MODE_HYBRID
+
+    return {
+        "protocol_fee_thr":      protocol_fee_thr,
+        "external_service_fee":  external_service_fee,
+        "external_service_token": token,
+        "gas_fee_usd_estimate":  CROSSCHAIN_GAS_FEE_USD,
+        "amount_gross":          amount,
+        "amount_net":            amount_net,
+        "thr_price_usd":         thr_price_usd,
+        "thr_rate":              dynamic_rate,
+        "fee_mode":              resolved_mode,
+        "fee_collector_thr":     fee_collector_thr,
+        "fee_collector_ext":     fee_collector_ext,
+    }
+
+
+@app.route("/api/v1/withdrawal/quote", methods=["GET"])
+def api_v1_withdrawal_quote():
+    """
+    Withdrawal fee quote — dry run only, no state change.
+
+    Query params:
+      address       THR wallet address
+      amount        gross amount to withdraw (float)
+      token         USDT or USDC
+      dest_chain    bsc | base | arbitrum
+      fee_mode      HYBRID | THR_ONLY | EXTERNAL_TOKEN_ONLY (optional, default HYBRID)
+
+    Returns fee breakdown, net amount user receives, payout wallet (NOT user's destination),
+    and withdrawal_available flag with disabled_reasons if not available.
+    """
+    thr_address = (request.args.get("address") or "").strip().upper()
+    token       = (request.args.get("token") or "USDT").strip().upper()
+    dest_chain  = (request.args.get("dest_chain") or "bsc").strip().lower()
+    fee_mode_req = (request.args.get("fee_mode") or WITHDRAWAL_FEE_MODE).strip().upper()
+
+    try:
+        amount = float(request.args.get("amount", 0))
+    except (TypeError, ValueError):
+        return jsonify(ok=False, error="invalid_amount"), 400
+
+    # Validate inputs
+    if not thr_address or not thr_address.startswith("THR"):
+        return jsonify(ok=False, error="missing_or_invalid_address"), 400
+    if token not in WITHDRAW_SUPPORTED_TOKENS:
+        return jsonify(ok=False, error="unsupported_token",
+                       supported=sorted(WITHDRAW_SUPPORTED_TOKENS)), 400
+    if dest_chain not in WITHDRAW_CHAIN_CONFIG:
+        return jsonify(ok=False, error="unknown_chain",
+                       available=list(WITHDRAW_CHAIN_CONFIG.keys())), 400
+    if amount <= 0:
+        return jsonify(ok=False, error="amount_must_be_positive"), 400
+    if fee_mode_req not in (WITHDRAWAL_FEE_MODE_HYBRID, WITHDRAWAL_FEE_MODE_THR_ONLY, WITHDRAWAL_FEE_MODE_EXTERNAL):
+        return jsonify(ok=False, error="invalid_fee_mode",
+                       valid=["HYBRID", "THR_ONLY", "EXTERNAL_TOKEN_ONLY"]), 400
+
+    # Chain token compatibility
+    chain_cfg = WITHDRAW_CHAIN_CONFIG[dest_chain]
+    if token not in chain_cfg.get("tokens", []):
+        return jsonify(ok=False, error="token_not_supported_on_chain",
+                       chain=dest_chain, supported=chain_cfg["tokens"]), 400
+
+    # Min amount
+    min_amount = MIN_USDT_WITHDRAWAL if token == "USDT" else MIN_USDC_WITHDRAWAL
+    if amount < min_amount:
+        return jsonify(ok=False, error="below_minimum",
+                       minimum=min_amount, token=token), 400
+
+    # Max amount
+    if amount > MAX_USDT_WITHDRAW:
+        return jsonify(ok=False, error="exceeds_max_withdrawal",
+                       maximum=MAX_USDT_WITHDRAW, token=token), 400
+
+    # Pool availability check
+    vault_status, vault_addr = _pool_vault_status(dest_chain)
+    liq = _chain_pool_liquidity(dest_chain)
+    max_drawable = round(liq["pool_usdt_reserve"] * WITHDRAWAL_MAX_POOL_FRACTION, 6)
+    signer_available = bool(os.getenv("GATEWAY_SECRET", "").strip())
+
+    disabled_reasons = []
+    if vault_status != "configured":
+        disabled_reasons.append("pool_vault_not_configured")
+    if not signer_available:
+        disabled_reasons.append("signer_not_available")
+    if liq["pool_usdt_reserve"] <= 0:
+        disabled_reasons.append("no_pool_liquidity")
+    if amount > max_drawable > 0:
+        disabled_reasons.append("amount_exceeds_drawable_pool_liquidity")
+    withdrawal_available = len(disabled_reasons) == 0
+
+    # Compute fees (even if withdrawal is not yet available — useful for display)
+    fee_breakdown = _compute_withdrawal_fee(amount, token, dest_chain, fee_mode=fee_mode_req)
+
+    # User THR balance for pre-check (informational)
+    ledger = load_json(LEDGER_FILE, {})
+    thr_balance = float(ledger.get(thr_address, 0.0))
+    thr_sufficient = thr_balance >= fee_breakdown["protocol_fee_thr"]
+
+    # Balance buckets (informational)
+    buckets = _get_address_buckets(thr_address)
+
+    payout_wallet = (chain_cfg.get("hot_wallet") or "").strip() or None
+
+    return jsonify({
+        "ok": True,
+        "quote": {
+            "thr_address":         thr_address,
+            "token":               token,
+            "dest_chain":          dest_chain,
+            "dest_chain_label":    chain_cfg.get("label", dest_chain),
+            "amount_gross":        amount,
+            "amount_net":          fee_breakdown["amount_net"],
+            "protocol_fee_thr":    fee_breakdown["protocol_fee_thr"],
+            "external_service_fee": fee_breakdown["external_service_fee"],
+            "external_service_token": fee_breakdown["external_service_token"],
+            "gas_fee_usd_estimate": fee_breakdown["gas_fee_usd_estimate"],
+            "thr_price_usd":       fee_breakdown["thr_price_usd"],
+            "thr_rate":            fee_breakdown["thr_rate"],
+            "fee_mode":            fee_breakdown["fee_mode"],
+            "fee_collector_thr":   fee_breakdown["fee_collector_thr"],
+            "fee_collector_ext":   fee_breakdown["fee_collector_ext"],
+        },
+        "pool_liquidity": {
+            "usdt_reserve":        liq["pool_usdt_reserve"],
+            "max_drawable":        max_drawable,
+            "pool_vault":          vault_addr or None,
+            "pool_vault_status":   vault_status,
+        },
+        "user": {
+            "thr_balance":         round(thr_balance, 6),
+            "thr_fee_sufficient":  thr_sufficient,
+            "thr_fee_required":    fee_breakdown["protocol_fee_thr"],
+            "buckets":             buckets,
+        },
+        "payout_wallet":           payout_wallet,
+        "withdrawal_available":    withdrawal_available,
+        "disabled_reasons":        disabled_reasons if not withdrawal_available else [],
+        "note": (
+            "payout_wallet is the Pythia/system gateway address that SENDS funds — "
+            "not the user's destination. Provide destination_address in the request call."
+        ),
+    }), 200
+
+
+@app.route("/api/v1/withdrawal/request", methods=["POST"])
+def api_v1_withdrawal_request():
+    """
+    Submit a withdrawal request (queued, no live signing/broadcast in phase 2).
+
+    Body:
+    {
+        "address":             "THR...",
+        "auth_secret":         "hex...",    send_seed / auth secret
+        "token":               "USDT",
+        "amount":              100.0,
+        "dest_chain":          "bsc",
+        "destination_address": "0x...",     user's EVM recipient wallet
+        "fee_mode":            "HYBRID"     optional, default from server config
+    }
+
+    payout_wallet is always the Pythia/system gateway — never the user's destination.
+
+    Phase 2 behaviour:
+    - Validates auth (pledge send_seed or auth_secret)
+    - Validates chain/token/amount/destination
+    - Checks pool liquidity availability
+    - Checks user has sufficient THR for protocol_fee_thr
+    - Deducts protocol_fee_thr from user THR balance immediately
+    - Creates queued withdrawal request (status: queued)
+    - Does NOT sign, broadcast, or move external funds
+    - Records crosschain_withdrawal_requested event in wallet history
+    - Records crosschain_withdrawal_fee_charged event for THR fee
+    """
+    data = request.get_json() or {}
+    thr_address = (data.get("address") or "").strip().upper()
+    auth_secret = (data.get("auth_secret") or "").strip()
+    token       = (data.get("token") or "USDT").strip().upper()
+    dest_chain  = (data.get("dest_chain") or "bsc").strip().lower()
+    dest_addr   = (data.get("destination_address") or "").strip().lower()
+    fee_mode_req = (data.get("fee_mode") or WITHDRAWAL_FEE_MODE).strip().upper()
+
+    try:
+        amount = float(data.get("amount", 0))
+    except (TypeError, ValueError):
+        return jsonify(ok=False, error="invalid_amount"), 400
+
+    # ── 1. Input validation ───────────────────────────────────────────────────
+    if not validate_thr_address(thr_address):
+        return jsonify(ok=False, error="invalid_thr_address"), 400
+    if token not in WITHDRAW_SUPPORTED_TOKENS:
+        return jsonify(ok=False, error="unsupported_token",
+                       supported=sorted(WITHDRAW_SUPPORTED_TOKENS)), 400
+    if dest_chain not in WITHDRAW_CHAIN_CONFIG:
+        return jsonify(ok=False, error="unknown_chain",
+                       available=list(WITHDRAW_CHAIN_CONFIG.keys())), 400
+    if not re.match(r"^0x[a-f0-9]{40}$", dest_addr):
+        return jsonify(ok=False, error="invalid_destination_address",
+                       detail="Must be a valid 0x EVM address"), 400
+    if fee_mode_req not in (WITHDRAWAL_FEE_MODE_HYBRID, WITHDRAWAL_FEE_MODE_THR_ONLY, WITHDRAWAL_FEE_MODE_EXTERNAL):
+        return jsonify(ok=False, error="invalid_fee_mode",
+                       valid=["HYBRID", "THR_ONLY", "EXTERNAL_TOKEN_ONLY"]), 400
+    if amount <= 0:
+        return jsonify(ok=False, error="amount_must_be_positive"), 400
+
+    chain_cfg = WITHDRAW_CHAIN_CONFIG[dest_chain]
+    if token not in chain_cfg.get("tokens", []):
+        return jsonify(ok=False, error="token_not_supported_on_chain",
+                       chain=dest_chain, supported=chain_cfg["tokens"]), 400
+
+    min_amount = MIN_USDT_WITHDRAWAL if token == "USDT" else MIN_USDC_WITHDRAWAL
+    if amount < min_amount:
+        return jsonify(ok=False, error="below_minimum",
+                       minimum=min_amount, token=token), 400
+    if amount > MAX_USDT_WITHDRAW:
+        return jsonify(ok=False, error="exceeds_max_withdrawal",
+                       maximum=MAX_USDT_WITHDRAW, token=token), 400
+
+    # ── 2. Auth — pledge ownership via send_seed / auth_secret ───────────────
+    access_result, access_msg = _validate_pool_access(thr_address, auth_secret)
+    if access_result != "ok":
+        return jsonify(ok=False, error=access_result, detail=access_msg), 403
+
+    # ── 3. Pool vault + liquidity check (before touching state) ──────────────
+    vault_status, vault_addr = _pool_vault_status(dest_chain)
+    liq = _chain_pool_liquidity(dest_chain)
+    max_drawable = round(liq["pool_usdt_reserve"] * WITHDRAWAL_MAX_POOL_FRACTION, 6)
+
+    if vault_status != "configured":
+        return jsonify(ok=False, error="withdrawal_not_available",
+                       reason="pool_vault_not_configured",
+                       chain=dest_chain), 503
+    if liq["pool_usdt_reserve"] <= 0:
+        return jsonify(ok=False, error="withdrawal_not_available",
+                       reason="no_pool_liquidity"), 503
+    if amount > max_drawable:
+        return jsonify(ok=False, error="insufficient_pool_liquidity",
+                       max_drawable=max_drawable, requested=amount), 400
+
+    # ── 4. Fee computation ────────────────────────────────────────────────────
+    fee = _compute_withdrawal_fee(amount, token, dest_chain, fee_mode=fee_mode_req)
+
+    # ── 5. THR balance check for protocol_fee_thr ────────────────────────────
+    ledger = load_json(LEDGER_FILE, {})
+    thr_balance = float(ledger.get(thr_address, 0.0))
+    if fee["protocol_fee_thr"] > 0 and thr_balance < fee["protocol_fee_thr"]:
+        return jsonify(
+            ok=False, error="insufficient_thr_for_fee",
+            required_thr=fee["protocol_fee_thr"],
+            thr_balance=round(thr_balance, 6),
+        ), 400
+
+    # ── 6. Deduct THR fee immediately (locks it in fee collector / burn) ──────
+    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    current_ts = time.time()
+    withdraw_id = f"WDREQ-{int(current_ts)}-{secrets.token_hex(5).upper()}"
+
+    if fee["protocol_fee_thr"] > 0:
+        fee_dest = fee["fee_collector_thr"] or BURN_ADDRESS
+        ledger[thr_address] = round(thr_balance - fee["protocol_fee_thr"], 6)
+        ledger[fee_dest]    = round(float(ledger.get(fee_dest, 0.0)) + fee["protocol_fee_thr"], 6)
+        save_json(LEDGER_FILE, ledger)
+
+        # Record fee charge event in history
+        add_wallet_history_event(
+            thr_address=thr_address,
+            event_type="crosschain_withdrawal_fee_charged",
+            chain="thronos",
+            asset="THR",
+            amount=fee["protocol_fee_thr"],
+            status="confirmed",
+            direction="out",
+            internal_txid=withdraw_id,
+            network_label="Thronos",
+            timestamp=current_ts,
+        )
+
+    # ── 7. Build queued request record ────────────────────────────────────────
+    payout_wallet = (chain_cfg.get("hot_wallet") or "").strip() or None
+    request_record = {
+        "id":                  withdraw_id,
+        "thr_address":         thr_address,
+        "token":               token,
+        "amount_gross":        amount,
+        "amount_net":          fee["amount_net"],
+        "dest_chain":          dest_chain,
+        "dest_chain_label":    chain_cfg.get("label", dest_chain),
+        "destination_address": dest_addr,
+        "payout_wallet":       payout_wallet,
+        "protocol_fee_thr":    fee["protocol_fee_thr"],
+        "external_service_fee": fee["external_service_fee"],
+        "external_service_token": fee["external_service_token"],
+        "gas_fee_usd_estimate": fee["gas_fee_usd_estimate"],
+        "fee_mode":            fee["fee_mode"],
+        "fee_collector_thr":   fee["fee_collector_thr"],
+        "fee_collector_ext":   fee["fee_collector_ext"],
+        "thr_price_usd":       fee["thr_price_usd"],
+        "thr_rate":            fee["thr_rate"],
+        "pool_vault":          vault_addr or None,
+        "status":              "queued",
+        "created_at":          ts,
+        "updated_at":          ts,
+        "signed_at":           None,
+        "broadcast_at":        None,
+        "confirmed_at":        None,
+        "external_txid":       None,
+        "failure_reason":      None,
+    }
+
+    requests_list = load_json(WITHDRAW_REQUESTS_FILE, [])
+    requests_list.append(request_record)
+    save_json(WITHDRAW_REQUESTS_FILE, requests_list)
+
+    # Also append to legacy WITHDRAW_QUEUE_FILE for backward-compat
+    legacy_entry = {
+        "id":              withdraw_id,
+        "thr_address":     thr_address,
+        "dest_chain":      dest_chain,
+        "dest_chain_label": chain_cfg.get("label", dest_chain),
+        "external_wallet": dest_addr,
+        "token":           token,
+        "amount":          amount,
+        "amount_net":      fee["amount_net"],
+        "fee_thr":         fee["protocol_fee_thr"],
+        "oracle_price_usd": fee["thr_price_usd"],
+        "status":          "queued",
+        "created_at":      ts,
+    }
+    queue = load_json(WITHDRAW_QUEUE_FILE, [])
+    queue.append(legacy_entry)
+    save_json(WITHDRAW_QUEUE_FILE, queue)
+
+    # ── 8. Record wallet history event ────────────────────────────────────────
+    add_wallet_history_event(
+        thr_address=thr_address,
+        event_type="crosschain_withdrawal_requested",
+        chain=dest_chain,
+        asset=token,
+        amount=amount,
+        status="queued",
+        direction="out",
+        internal_txid=withdraw_id,
+        network_label=chain_cfg.get("label", dest_chain),
+        external_to=dest_addr,
+        timestamp=current_ts,
+    )
+
+    # ── 9. Chain ledger record ────────────────────────────────────────────────
+    chain_data = load_json(CHAIN_FILE, [])
+    tx_record = {
+        "type":              "crosschain_withdrawal_requested",
+        "tx_id":             withdraw_id,
+        "from":              thr_address,
+        "to":                dest_addr,
+        "token":             token,
+        "amount":            amount,
+        "amount_net":        fee["amount_net"],
+        "dest_chain":        dest_chain,
+        "protocol_fee_thr":  fee["protocol_fee_thr"],
+        "external_service_fee": fee["external_service_fee"],
+        "fee_mode":          fee["fee_mode"],
+        "thr_price_usd":     fee["thr_price_usd"],
+        "payout_wallet":     payout_wallet,
+        "status":            "queued",
+        "timestamp":         ts,
+    }
+    chain_data.append(tx_record)
+    save_json(CHAIN_FILE, chain_data)
+    update_last_block(tx_record, is_block=False)
+
+    try:
+        broadcast_tx(tx_record)
+    except Exception:
+        pass
+
+    logger.info(
+        "[withdrawal] queued %s: %s %s on %s -> %s (fee_thr: %s, fee_token: %s, mode: %s)",
+        withdraw_id, amount, token, dest_chain, dest_addr,
+        fee["protocol_fee_thr"], fee["external_service_fee"], fee["fee_mode"]
+    )
+
+    return jsonify({
+        "ok":             True,
+        "withdrawal_id":  withdraw_id,
+        "status":         "queued",
+        "token":          token,
+        "amount_gross":   amount,
+        "amount_net":     fee["amount_net"],
+        "dest_chain":     dest_chain,
+        "dest_chain_label": chain_cfg.get("label", dest_chain),
+        "destination_address": dest_addr,
+        "payout_wallet":  payout_wallet,
+        "protocol_fee_thr": fee["protocol_fee_thr"],
+        "external_service_fee": fee["external_service_fee"],
+        "external_service_token": fee["external_service_token"],
+        "gas_fee_usd_estimate": fee["gas_fee_usd_estimate"],
+        "fee_mode":       fee["fee_mode"],
+        "thr_price_usd":  fee["thr_price_usd"],
+        "created_at":     ts,
+        "estimated_minutes": 15,
+        "note": (
+            "Request is queued. Signing and broadcast will be performed by Pythia/system "
+            "signer in a future phase. payout_wallet is the system gateway, not your wallet."
+        ),
+    }), 201
+
+
+@app.route("/api/v1/withdrawal/status/<withdraw_id>", methods=["GET"])
+def api_v1_withdrawal_status(withdraw_id: str):
+    """
+    Get status of a queued/processed withdrawal request by ID.
+
+    Query params (optional, for ownership verification):
+      address    THR wallet address
+    """
+    thr_address = (request.args.get("address") or "").strip().upper()
+
+    # Search new requests file first, then legacy queue
+    requests_list = load_json(WITHDRAW_REQUESTS_FILE, [])
+    record = next((r for r in requests_list if r.get("id") == withdraw_id), None)
+
+    if not record:
+        queue = load_json(WITHDRAW_QUEUE_FILE, [])
+        legacy = next((r for r in queue if r.get("id") == withdraw_id), None)
+        if legacy:
+            record = legacy
+
+    if not record:
+        return jsonify(ok=False, error="withdrawal_not_found", id=withdraw_id), 404
+
+    # Ownership check: if address provided, must match
+    if thr_address and record.get("thr_address", "").upper() != thr_address:
+        return jsonify(ok=False, error="address_mismatch"), 403
+
+    return jsonify({"ok": True, "withdrawal": record}), 200
+
+
+@app.route("/api/admin/withdrawal/queue", methods=["GET"])
+def api_admin_withdrawal_queue():
+    """
+    Admin view of pending withdrawal requests.
+
+    Query params:
+      status     filter by status (queued | signed | broadcasted | confirmed | failed)
+      chain      filter by dest_chain
+      limit      max records (default 50)
+    """
+    denied = require_admin()
+    if denied:
+        return denied
+
+    status_filter = (request.args.get("status") or "").strip().lower()
+    chain_filter  = (request.args.get("chain") or "").strip().lower()
+    try:
+        limit = int(request.args.get("limit", 50))
+    except (TypeError, ValueError):
+        limit = 50
+
+    requests_list = load_json(WITHDRAW_REQUESTS_FILE, [])
+    records = list(reversed(requests_list))  # most recent first
+
+    if status_filter:
+        records = [r for r in records if r.get("status") == status_filter]
+    if chain_filter:
+        records = [r for r in records if r.get("dest_chain") == chain_filter]
+
+    records = records[:limit]
+
+    summary = {}
+    for r in load_json(WITHDRAW_REQUESTS_FILE, []):
+        s = r.get("status", "unknown")
+        summary[s] = summary.get(s, 0) + 1
+
+    return jsonify({
+        "ok":       True,
+        "total":    len(requests_list),
+        "filtered": len(records),
+        "summary":  summary,
+        "requests": records,
+    }), 200
+
+
 @app.route("/api/wallet/activate", methods=["POST"])
 def api_wallet_activate():
     """

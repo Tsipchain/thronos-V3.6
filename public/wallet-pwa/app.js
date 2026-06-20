@@ -921,9 +921,9 @@ async function showImport(addingExtra = false) {
       }
       const canonical = d.canonical_v1_address;
 
-      // Store account — include kit if server returned Recovery Kit
+      // Store account — save send_secret so old/migration users can use cross-chain pools
       const kitObj = d.recovery_kit ? (() => { try { return JSON.parse(d.recovery_kit); } catch { return { canonical_v1_address: canonical }; } })() : { canonical_v1_address: canonical };
-      upsertAccount(canonical, kitObj, shortAddr(canonical));
+      upsertAccount(canonical, kitObj, shortAddr(canonical), secret);
       setActiveAddr(canonical);
 
       // Decrypt with the PIN just set so Face ID enrollment below has the real key

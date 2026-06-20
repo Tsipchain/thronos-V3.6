@@ -1437,6 +1437,18 @@ TARGET_BLOCK_TIME = 120              # 2 MINUTES per block (optimized for ecosys
 RETARGET_INTERVAL = 10               # blocks (retarget every ~20 minutes)
 
 AI_WALLET_ADDRESS = os.getenv("THR_AI_AGENT_WALLET", "THR_AI_AGENT_WALLET_V1")
+
+# Pythia/System signer wallet — public EVM addresses for external chain pool vaults.
+# PYTHIA_SYSTEM_THR_ADDRESS = the system wallet's Thronos identity (same as AI_WALLET_ADDRESS by default)
+# PYTHIA_SYSTEM_EVM_*_ADDRESS = the public on-chain addresses the system signer controls on each external chain.
+# These are used as MVP fallback when explicit chain-specific pool vault env vars are not set.
+# NEVER put private keys, seeds, or mnemonics here.
+PYTHIA_SYSTEM_THR_ADDRESS     = _strip_env_quotes(os.getenv("PYTHIA_SYSTEM_THR_ADDRESS", AI_WALLET_ADDRESS))
+PYTHIA_SYSTEM_EVM_BSC_ADDRESS = _strip_env_quotes(os.getenv("PYTHIA_SYSTEM_EVM_BSC_ADDRESS", ""))
+PYTHIA_SYSTEM_EVM_BASE_ADDRESS      = _strip_env_quotes(os.getenv("PYTHIA_SYSTEM_EVM_BASE_ADDRESS", ""))
+PYTHIA_SYSTEM_EVM_ARBITRUM_ADDRESS  = _strip_env_quotes(os.getenv("PYTHIA_SYSTEM_EVM_ARBITRUM_ADDRESS", ""))
+PYTHIA_SYSTEM_EVM_ETHEREUM_ADDRESS  = _strip_env_quotes(os.getenv("PYTHIA_SYSTEM_EVM_ETHEREUM_ADDRESS", ""))
+
 BURN_ADDRESS      = "0x0"
 SWAP_POOL_ADDRESS = "THR_SWAP_POOL_V1"
 GAME_POOL_ADDRESS = "THR_CRYPTO_HUNTERS_POOL"
@@ -15539,22 +15551,35 @@ def api_admin_system_addresses():
     base_vault_status, __ = _pool_vault_status("base")
     arb_vault_status,  ___ = _pool_vault_status("arbitrum")
 
+    # Pythia/system signer EVM addresses (PYTHIA_SYSTEM_EVM_* env vars or resolved from config)
+    pythia_bsc  = PYTHIA_SYSTEM_EVM_BSC_ADDRESS or _addr(bsc_cfg, "pool_vault")
+    pythia_base = PYTHIA_SYSTEM_EVM_BASE_ADDRESS or _addr(base_cfg, "pool_vault")
+    pythia_arb  = PYTHIA_SYSTEM_EVM_ARBITRUM_ADDRESS or _addr(arb_cfg, "pool_vault")
+    pythia_eth  = PYTHIA_SYSTEM_EVM_ETHEREUM_ADDRESS or None
+
     return jsonify({
         "ok": True,
-        # Thronos chain identity — THR address of the system/AI-agent wallet
-        "system_wallet":       AI_WALLET_ADDRESS,
-        # Configured pool vault EVM addresses (admin copies these from the signer-controlled wallet)
-        "evm_bsc_address":       _addr(bsc_cfg,  "pool_vault"),
-        "evm_base_address":      _addr(base_cfg, "pool_vault"),
-        "evm_arbitrum_address":  _addr(arb_cfg,  "pool_vault"),
+        # Thronos chain identity
+        "system_wallet":              AI_WALLET_ADDRESS,
+        "pythia_system_thr_address":  PYTHIA_SYSTEM_THR_ADDRESS,
+        # Pythia/system signer public EVM addresses (NEVER private key or seed)
+        "pythia_evm_bsc_address":       pythia_bsc,
+        "pythia_evm_base_address":      pythia_base,
+        "pythia_evm_arbitrum_address":  pythia_arb,
+        "pythia_evm_ethereum_address":  pythia_eth,
+        # Configured pool vault EVM addresses (may equal Pythia addresses as MVP fallback)
+        "evm_bsc_address":       _addr(bsc_cfg,  "pool_vault") or pythia_bsc,
+        "evm_base_address":      _addr(base_cfg, "pool_vault") or pythia_base,
+        "evm_arbitrum_address":  _addr(arb_cfg,  "pool_vault") or pythia_arb,
         # Service availability
         "signer_available":  gateway_configured,
         "watcher_available": _BNB_WATCHER_AVAILABLE,
         # Per-chain vault role breakdown (safe public addresses only)
         "roles": {
             "bsc": {
-                "pool_vault":        _addr(bsc_cfg, "pool_vault"),
+                "pool_vault":        _addr(bsc_cfg, "pool_vault") or pythia_bsc,
                 "pool_vault_status": bsc_vault_status,
+                "pool_vault_source": "BSC_POOL_VAULT_ADDRESS" if _addr(bsc_cfg, "pool_vault") else "PYTHIA_SYSTEM_EVM_BSC_ADDRESS (fallback)",
                 "usdt_pledge_vault": _addr(bsc_cfg, "usdt_pledge_vault"),
                 "treasury":          _addr(bsc_cfg, "treasury"),
                 "fee_collector":     _addr(bsc_cfg, "fee_collector"),
@@ -15562,19 +15587,23 @@ def api_admin_system_addresses():
                 "payout":            _addr(bsc_cfg, "hot_wallet"),
             },
             "base": {
-                "pool_vault":        _addr(base_cfg, "pool_vault"),
+                "pool_vault":        _addr(base_cfg, "pool_vault") or pythia_base,
                 "pool_vault_status": base_vault_status,
+                "pool_vault_source": "BASE_POOL_VAULT_ADDRESS" if _addr(base_cfg, "pool_vault") else "PYTHIA_SYSTEM_EVM_BASE_ADDRESS (fallback)",
                 "payout":            _addr(base_cfg, "hot_wallet"),
             },
             "arbitrum": {
-                "pool_vault":        _addr(arb_cfg, "pool_vault"),
+                "pool_vault":        _addr(arb_cfg, "pool_vault") or pythia_arb,
                 "pool_vault_status": arb_vault_status,
+                "pool_vault_source": "ARB_POOL_VAULT_ADDRESS" if _addr(arb_cfg, "pool_vault") else "PYTHIA_SYSTEM_EVM_ARBITRUM_ADDRESS (fallback)",
                 "payout":            _addr(arb_cfg, "hot_wallet"),
             },
         },
         "note": (
-            "Set BSC_POOL_VAULT_ADDRESS to the AMM/system BSC address controlled by your signer. "
-            "Add-liquidity is disabled per chain until pool_vault_status == 'configured'."
+            "Preferred: set BSC_POOL_VAULT_ADDRESS / BASE_POOL_VAULT_ADDRESS / ARB_POOL_VAULT_ADDRESS "
+            "to the chain-specific vault address. MVP fallback: PYTHIA_SYSTEM_EVM_BSC_ADDRESS etc. "
+            "Add-liquidity is disabled per chain until pool_vault_status == 'configured' "
+            "(requires real 0x address + GATEWAY_SECRET + watcher for BSC)."
         ),
     }), 200
 
@@ -27741,9 +27770,10 @@ WITHDRAW_CHAIN_CONFIG: dict = {
         "rpc_url":        BSC_RPC_URL,  # defined globally above
         # hot_wallet = payout address for cross-chain withdrawals (BNB_HOT_WALLET)
         "hot_wallet":     _strip_env_quotes(os.getenv("BNB_HOT_WALLET", "")),
-        # pool_vault = vault that receives USDT from LP contributors (BSC_POOL_VAULT_ADDRESS)
-        # If not set, falls back to hot_wallet with a log warning.
-        "pool_vault":     _strip_env_quotes(os.getenv("BSC_POOL_VAULT_ADDRESS", "")),
+        # pool_vault = vault that receives USDT from LP contributors (BSC_POOL_VAULT_ADDRESS).
+        # MVP fallback: if not set, uses PYTHIA_SYSTEM_EVM_BSC_ADDRESS (system signer's BSC address).
+        # Never falls back to treasury/gas/fee wallets.
+        "pool_vault":     _strip_env_quotes(os.getenv("BSC_POOL_VAULT_ADDRESS", "")) or PYTHIA_SYSTEM_EVM_BSC_ADDRESS,
         # usdt_pledge_vault = where users send USDT to pledge (BSC_USDT_PLEDGE_VAULT)
         # If not set, falls back to hot_wallet for backward compat.
         "usdt_pledge_vault": _strip_env_quotes(os.getenv("BSC_USDT_PLEDGE_VAULT", "")),
@@ -27761,7 +27791,7 @@ WITHDRAW_CHAIN_CONFIG: dict = {
         "tokens":         ["USDC"],
         "rpc_url":        _strip_env_quotes(os.getenv("BASE_RPC_URL", "")),
         "hot_wallet":     _strip_env_quotes(os.getenv("BASE_HOT_WALLET", "")),
-        "pool_vault":     _strip_env_quotes(os.getenv("BASE_POOL_VAULT_ADDRESS", "")),
+        "pool_vault":     _strip_env_quotes(os.getenv("BASE_POOL_VAULT_ADDRESS", "")) or PYTHIA_SYSTEM_EVM_BASE_ADDRESS,
         "usdc_contract":  _strip_env_quotes(os.getenv("BASE_USDC_CONTRACT", "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913")),
     },
     "arbitrum": {
@@ -27769,7 +27799,7 @@ WITHDRAW_CHAIN_CONFIG: dict = {
         "tokens":         ["USDT", "USDC"],
         "rpc_url":        _strip_env_quotes(os.getenv("ARB_RPC_URL", "")),
         "hot_wallet":     _strip_env_quotes(os.getenv("ARB_HOT_WALLET", "")),
-        "pool_vault":     _strip_env_quotes(os.getenv("ARB_POOL_VAULT_ADDRESS", "")),
+        "pool_vault":     _strip_env_quotes(os.getenv("ARB_POOL_VAULT_ADDRESS", "")) or PYTHIA_SYSTEM_EVM_ARBITRUM_ADDRESS,
         "usdt_contract":  _strip_env_quotes(os.getenv("ARB_USDT_CONTRACT", "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9")),
         "usdc_contract":  _strip_env_quotes(os.getenv("ARB_USDC_CONTRACT", "0xaf88d065e77c8cC2239327C5EDb3A432268e5831")),
     },
@@ -27803,15 +27833,15 @@ def _pool_vault_status(chain: str) -> tuple[str, str]:
     status = 'configured' | 'pending_config'
 
     pending_config when any of:
-      - No pool vault address is set for the chain
-      - GATEWAY_SECRET not configured (no authorized confirmer)
+      - No pool vault address is set for the chain (or doesn't start with '0x')
+      - GATEWAY_SECRET not configured (no authorized confirmer / signer)
       - For BSC: bnb_pledge_watcher not available (no deposit watcher)
 
     NEVER falls back to treasury/fee/gas wallets.
     """
     vault = WITHDRAW_CHAIN_CONFIG.get(chain, {}).get("pool_vault", "").strip()
-    if not vault:
-        return ("pending_config", "")
+    if not vault or not vault.startswith("0x"):
+        return ("pending_config", vault)
     if not os.getenv("GATEWAY_SECRET", "").strip():
         return ("pending_config", vault)
     if chain == "bsc" and not _BNB_WATCHER_AVAILABLE:

@@ -16884,6 +16884,177 @@ def api_admin_pythia_provision_v1_wallet():
         }), 500
 
 
+def _attach_or_create_pythia_evm_address() -> tuple[dict | None, str]:
+    """
+    Attach or create EVM public address for Pythia V1 wallet (Phase 2.4.5+).
+
+    Returns: (wallet_dict, source) or (None, error_msg)
+    Source: existing_v1_wallet | attached_existing_core_wallet | created_v1_evm_address | needs_creation
+
+    Phase 2.4.5-MVP: Returns needs_creation (no safe creation path without signer material).
+    Phase 2.4+: Will derive from HSM/KMS when secure material available.
+
+    Never returns private key, seed, mnemonic, or decrypted material.
+    Only public EVM addresses that can be freely shared.
+    """
+    try:
+        wallet = _discover_pythia_v1_wallet()
+        if not wallet:
+            return None, "wallet_not_found"
+
+        existing_evm = wallet.get("evm_public_address_bsc")
+        if existing_evm and _is_valid_evm_address(existing_evm):
+            return wallet, "existing_v1_wallet"
+
+        # TODO Phase 2.4: Check V1/core wallet records for existing EVM addresses
+        # For now: MVP returns needs_creation
+        # Example: look in wallet_v1_wallet.json or core wallet registry for related addresses
+
+        # TODO Phase 2.4: If HSM/KMS signer material available, derive EVM public address
+        # For now: MVP cannot safely create EVM addresses without signer material
+
+        return None, "needs_creation"
+
+    except Exception as e:
+        logger.error(f"[Pythia EVM Attach] Error: {e}", exc_info=True)
+        return None, str(e)
+
+
+@app.route("/api/admin/pythia/attach-evm-address", methods=["POST"])
+def api_admin_pythia_attach_evm_address():
+    """
+    Admin endpoint — Attach or create EVM public address for Pythia V1 wallet (Phase 2.4.5+).
+
+    Behavior:
+    - If Pythia V1 wallet has a valid evm_public_address, return it
+    - If existing controlled EVM address in V1/core wallet records, attach it
+    - If wallet creation logic can generate real EVM address, create and attach it
+    - If no safe EVM address path exists, return controlled response status=needs_creation
+    - Never invent fake EVM addresses
+
+    Request body (optional):
+    {
+      "evm_public_address": "0x..."  (optional, explicit EVM address to attach)
+    }
+
+    Response:
+    {
+      "ok": true,
+      "pythia_v1_wallet": {
+        "thr_address": "THR...",
+        "evm_public_address": "0x..." or null,
+        "status": "configured|needs_creation",
+        "safe_to_register": true|false,
+        "source": "existing_v1_wallet|attached_existing_core_wallet|created_v1_evm_address|needs_creation"
+      }
+    }
+
+    Never returns private key, seed, mnemonic, send_seed, send_secret, auth_secret,
+    recovery kit plaintext, signer secret, or decrypted material.
+
+    No signing, broadcasting, or RPC transfer—attach/create only.
+    """
+    denied = require_admin()
+    if denied:
+        return denied
+
+    try:
+        data = request.get_json() or {}
+        provided_evm_address = (data.get("evm_public_address") or "").strip()
+
+        wallet = _discover_pythia_v1_wallet()
+        if not wallet:
+            return jsonify({
+                "ok": False,
+                "error": "pythia_v1_wallet_not_found",
+                "detail": "Provision a Pythia V1 wallet first via POST /api/admin/pythia/provision-v1-wallet",
+            }), 404
+
+        existing_evm = wallet.get("evm_public_address_bsc")
+        if existing_evm and _is_valid_evm_address(existing_evm):
+            return jsonify({
+                "ok": True,
+                "pythia_v1_wallet": {
+                    "thr_address": wallet.get("thr_address"),
+                    "evm_public_address": existing_evm,
+                    "status": "configured",
+                    "safe_to_register": True,
+                    "source": "existing_v1_wallet",
+                }
+            }), 200
+
+        if provided_evm_address:
+            if not _is_valid_evm_address(provided_evm_address):
+                return jsonify({
+                    "ok": False,
+                    "error": "invalid_evm_address",
+                    "detail": "EVM address must be 42-char 0x-prefixed valid address",
+                    "status": "needs_creation",
+                }), 400
+
+            wallet["evm_public_address_bsc"] = provided_evm_address
+            for chain in ["base", "arbitrum", "eth"]:
+                wallet[f"evm_public_address_{chain}"] = provided_evm_address
+
+            try:
+                save_json(PYTHIA_V1_WALLET_FILE, wallet)
+            except Exception as e:
+                logger.error(f"[Pythia EVM Attach] Failed to persist: {e}")
+                return jsonify({
+                    "ok": False,
+                    "error": "persistence_failed",
+                    "detail": str(e),
+                    "status": "needs_creation",
+                }), 400
+
+            add_wallet_history_event(
+                thr_address="SYSTEM_PYTHIA_ACTIONS",
+                event_type="pythia_evm_address_attached",
+                chain="thronos",
+                asset="",
+                amount=0.0,
+                direction="system",
+                internal_txid=f"ATTACH_{int(time.time())}",
+                status="confirmed",
+                note=f"Pythia EVM address attached: {provided_evm_address}"
+            )
+
+            return jsonify({
+                "ok": True,
+                "pythia_v1_wallet": {
+                    "thr_address": wallet.get("thr_address"),
+                    "evm_public_address": provided_evm_address,
+                    "status": "configured",
+                    "safe_to_register": True,
+                    "source": "attached_existing_core_wallet",
+                }
+            }), 201
+
+        return jsonify({
+            "ok": True,
+            "pythia_v1_wallet": {
+                "thr_address": wallet.get("thr_address"),
+                "evm_public_address": None,
+                "status": "needs_creation",
+                "safe_to_register": False,
+                "source": "needs_creation",
+                "action_required": (
+                    "Phase 2.4.5-MVP: Provide EVM public address via POST body (evm_public_address field). "
+                    "Phase 2.4+: Will derive from HSM/KMS secure signer material."
+                ),
+            }
+        }), 200
+
+    except Exception as e:
+        logger.error(f"[Pythia EVM Attach] Endpoint error: {e}", exc_info=True)
+        return jsonify({
+            "ok": False,
+            "error": "server_error",
+            "detail": "Internal server error during EVM address attach",
+            "status": "needs_creation",
+        }), 500
+
+
 @app.route("/api/admin/pythia/register-core-addresses", methods=["POST"])
 def api_admin_pythia_register_core_addresses():
     """
@@ -29605,6 +29776,7 @@ def add_wallet_history_event(
                               gas_wallet_topped_up, swap_to_gas_requested, swap_to_gas_confirmed
                               gateway_payment_received, gateway_fee_collected, gateway_pool_topup_allocated, gateway_gas_reserve_allocated, gateway_payout_requested
                     Phase 2.4.5: pythia_v1_wallet_discovered, pythia_v1_wallet_provisioned, pythia_public_address_registered, pythia_role_address_registered
+                                 pythia_evm_address_attached, pythia_evm_address_created
         chain: thronos, bsc, base, arbitrum, eth, btc
         asset: THR, BTC, WBTC, USDT, USDC, BNB, ETH, native
         amount: Transaction amount

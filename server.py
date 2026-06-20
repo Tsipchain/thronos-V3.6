@@ -1373,6 +1373,21 @@ BSC_FEE_COLLECTOR_ADDRESS    = _strip_env_quotes(os.getenv("BSC_FEE_COLLECTOR_AD
 BASE_FEE_COLLECTOR_ADDRESS   = _strip_env_quotes(os.getenv("BASE_FEE_COLLECTOR_ADDRESS", ""))
 ARB_FEE_COLLECTOR_ADDRESS    = _strip_env_quotes(os.getenv("ARB_FEE_COLLECTOR_ADDRESS", ""))
 ETH_FEE_COLLECTOR_ADDRESS    = _strip_env_quotes(os.getenv("ETH_FEE_COLLECTOR_ADDRESS", ""))
+# Per-chain gas wallet addresses (dedicated gas replenishment, never token vault)
+BSC_GAS_WALLET_ADDRESS       = _strip_env_quotes(os.getenv("BSC_GAS_WALLET_ADDRESS", ""))
+BASE_GAS_WALLET_ADDRESS      = _strip_env_quotes(os.getenv("BASE_GAS_WALLET_ADDRESS", ""))
+ARB_GAS_WALLET_ADDRESS       = _strip_env_quotes(os.getenv("ARB_GAS_WALLET_ADDRESS", ""))
+ETH_GAS_WALLET_ADDRESS       = _strip_env_quotes(os.getenv("ETH_GAS_WALLET_ADDRESS", ""))
+# Per-chain payout addresses (hot wallet for cross-chain withdrawals)
+BSC_PAYOUT_ADDRESS           = _strip_env_quotes(os.getenv("BSC_PAYOUT_ADDRESS", "") or os.getenv("BNB_HOT_WALLET", ""))
+BASE_PAYOUT_ADDRESS          = _strip_env_quotes(os.getenv("BASE_PAYOUT_ADDRESS", "") or os.getenv("BASE_HOT_WALLET", ""))
+ARB_PAYOUT_ADDRESS           = _strip_env_quotes(os.getenv("ARB_PAYOUT_ADDRESS", "") or os.getenv("ARB_HOT_WALLET", ""))
+ETH_PAYOUT_ADDRESS           = _strip_env_quotes(os.getenv("ETH_PAYOUT_ADDRESS", "") or os.getenv("ETH_HOT_WALLET", ""))
+# Per-chain pool vault addresses (where LP contributors send tokens)
+BSC_POOL_VAULT_ADDRESS_EXPLICIT = _strip_env_quotes(os.getenv("BSC_POOL_VAULT_ADDRESS", ""))
+BASE_POOL_VAULT_ADDRESS_EXPLICIT = _strip_env_quotes(os.getenv("BASE_POOL_VAULT_ADDRESS", ""))
+ARB_POOL_VAULT_ADDRESS_EXPLICIT = _strip_env_quotes(os.getenv("ARB_POOL_VAULT_ADDRESS", ""))
+ETH_POOL_VAULT_ADDRESS_EXPLICIT = _strip_env_quotes(os.getenv("ETH_POOL_VAULT_ADDRESS", ""))
 # Minimum withdrawal amounts per token
 MIN_USDT_WITHDRAWAL = float(_strip_env_quotes(os.getenv("MIN_USDT_WITHDRAWAL", "10.0")))
 MIN_USDC_WITHDRAWAL = float(_strip_env_quotes(os.getenv("MIN_USDC_WITHDRAWAL", "10.0")))
@@ -5158,6 +5173,64 @@ def get_thr_balance(address: str) -> tuple[float, str]:
         if k.upper() == addr_upper:
             return float(v), "ledger_case_insensitive"
     return 0.0, "zero"
+
+
+def get_token_balance(address: str, token: str, chain: str = "thronos") -> tuple[float, str]:
+    """
+    Get token balance for an address on a specific chain.
+
+    Args:
+        address: Thronos or EVM address
+        token: Token symbol (THR, USDT, USDC, WBTC, etc.)
+        chain: Blockchain (thronos, bsc, base, arbitrum, eth)
+
+    Returns (balance, source) where source indicates where the balance came from.
+    """
+    if not address:
+        return 0.0, "zero"
+
+    # THR is on Thronos chain only
+    if token == "THR" and chain == "thronos":
+        return get_thr_balance(address)
+
+    # WBTC (wrapped Bitcoin on Thronos)
+    if token == "WBTC" and chain == "thronos":
+        balance = get_balance_from_store(address, "wbtc", 0.0)
+        return float(balance), "ledger_wbtc" if balance > 0 else "zero"
+
+    # L2E token on Thronos
+    if token == "L2E" and chain == "thronos":
+        balance = get_balance_from_store(address, "l2e", 0.0)
+        return float(balance), "ledger_l2e" if balance > 0 else "zero"
+
+    # EVM-chain tokens (USDT/USDC/etc) — placeholder for Phase 2.2+
+    # When RPC integration is implemented, fetch balance from smart contract
+    return 0.0, "zero"
+
+
+def calculate_external_fee_split(gas_fee_usd: float) -> dict:
+    """
+    Split external service fee between fee_collector and pool top-up reserve.
+
+    External fee split policy (Phase 2.2):
+    - 87.5% of gas_fee_usd → fee_collector_address (service provider)
+    - 12.5% of gas_fee_usd → pool reserve top-up (liquidity protection)
+
+    Example: $2.00 gas fee → $1.75 to fee_collector + $0.25 pool top-up
+
+    Args:
+        gas_fee_usd: Total external gas fee in USD
+
+    Returns dict with:
+        fee_collector_usd: Amount sent to fee_collector
+        pool_topup_usd: Amount added to pool reserve
+    """
+    fee_collector_fraction = 0.875  # 87.5%
+    pool_topup_fraction = 0.125     # 12.5%
+    return {
+        "fee_collector_usd": round(gas_fee_usd * fee_collector_fraction, 6),
+        "pool_topup_usd": round(gas_fee_usd * pool_topup_fraction, 6),
+    }
 
 
 def get_wallet_balances(wallet: str):
@@ -15932,7 +16005,7 @@ def api_admin_pythia_addresses():
                 "fee_collector": (bsc_cfg.get("fee_collector") or BSC_FEE_COLLECTOR_ADDRESS or "").strip() or None,
                 "gas_wallet":    (bsc_cfg.get("gas_wallet") or "").strip() or None,
                 "treasury":      (bsc_cfg.get("treasury") or "").strip() or None,
-                "payout_wallet": (bsc_cfg.get("hot_wallet") or "").strip() or None,
+                "payout_wallet": (bsc_cfg.get("payout_wallet") or "").strip() or None,
                 "pythia_signer_public_address": pythia_bsc or None,
                 "pool_vault_status": _pool_vault_status("bsc")[0],
                 "pool_vault_source": (
@@ -16159,7 +16232,7 @@ def api_admin_withdrawal_liquidity_status():
             "tokens": cfg.get("tokens", []),
             "pool_vault": vault_addr or None,
             "pool_vault_status": vault_status,
-            "payout_wallet": (cfg.get("hot_wallet") or "").strip() or None,
+            "payout_wallet": (cfg.get("payout_wallet") or "").strip() or None,
             "fee_collector": fee_collector_addr,
             "pool_usdt_reserve": liq["pool_usdt_reserve"],
             "pool_thr_reserve": liq["pool_thr_reserve"],
@@ -28394,47 +28467,62 @@ def api_admin_seed_pool():
 # ─── USDT Withdrawal (cross-chain: Thronos → BSC/Base/Arbitrum) ──────────────
 
 # Per-chain configuration — a chain is available only when both RPC URL and
-# hot wallet address are set in the environment.  Missing vars → chain disabled
+# payout wallet address are set in the environment.  Missing vars → chain disabled
 # and rejected cleanly rather than producing a runtime error mid-withdrawal.
 WITHDRAW_CHAIN_CONFIG: dict = {
     "bsc": {
         "label":          "BNB Chain (BSC)",
         "tokens":         ["USDT"],
-        "rpc_url":        BSC_RPC_URL,  # defined globally above
-        # hot_wallet = payout address for cross-chain withdrawals (BNB_HOT_WALLET)
-        "hot_wallet":     _strip_env_quotes(os.getenv("BNB_HOT_WALLET", "")),
-        # pool_vault = vault that receives USDT from LP contributors (BSC_POOL_VAULT_ADDRESS).
-        # MVP fallback: if not set, uses PYTHIA_SYSTEM_EVM_BSC_ADDRESS (system signer's BSC address).
+        "rpc_url":        BSC_RPC_URL,
+        # payout_wallet = address that sends cross-chain withdrawals (BSC_PAYOUT_ADDRESS)
+        "payout_wallet":  BSC_PAYOUT_ADDRESS,
+        # pool_vault = vault that receives USDT from LP contributors (BSC_POOL_VAULT_ADDRESS)
+        # MVP fallback: if not set, uses PYTHIA_SYSTEM_EVM_BSC_ADDRESS (system signer's BSC address)
         # Never falls back to treasury/gas/fee wallets.
-        "pool_vault":     _strip_env_quotes(os.getenv("BSC_POOL_VAULT_ADDRESS", "")) or PYTHIA_SYSTEM_EVM_BSC_ADDRESS,
+        "pool_vault":     BSC_POOL_VAULT_ADDRESS_EXPLICIT or PYTHIA_SYSTEM_EVM_BSC_ADDRESS,
         # usdt_pledge_vault = where users send USDT to pledge (BSC_USDT_PLEDGE_VAULT)
-        # If not set, falls back to hot_wallet for backward compat.
+        # If not set, falls back to payout_wallet for backward compat.
         "usdt_pledge_vault": _strip_env_quotes(os.getenv("BSC_USDT_PLEDGE_VAULT", "")),
         "usdt_contract":  USDT_BNB_CONTRACT,
         # treasury = Thronos project treasury (BSC_TREASURY_ADDRESS, informational only)
         "treasury":       _strip_env_quotes(os.getenv("BSC_TREASURY_ADDRESS", "")),
         # fee_collector = collects protocol fees (BSC_FEE_COLLECTOR_ADDRESS)
-        "fee_collector":  _strip_env_quotes(os.getenv("BSC_FEE_COLLECTOR_ADDRESS", "")),
+        "fee_collector":  BSC_FEE_COLLECTOR_ADDRESS,
         # gas_wallet = dedicated gas replenishment wallet (BSC_GAS_WALLET_ADDRESS)
         # Never used as token vault.
-        "gas_wallet":     _strip_env_quotes(os.getenv("BSC_GAS_WALLET_ADDRESS", "")),
+        "gas_wallet":     BSC_GAS_WALLET_ADDRESS,
     },
     "base": {
         "label":          "Base",
         "tokens":         ["USDC"],
         "rpc_url":        _strip_env_quotes(os.getenv("BASE_RPC_URL", "")),
-        "hot_wallet":     _strip_env_quotes(os.getenv("BASE_HOT_WALLET", "")),
-        "pool_vault":     _strip_env_quotes(os.getenv("BASE_POOL_VAULT_ADDRESS", "")) or PYTHIA_SYSTEM_EVM_BASE_ADDRESS,
+        "payout_wallet":  BASE_PAYOUT_ADDRESS,
+        "pool_vault":     BASE_POOL_VAULT_ADDRESS_EXPLICIT or PYTHIA_SYSTEM_EVM_BASE_ADDRESS,
         "usdc_contract":  _strip_env_quotes(os.getenv("BASE_USDC_CONTRACT", "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913")),
+        "fee_collector":  BASE_FEE_COLLECTOR_ADDRESS,
+        "gas_wallet":     BASE_GAS_WALLET_ADDRESS,
     },
     "arbitrum": {
         "label":          "Arbitrum",
         "tokens":         ["USDT", "USDC"],
         "rpc_url":        _strip_env_quotes(os.getenv("ARB_RPC_URL", "")),
-        "hot_wallet":     _strip_env_quotes(os.getenv("ARB_HOT_WALLET", "")),
-        "pool_vault":     _strip_env_quotes(os.getenv("ARB_POOL_VAULT_ADDRESS", "")) or PYTHIA_SYSTEM_EVM_ARBITRUM_ADDRESS,
+        "payout_wallet":  ARB_PAYOUT_ADDRESS,
+        "pool_vault":     ARB_POOL_VAULT_ADDRESS_EXPLICIT or PYTHIA_SYSTEM_EVM_ARBITRUM_ADDRESS,
         "usdt_contract":  _strip_env_quotes(os.getenv("ARB_USDT_CONTRACT", "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9")),
         "usdc_contract":  _strip_env_quotes(os.getenv("ARB_USDC_CONTRACT", "0xaf88d065e77c8cC2239327C5EDb3A432268e5831")),
+        "fee_collector":  ARB_FEE_COLLECTOR_ADDRESS,
+        "gas_wallet":     ARB_GAS_WALLET_ADDRESS,
+    },
+    "eth": {
+        "label":          "Ethereum",
+        "tokens":         ["USDC", "USDT"],
+        "rpc_url":        ETH_RPC_URL,
+        "payout_wallet":  ETH_PAYOUT_ADDRESS,
+        "pool_vault":     ETH_POOL_VAULT_ADDRESS_EXPLICIT or PYTHIA_SYSTEM_EVM_ETHEREUM_ADDRESS,
+        "usdc_contract":  _strip_env_quotes(os.getenv("ETH_USDC_CONTRACT", "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48")),
+        "usdt_contract":  _strip_env_quotes(os.getenv("ETH_USDT_CONTRACT", "0xdAC17F958D2ee523a2206206994597C13D831ec7")),
+        "fee_collector":  ETH_FEE_COLLECTOR_ADDRESS,
+        "gas_wallet":     ETH_GAS_WALLET_ADDRESS,
     },
 }
 
@@ -28442,21 +28530,21 @@ WITHDRAW_CHAIN_CONFIG: dict = {
 def _get_pool_vault(chain: str) -> str:
     """
     Returns the configured pool vault address for a chain.
-    Prefers BSC_POOL_VAULT_ADDRESS / ARB_POOL_VAULT_ADDRESS / BASE_POOL_VAULT_ADDRESS.
-    Falls back to hot_wallet with a warning.
+    Prefers BSC_POOL_VAULT_ADDRESS / ARB_POOL_VAULT_ADDRESS / BASE_POOL_VAULT_ADDRESS / ETH_POOL_VAULT_ADDRESS.
+    Falls back to payout_wallet with a warning.
     NEVER uses treasury, gas_wallet, or fee_collector.
     """
     cfg = WITHDRAW_CHAIN_CONFIG.get(chain, {})
     vault = cfg.get("pool_vault", "").strip()
     if vault:
         return vault
-    hot = cfg.get("hot_wallet", "").strip()
-    if hot:
+    payout = cfg.get("payout_wallet", "").strip()
+    if payout:
         logger.warning(
-            "[pool_vault] %s_POOL_VAULT_ADDRESS not configured — falling back to hot_wallet. "
+            "[pool_vault] %s_POOL_VAULT_ADDRESS not configured — falling back to payout_wallet. "
             "Set %s_POOL_VAULT_ADDRESS for production.", chain.upper(), chain.upper()
         )
-        return hot
+        return payout
     return ""
 
 
@@ -28540,7 +28628,10 @@ def add_wallet_history_event(
                     bridge, crosschain_withdraw, gateway_payout, failed, manual_review,
                     pool_add_liquidity_intent_created, pool_add_liquidity_external_tx_confirmed,
                     pool_add_liquidity_lp_minted, pledge_usdt_bnb_confirmed,
-                    crosschain_deposit_detected, crosschain_transfer_received
+                    crosschain_deposit_detected, crosschain_transfer_received,
+                    crosschain_withdrawal_* (requested/signed/broadcasted/confirmed/failed),
+                    external_service_fee_collected, external_fee_split_recorded,
+                    pool_topup_from_service_fee, gas_reserve_accounted
         chain: thronos, bsc, base, arbitrum, eth, btc
         asset: THR, BTC, WBTC, USDT, USDC, BNB, ETH
         amount: Transaction amount
@@ -28617,10 +28708,10 @@ def get_wallet_history(thr_address: str, limit: int = 100) -> list:
 
 
 def get_available_withdraw_chains() -> dict:
-    """Return chains that have both rpc_url and hot_wallet configured."""
+    """Return chains that have both rpc_url and payout_wallet configured."""
     available = {}
     for chain_id, cfg in WITHDRAW_CHAIN_CONFIG.items():
-        if cfg.get("rpc_url") and cfg.get("hot_wallet"):
+        if cfg.get("rpc_url") and cfg.get("payout_wallet"):
             available[chain_id] = {
                 "id":     chain_id,
                 "label":  cfg["label"],
@@ -29059,7 +29150,7 @@ def api_v1_withdrawal_quote():
     # Balance buckets (informational)
     buckets = _get_address_buckets(thr_address)
 
-    payout_wallet = (chain_cfg.get("hot_wallet") or "").strip() or None
+    payout_wallet = (chain_cfg.get("payout_wallet") or "").strip() or None
 
     return jsonify({
         "ok": True,
@@ -29216,7 +29307,7 @@ def api_v1_withdrawal_request():
     withdraw_id = f"WDREQ-{int(current_ts)}-{secrets.token_hex(5).upper()}"
 
     # ── 7. Build queued request record ────────────────────────────────────────
-    payout_wallet = (chain_cfg.get("hot_wallet") or "").strip() or None
+    payout_wallet = (chain_cfg.get("payout_wallet") or "").strip() or None
     request_record = {
         "id":                  withdraw_id,
         "thr_address":         thr_address,

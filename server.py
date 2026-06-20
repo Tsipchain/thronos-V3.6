@@ -16676,11 +16676,11 @@ def _discover_pythia_v1_wallet() -> dict | None:
     return None
 
 
-def _provision_pythia_v1_wallet() -> dict:
+def _provision_pythia_v1_wallet() -> dict | tuple[None, str]:
     """
     Provision a new Pythia V1 wallet if it doesn't exist (Phase 2.4.5).
 
-    Returns: {thr_address, evm_public_address, status, ...}
+    Returns: {thr_address, evm_public_address, status, ...} or (None, error_msg)
     Never stores or returns private keys, seeds, mnemonics, etc.
 
     For now: Create skeleton with THR address only, mark status="needs_creation".
@@ -16689,43 +16689,54 @@ def _provision_pythia_v1_wallet() -> dict:
     Phase 2.4.5-MVP does NOT invent fake EVM addresses.
     If real wallet creation logic is unavailable, status remains "needs_creation".
     """
-    existing = _discover_pythia_v1_wallet()
-    if existing:
-        return existing
+    try:
+        existing = _discover_pythia_v1_wallet()
+        if existing:
+            return existing
 
-    import secrets
+        ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+        wallet_id = f"PYTHIA_V1_{secrets.token_hex(6).upper()}"
 
-    ts = datetime.now(UTC).isoformat() + "Z"
+        pythia_wallet = {
+            "pythia_v1_wallet_id": wallet_id,
+            "thr_address": PYTHIA_SYSTEM_THR_ADDRESS or "THR5DF27A86C477F381594E896F0E55357DEC5942BA",
+            "owner_type": "system",
+            "system_actor": "pythia",
+            "wallet_role": "pythia_v1_core",
+            "public_only": True,
+            "created_at": ts,
+            "status": "needs_creation",
+            "source": "skeleton_awaiting_signer_material",
+        }
 
-    pythia_wallet = {
-        "pythia_v1_wallet_id": f"PYTHIA_V1_{secrets.token_hex(6).upper()}",
-        "thr_address": PYTHIA_SYSTEM_THR_ADDRESS or "THR5DF27A86C477F381594E896F0E55357DEC5942BA",
-        "owner_type": "system",
-        "system_actor": "pythia",
-        "wallet_role": "pythia_v1_core",
-        "public_only": True,
-        "created_at": ts,
-        "status": "needs_creation",
-        "source": "skeleton_awaiting_signer_material",
-    }
+        for chain in ["bsc", "base", "arbitrum", "eth"]:
+            pythia_wallet[f"evm_public_address_{chain}"] = None
 
-    for chain in ["bsc", "base", "arbitrum", "eth"]:
-        pythia_wallet[f"evm_public_address_{chain}"] = None
+        try:
+            add_wallet_history_event(
+                thr_address="SYSTEM_PYTHIA_ACTIONS",
+                event_type="pythia_v1_wallet_provisioned",
+                chain="thronos",
+                asset="THR",
+                amount=0.0,
+                direction="system",
+                internal_txid=wallet_id,
+                status="confirmed",
+                note=f"Pythia V1 wallet skeleton created: {pythia_wallet['thr_address']}"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to write wallet_history event: {e}")
 
-    add_wallet_history_event(
-        thr_address="SYSTEM_PYTHIA_ACTIONS",
-        event_type="pythia_v1_wallet_provisioned",
-        chain="thronos",
-        asset="THR",
-        amount=0.0,
-        direction="system",
-        internal_txid=pythia_wallet["pythia_v1_wallet_id"],
-        status="confirmed",
-        note=f"Pythia V1 wallet skeleton created (awaiting real signer material): {pythia_wallet['thr_address']}"
-    )
+        try:
+            save_json(PYTHIA_V1_WALLET_FILE, pythia_wallet)
+        except Exception as e:
+            return None, f"Failed to persist wallet: {e}"
 
-    save_json(PYTHIA_V1_WALLET_FILE, pythia_wallet)
-    return pythia_wallet
+        return pythia_wallet
+
+    except Exception as e:
+        logger.error(f"[Pythia V1 Provision] Unhandled error: {e}", exc_info=True)
+        return None, str(e)
 
 
 def _get_pythia_v1_wallet() -> dict | None:
@@ -16737,7 +16748,10 @@ def _get_pythia_v1_wallet() -> dict | None:
     """
     wallet = _discover_pythia_v1_wallet()
     if not wallet:
-        wallet = _provision_pythia_v1_wallet()
+        result = _provision_pythia_v1_wallet()
+        if isinstance(result, tuple):
+            return None
+        wallet = result
     return wallet
 
 
@@ -16818,28 +16832,56 @@ def api_admin_pythia_provision_v1_wallet():
     if denied:
         return denied
 
-    wallet = _provision_pythia_v1_wallet()
-    evm_addr = wallet.get("evm_public_address_bsc")
-    has_real_evm = evm_addr and _is_valid_evm_address(evm_addr)
+    try:
+        wallet_result = _provision_pythia_v1_wallet()
 
-    return jsonify({
-        "ok": True,
-        "pythia_v1_wallet": {
-            "thr_address": wallet.get("thr_address"),
-            "evm_public_address": evm_addr if has_real_evm else None,
-            "source": "created_v1_wallet" if wallet.get("status") == "needs_creation" else "existing_v1_wallet",
-            "status": "configured" if has_real_evm else wallet.get("status", "needs_creation"),
-            "wallet_id": wallet.get("pythia_v1_wallet_id"),
-            "created_at": wallet.get("created_at"),
-            "system_actor": wallet.get("system_actor"),
-            "action_required": (
-                "Create or register real Pythia EVM public addresses via secure signer material. "
-                "For Phase 2.4.5-MVP: If no HSM/KMS available yet, register addresses manually "
-                "via POST /api/admin/pythia/register-core-addresses."
-                if not has_real_evm else None
-            ),
-        }
-    }), 201
+        if isinstance(wallet_result, tuple):
+            error_msg = wallet_result[1]
+            return jsonify({
+                "ok": False,
+                "error": "pythia_v1_provision_failed",
+                "detail": error_msg,
+                "status": "needs_creation",
+            }), 400
+
+        wallet = wallet_result
+        if not wallet or not isinstance(wallet, dict):
+            return jsonify({
+                "ok": False,
+                "error": "pythia_v1_provision_failed",
+                "detail": "Wallet provisioning returned invalid result",
+                "status": "needs_creation",
+            }), 400
+
+        evm_addr = wallet.get("evm_public_address_bsc")
+        has_real_evm = evm_addr and _is_valid_evm_address(evm_addr)
+
+        return jsonify({
+            "ok": True,
+            "pythia_v1_wallet": {
+                "thr_address": wallet.get("thr_address"),
+                "evm_public_address": evm_addr if has_real_evm else None,
+                "source": "created_v1_wallet" if wallet.get("status") == "needs_creation" else "existing_v1_wallet",
+                "status": "configured" if has_real_evm else wallet.get("status", "needs_creation"),
+                "safe_to_register": has_real_evm,
+                "wallet_id": wallet.get("pythia_v1_wallet_id"),
+                "created_at": wallet.get("created_at"),
+                "system_actor": wallet.get("system_actor"),
+                "action_required": (
+                    "Attach or create a valid EVM public address through ThronosWallet/V1 wallet logic before registration."
+                    if not has_real_evm else None
+                ),
+            }
+        }), 201
+
+    except Exception as e:
+        logger.error(f"[Pythia V1 Provision] Endpoint error: {e}", exc_info=True)
+        return jsonify({
+            "ok": False,
+            "error": "server_error",
+            "detail": "Internal server error during wallet provisioning",
+            "status": "needs_creation",
+        }), 500
 
 
 @app.route("/api/admin/pythia/register-core-addresses", methods=["POST"])

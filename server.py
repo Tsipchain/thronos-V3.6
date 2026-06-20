@@ -32135,15 +32135,17 @@ def api_v1_user_positions(address):
                 "pool_id": pool.get("id"),
                 "token_a": token_a,
                 "token_b": token_b,
-                "user_shares": round(user_shares, 6),
+                "liquidity_share": round(user_shares, 6),
                 "total_shares": round(total_shares, 6),
-                "share_percent": round(share_ratio * 100, 4),
+                "share_pct": round(share_ratio * 100, 4),
                 "token_a_amount": token_a_amount,
                 "token_b_amount": token_b_amount,
                 "value_thr": round(value_thr, 6),
                 "value_usd": round(value_thr * thr_price, 2),
                 "reserves_a": reserves_a,
-                "reserves_b": reserves_b
+                "reserves_b": reserves_b,
+                "pair": f"{token_a}/{token_b}",
+                "pending_rewards": 0.0,
             }
 
             # Add referral info if available
@@ -33812,6 +33814,7 @@ def api_v1_pools_add_liquidity_confirm():
     token_a = intent.get("token_a", "")
     token_b = intent.get("token_b", "")
     chain = intent.get("external_chain", "")
+    vault_address = intent.get("vault_address", "")
 
     # ── Pre-commit validation (before any mutations) ──
 

@@ -417,7 +417,7 @@ async function showImport(addingExtra = false) {
       <p class="tagline">Thronos Chain Wallet</p>
 
       <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">
-        <button class="btn btn--ghost" id="tabCreate" style="flex:1;min-width:80px;padding:8px;font-size:.8rem;border-radius:10px">✨ New Wallet</button>
+        <button class="btn btn--ghost" id="tabCreate" style="flex:1;min-width:80px;padding:8px;font-size:.8rem;border-radius:10px;display:none">✨ New Wallet</button>
         <button class="btn" id="tabKit" style="flex:1;min-width:80px;padding:8px;font-size:.8rem;background:var(--accent);color:#fff;border-radius:10px">Recovery Kit</button>
         <button class="btn btn--ghost" id="tabBtcPledge" style="flex:1;min-width:80px;padding:8px;font-size:.8rem;border-radius:10px">₿ BTC Pledge</button>
         <button class="btn btn--ghost" id="tabUsdtPledge" style="flex:1;min-width:80px;padding:8px;font-size:.8rem;border-radius:10px">💵 USDT Pledge</button>
@@ -921,9 +921,9 @@ async function showImport(addingExtra = false) {
       }
       const canonical = d.canonical_v1_address;
 
-      // Store account — include kit if server returned Recovery Kit
+      // Store account — save send_secret so old/migration users can use cross-chain pools
       const kitObj = d.recovery_kit ? (() => { try { return JSON.parse(d.recovery_kit); } catch { return { canonical_v1_address: canonical }; } })() : { canonical_v1_address: canonical };
-      upsertAccount(canonical, kitObj, shortAddr(canonical));
+      upsertAccount(canonical, kitObj, shortAddr(canonical), secret);
       setActiveAddr(canonical);
 
       // Decrypt with the PIN just set so Face ID enrollment below has the real key
@@ -1309,6 +1309,9 @@ async function showWallet() {
         </div>
       </div>
 
+      <!-- LP Positions panel (populated async) -->
+      <div id="lpPositionsPanel"></div>
+
       <!-- Quick actions — matches web wallet -->
       <div class="actions mt8" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px">
         <button class="action-btn" id="sendBtn"><span class="action-btn__icon">💸</span>Send</button>
@@ -1335,6 +1338,37 @@ async function showWallet() {
     unlocked.delete(address);
     showUnlock();
   });
+
+  // Load LP positions async — show only when Thronos network is active
+  async function loadLpPositions() {
+    const panel = document.getElementById('lpPositionsPanel');
+    if (!panel) return;
+    try {
+      const r = await fetch(`${API_BASE}/api/v1/pools/positions/${address}`).then(x => x.json()).catch(() => null);
+      const positions = r?.positions || [];
+      if (!positions.length) { panel.innerHTML = ''; return; }
+      const rows = positions.map(p => {
+        const pct = p.share_pct != null ? `${Number(p.share_pct).toFixed(4)}%` : '—';
+        const valThr = p.value_thr != null ? `≈ ${Number(p.value_thr).toFixed(4)} THR` : '';
+        return `<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid #ffffff10;cursor:pointer"
+                     onclick="showPools()">
+          <div>
+            <div style="font-size:.85rem;font-weight:600;color:#fff">${escHtml(p.token_a || '')}/${escHtml(p.token_b || '')}</div>
+            <div style="font-size:.72rem;color:var(--muted)">${Number(p.liquidity_share || 0).toFixed(6)} LP shares · ${pct} of pool</div>
+          </div>
+          <div style="text-align:right">
+            <div style="font-size:.82rem;color:#b08cf8">${valThr}</div>
+            <div style="font-size:.68rem;color:var(--muted)">${p.pending_rewards > 0 ? `+${Number(p.pending_rewards).toFixed(6)} pending` : ''}</div>
+          </div>
+        </div>`;
+      }).join('');
+      panel.innerHTML = `
+        <div class="card" style="padding:10px 12px;margin-bottom:10px">
+          <div style="font-size:.7rem;text-transform:uppercase;letter-spacing:1px;color:#b08cf8;margin-bottom:6px">Pool Positions</div>
+          ${rows}
+        </div>`;
+    } catch { panel.innerHTML = ''; }
+  }
 
   document.getElementById('accBtn')?.addEventListener('click', showAccountPicker);
   document.getElementById('addAccBtn').addEventListener('click', () => showImport(true));
@@ -1492,15 +1526,30 @@ async function showWallet() {
     refreshCurrentNet();
   });
 
+  // Restore persisted network selection
+  const _savedNet = LS.get(`thr_network_${address}`);
+  if (_savedNet && document.getElementById('homeNetSel')) {
+    document.getElementById('homeNetSel').value = _savedNet;
+  }
+
   document.getElementById('homeNetSel').addEventListener('change', (e) => {
     homeChainBalances = null; // always re-fetch on network switch
     const netId = e.target.value;
-    if (netId === 'thronos') { loadThronosAssets(); return; }
-    loadOtherNetworkAssets(netId);
+    LS.set(`thr_network_${address}`, netId); // persist per wallet
+    const lpPanel = document.getElementById('lpPositionsPanel');
+    if (netId === 'thronos') {
+      loadThronosAssets();
+      loadLpPositions();
+    } else {
+      if (lpPanel) lpPanel.innerHTML = ''; // hide LP panel on external networks
+      loadOtherNetworkAssets(netId);
+    }
   });
 
   // Load balances — same API as web wallet
-  loadThronosAssets();
+  // Load persisted network (or Thronos default)
+  const _initNet = document.getElementById('homeNetSel')?.value || 'thronos';
+  if (_initNet === 'thronos') { loadThronosAssets(); loadLpPositions(); } else { loadOtherNetworkAssets(_initNet); }
 
   // Auto-refresh every 30s while wallet is open
   const _autoRefreshId = setInterval(() => {
@@ -3319,6 +3368,26 @@ const HISTORY_FILTERS = [
   { key: 'burn', label: 'Burn' },
 ];
 
+// Map from app network ID to chain IDs stored in wallet history events
+const HISTORY_CHAIN_MAP = {
+  thronos: ['thronos'],
+  bnb:     ['bsc'],
+  arbitrum:['arbitrum'],
+  base:    ['base'],
+  ethereum:['eth'],
+  bitcoin: ['btc'],
+};
+
+// Explorer base URLs for history events (no RPC, display only)
+const EXPLORER_BASES = {
+  thronos:  { tx: 'https://api.thronoschain.org/viewer?tx={txid}', label: 'Thronos' },
+  bsc:      { tx: 'https://bscscan.com/tx/{txid}',  label: 'BscScan' },
+  arbitrum: { tx: 'https://arbiscan.io/tx/{txid}',  label: 'Arbiscan' },
+  base:     { tx: 'https://basescan.org/tx/{txid}', label: 'BaseScan' },
+  eth:      { tx: 'https://etherscan.io/tx/{txid}', label: 'Etherscan' },
+  btc:      { tx: 'https://blockstream.info/tx/{txid}', label: 'Blockstream' },
+};
+
 function _parseTxDate(ts) {
   if (ts === undefined || ts === null || ts === '') return null;
   if (typeof ts === 'number') return new Date(ts > 1e12 ? ts : ts * 1000);
@@ -3333,10 +3402,30 @@ function _parseTxDate(ts) {
   return isNaN(d2.getTime()) ? null : d2;
 }
 
+const _EVENT_TYPE_LABELS = {
+  pool_add_liquidity_intent_created:        '💧 LP intent created',
+  pool_add_liquidity_external_tx_confirmed: '✅ External deposit confirmed',
+  pool_add_liquidity_lp_minted:             '🌱 LP shares minted',
+  pledge_usdt_bnb_confirmed:                '💵 USDT pledge confirmed',
+  crosschain_deposit_detected:              '📥 Cross-chain deposit',
+  crosschain_transfer_received:             '📥 Cross-chain transfer received',
+  crosschain_transfer_sent:                 '📤 Cross-chain transfer sent',
+  bridge_deposit_detected:                  '⚡ Bridge deposit',
+  pool_seed:                                '💧 Pool seeded',
+  pool_withdraw:                            '↩ Pool withdraw',
+  pool_add_liquidity:                       '💧 Add liquidity',
+  pledge:                                   '🔒 Pledge',
+  token_receive:                            '📥 Received',
+  token_send:                               '📤 Sent',
+  crosschain_withdraw:                      '🔄 Cross-chain withdrawal',
+  gateway_payout:                           '💰 Gateway payout',
+  bridge:                                   '⚡ Bridge',
+};
+
 function _renderHistoryRow(tx) {
-  const kind = tx.kind || tx.type || tx.category || 'transfer';
-  const label = tx.category_label || kind.replace(/_/g, ' ');
-  const direction = tx.direction || (tx.kind === 'swap' ? 'swap' : 'out');
+  const kind = tx.event_type || tx.kind || tx.type || tx.category || 'transfer';
+  const label = tx.category_label || _EVENT_TYPE_LABELS[kind] || kind.replace(/_/g, ' ');
+  const direction = tx.direction || (kind === 'swap' ? 'swap' : 'out');
   const symbol = (tx.asset_symbol || tx.symbol || 'THR').toUpperCase();
   const amount = tx.display_amount !== undefined ? tx.display_amount : (tx.amount_in !== undefined ? tx.amount_in : tx.amount);
   const date = _parseTxDate(tx.timestamp);
@@ -3360,19 +3449,43 @@ function _renderHistoryRow(tx) {
 
   const feeHtml = tx.fee_burned ? `<div style="font-size:.72rem;color:var(--muted)">Fee: ${Number(tx.fee_burned).toLocaleString(undefined,{maximumFractionDigits:6})} THR</div>` : '';
   const noteHtml = tx.note ? `<div style="font-size:.72rem;color:var(--muted);margin-top:2px">${tx.note}</div>` : '';
-  const linkHtml = tx.explorer_link ? `<a href="${tx.explorer_link}" target="_blank" style="font-size:.72rem;color:#b08cf8">View ↗</a>` : '';
+  const networkLabel = tx.network_label || (tx.chain ? tx.chain.toUpperCase() : '');
+  const netBadge = networkLabel ? `<span style="font-size:.68rem;color:var(--muted);margin-top:1px">${networkLabel}</span>` : '';
+
+  // Build explorer links from event fields
+  const links = [];
+  const chain = tx.chain || '';
+  const expBase = EXPLORER_BASES[chain];
+
+  // Internal Thronos viewer link — always available if we have an internal txid
+  if (tx.internal_txid) {
+    const thrUrl = `https://api.thronoschain.org/viewer?tx=${encodeURIComponent(tx.internal_txid)}`;
+    links.push(`<a href="${thrUrl}" target="_blank" rel="noopener" style="font-size:.68rem;color:#b08cf8;text-decoration:none">Thronos ↗</a>`);
+  }
+
+  // External chain explorer link
+  if (tx.external_txid && expBase) {
+    const url = expBase.tx.replace('{txid}', tx.external_txid);
+    links.push(`<a href="${url}" target="_blank" rel="noopener" style="font-size:.68rem;color:#b08cf8;text-decoration:none">${expBase.label} ↗</a>`);
+  } else if (tx.explorer_url) {
+    links.push(`<a href="${tx.explorer_url}" target="_blank" rel="noopener" style="font-size:.68rem;color:#b08cf8;text-decoration:none">Explorer ↗</a>`);
+  } else if (tx.explorer_link) {
+    links.push(`<a href="${tx.explorer_link}" target="_blank" rel="noopener" style="font-size:.68rem;color:#b08cf8;text-decoration:none">View ↗</a>`);
+  }
+  const linkHtml = links.length ? `<div style="display:flex;gap:6px">${links.join('')}</div>` : '';
 
   return `<div class="card" style="padding:10px 12px;margin-bottom:8px">
     <div style="display:flex;justify-content:space-between;align-items:flex-start">
       <div>
         <div style="font-size:.85rem;font-weight:700;color:#fff;text-transform:capitalize">${label}</div>
         <div style="font-size:.72rem;color:var(--muted)">${dateStr}</div>
+        ${netBadge}
       </div>
       <div style="text-align:right;font-size:.85rem;font-weight:700">${amountHtml}</div>
     </div>
     <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px">
       <div>${feeHtml}${noteHtml}</div>
-      <div style="display:flex;gap:8px;align-items:center">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end">
         <span style="font-size:.7rem;color:${statusColor};text-transform:capitalize">${status}</span>
         ${linkHtml}
       </div>
@@ -3384,6 +3497,9 @@ async function showHistory(address) {
   address = address || getActiveAddr();
   if (!address || !unlocked.has(address)) { showUnlock(); return; }
 
+  // Restore active network from persisted selection
+  const savedNet = LS.get(`thr_network_${address}`) || 'thronos';
+
   render(`
     <div class="screen">
       <div class="header">
@@ -3391,7 +3507,13 @@ async function showHistory(address) {
         <span style="font-weight:700;color:#fff">📋 Transaction History</span>
         <span></span>
       </div>
-      <div id="historyFilters" style="display:flex;gap:6px;overflow-x:auto;padding:10px 0;white-space:nowrap"></div>
+      <div style="display:flex;align-items:center;gap:8px;padding:8px 0">
+        <span style="font-size:.7rem;text-transform:uppercase;letter-spacing:1px;color:var(--muted)">Network</span>
+        <select id="histNetSel" class="input" style="flex:1;margin:0;padding:5px 8px;font-size:.8rem;width:auto;background:#0d0a1a;border:1px solid #2a2050;color:#b08cf8">
+          ${HOME_NETWORKS.map(n => `<option value="${n.id}" ${n.id === savedNet ? 'selected' : ''}>${n.icon} ${n.label}</option>`).join('')}
+        </select>
+      </div>
+      <div id="historyFilters" style="display:flex;gap:6px;overflow-x:auto;padding:4px 0 8px;white-space:nowrap"></div>
       <div id="historyBody" style="margin-top:4px">
         <p style="color:var(--muted);text-align:center;padding:20px">Loading history…</p>
       </div>
@@ -3402,12 +3524,13 @@ async function showHistory(address) {
 
   let allTx = [];
   let activeFilter = 'all';
+  let activeNetwork = savedNet;
 
   function renderFilters() {
     const el = document.getElementById('historyFilters');
     if (!el) return;
     el.innerHTML = HISTORY_FILTERS.map(f => `
-      <button class="btn ${f.key === activeFilter ? 'btn--primary' : 'btn--ghost'}" data-filter="${f.key}" style="padding:6px 12px;font-size:.75rem;flex-shrink:0">${f.label}</button>
+      <button class="btn ${f.key === activeFilter ? 'btn--primary' : 'btn--ghost'}" data-filter="${f.key}" style="padding:5px 10px;font-size:.73rem;flex-shrink:0">${f.label}</button>
     `).join('');
     el.querySelectorAll('button[data-filter]').forEach(btn => {
       btn.addEventListener('click', () => { activeFilter = btn.dataset.filter; renderFilters(); renderList(); });
@@ -3417,9 +3540,19 @@ async function showHistory(address) {
   function renderList() {
     const el = document.getElementById('historyBody');
     if (!el) return;
-    const filtered = activeFilter === 'all' ? allTx : allTx.filter(tx => (tx.kind || tx.type || tx.category) === activeFilter);
+    // Filter by active category
+    let filtered = activeFilter === 'all' ? allTx : allTx.filter(tx => (tx.kind || tx.type || tx.category || tx.event_type) === activeFilter);
+    // Network filter: keep events matching selected network chains, or all if chains unknown
+    const netChains = HISTORY_CHAIN_MAP[activeNetwork] || [];
+    if (netChains.length) {
+      filtered = filtered.filter(tx => {
+        const c = tx.chain || '';
+        return !c || netChains.includes(c); // show if chain matches or chain unknown (legacy)
+      });
+    }
     if (!filtered.length) {
-      el.innerHTML = '<p style="color:var(--muted);text-align:center;padding:20px">No transactions found.</p>';
+      const netLabel = HOME_NETWORKS.find(n => n.id === activeNetwork)?.label || activeNetwork;
+      el.innerHTML = `<p style="color:var(--muted);text-align:center;padding:20px">No transactions on ${netLabel}.</p>`;
       return;
     }
     const sorted = [...filtered].sort((a, b) => {
@@ -3429,15 +3562,46 @@ async function showHistory(address) {
     el.innerHTML = sorted.map(_renderHistoryRow).join('');
   }
 
-  renderFilters();
-
-  try {
-    allTx = await fetchHistory(address);
-    renderList();
-  } catch (e) {
+  async function loadHistory() {
     const el = document.getElementById('historyBody');
-    if (el) el.innerHTML = `<p style="color:#ff6b6b;text-align:center;padding:20px">Error: ${e.message}</p>`;
+    if (el) el.innerHTML = '<p style="color:var(--muted);text-align:center;padding:20px">Loading history…</p>';
+    try {
+      // Load from both legacy endpoint and new v1 wallet history endpoint and merge
+      const [legacyTx, v1Res] = await Promise.allSettled([
+        fetchHistory(address),
+        fetch(`${API_BASE}/api/wallet/history/${encodeURIComponent(address)}?limit=200`).then(r => r.json()).catch(() => null),
+      ]);
+      const legacy = legacyTx.status === 'fulfilled' ? (legacyTx.value || []) : [];
+      const v1 = (v1Res.status === 'fulfilled' && v1Res.value?.ok) ? (v1Res.value.history || []) : [];
+      // Merge: v1 events have event_type/chain/network_label; normalize kind for filter compat
+      const v1Normalized = v1.map(e => ({
+        ...e,
+        kind: e.event_type || e.kind || 'transfer',
+        category: e.event_type || e.kind,
+        asset_symbol: e.asset || e.asset_symbol,
+      }));
+      // Deduplicate by id
+      const seen = new Set();
+      allTx = [];
+      for (const tx of [...v1Normalized, ...legacy]) {
+        const id = tx.id || tx.tx_id || tx.txid || JSON.stringify(tx).slice(0, 60);
+        if (!seen.has(id)) { seen.add(id); allTx.push(tx); }
+      }
+      renderList();
+    } catch (e) {
+      const el2 = document.getElementById('historyBody');
+      if (el2) el2.innerHTML = `<p style="color:#ff6b6b;text-align:center;padding:20px">Error: ${e.message}</p>`;
+    }
   }
+
+  document.getElementById('histNetSel')?.addEventListener('change', (e) => {
+    activeNetwork = e.target.value;
+    LS.set(`thr_network_${address}`, activeNetwork);
+    renderList();
+  });
+
+  renderFilters();
+  await loadHistory();
 }
 
 async function showPools() {
@@ -3788,59 +3952,222 @@ async function showWithdraw(address) {
   renderPage(null);
 }
 
-async function showAddLiquidity(poolId, tokenA, tokenB) {
+async function showAddLiquidity(poolId, tokenA, tokenB, poolMeta) {
   const address = getActiveAddr();
+  const acc = getAccount(address);
+  const authSecret = acc?.pledge_send_secret || '';
+
+  // Cross-chain: THR + USDT/USDC handled by pending-intent endpoint
+  const isCrossChain = tokenA === 'THR' && (tokenB === 'USDT' || tokenB === 'USDC');
+
   const overlay = document.createElement('div');
-  overlay.style.cssText = 'position:fixed;inset:0;background:#000000aa;z-index:999;display:flex;align-items:flex-end;justify-content:center;';
+  overlay.style.cssText = 'position:fixed;inset:0;background:#000000aa;z-index:999;display:flex;align-items:flex-end;justify-content:center;overflow-y:auto;';
+
+  // Load pool info (reserves + ratio) + external chains in parallel
+  let poolInfo = null;
+  let externalChains = [];
+  try {
+    const [poolRes, availRes] = await Promise.allSettled([
+      fetch(`${API_BASE}/api/v1/pools`).then(r => r.json()).catch(() => null),
+      isCrossChain ? fetch(`${API_BASE}/api/v1/pools/available`).then(r => r.json()).catch(() => null) : Promise.resolve(null),
+    ]);
+    if (poolRes.status === 'fulfilled') {
+      poolInfo = (poolRes.value?.pools || []).find(p => p.id === poolId) || poolMeta || null;
+    }
+    if (availRes.status === 'fulfilled' && availRes.value?.ok) {
+      externalChains = (availRes.value.pools || []).find(p => p.pool_id === poolId)?.external_chains || [];
+    }
+  } catch {}
+
+  const resA = Number(poolInfo?.reserves_a || 0);
+  const resB = Number(poolInfo?.reserves_b || 0);
+  const poolRatio = resA > 0 && resB > 0 ? resB / resA : null;
+
+  function fmtNum(v) {
+    if (!v) return '—';
+    const n = Number(v);
+    if (n >= 1000) return n.toLocaleString(undefined, { maximumFractionDigits: 4 });
+    if (n >= 1) return n.toFixed(6);
+    return n.toFixed(8);
+  }
+
+  const reservesHtml = resA > 0 ? `
+    <div style="background:#0d0a1a;border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:.78rem">
+      <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+        <span style="color:var(--muted)">Pool Reserves</span>
+        <span style="color:var(--muted)">Ratio</span>
+      </div>
+      <div style="display:flex;justify-content:space-between">
+        <span style="color:#fff">${fmtNum(resA)} ${tokenA} / ${fmtNum(resB)} ${tokenB}</span>
+        <span style="color:#b08cf8">1 ${tokenA} = ${poolRatio ? fmtNum(poolRatio) : '—'} ${tokenB}</span>
+      </div>
+    </div>` : '';
+
+  function chainOptions() {
+    if (!externalChains.length) return `<option value="">— no chains available —</option>`;
+    return externalChains.map(c =>
+      `<option value="${c.chain}" data-contract="${c.token_contract}" data-decimals="${c.decimals}" data-label="${c.label}">${c.label} (${c.token_standard})</option>`
+    ).join('');
+  }
+
   overlay.innerHTML = `
-    <div style="background:#13112a;border-radius:16px 16px 0 0;width:100%;max-width:480px;padding:20px 20px 32px">
-      <div style="font-size:1rem;font-weight:700;color:#fff;margin-bottom:16px">💧 Add Liquidity: ${tokenA}/${tokenB}</div>
+    <div style="background:#13112a;border-radius:16px 16px 0 0;width:100%;max-width:480px;padding:20px 20px 32px;margin-top:auto">
+      <div style="font-size:1rem;font-weight:700;color:#fff;margin-bottom:12px">💧 Add Liquidity: ${tokenA}/${tokenB}</div>
+
+      ${reservesHtml}
+
+      ${isCrossChain ? `
+      <label style="font-size:.82rem;color:var(--muted)">External Chain for ${tokenB}</label>
+      <select id="liqChain" class="input" style="margin-bottom:10px">
+        ${chainOptions()}
+      </select>
+      <label style="font-size:.82rem;color:var(--muted)">Your EVM Address (holding ${tokenB})</label>
+      <input type="text" id="liqEvm" class="input" placeholder="0x..." style="margin-bottom:10px;font-family:monospace;font-size:.8rem">
+      ` : ''}
+
       <label style="font-size:.82rem;color:var(--muted)">${tokenA} Amount</label>
-      <input type="number" id="liqA" class="input" placeholder="0.00" min="0" step="0.000001" inputmode="decimal" style="margin-bottom:10px">
+      <input type="number" id="liqA" class="input" placeholder="0.00" min="0" step="0.000001" inputmode="decimal" style="margin-bottom:6px">
+
       <label style="font-size:.82rem;color:var(--muted)">${tokenB} Amount</label>
-      <input type="number" id="liqB" class="input" placeholder="0.00" min="0" step="0.000001" inputmode="decimal" style="margin-bottom:14px">
+      <input type="number" id="liqB" class="input" placeholder="0.00" min="0" step="0.000001" inputmode="decimal" style="margin-bottom:6px">
+
+      <div id="liqQuote" style="font-size:.78rem;color:#b08cf8;margin-bottom:10px;min-height:18px;padding:0 2px"></div>
+      ${isCrossChain ? `<div style="font-size:.75rem;color:#ffb81c;margin-bottom:10px;padding:8px;background:#ffb81c10;border-radius:6px;border:1px solid #ffb81c30">⚠️ Gas required on external chain to send ${tokenB} to vault.</div>` : ''}
+
+      ${!authSecret && isCrossChain ? `
+      <label style="font-size:.82rem;color:var(--muted)">Auth Secret (send_secret from pledge)</label>
+      <input type="password" id="liqAuth" class="input" placeholder="Enter your auth secret" style="margin-bottom:10px">
+      ` : ''}
+
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
         <button id="liqCancel" class="btn btn--ghost" style="padding:12px">Cancel</button>
-        <button id="liqAdd" class="btn btn--primary" style="padding:12px">Add Liquidity</button>
+        <button id="liqAdd" class="btn btn--primary" style="padding:12px">${isCrossChain ? 'Create Intent' : 'Add Liquidity'}</button>
       </div>
       <div id="liqErr" style="margin-top:10px;color:#ff6b6b;font-size:.82rem;display:none"></div>
       <div id="liqOk" style="margin-top:10px;color:#00ff66;font-size:.82rem;display:none"></div>
     </div>`;
   document.body.appendChild(overlay);
+
+  // Auto-calculate paired amount from pool ratio when either field changes
+  let quoteTimer = null;
+
+  function applyLocalRatio(changedSide) {
+    if (!poolRatio) return;
+    const aEl = overlay.querySelector('#liqA');
+    const bEl = overlay.querySelector('#liqB');
+    if (!aEl || !bEl) return;
+    if (changedSide === 'a') {
+      const v = parseFloat(aEl.value);
+      if (v > 0) bEl.value = (v * poolRatio).toFixed(6);
+    } else {
+      const v = parseFloat(bEl.value);
+      if (v > 0) aEl.value = (v / poolRatio).toFixed(6);
+    }
+  }
+
+  async function updateQuote(changedSide) {
+    applyLocalRatio(changedSide);
+    const amtA = parseFloat(overlay.querySelector('#liqA')?.value || '');
+    const quoteEl = overlay.querySelector('#liqQuote');
+    if (!amtA || amtA <= 0) { if (quoteEl) quoteEl.textContent = ''; return; }
+    try {
+      const q = await fetch(`${API_BASE}/api/v1/pools/quote-add-liquidity?pool_id=${poolId}&amount_a=${amtA}`).then(r => r.json()).catch(() => null);
+      if (q?.ok) {
+        const liqBEl = overlay.querySelector('#liqB');
+        if (liqBEl) liqBEl.value = q.amount_b;
+        const tolMin = q.amount_b ? (q.amount_b * 0.98).toFixed(6) : '—';
+        const tolMax = q.amount_b ? (q.amount_b * 1.02).toFixed(6) : '—';
+        if (quoteEl) quoteEl.innerHTML =
+          `Required: <strong>${q.amount_b} ${tokenB}</strong> (±2%: ${tolMin}–${tolMax})<br>` +
+          `Est. LP shares: <strong>${q.lp_shares_estimate}</strong> · Your pool share: <strong>${q.share_pct}%</strong>`;
+      }
+    } catch {}
+  }
+
+  overlay.querySelector('#liqA')?.addEventListener('input', () => {
+    clearTimeout(quoteTimer);
+    quoteTimer = setTimeout(() => updateQuote('a'), 400);
+  });
+  overlay.querySelector('#liqB')?.addEventListener('input', () => {
+    clearTimeout(quoteTimer);
+    quoteTimer = setTimeout(() => updateQuote('b'), 400);
+  });
+
   overlay.querySelector('#liqCancel').addEventListener('click', () => overlay.remove());
+
   overlay.querySelector('#liqAdd').addEventListener('click', async () => {
     const amtA = parseFloat(overlay.querySelector('#liqA').value);
     const amtB = parseFloat(overlay.querySelector('#liqB').value);
     const errEl = overlay.querySelector('#liqErr');
     const okEl = overlay.querySelector('#liqOk');
+    errEl.style.display = 'none';
+
     if (!amtA || amtA <= 0 || !amtB || amtB <= 0) {
       errEl.textContent = 'Enter valid amounts for both tokens';
       errEl.style.display = '';
       return;
     }
-    const { privHex } = unlocked.get(address) || {};
-    if (!privHex) { errEl.textContent = 'Wallet locked'; errEl.style.display = ''; return; }
 
     const btn = overlay.querySelector('#liqAdd');
-    btn.disabled = true; btn.textContent = 'Adding…';
+    btn.disabled = true; btn.textContent = isCrossChain ? 'Creating Intent…' : 'Adding…';
+
     try {
-      const r = await fetch(`${API_WRITE}/api/wallet/v1/add_liquidity`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ from: address, pool_id: poolId, amount_a: amtA, amount_b: amtB, private_key_hex: privHex })
-      });
-      const d = await r.json().catch(() => ({}));
-      if (r.ok && (d.ok || d.status === 'success')) {
-        okEl.textContent = '✅ Liquidity added!';
-        okEl.style.display = '';
-        setTimeout(() => overlay.remove(), 2000);
+      if (isCrossChain) {
+        const chainSel = overlay.querySelector('#liqChain');
+        const selOpt = chainSel?.selectedOptions[0];
+        const chain = selOpt?.value || '';
+        const tokenContract = selOpt?.dataset?.contract || '';
+        const decimals = parseInt(selOpt?.dataset?.decimals || '18', 10);
+        const evmAddress = (overlay.querySelector('#liqEvm')?.value || '').trim();
+        const secret = authSecret || (overlay.querySelector('#liqAuth')?.value || '').trim();
+
+        if (!chain) { throw new Error('Select an external chain'); }
+        if (!evmAddress) { throw new Error(`Enter your EVM address holding ${tokenB}`); }
+        if (!secret) { throw new Error('Auth secret required'); }
+
+        const r = await fetch(`${API_WRITE}/api/v1/pools/add-liquidity`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pool_id: poolId, amount_a: amtA, amount_b: amtB, chain, token_contract: tokenContract, decimals, provider_thr: address, evm_address: evmAddress, auth_secret: secret }),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (r.ok && d.ok) {
+          const chainLabel = selOpt?.dataset?.label || chain;
+          okEl.innerHTML = `✅ Intent created.<br><br>Send <strong>${amtB} ${tokenB}</strong> to:<br>` +
+            `<code style="font-size:.7rem;word-break:break-all;display:block;background:#1a1a2e;padding:8px;border-radius:4px;margin:8px 0">${d.vault_address}</code>` +
+            `on ${chainLabel}.<br><br><small style="color:var(--muted)">Intent: ${d.intent_id}<br>Expires: ${new Date(d.expires_at * 1000).toLocaleString()}</small>`;
+          okEl.style.display = '';
+          setTimeout(() => overlay.remove(), 10000);
+        } else {
+          // Provide helpful ratio_mismatch message
+          if (d.error === 'ratio_mismatch') {
+            throw new Error(`${d.message || 'Ratio mismatch'}`);
+          }
+          throw new Error(d.message || d.error || 'Create intent failed');
+        }
       } else {
-        throw new Error(d.message || d.error || 'failed');
+        // Legacy internal pool path (WBTC/L2E pairs)
+        const { privHex } = unlocked.get(address) || {};
+        if (!privHex) { throw new Error('Wallet locked'); }
+        const r = await fetch(`${API_WRITE}/api/wallet/v1/add_liquidity`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ from: address, pool_id: poolId, amount_a: amtA, amount_b: amtB, private_key_hex: privHex }),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (r.ok && (d.ok || d.status === 'success')) {
+          okEl.textContent = '✅ Liquidity added!';
+          okEl.style.display = '';
+          setTimeout(() => overlay.remove(), 2000);
+        } else {
+          if (d.error === 'ratio_mismatch') throw new Error(d.message || 'Ratio mismatch');
+          throw new Error(d.message || d.error || 'failed');
+        }
       }
     } catch (e) {
-      errEl.textContent = e.message || 'Add liquidity failed';
+      errEl.textContent = e.message || (isCrossChain ? 'Create intent failed' : 'Add liquidity failed');
       errEl.style.display = '';
-      btn.disabled = false; btn.textContent = 'Add Liquidity';
+      btn.disabled = false; btn.textContent = isCrossChain ? 'Create Intent' : 'Add Liquidity';
     }
   });
 }

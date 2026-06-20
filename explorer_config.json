@@ -6,8 +6,7 @@
       "chain_id": 56,
       "tx_url": "https://bscscan.com/tx/{txid}",
       "address_url": "https://bscscan.com/address/{address}",
-      "token_url": "https://bscscan.com/token/{contract}",
-      "rpc": "https://bsc-dataseed.binance.org"
+      "token_url": "https://bscscan.com/token/{contract}"
     },
     "base": {
       "name": "BaseScan",
@@ -15,8 +14,7 @@
       "chain_id": 8453,
       "tx_url": "https://basescan.org/tx/{txid}",
       "address_url": "https://basescan.org/address/{address}",
-      "token_url": "https://basescan.org/token/{contract}",
-      "rpc": "https://mainnet.base.org"
+      "token_url": "https://basescan.org/token/{contract}"
     },
     "arbitrum": {
       "name": "Arbiscan",
@@ -24,8 +22,7 @@
       "chain_id": 42161,
       "tx_url": "https://arbiscan.io/tx/{txid}",
       "address_url": "https://arbiscan.io/address/{address}",
-      "token_url": "https://arbiscan.io/token/{contract}",
-      "rpc": "https://arb1.arbitrum.io/rpc"
+      "token_url": "https://arbiscan.io/token/{contract}"
     },
     "eth": {
       "name": "Etherscan",
@@ -33,8 +30,7 @@
       "chain_id": 1,
       "tx_url": "https://etherscan.io/tx/{txid}",
       "address_url": "https://etherscan.io/address/{address}",
-      "token_url": "https://etherscan.io/token/{contract}",
-      "rpc": "https://eth.llamarpc.com"
+      "token_url": "https://etherscan.io/token/{contract}"
     },
     "btc": {
       "name": "BTC Explorer",
@@ -42,17 +38,15 @@
       "chain_id": null,
       "tx_url": "https://blockstream.info/tx/{txid}",
       "address_url": "https://blockstream.info/address/{address}",
-      "token_url": null,
-      "rpc": null
+      "token_url": null
     },
     "thronos": {
       "name": "Thronos Viewer",
       "chain_name": "Thronos",
       "chain_id": null,
-      "tx_url": "https://api.thronoschain.org/viewer#/tx/{txid}",
-      "address_url": "https://api.thronoschain.org/viewer#/address/{address}",
-      "token_url": null,
-      "rpc": "https://api.thronoschain.org"
+      "tx_url": "https://api.thronoschain.org/v1/viewer?address={address}",
+      "address_url": "https://api.thronoschain.org/v1/viewer?address={address}",
+      "token_url": null
     }
   },
   "asset_contracts": {

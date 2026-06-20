@@ -1398,7 +1398,8 @@ XRP_RPC_URL = os.getenv("XRP_RPC_URL", os.getenv("XRPL_RPC_URL", "https://xrplcl
 # ─── USDT-on-BNB-Chain Pledge (mobile/PWA only) ────────────────────────────
 # Vault EVM address that watches for incoming USDT (BEP20) pledge deposits.
 # Uses BSC_RPC_URL above — no separate RPC needed.
-BNB_PLEDGE_VAULT = os.getenv("BNB_PLEDGE_VAULT", "")
+# (Now sourced from WITHDRAW_CHAIN_CONFIG["bsc"]["usdt_pledge_vault"] — see line ~27580)
+BNB_PLEDGE_VAULT = os.getenv("BSC_USDT_PLEDGE_VAULT", os.getenv("BNB_PLEDGE_VAULT", ""))  # backwards-compatible
 USDT_BNB_CONTRACT = os.getenv("USDT_BNB_CONTRACT", "0x55d398326f99059fF775485246999027B3197955")  # BEP20 USDT, 18 decimals
 USDT_THR_RATE = float(_strip_env_quotes(os.getenv("USDT_THR_RATE", "100")))  # legacy static rate (overridden by dynamic pricing)
 MIN_USDT_PLEDGE = float(_strip_env_quotes(os.getenv("MIN_USDT_PLEDGE", "10")))  # minimum 10 USDT
@@ -2816,6 +2817,79 @@ def get_pledge_for_auth(thr_address: str) -> dict | None:
 
     pledges = load_json(PLEDGE_CHAIN, [])
     return next((p for p in pledges if p.get("thr_address") == thr_address), None)
+
+
+def _get_pledge_for_v1_wallet(thr_address: str) -> dict | None:
+    """
+    Find pledge record for a thr_address, checking direct match first, then
+    V1 migration map (old/core users whose pledge record still references the
+    legacy address, not the canonical V1 address).
+    """
+    pledge = get_pledge_for_auth(thr_address)
+    if pledge:
+        return pledge
+    try:
+        from wallet_v1_migration import search_all_migration_sources
+        rec = search_all_migration_sources(canonical_v1_address=thr_address)
+        if rec and rec.get("legacy_address"):
+            return get_pledge_for_auth(rec["legacy_address"])
+    except Exception:
+        pass
+    return None
+
+
+def _validate_pool_access(thr_address: str, auth_secret: str) -> tuple[str, str | None]:
+    """
+    Gate check for pool add-liquidity. Returns ("ok", None) or ("error_code", message).
+
+    V1 wallet holders can access pools regardless of pledge path:
+    - New BTC/USDT pledge users — direct pledge record
+    - Old/migration users — pledge record under legacy address, resolved via migration map
+    - Whitelisted users — no auth_secret required
+
+    NEVER grants access based on treasury/fee/gas wallets.
+    """
+    if not thr_address:
+        return "missing_provider", "Provider THR address required"
+    if not auth_secret:
+        return "missing_auth_secret", "auth_secret required for pool access"
+
+    # Whitelist users: skip auth_secret check
+    entry = get_mining_whitelist_entry(thr_address)
+    if (entry and entry.get("active", True) and not entry.get("banned", False)
+            and _whitelist_allows_no_pledge(entry)):
+        return "ok", None
+
+    # Resolve pledge record (direct or via migration)
+    pledge = _get_pledge_for_v1_wallet(thr_address)
+    if not pledge:
+        return "no_v1_wallet_access", "No V1 wallet access. Complete a pledge or migrate your existing wallet."
+
+    stored_auth_hash = pledge.get("send_auth_hash")
+    stored_seed_hash = pledge.get("send_seed_hash")
+
+    h_auth = hashlib.sha256(f"{auth_secret}:auth".encode()).hexdigest()
+    h_seed = hashlib.sha256(auth_secret.encode()).hexdigest()
+
+    if stored_auth_hash and stored_auth_hash in (h_auth, h_seed):
+        return "ok", None
+    if stored_seed_hash and stored_seed_hash in (h_auth, h_seed):
+        return "ok", None
+
+    # Legacy pledge with no stored hash: auto-register on first use
+    if not stored_auth_hash and not stored_seed_hash:
+        pledges = load_json(PLEDGE_CHAIN, [])
+        for p in pledges:
+            if p.get("thr_address") == pledge.get("thr_address"):
+                p["send_auth_hash"] = h_auth
+                p["send_seed_hash"] = h_seed
+                p["auth_migrated_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+                break
+        save_json(PLEDGE_CHAIN, pledges)
+        logger.info("[pool_access] Auto-registered auth hash for %s", thr_address[:10])
+        return "ok", None
+
+    return "invalid_auth_secret", "Invalid auth_secret"
 
 
 # ─── PR-182: Write Protection for Replica Nodes ────────────────────────────────
@@ -15438,6 +15512,73 @@ def api_sentinel_fiat_session():
     }), 200
 
 
+@app.route("/api/admin/system-addresses", methods=["GET"])
+def api_admin_system_addresses():
+    """
+    Returns the system/AMM wallet public addresses and vault role assignments.
+    Protected by admin auth. NEVER exposes private keys, seeds, mnemonics, or secrets.
+
+    signer_available = GATEWAY_SECRET is configured (authorized confirmer for cross-chain intents)
+    watcher_available = bnb_pledge_watcher loaded successfully at startup
+    """
+    denied = require_admin()
+    if denied:
+        return denied
+
+    gateway_configured = bool(os.getenv("GATEWAY_SECRET", "").strip())
+
+    bsc_cfg  = WITHDRAW_CHAIN_CONFIG.get("bsc", {})
+    base_cfg = WITHDRAW_CHAIN_CONFIG.get("base", {})
+    arb_cfg  = WITHDRAW_CHAIN_CONFIG.get("arbitrum", {})
+
+    def _addr(cfg: dict, key: str) -> str | None:
+        v = cfg.get(key, "").strip()
+        return v if v else None
+
+    bsc_vault_status,  _  = _pool_vault_status("bsc")
+    base_vault_status, __ = _pool_vault_status("base")
+    arb_vault_status,  ___ = _pool_vault_status("arbitrum")
+
+    return jsonify({
+        "ok": True,
+        # Thronos chain identity — THR address of the system/AI-agent wallet
+        "system_wallet":       AI_WALLET_ADDRESS,
+        # Configured pool vault EVM addresses (admin copies these from the signer-controlled wallet)
+        "evm_bsc_address":       _addr(bsc_cfg,  "pool_vault"),
+        "evm_base_address":      _addr(base_cfg, "pool_vault"),
+        "evm_arbitrum_address":  _addr(arb_cfg,  "pool_vault"),
+        # Service availability
+        "signer_available":  gateway_configured,
+        "watcher_available": _BNB_WATCHER_AVAILABLE,
+        # Per-chain vault role breakdown (safe public addresses only)
+        "roles": {
+            "bsc": {
+                "pool_vault":        _addr(bsc_cfg, "pool_vault"),
+                "pool_vault_status": bsc_vault_status,
+                "usdt_pledge_vault": _addr(bsc_cfg, "usdt_pledge_vault"),
+                "treasury":          _addr(bsc_cfg, "treasury"),
+                "fee_collector":     _addr(bsc_cfg, "fee_collector"),
+                "gas_wallet":        _addr(bsc_cfg, "gas_wallet"),
+                "payout":            _addr(bsc_cfg, "hot_wallet"),
+            },
+            "base": {
+                "pool_vault":        _addr(base_cfg, "pool_vault"),
+                "pool_vault_status": base_vault_status,
+                "payout":            _addr(base_cfg, "hot_wallet"),
+            },
+            "arbitrum": {
+                "pool_vault":        _addr(arb_cfg, "pool_vault"),
+                "pool_vault_status": arb_vault_status,
+                "payout":            _addr(arb_cfg, "hot_wallet"),
+            },
+        },
+        "note": (
+            "Set BSC_POOL_VAULT_ADDRESS to the AMM/system BSC address controlled by your signer. "
+            "Add-liquidity is disabled per chain until pool_vault_status == 'configured'."
+        ),
+    }), 200
+
+
 @app.route("/d3lfoi", methods=["GET"])
 @app.route("/d3lfoi_admin", methods=["GET"])
 def d3lfoi_admin_console():
@@ -17130,6 +17271,8 @@ def pledge_submit():
             status="already_has_canonical",
             pledge_hash=exists["pledge_hash"],
             pdf_url=pdf_url,
+            recovery_kit=None,
+            recovery_kit_available=False,
             recovery_required=True,
             recovery_url="/recovery",
         ),200
@@ -17271,14 +17414,37 @@ def pledge_submit():
             _enc_blob = json.dumps({'v':1,'alg':'aes256gcm','kdf':'pbkdf2-sha256-250k',
                                     'salt':_salt.hex(),'iv':_iv.hex(),'ct':_ct.hex()})
             recovery_kit_str = json.dumps({
+                'version': 'wallet-v1-recovery-kit',
                 'canonical_v1_address': thr_addr,
                 'address': thr_addr,
+                'bound_key_address': thr_addr,
+                'public_key': compressed_pub,
                 'compressed_public_key': compressed_pub,
                 'encrypted_private_key_backup': _enc_blob,
                 'wallet_v1_encrypted_priv': _enc_blob,
                 'migration_source': 'pledge_v1_direct',
-                'version': 2,
+                'created_at': datetime.utcnow().isoformat(timespec="seconds") + "Z",
+                'warning': 'Keep this file offline. It restores signing access. For pledge-created wallets, decrypt with your pledge passphrase or send secret.',
             })
+            # Keep the old pledge recovery model: do not store the recovery kit
+            # server-side. Only store a hash for diagnostics/recognition; the
+            # recoverable copy lives inside the encrypted PDF stego payload.
+            pledge_entry["wallet_v1_recovery_kit_hash"] = hashlib.sha256(recovery_kit_str.encode()).hexdigest()
+            pledge_entry["wallet_v1_recovery_source"] = "pdf_stego"
+            try:
+                pdf_name = create_secure_pdf_contract(
+                    btc_address, pledge_text, thr_addr, phash, height, send_seed, CONTRACTS_DIR, passphrase,
+                    extra_recovery_payload={
+                        "wallet_v1_recovery_kit": recovery_kit_str,
+                        "wallet_v1_recovery_kit_hash": pledge_entry["wallet_v1_recovery_kit_hash"],
+                    },
+                )
+                pledge_entry["pdf_filename"] = pdf_name
+                pdf_url = f"/contracts/{pdf_name}" if os.path.isfile(os.path.join(CONTRACTS_DIR, pdf_name)) else pdf_url
+            except Exception as pdf_recovery_err:
+                app.logger.warning(f"PDF recovery-kit embedding failed for {thr_addr}: {pdf_recovery_err}")
+            pledges[-1] = pledge_entry
+            save_json(PLEDGE_CHAIN, pledges)
         except Exception as enc_err:
             app.logger.warning(f"Recovery Kit encryption unavailable: {enc_err}")
 
@@ -20507,21 +20673,22 @@ def api_wallet_tokens(thr_addr):
     }), 200
 
 
-@app.route("/viewer", methods=["GET"])
-def viewer():
+@app.route("/v1/viewer", methods=["GET"])
+def v1_viewer():
     """
-    Thronos Viewer - blockchain explorer + cross-chain activity dashboard.
+    Thronos Wallet Viewer — wallet history + cross-chain activity dashboard.
+    Available at /v1/viewer (not /viewer which is the block explorer).
 
     Query params:
     - address: THR address to view (optional)
     - tab: Default tab (all, native_thr, tokens, pledges, pools, bridge, crosschain, withdrawals, failed)
 
     Displays:
-    - All transactions across all chains
+    - All wallet transactions across all chains
     - Native THR transfers
-    - Token transfers (ERC20, BEP20, etc.)
-    - Pledges (BTC, USDT)
-    - Liquidity pool operations
+    - Token transfers (ERC20, BEP20)
+    - Pledges (BTC, USDT-on-BNB)
+    - Liquidity pool operations (seed, withdraw)
     - Bridge/cross-chain activity
     - Withdrawal queue status
     - Failed/manual review items
@@ -20534,10 +20701,10 @@ def viewer():
             "viewer.html",
             address=address,
             default_tab=default_tab,
-            api_url=request.base_url.rstrip("/")
+            api_url=request.url_root.rstrip("/")
         )
     except Exception as e:
-        logger.error(f"Error rendering viewer: {e}")
+        logger.error(f"Error rendering v1_viewer: {e}")
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
@@ -20571,15 +20738,31 @@ def api_viewer_transactions():
         history = get_wallet_history(address, limit=limit * 3)
 
         # Apply tab filter
+        _LP_EVENT_TYPES = {
+            "pool_add_liquidity_intent_created",
+            "pool_add_liquidity_external_tx_confirmed",
+            "pool_add_liquidity_lp_minted",
+        }
+        _CROSSCHAIN_EVENT_TYPES = _LP_EVENT_TYPES | {
+            "crosschain_withdraw",
+            "crosschain_deposit_detected",
+            "crosschain_transfer_received",
+            "crosschain_transfer_sent",
+            "bridge_deposit_detected",
+            "pledge_usdt_bnb_confirmed",
+        }
         tab_filters = {
             "native_thr": lambda e: e.get("asset") == "THR" and e.get("chain") == "thronos",
             "tokens": lambda e: e.get("asset") != "THR" and e.get("event_type") in ("token_send", "token_receive"),
-            "pledges": lambda e: e.get("event_type") == "pledge",
-            "pools": lambda e: e.get("event_type") in ("pool_seed", "pool_withdraw"),
-            "bridge": lambda e: e.get("event_type") == "bridge",
-            "crosschain": lambda e: e.get("event_type") == "crosschain_withdraw",
+            "pledges": lambda e: e.get("event_type") in ("pledge", "pledge_usdt_bnb_confirmed"),
+            "pools": lambda e: e.get("event_type") in (
+                "pool_seed", "pool_withdraw", "pool_add_liquidity",
+                "pool_add_liquidity_lp_minted",
+            ),
+            "bridge": lambda e: e.get("event_type") in ("bridge", "bridge_deposit_detected"),
+            "crosschain": lambda e: e.get("event_type") in _CROSSCHAIN_EVENT_TYPES,
             "withdrawals": lambda e: e.get("event_type") in ("crosschain_withdraw", "gateway_payout"),
-            "failed": lambda e: e.get("status") in ("failed", "manual_review"),
+            "failed": lambda e: e.get("status") in ("failed", "manual_review", "expired"),
         }
 
         if tab != "all" and tab in tab_filters:
@@ -20613,8 +20796,23 @@ def api_viewer_transactions():
         return jsonify({"ok": False, "error": str(e)}), 400
 
 
+@app.route("/api/v1/explorer/config", methods=["GET"])
+def api_explorer_config():
+    """
+    Return the public explorer configuration (explorer URLs only, no RPC URLs or secrets).
+    Used by PWA and mobile to build explorer links for transactions.
+    """
+    cfg = load_explorer_config()
+    return jsonify({
+        "ok": True,
+        "explorers": cfg.get("explorers", {}),
+        "asset_contracts": cfg.get("asset_contracts", {}),
+        "token_standards": cfg.get("token_standards", {}),
+    }), 200
+
+
 @app.route("/api/wallet/history/<thr_addr>", methods=["GET"])
-def api_wallet_history(thr_addr):
+def api_v1_wallet_history(thr_addr):
     """
     Returns transaction history for a wallet.
 
@@ -26765,6 +26963,10 @@ def tx_registry_view():
 
 
 # ─── SCHEDULER ─────────────────────────────────────
+# Set by start_scheduler(); True only when bnb_pledge_watcher imports successfully.
+_BNB_WATCHER_AVAILABLE = False
+
+
 def _with_app_context(fn):
     """Wrap a scheduler job so it runs inside Flask's app context.
     Required by jobs that call jsonify, url_for, or access g/current_app."""
@@ -26814,13 +27016,16 @@ if NODE_ROLE == "master" and SCHEDULER_ENABLED and ENABLE_CHAIN:
         print(f"[SCHEDULER] BTC pledge watcher unavailable: {e}")
 
     # BNB/USDT Pledge Watcher – polls BSC for USDT vault deposits via eth_getLogs
+    global _BNB_WATCHER_AVAILABLE
     try:
         from bnb_pledge_watcher import watch_bnb_pledges
         scheduler.add_job(_with_app_context(watch_bnb_pledges), "interval", minutes=5,
                          coalesce=True, max_instances=1, id="bnb_pledge_watcher")
         print("[SCHEDULER] BNB/USDT pledge watcher scheduled (every 5 min)")
+        _BNB_WATCHER_AVAILABLE = True
     except ImportError as e:
         print(f"[SCHEDULER] BNB/USDT pledge watcher unavailable: {e}")
+        _BNB_WATCHER_AVAILABLE = False
 
     # PYTHEIA Worker – system health monitoring & governance advice
     try:
@@ -27348,10 +27553,10 @@ def api_usdt_pledge():
     # Add wallet history events
     current_ts = time.time()
 
-    # 1. Record USDT pledge on BNB Chain (external)
+    # 1. Primary pledge event: USDT-on-BSC confirmed (visible on BNB network in history)
     add_wallet_history_event(
         thr_address=thr_address,
-        event_type="pledge",
+        event_type="pledge_usdt_bnb_confirmed",
         chain="bsc",
         asset="USDT",
         amount=usdt_amount,
@@ -27362,6 +27567,8 @@ def api_usdt_pledge():
         token_contract=USDT_BNB_CONTRACT,
         token_standard="BEP20",
         network_label="BNB Smart Chain",
+        external_from=bnb_address,
+        external_to=BNB_PLEDGE_VAULT,
         timestamp=current_ts,
     )
 
@@ -27375,6 +27582,7 @@ def api_usdt_pledge():
         status="credited",
         direction="in",
         internal_txid=tx_id,
+        external_txid=bnb_txid,
         token_standard="native",
         network_label="Thronos",
         timestamp=current_ts,
@@ -27532,14 +27740,29 @@ WITHDRAW_CHAIN_CONFIG: dict = {
         "label":          "BNB Chain (BSC)",
         "tokens":         ["USDT"],
         "rpc_url":        BSC_RPC_URL,  # defined globally above
+        # hot_wallet = payout address for cross-chain withdrawals (BNB_HOT_WALLET)
         "hot_wallet":     _strip_env_quotes(os.getenv("BNB_HOT_WALLET", "")),
+        # pool_vault = vault that receives USDT from LP contributors (BSC_POOL_VAULT_ADDRESS)
+        # If not set, falls back to hot_wallet with a log warning.
+        "pool_vault":     _strip_env_quotes(os.getenv("BSC_POOL_VAULT_ADDRESS", "")),
+        # usdt_pledge_vault = where users send USDT to pledge (BSC_USDT_PLEDGE_VAULT)
+        # If not set, falls back to hot_wallet for backward compat.
+        "usdt_pledge_vault": _strip_env_quotes(os.getenv("BSC_USDT_PLEDGE_VAULT", "")),
         "usdt_contract":  USDT_BNB_CONTRACT,
+        # treasury = Thronos project treasury (BSC_TREASURY_ADDRESS, informational only)
+        "treasury":       _strip_env_quotes(os.getenv("BSC_TREASURY_ADDRESS", "")),
+        # fee_collector = collects protocol fees (BSC_FEE_COLLECTOR_ADDRESS)
+        "fee_collector":  _strip_env_quotes(os.getenv("BSC_FEE_COLLECTOR_ADDRESS", "")),
+        # gas_wallet = dedicated gas replenishment wallet (BSC_GAS_WALLET_ADDRESS)
+        # Never used as token vault.
+        "gas_wallet":     _strip_env_quotes(os.getenv("BSC_GAS_WALLET_ADDRESS", "")),
     },
     "base": {
         "label":          "Base",
         "tokens":         ["USDC"],
         "rpc_url":        _strip_env_quotes(os.getenv("BASE_RPC_URL", "")),
         "hot_wallet":     _strip_env_quotes(os.getenv("BASE_HOT_WALLET", "")),
+        "pool_vault":     _strip_env_quotes(os.getenv("BASE_POOL_VAULT_ADDRESS", "")),
         "usdc_contract":  _strip_env_quotes(os.getenv("BASE_USDC_CONTRACT", "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913")),
     },
     "arbitrum": {
@@ -27547,10 +27770,55 @@ WITHDRAW_CHAIN_CONFIG: dict = {
         "tokens":         ["USDT", "USDC"],
         "rpc_url":        _strip_env_quotes(os.getenv("ARB_RPC_URL", "")),
         "hot_wallet":     _strip_env_quotes(os.getenv("ARB_HOT_WALLET", "")),
+        "pool_vault":     _strip_env_quotes(os.getenv("ARB_POOL_VAULT_ADDRESS", "")),
         "usdt_contract":  _strip_env_quotes(os.getenv("ARB_USDT_CONTRACT", "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9")),
         "usdc_contract":  _strip_env_quotes(os.getenv("ARB_USDC_CONTRACT", "0xaf88d065e77c8cC2239327C5EDb3A432268e5831")),
     },
 }
+
+
+def _get_pool_vault(chain: str) -> str:
+    """
+    Returns the configured pool vault address for a chain.
+    Prefers BSC_POOL_VAULT_ADDRESS / ARB_POOL_VAULT_ADDRESS / BASE_POOL_VAULT_ADDRESS.
+    Falls back to hot_wallet with a warning.
+    NEVER uses treasury, gas_wallet, or fee_collector.
+    """
+    cfg = WITHDRAW_CHAIN_CONFIG.get(chain, {})
+    vault = cfg.get("pool_vault", "").strip()
+    if vault:
+        return vault
+    hot = cfg.get("hot_wallet", "").strip()
+    if hot:
+        logger.warning(
+            "[pool_vault] %s_POOL_VAULT_ADDRESS not configured — falling back to hot_wallet. "
+            "Set %s_POOL_VAULT_ADDRESS for production.", chain.upper(), chain.upper()
+        )
+        return hot
+    return ""
+
+
+def _pool_vault_status(chain: str) -> tuple[str, str]:
+    """
+    Returns (status, vault_address).
+    status = 'configured' | 'pending_config'
+
+    pending_config when any of:
+      - No pool vault address is set for the chain
+      - GATEWAY_SECRET not configured (no authorized confirmer)
+      - For BSC: bnb_pledge_watcher not available (no deposit watcher)
+
+    NEVER falls back to treasury/fee/gas wallets.
+    """
+    vault = WITHDRAW_CHAIN_CONFIG.get(chain, {}).get("pool_vault", "").strip()
+    if not vault:
+        return ("pending_config", "")
+    if not os.getenv("GATEWAY_SECRET", "").strip():
+        return ("pending_config", vault)
+    if chain == "bsc" and not _BNB_WATCHER_AVAILABLE:
+        return ("pending_config", vault)
+    return ("configured", vault)
+
 
 WITHDRAW_SUPPORTED_TOKENS = {"USDT", "USDC"}
 WITHDRAW_QUEUE_FILE = os.path.join(DATA_DIR, "withdraw_queue.json")
@@ -27595,13 +27863,22 @@ def add_wallet_history_event(
     token_standard: str = "native",
     network_label: str = "",
     timestamp: float = None,
+    external_from: str = "",
+    external_to: str = "",
+    pool_id: str = "",
+    lp_shares: float = 0.0,
+    pair: str = "",
 ) -> dict:
     """
     Write a wallet history event (transaction, pledge, pool seed, withdrawal, etc).
 
     Args:
         thr_address: Thronos wallet address
-        event_type: pledge, token_receive, token_send, pool_seed, pool_withdraw, bridge, crosschain_withdraw, gateway_payout, failed, manual_review
+        event_type: pledge, token_receive, token_send, pool_seed, pool_withdraw,
+                    bridge, crosschain_withdraw, gateway_payout, failed, manual_review,
+                    pool_add_liquidity_intent_created, pool_add_liquidity_external_tx_confirmed,
+                    pool_add_liquidity_lp_minted, pledge_usdt_bnb_confirmed,
+                    crosschain_deposit_detected, crosschain_transfer_received
         chain: thronos, bsc, base, arbitrum, eth, btc
         asset: THR, BTC, WBTC, USDT, USDC, BNB, ETH
         amount: Transaction amount
@@ -27613,6 +27890,11 @@ def add_wallet_history_event(
         token_standard: native, BEP20, ERC20
         network_label: Human-readable chain name
         timestamp: Unix timestamp (defaults to now)
+        external_from: EVM sender address
+        external_to: EVM recipient/vault address
+        pool_id: Pool identifier for LP events
+        lp_shares: LP shares minted (for pool_add_liquidity_lp_minted events)
+        pair: Token pair string e.g. "THR/USDT" (for LP events)
 
     Returns:
         The created event dict
@@ -27637,7 +27919,12 @@ def add_wallet_history_event(
         "direction": direction,
         "internal_txid": internal_txid,
         "external_txid": external_txid,
+        "external_from": external_from,
+        "external_to": external_to,
         "explorer_url": explorer_url,
+        "pool_id": pool_id,
+        "lp_shares": lp_shares,
+        "pair": pair,
         "timestamp": timestamp,
         "created_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(timestamp)),
     }
@@ -28596,20 +28883,10 @@ def api_v1_delete_course(course_id: str):
     if course.get("teacher") != teacher:
         return jsonify(status="error", message="Not the course teacher"), 403
 
-    ok, _, error_key = validate_effective_auth(teacher, auth_secret, passphrase)
+    signed_tx = data.get("signed_tx") or data.get("wallet_v1_signed_tx")
+    ok, error_key = validate_course_actor_auth(teacher, auth_secret, passphrase, signed_tx, expected_to=f"COURSE_DELETE:{course_id}")
     if not ok:
-        if error_key == "no_effective_pledge":
-            return jsonify(status="error", message="Teacher has no effective pledge access"), 403
-        if error_key == "missing_auth_secret":
-            return jsonify(status="error", message="Missing auth_secret"), 400
-        if error_key == "missing_pledge":
-            return jsonify(status="error", message="Teacher not pledged"), 404
-        if error_key == "send_not_enabled":
-            return jsonify(status="error", message="Teacher send not enabled"), 400
-        if error_key == "passphrase_required":
-            return jsonify(status="error", message="Passphrase required"), 400
-        if error_key == "invalid_auth":
-            return jsonify(status="error", message="Invalid auth"), 403
+        return _course_auth_error_response(error_key, "Teacher")
 
     courses = [c for c in courses if c.get("id") != course_id]
     save_courses(courses)
@@ -28637,6 +28914,96 @@ def api_v1_delete_course(course_id: str):
 
     return jsonify(status="success", message="Course deleted"), 200
 
+
+
+
+def _course_auth_error_response(error_key: str | None, actor_label: str = "Teacher"):
+    if error_key == "no_effective_pledge":
+        return jsonify(status="error", message=f"{actor_label} has no effective pledge access"), 403
+    if error_key == "missing_auth_secret":
+        return jsonify(status="error", message="Missing auth_secret or Wallet V1 signature"), 400
+    if error_key == "missing_pledge":
+        return jsonify(status="error", message=f"{actor_label} not found or has not pledged"), 404
+    if error_key == "send_not_enabled":
+        return jsonify(status="error", message=f"{actor_label} send not enabled"), 400
+    if error_key == "passphrase_required":
+        return jsonify(status="error", message="Passphrase required"), 400
+    if error_key == "invalid_auth":
+        return jsonify(status="error", message="Invalid auth"), 403
+    if error_key == "invalid_v1_signature":
+        return jsonify(status="error", message="Invalid Wallet V1 signature"), 403
+    return jsonify(status="error", message="Authentication failed"), 403
+
+
+def validate_course_actor_auth(actor_address: str, auth_secret: str = "", passphrase: str = "", signed_tx=None, *, expected_to: str = "COURSE_CREATE") -> tuple[bool, str | None]:
+    """Authenticate course mutations with legacy pledge auth or Wallet V1 signature.
+
+    Wallet V1 course signatures are zero-value action envelopes. They prove that
+    the browser controls the connected V1 wallet without requiring the old
+    pledge send_secret, which unblocks migrated pledge wallets on /courses.
+    """
+    actor_address = (actor_address or "").strip()
+    if auth_secret:
+        ok, _state, error_key = validate_effective_auth(actor_address, auth_secret, passphrase)
+        return ok, error_key
+
+    if not signed_tx:
+        return False, "missing_auth_secret"
+
+    if isinstance(signed_tx, str):
+        try:
+            signed_tx = json.loads(signed_tx)
+        except Exception:
+            return False, "invalid_v1_signature"
+    if not isinstance(signed_tx, dict):
+        return False, "invalid_v1_signature"
+
+    try:
+        import wallet_v1_production_final as wallet_v1_prod
+        signed_from = (signed_tx.get("from") or "").strip()
+        signed_to = (signed_tx.get("to") or "").strip()
+        if signed_from != actor_address:
+            return False, "invalid_v1_signature"
+        if expected_to and signed_to != expected_to:
+            return False, "invalid_v1_signature"
+        if str(signed_tx.get("token") or "").upper() not in {"COURSE", "L2E"}:
+            return False, "invalid_v1_signature"
+        if float(signed_tx.get("amount") or 0) != 0:
+            return False, "invalid_v1_signature"
+
+        for verifier in (
+            wallet_v1_prod.verify_required_fields,
+            wallet_v1_prod.verify_no_forbidden_fields,
+            wallet_v1_prod.verify_ecdsa_signature,
+            wallet_v1_prod.verify_publickey_matches_address,
+            wallet_v1_prod.verify_timestamp,
+        ):
+            if verifier is wallet_v1_prod.verify_timestamp:
+                ok, err = verifier(signed_tx.get("timestamp"))
+            else:
+                ok, err = verifier(signed_tx)
+            if not ok:
+                app.logger.warning("Course Wallet V1 auth failed: %s", err)
+                return False, "invalid_v1_signature"
+
+        # Course auth is not a spend transaction, so keep replay state local to courses
+        # instead of consuming the Wallet V1 tx nonce namespace used by /api/v1/tx/send.
+        nonce = str(signed_tx.get("nonce") or "")
+        nonce_file = os.path.join(DATA_DIR, "course_action_nonces.json")
+        nonce_store = load_json(nonce_file, {})
+        now = int(time.time())
+        if not isinstance(nonce_store, dict):
+            nonce_store = {}
+        nonce_store = {k: v for k, v in nonce_store.items() if now - int(v or 0) < 600}
+        nonce_key = f"{actor_address}:{nonce}"
+        if not nonce or nonce_key in nonce_store:
+            return False, "invalid_v1_signature"
+        nonce_store[nonce_key] = now
+        save_json(nonce_file, nonce_store)
+        return True, None
+    except Exception as exc:
+        app.logger.warning("Course Wallet V1 auth exception: %s", exc)
+        return False, "invalid_v1_signature"
 
 @app.route("/api/v1/courses", methods=["POST"])
 def api_v1_create_course():
@@ -28697,21 +29064,11 @@ def api_v1_create_course():
     if not title or not teacher or price_thr < 0 or reward_l2e <= 0:
         return jsonify(status="error", message="Missing or invalid fields"), 400
 
-    # Authenticate teacher
-    ok, _, error_key = validate_effective_auth(teacher, auth_secret, passphrase)
+    # Authenticate teacher (legacy send_secret or Wallet V1 signed action)
+    signed_tx = data.get("signed_tx") or data.get("wallet_v1_signed_tx")
+    ok, error_key = validate_course_actor_auth(teacher, auth_secret, passphrase, signed_tx, expected_to="COURSE_CREATE")
     if not ok:
-        if error_key == "no_effective_pledge":
-            return jsonify(status="error", message="Teacher has no effective pledge access"), 403
-        if error_key == "missing_auth_secret":
-            return jsonify(status="error", message="Missing auth_secret"), 400
-        if error_key == "missing_pledge":
-            return jsonify(status="error", message="Teacher not found or has not pledged"), 404
-        if error_key == "send_not_enabled":
-            return jsonify(status="error", message="Teacher send not enabled"), 400
-        if error_key == "passphrase_required":
-            return jsonify(status="error", message="Passphrase required"), 400
-        if error_key == "invalid_auth":
-            return jsonify(status="error", message="Invalid auth"), 403
+        return _course_auth_error_response(error_key, "Teacher")
 
     courses = load_courses()
     course_id = str(uuid.uuid4())
@@ -31046,20 +31403,10 @@ def api_v1_get_quiz_for_edit(course_id: str):
     if course.get("teacher") != teacher:
         return jsonify(status="error", message="Not the course teacher"), 403
 
-    ok, _, error_key = validate_effective_auth(teacher, auth_secret, passphrase)
+    signed_tx = data.get("signed_tx") or data.get("wallet_v1_signed_tx")
+    ok, error_key = validate_course_actor_auth(teacher, auth_secret, passphrase, signed_tx, expected_to=f"COURSE_QUIZ:{course_id}")
     if not ok:
-        if error_key == "no_effective_pledge":
-            return jsonify(status="error", message="Teacher has no effective pledge access"), 403
-        if error_key == "missing_auth_secret":
-            return jsonify(status="error", message="Missing auth_secret"), 400
-        if error_key == "missing_pledge":
-            return jsonify(status="error", message="Teacher not pledged"), 404
-        if error_key == "send_not_enabled":
-            return jsonify(status="error", message="Teacher send not enabled"), 400
-        if error_key == "passphrase_required":
-            return jsonify(status="error", message="Passphrase required"), 400
-        if error_key == "invalid_auth":
-            return jsonify(status="error", message="Invalid auth"), 403
+        return _course_auth_error_response(error_key, "Teacher")
 
     quiz = load_quizzes().get(course_id)
     if quiz:
@@ -31172,21 +31519,11 @@ def api_v1_create_quiz(course_id: str):
     if course.get("teacher") != teacher:
         return jsonify(status="error", message="Not the course teacher"), 403
 
-    # Authenticate teacher
-    ok, _, error_key = validate_effective_auth(teacher, auth_secret, passphrase)
+    # Authenticate teacher (legacy send_secret or Wallet V1 signed action)
+    signed_tx = data.get("signed_tx") or data.get("wallet_v1_signed_tx")
+    ok, error_key = validate_course_actor_auth(teacher, auth_secret, passphrase, signed_tx, expected_to=f"COURSE_QUIZ:{course_id}")
     if not ok:
-        if error_key == "no_effective_pledge":
-            return jsonify(status="error", message="Teacher has no effective pledge access"), 403
-        if error_key == "missing_auth_secret":
-            return jsonify(status="error", message="Missing auth_secret"), 400
-        if error_key == "missing_pledge":
-            return jsonify(status="error", message="Teacher not pledged"), 404
-        if error_key == "send_not_enabled":
-            return jsonify(status="error", message="Teacher send not enabled"), 400
-        if error_key == "passphrase_required":
-            return jsonify(status="error", message="Passphrase required"), 400
-        if error_key == "invalid_auth":
-            return jsonify(status="error", message="Invalid auth"), 403
+        return _course_auth_error_response(error_key, "Teacher")
 
     # QUEST: Validate questions format (MCQ / True-False)
     validated_questions = []
@@ -31798,15 +32135,17 @@ def api_v1_user_positions(address):
                 "pool_id": pool.get("id"),
                 "token_a": token_a,
                 "token_b": token_b,
-                "user_shares": round(user_shares, 6),
+                "liquidity_share": round(user_shares, 6),
                 "total_shares": round(total_shares, 6),
-                "share_percent": round(share_ratio * 100, 4),
+                "share_pct": round(share_ratio * 100, 4),
                 "token_a_amount": token_a_amount,
                 "token_b_amount": token_b_amount,
                 "value_thr": round(value_thr, 6),
                 "value_usd": round(value_thr * thr_price, 2),
                 "reserves_a": reserves_a,
-                "reserves_b": reserves_b
+                "reserves_b": reserves_b,
+                "pair": f"{token_a}/{token_b}",
+                "pending_rewards": 0.0,
             }
 
             # Add referral info if available
@@ -32301,16 +32640,28 @@ def api_v1_add_liquidity():
     reserves_b = float(pool["reserves_b"])
     total_shares = float(pool["total_shares"])
 
-    # Check if amounts maintain the ratio (allow small slippage)
+    # Check if amounts maintain the ratio (allow 2% slippage)
     expected_ratio = reserves_a / reserves_b if reserves_b > 0 else 0
     provided_ratio = amt_a / amt_b if amt_b > 0 else 0
 
-    if abs(expected_ratio - provided_ratio) / max(expected_ratio, 0.0001) > 0.02:  # 2% slippage tolerance
+    if reserves_a > 0 and reserves_b > 0 and abs(expected_ratio - provided_ratio) / max(expected_ratio, 0.0001) > 0.02:
+        required_b = round(amt_a / expected_ratio, 6) if expected_ratio > 0 else 0
+        min_b = round(required_b * 0.98, 6)
+        max_b = round(required_b * 1.02, 6)
         return jsonify(
             status="error",
-            message="Amounts don't match pool ratio",
-            expected_ratio=expected_ratio,
-            provided_ratio=provided_ratio
+            error="ratio_mismatch",
+            message=(
+                f"Amount mismatch: {amt_a} {token_a} requires {required_b} {token_b} "
+                f"(±2% = {min_b}–{max_b}). You provided {amt_b} {token_b}."
+            ),
+            required_amount_b=required_b,
+            min_amount_b=min_b,
+            max_amount_b=max_b,
+            expected_ratio=round(expected_ratio, 6),
+            provided_ratio=round(provided_ratio, 6),
+            token_a=token_a,
+            token_b=token_b,
         ), 400
 
     # Check balances
@@ -32924,6 +33275,707 @@ def api_v1_pool_swap():
         tx_id=tx_id
     ), 200
 
+
+# ─── Issue #672: Cross-Chain Add-Liquidity (THR + USDT/USDC) ─────────────────
+
+# Supported external tokens per chain for pool add-liquidity
+_POOL_EXTERNAL_TOKENS: dict[str, list[dict]] = {
+    "bsc": [
+        {"token": "USDT", "token_contract": USDT_BNB_CONTRACT, "decimals": 18,
+         "token_standard": "BEP20", "network_label": "BNB Smart Chain"},
+        {"token": "USDC", "token_contract": "0x8AC76a51cc950d9822D68b83FE1Ad97B32Cd580d", "decimals": 18,
+         "token_standard": "BEP20", "network_label": "BNB Smart Chain"},
+    ],
+    "arbitrum": [
+        {"token": "USDT", "token_contract": "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9", "decimals": 6,
+         "token_standard": "ERC20", "network_label": "Arbitrum"},
+        {"token": "USDC", "token_contract": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831", "decimals": 6,
+         "token_standard": "ERC20", "network_label": "Arbitrum"},
+    ],
+    "base": [
+        {"token": "USDC", "token_contract": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", "decimals": 6,
+         "token_standard": "ERC20", "network_label": "Base"},
+    ],
+}
+
+_POOL_CHAIN_RPC: dict[str, str] = {
+    "bsc": BSC_RPC_URL,
+    "arbitrum": os.getenv("ARB_RPC_URL", "https://arb1.arbitrum.io/rpc"),
+    "base": os.getenv("BASE_RPC_URL", "https://mainnet.base.org"),
+}
+
+
+def _fetch_erc20_balance_internal(chain: str, evm_address: str, token_contract: str, decimals: int) -> float | None:
+    """Call eth_call balanceOf on a token contract. Returns float balance or None on error."""
+    rpc_url = _POOL_CHAIN_RPC.get(chain, "").strip()
+    if not rpc_url:
+        return None
+    try:
+        data_hex = "0x70a08231" + evm_address.replace("0x", "").lower().zfill(64)
+        result = requests.post(
+            rpc_url,
+            json={"jsonrpc": "2.0", "method": "eth_call",
+                  "params": [{"to": token_contract, "data": data_hex}, "latest"], "id": 1},
+            timeout=10
+        ).json()
+        raw_hex = result.get("result", "0x0") or "0x0"
+        raw = int(raw_hex, 16)
+        divisor = 10 ** decimals
+        return raw / divisor
+    except Exception as exc:
+        logger.warning("[pool_erc20_balance] chain=%s error=%s", chain, exc)
+        return None
+
+
+@app.route("/api/v1/pools/available", methods=["GET"])
+def api_v1_pools_available():
+    """
+    Returns pools eligible for cross-chain add-liquidity (THR paired with USDT or USDC).
+    Includes supported external chains per pool token_b.
+    """
+    pools = load_pools()
+    result = []
+    for pool in pools:
+        token_a = pool.get("token_a", "")
+        token_b = pool.get("token_b", "")
+        # Only THR paired with a stablecoin
+        if token_a != "THR" or token_b not in ("USDT", "USDC"):
+            continue
+
+        reserves_a = float(pool.get("reserves_a", 0))
+        reserves_b = float(pool.get("reserves_b", 0))
+        total_shares = float(pool.get("total_shares", 0))
+
+        # Build supported chain list for the external token (token_b)
+        external_chains = []
+        for chain_id, tokens in _POOL_EXTERNAL_TOKENS.items():
+            for t in tokens:
+                if t["token"] == token_b:
+                    external_chains.append({
+                        "chain": chain_id,
+                        "label": t["network_label"],
+                        "token_contract": t["token_contract"],
+                        "decimals": t["decimals"],
+                        "token_standard": t["token_standard"],
+                    })
+
+        if not external_chains:
+            continue
+
+        result.append({
+            "pool_id": pool.get("id"),
+            "name": pool.get("name", f"{token_a}/{token_b}"),
+            "token_a": token_a,
+            "token_b": token_b,
+            "reserves_a": reserves_a,
+            "reserves_b": reserves_b,
+            "total_shares": total_shares,
+            "pool_ratio": round(reserves_b / reserves_a, 6) if reserves_a > 0 else None,
+            "fee_bps": pool_fee_bps(pool),
+            "lp_symbol": pool.get("lp_symbol", f"LP-{token_a}-{token_b}"),
+            "external_chains": external_chains,
+        })
+
+    return jsonify(ok=True, pools=result), 200
+
+
+@app.route("/api/v1/pools/quote-add-liquidity", methods=["GET"])
+def api_v1_pools_quote_add_liquidity():
+    """
+    Returns a quote for adding liquidity to a cross-chain pool.
+
+    Query params:
+        pool_id: pool UUID
+        amount_a: THR amount (optional; supply either amount_a or amount_b)
+        amount_b: external token amount (optional)
+        chain: external chain (bsc|arbitrum|base)
+
+    Returns: required amounts, lp_shares_estimate, pool_ratio, fee_bps, gas_warning
+    """
+    pool_id = request.args.get("pool_id", "").strip()
+    chain = request.args.get("chain", "").strip().lower()
+    amount_a_str = request.args.get("amount_a", "").strip()
+    amount_b_str = request.args.get("amount_b", "").strip()
+
+    if not pool_id:
+        return jsonify(ok=False, error="missing_pool_id"), 400
+
+    pools = load_pools()
+    pool = next((p for p in pools if p.get("id") == pool_id), None)
+    if not pool:
+        return jsonify(ok=False, error="pool_not_found"), 404
+
+    token_a = pool.get("token_a", "")
+    token_b = pool.get("token_b", "")
+    reserves_a = float(pool.get("reserves_a", 0))
+    reserves_b = float(pool.get("reserves_b", 0))
+    total_shares = float(pool.get("total_shares", 0))
+
+    # Determine chain config for token_b
+    chain_info = None
+    if chain:
+        for t in _POOL_EXTERNAL_TOKENS.get(chain, []):
+            if t["token"] == token_b:
+                chain_info = dict(t, chain=chain)
+                break
+
+    # Calculate required paired amount based on pool ratio
+    if reserves_a > 0 and reserves_b > 0:
+        ratio = reserves_b / reserves_a  # USDT per THR
+        if amount_a_str:
+            try:
+                amount_a = float(amount_a_str)
+            except ValueError:
+                return jsonify(ok=False, error="invalid_amount_a"), 400
+            amount_b = round(amount_a * ratio, 6)
+        elif amount_b_str:
+            try:
+                amount_b = float(amount_b_str)
+            except ValueError:
+                return jsonify(ok=False, error="invalid_amount_b"), 400
+            amount_a = round(amount_b / ratio, 6)
+        else:
+            return jsonify(ok=False, error="provide_amount_a_or_b"), 400
+
+        # LP shares estimate: proportional to contribution
+        lp_shares_estimate = round((amount_a / reserves_a) * total_shares, 6) if total_shares > 0 else 0.0
+        share_pct = round((amount_a / (reserves_a + amount_a)) * 100, 4) if (reserves_a + amount_a) > 0 else 0.0
+    else:
+        # Empty pool: geometric mean initial shares
+        if amount_a_str and amount_b_str:
+            try:
+                amount_a = float(amount_a_str)
+                amount_b = float(amount_b_str)
+            except ValueError:
+                return jsonify(ok=False, error="invalid_amounts"), 400
+        else:
+            return jsonify(ok=False, error="pool_empty_provide_both"), 400
+        import math
+        lp_shares_estimate = round(math.sqrt(amount_a * amount_b), 6)
+        ratio = amount_b / amount_a if amount_a > 0 else 0
+        share_pct = 100.0
+
+    return jsonify(
+        ok=True,
+        pool_id=pool_id,
+        token_a=token_a,
+        token_b=token_b,
+        amount_a=round(amount_a, 6),
+        amount_b=round(amount_b, 6),
+        pool_ratio=round(ratio, 6),
+        lp_shares_estimate=lp_shares_estimate,
+        share_pct=share_pct,
+        fee_bps=pool_fee_bps(pool),
+        chain_info=chain_info,
+        gas_warning="External chain gas required in native token (BNB/ETH) to confirm the USDT/USDC transfer.",
+        slippage_tolerance_pct=2.0,
+    ), 200
+
+
+@app.route("/api/v1/pools/add-liquidity", methods=["POST"])
+def api_v1_pools_add_liquidity_crosschain():
+    """
+    Cross-chain add-liquidity: initiates a pending liquidity intent.
+
+    User must send USDT/USDC to vault address on external chain.
+    Watcher/gateway confirms external deposit via /confirm endpoint.
+    Only then: THR deducted, LP shares minted.
+
+    Request body:
+    {
+        "pool_id": "uuid...",
+        "amount_a": 500.0,          // THR amount
+        "amount_b": 5.0,            // USDT or USDC amount
+        "chain": "bsc",             // external chain for token_b
+        "token_contract": "0x...",  // ERC20 contract for token_b
+        "decimals": 18,
+        "provider_thr": "THR...",   // Thronos wallet
+        "evm_address": "0x...",     // user's EVM wallet holding USDT/USDC
+        "auth_secret": "..."
+    }
+
+    Returns:
+    {
+        "ok": true,
+        "intent_id": "...",
+        "pool_id": "...",
+        "token_a": "THR",
+        "token_b": "USDT",
+        "amount_a": 500.0,
+        "amount_b": 5.0,
+        "external_chain": "bsc",
+        "vault_address": "0x...",  // where user sends token_b
+        "token_contract": "0x...",
+        "status": "pending_external_deposit",
+        "expires_at": timestamp,
+        "message": "Send X amount_b to vault_address on external_chain to complete."
+    }
+    """
+    data = request.get_json() or {}
+
+    pool_id = (data.get("pool_id") or "").strip()
+    chain = (data.get("chain") or "").lower().strip()
+    token_contract = (data.get("token_contract") or "").strip()
+    evm_address = (data.get("evm_address") or "").strip()
+    decimals_raw = data.get("decimals", 18)
+    auth_secret = (data.get("auth_secret") or "").strip()
+    provider = (data.get("provider_thr") or data.get("from") or "").strip()
+
+    try:
+        amt_a = float(data.get("amount_a", 0))
+        amt_b = float(data.get("amount_b", 0))
+        decimals = int(decimals_raw)
+    except (TypeError, ValueError):
+        return jsonify(ok=False, error="invalid_amounts"), 400
+
+    if not pool_id or amt_a <= 0 or amt_b <= 0:
+        return jsonify(ok=False, error="missing_fields",
+                       message="pool_id, amount_a, amount_b are required"), 400
+    if not chain or chain not in _POOL_EXTERNAL_TOKENS:
+        return jsonify(ok=False, error="invalid_chain",
+                       message=f"Supported chains: {list(_POOL_EXTERNAL_TOKENS.keys())}"), 400
+    if not token_contract:
+        return jsonify(ok=False, error="missing_token_contract"), 400
+    if not evm_address:
+        return jsonify(ok=False, error="missing_evm_address"), 400
+    if not provider:
+        return jsonify(ok=False, error="missing_provider"), 400
+
+    # Validate token_contract is in known list for this chain
+    known_contracts = {t["token_contract"].lower() for t in _POOL_EXTERNAL_TOKENS.get(chain, [])}
+    if token_contract.lower() not in known_contracts:
+        return jsonify(ok=False, error="unknown_token_contract",
+                       message="Token contract not in supported list for this chain"), 400
+
+    # Determine token metadata for this contract
+    token_meta = next(
+        (t for t in _POOL_EXTERNAL_TOKENS.get(chain, []) if t["token_contract"].lower() == token_contract.lower()),
+        None
+    )
+    if not token_meta:
+        return jsonify(ok=False, error="token_meta_not_found"), 400
+
+    ext_token = token_meta["token"]
+    token_standard = token_meta["token_standard"]
+    network_label = token_meta["network_label"]
+
+    # V1 wallet access gate: covers new pledge users, old/migration users, whitelisted users
+    _access_err, _access_msg = _validate_pool_access(provider, auth_secret)
+    if _access_err != "ok":
+        logger.warning("[add_liquidity_intent] pool_access_denied provider=%s err=%s",
+                       provider[:10] if provider else "", _access_err)
+        return jsonify(ok=False, error=_access_err, message=_access_msg), (
+            401 if _access_err == "invalid_auth_secret" else 403
+        )
+
+    # Load pool
+    pools = load_pools()
+    pool = next((p for p in pools if p.get("id") == pool_id), None)
+    if not pool:
+        return jsonify(ok=False, error="pool_not_found"), 404
+
+    token_a = pool.get("token_a", "")
+    token_b = pool.get("token_b", "")
+
+    if token_a != "THR" or token_b != ext_token:
+        return jsonify(ok=False, error="pool_token_mismatch",
+                       message=f"Pool is {token_a}/{token_b}, requested THR/{ext_token}"), 400
+
+    reserves_a = float(pool.get("reserves_a", 0))
+    reserves_b = float(pool.get("reserves_b", 0))
+    total_shares = float(pool.get("total_shares", 0))
+
+    # Validate ratio (2% slippage tolerance)
+    if reserves_a > 0 and reserves_b > 0:
+        expected_ratio = reserves_b / reserves_a
+        provided_ratio = amt_b / amt_a if amt_a > 0 else 0
+        ratio_deviation = abs(expected_ratio - provided_ratio) / max(expected_ratio, 0.000001)
+        if ratio_deviation > 0.02:
+            required_b = round(amt_a * expected_ratio, 6)
+            min_b = round(required_b * 0.98, 6)
+            max_b = round(required_b * 1.02, 6)
+            return jsonify(
+                ok=False,
+                error="ratio_mismatch",
+                message=(
+                    f"Amount mismatch: {amt_a} {token_a} requires {required_b} {ext_token} "
+                    f"(±2% = {min_b}–{max_b}). You provided {amt_b} {ext_token}."
+                ),
+                required_amount_b=required_b,
+                min_amount_b=min_b,
+                max_amount_b=max_b,
+                expected_ratio=round(expected_ratio, 6),
+                provided_ratio=round(provided_ratio, 6),
+                deviation_pct=round(ratio_deviation * 100, 2),
+                token_a=token_a,
+                token_b=ext_token,
+            ), 400
+
+    # Check THR balance on Thronos ledger (for reservation, not deduction)
+    thr_ledger = load_json(LEDGER_FILE, {})
+    thr_balance = float(thr_ledger.get(provider, 0.0))
+    if thr_balance < amt_a:
+        return jsonify(ok=False, error="insufficient_thr",
+                       message=f"Need {amt_a} THR, have {thr_balance}"), 400
+
+    # Check external USDT/USDC balance via balanceOf() — read-only verification only
+    ext_balance = _fetch_erc20_balance_internal(chain, evm_address, token_contract, decimals)
+    if ext_balance is None:
+        return jsonify(ok=False, error="external_balance_check_failed",
+                       message="Could not verify external token balance — RPC unavailable"), 502
+    if ext_balance < amt_b:
+        return jsonify(ok=False, error="insufficient_external_balance",
+                       message=f"Need {amt_b} {ext_token} on {network_label}, have {ext_balance}",
+                       balance=ext_balance), 400
+
+    # ── Create pending intent (no mutations yet) ──
+    import secrets as _secrets
+    intent_id = f"INTENT-{int(time.time())}-{_secrets.token_hex(6)}"
+
+    # Get pool vault address — only proceeds when fully configured + signer + watcher available.
+    # NEVER uses treasury, gas_wallet, or fee_collector.
+    _vault_status, vault_address = _pool_vault_status(chain)
+    if _vault_status == "pending_config" or not vault_address:
+        return jsonify(
+            ok=False,
+            error="vault_pending_config",
+            message=(
+                f"Add-liquidity is disabled for {chain}: pool vault is pending configuration. "
+                f"Set {chain.upper()}_POOL_VAULT_ADDRESS to the AMM/system address controlled by the signer, "
+                f"and ensure GATEWAY_SECRET and the chain watcher are configured. "
+                f"See GET /api/admin/system-addresses for current status."
+            ),
+        ), 503
+
+    # Store intent in intents file
+    intents_file = os.path.join(DATA_DIR, "pool_liquidity_intents.json")
+    intents = load_json(intents_file, [])
+    expires_at = time.time() + 86400  # 24 hour expiry
+
+    intent = {
+        "intent_id": intent_id,
+        "pool_id": pool_id,
+        "provider_thr": provider,
+        "evm_address": evm_address,
+        "token_a": token_a,
+        "token_b": token_b,
+        "amount_a": amt_a,
+        "amount_b": amt_b,
+        "external_chain": chain,
+        "token_contract": token_contract,
+        "token_standard": token_standard,
+        "network_label": network_label,
+        "vault_address": vault_address,
+        "status": "pending_external_deposit",
+        "external_txid": None,
+        "created_at": time.time(),
+        "expires_at": expires_at,
+    }
+    intents.append(intent)
+    save_json(intents_file, intents)
+
+    # Phase 1: intent created — THR not yet deducted, waiting for external deposit
+    _pair_label = f"{token_a}/{token_b}"
+    add_wallet_history_event(
+        thr_address=provider,
+        event_type="pool_add_liquidity_intent_created",
+        chain="thronos",
+        asset="THR",
+        amount=amt_a,
+        status="pending",
+        direction="pool",
+        internal_txid=intent_id,
+        token_standard="native",
+        network_label="Thronos",
+        external_to=vault_address,
+        pool_id=pool_id,
+        pair=_pair_label,
+    )
+    # Phase 1 (external side): inform history that USDT/USDC deposit is expected on-chain
+    add_wallet_history_event(
+        thr_address=provider,
+        event_type="pool_add_liquidity_intent_created",
+        chain=chain,
+        asset=ext_token,
+        amount=amt_b,
+        status="pending",
+        direction="pool",
+        internal_txid=intent_id,
+        token_contract=token_contract,
+        token_standard=token_standard,
+        network_label=network_label,
+        external_to=vault_address,
+        pool_id=pool_id,
+        pair=_pair_label,
+    )
+
+    logger.info(
+        "[pool_add_liquidity_intent] intent=%s provider=%s pool=%s thr=%.6f %s=%.6f chain=%s",
+        intent_id, provider, pool_id, amt_a, ext_token, amt_b, chain
+    )
+
+    return jsonify(
+        ok=True,
+        intent_id=intent_id,
+        pool_id=pool_id,
+        token_a=token_a,
+        token_b=token_b,
+        amount_a=amt_a,
+        amount_b=amt_b,
+        external_chain=chain,
+        vault_address=vault_address,
+        token_contract=token_contract,
+        status="pending_external_deposit",
+        expires_at=expires_at,
+        message=f"Send {amt_b} {ext_token} to {vault_address} on {network_label} to complete. Allow ~5 min for confirmation.",
+        gas_warning=f"You need gas ({network_label} native token) to send {ext_token}.",
+    ), 200
+
+
+@app.route("/api/v1/pools/add-liquidity/confirm", methods=["POST"])
+def api_v1_pools_add_liquidity_confirm():
+    """
+    Watcher/gateway confirms external deposit and commits liquidity.
+
+    CRITICAL: Watcher MUST verify the external_txid transfer details BEFORE calling this:
+      1. Token address = intent.token_contract
+      2. Amount transferred ≈ intent.amount_b (within slippage)
+      3. Recipient = vault_address (from intent)
+      4. Sender = user's EVM address (from intent.evm_address)
+      5. Chain = intent.external_chain
+
+    This endpoint assumes watcher has already verified transfer validity.
+    Do NOT accept arbitrary external_txid without validating these details.
+
+    Request body:
+    {
+        "intent_id": "INTENT-...",
+        "external_txid": "0x...",     // watcher-verified blockchain tx hash
+        "gateway_secret": "..."       // required — blocks if not configured
+    }
+
+    Returns: confirms intent, deducts THR, mints LP shares
+    """
+    data = request.get_json() or {}
+    intent_id = (data.get("intent_id") or "").strip()
+    external_txid = (data.get("external_txid") or "").strip()
+    gateway_secret = (data.get("gateway_secret") or "").strip()
+
+    if not intent_id or not external_txid:
+        return jsonify(ok=False, error="missing_fields"), 400
+
+    # Gateway auth — required when GATEWAY_SECRET is configured
+    configured_secret = os.getenv("GATEWAY_SECRET", "").strip()
+    if configured_secret:
+        if not gateway_secret:
+            logger.warning("[add_liquidity_confirm] missing_gateway_secret")
+            return jsonify(ok=False, error="missing_gateway_secret",
+                           message="GATEWAY_SECRET required"), 401
+        if gateway_secret != configured_secret:
+            logger.warning("[add_liquidity_confirm] invalid_gateway_secret attempt")
+            return jsonify(ok=False, error="invalid_gateway_secret"), 401
+    else:
+        logger.warning("[add_liquidity_confirm] GATEWAY_SECRET not configured — refusing all confirm requests for security")
+        return jsonify(ok=False, error="gateway_not_configured",
+                       message="Pool gateway not configured"), 500
+
+    # Load intents
+    intents_file = os.path.join(DATA_DIR, "pool_liquidity_intents.json")
+    intents = load_json(intents_file, [])
+    intent = next((i for i in intents if i.get("intent_id") == intent_id), None)
+    if not intent:
+        return jsonify(ok=False, error="intent_not_found"), 404
+
+    # Verify intent status and expiry BEFORE any mutations
+    if intent.get("status") != "pending_external_deposit":
+        return jsonify(ok=False, error="intent_not_pending",
+                       message=f"Intent status is {intent.get('status')}"), 400
+
+    if time.time() > intent.get("expires_at", 0):
+        intent["status"] = "expired"
+        save_json(intents_file, intents)
+        logger.warning("[add_liquidity_confirm] intent_expired intent=%s", intent_id)
+        return jsonify(ok=False, error="intent_expired",
+                       message="Intent expired — no confirmation possible"), 410
+
+    # Prevent duplicate external_txid confirmation (same txid cannot confirm multiple intents)
+    for other_intent in intents:
+        if other_intent.get("intent_id") != intent_id and other_intent.get("external_txid") == external_txid:
+            logger.warning("[add_liquidity_confirm] duplicate_external_txid txid=%s intent1=%s intent2=%s",
+                           external_txid, other_intent.get("intent_id"), intent_id)
+            return jsonify(ok=False, error="duplicate_external_txid",
+                           message="External transaction already used to confirm another intent"), 409
+
+    # Extract intent data
+    pool_id = intent.get("pool_id")
+    provider = intent.get("provider_thr")
+    amt_a = intent.get("amount_a", 0)
+    amt_b = intent.get("amount_b", 0)
+    token_a = intent.get("token_a", "")
+    token_b = intent.get("token_b", "")
+    chain = intent.get("external_chain", "")
+    vault_address = intent.get("vault_address", "")
+
+    # ── Pre-commit validation (before any mutations) ──
+
+    # Validate pool exists
+    pools = load_pools()
+    pool = next((p for p in pools if p.get("id") == pool_id), None)
+    if not pool:
+        intent["status"] = "manual_review"
+        intent["error"] = "Pool not found at confirmation time"
+        save_json(intents_file, intents)
+        logger.warning("[add_liquidity_confirm] pool_not_found intent=%s", intent_id)
+        return jsonify(ok=False, error="pool_not_found_at_confirm"), 500
+
+    # Validate THR balance (before deducting)
+    thr_ledger = load_json(LEDGER_FILE, {})
+    thr_balance = float(thr_ledger.get(provider, 0.0))
+    if thr_balance < amt_a:
+        intent["status"] = "manual_review"
+        intent["error"] = f"THR balance insufficient at confirmation time: had {thr_balance}, needed {amt_a}"
+        save_json(intents_file, intents)
+        logger.warning("[add_liquidity_confirm] insufficient_thr intent=%s provider=%s", intent_id, provider)
+        return jsonify(ok=False, error="insufficient_thr_at_confirm",
+                       message="THR balance changed since intent creation"), 400
+
+    # ── Commit mutations (all pre-checks passed) ──
+
+    # 1. Deduct THR from ledger
+    thr_ledger[provider] = round(thr_balance - amt_a, 6)
+    save_json(LEDGER_FILE, thr_ledger)
+
+    # 2. Update pool reserves + mint LP shares
+
+    reserves_a = float(pool.get("reserves_a", 0))
+    reserves_b = float(pool.get("reserves_b", 0))
+    total_shares = float(pool.get("total_shares", 0))
+
+    # Mint LP shares
+    import math as _math
+    if total_shares > 0 and reserves_a > 0:
+        shares_minted = round((amt_a / reserves_a) * total_shares, 6)
+    else:
+        shares_minted = round(_math.sqrt(amt_a * amt_b), 6)
+
+    pool["reserves_a"] = round(reserves_a + amt_a, 6)
+    pool["reserves_b"] = round(reserves_b + amt_b, 6)
+    pool["total_shares"] = round(total_shares + shares_minted, 6)
+    providers = pool.setdefault("providers", {})
+    providers[provider] = round(float(providers.get(provider, 0.0)) + shares_minted, 6)
+    save_pools(pools)
+
+    # 3. Record on-chain transaction
+    chain_data = load_json(CHAIN_FILE, [])
+    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    chain_data.append({
+        "type": "pool_add_liquidity",
+        "kind": "pool_add_liquidity",
+        "pool_id": pool_id,
+        "provider": provider,
+        "evm_address": intent.get("evm_address"),
+        "token_a": token_a,
+        "token_b": token_b,
+        "amount_a": amt_a,
+        "amount_b": amt_b,
+        "external_chain": chain,
+        "token_contract": intent.get("token_contract"),
+        "token_standard": intent.get("token_standard"),
+        "external_txid": external_txid,
+        "intent_id": intent_id,
+        "lp_shares_minted": shares_minted,
+        "amount": amt_a,
+        "symbol": "THR",
+        "tx_id": intent_id,
+        "timestamp": ts,
+    })
+    save_json(CHAIN_FILE, chain_data)
+
+    # 4. Write phased wallet history events
+    network_label = intent.get("network_label", "")
+    _pair_label   = f"{token_a}/{token_b}"
+    _evm_address  = intent.get("evm_address", "")
+
+    # Phase 2: external deposit confirmed on-chain
+    add_wallet_history_event(
+        thr_address=provider,
+        event_type="pool_add_liquidity_external_tx_confirmed",
+        chain=chain,
+        asset=token_b,
+        amount=amt_b,
+        status="confirmed",
+        direction="pool",
+        internal_txid=intent_id,
+        external_txid=external_txid,
+        token_contract=intent.get("token_contract"),
+        token_standard=intent.get("token_standard"),
+        network_label=network_label,
+        external_from=_evm_address,
+        external_to=vault_address,
+        pool_id=pool_id,
+        pair=_pair_label,
+    )
+
+    # Phase 3a: THR committed (deducted from wallet)
+    add_wallet_history_event(
+        thr_address=provider,
+        event_type="pool_add_liquidity_external_tx_confirmed",
+        chain="thronos",
+        asset="THR",
+        amount=amt_a,
+        status="confirmed",
+        direction="pool",
+        internal_txid=intent_id,
+        external_txid=external_txid,
+        token_standard="native",
+        network_label="Thronos",
+        pool_id=pool_id,
+        pair=_pair_label,
+    )
+
+    # Phase 3b: LP shares minted — primary LP event visible under THR wallet
+    add_wallet_history_event(
+        thr_address=provider,
+        event_type="pool_add_liquidity_lp_minted",
+        chain="thronos",
+        asset="THR",
+        amount=amt_a,
+        status="confirmed",
+        direction="pool",
+        internal_txid=intent_id,
+        external_txid=external_txid,
+        token_standard="native",
+        network_label="Thronos",
+        pool_id=pool_id,
+        lp_shares=shares_minted,
+        pair=_pair_label,
+    )
+
+    # 5. Mark intent as confirmed
+    intent["status"] = "confirmed"
+    intent["external_txid"] = external_txid
+    intent["confirmed_at"] = time.time()
+    intent["lp_shares_minted"] = shares_minted
+    save_json(intents_file, intents)
+
+    logger.info(
+        "[add_liquidity_confirm] intent=%s provider=%s pool=%s confirmed thr=%.6f %s=%.6f shares=%.6f",
+        intent_id, provider, pool_id, amt_a, token_b, amt_b, shares_minted
+    )
+
+    return jsonify(
+        ok=True,
+        intent_id=intent_id,
+        status="confirmed",
+        pool_id=pool_id,
+        lp_shares_minted=shares_minted,
+        reserves_a=pool["reserves_a"],
+        reserves_b=pool["reserves_b"],
+        message=f"Liquidity confirmed. You have {shares_minted} LP shares.",
+    ), 200
+
+
+# ─── End Issue #672 Cross-Chain Add-Liquidity ────────────────────────────────
 
 # PR-182 FIX: Run AI Wallet Check on Startup (master only)
 # NOTE: Guards are inside ensure_ai_wallet() and recompute_height_offset_from_ledger()

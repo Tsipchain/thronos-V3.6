@@ -26964,7 +26964,7 @@ def tx_registry_view():
 
 # ─── SCHEDULER ─────────────────────────────────────
 # Set by start_scheduler(); True only when bnb_pledge_watcher imports successfully.
-_BNB_WATCHER_AVAILABLE: bool = False
+_BNB_WATCHER_AVAILABLE = False
 
 
 def _with_app_context(fn):

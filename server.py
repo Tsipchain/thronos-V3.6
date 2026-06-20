@@ -2819,6 +2819,79 @@ def get_pledge_for_auth(thr_address: str) -> dict | None:
     return next((p for p in pledges if p.get("thr_address") == thr_address), None)
 
 
+def _get_pledge_for_v1_wallet(thr_address: str) -> dict | None:
+    """
+    Find pledge record for a thr_address, checking direct match first, then
+    V1 migration map (old/core users whose pledge record still references the
+    legacy address, not the canonical V1 address).
+    """
+    pledge = get_pledge_for_auth(thr_address)
+    if pledge:
+        return pledge
+    try:
+        from wallet_v1_migration import search_all_migration_sources
+        rec = search_all_migration_sources(canonical_v1_address=thr_address)
+        if rec and rec.get("legacy_address"):
+            return get_pledge_for_auth(rec["legacy_address"])
+    except Exception:
+        pass
+    return None
+
+
+def _validate_pool_access(thr_address: str, auth_secret: str) -> tuple[str, str | None]:
+    """
+    Gate check for pool add-liquidity. Returns ("ok", None) or ("error_code", message).
+
+    V1 wallet holders can access pools regardless of pledge path:
+    - New BTC/USDT pledge users — direct pledge record
+    - Old/migration users — pledge record under legacy address, resolved via migration map
+    - Whitelisted users — no auth_secret required
+
+    NEVER grants access based on treasury/fee/gas wallets.
+    """
+    if not thr_address:
+        return "missing_provider", "Provider THR address required"
+    if not auth_secret:
+        return "missing_auth_secret", "auth_secret required for pool access"
+
+    # Whitelist users: skip auth_secret check
+    entry = get_mining_whitelist_entry(thr_address)
+    if (entry and entry.get("active", True) and not entry.get("banned", False)
+            and _whitelist_allows_no_pledge(entry)):
+        return "ok", None
+
+    # Resolve pledge record (direct or via migration)
+    pledge = _get_pledge_for_v1_wallet(thr_address)
+    if not pledge:
+        return "no_v1_wallet_access", "No V1 wallet access. Complete a pledge or migrate your existing wallet."
+
+    stored_auth_hash = pledge.get("send_auth_hash")
+    stored_seed_hash = pledge.get("send_seed_hash")
+
+    h_auth = hashlib.sha256(f"{auth_secret}:auth".encode()).hexdigest()
+    h_seed = hashlib.sha256(auth_secret.encode()).hexdigest()
+
+    if stored_auth_hash and stored_auth_hash in (h_auth, h_seed):
+        return "ok", None
+    if stored_seed_hash and stored_seed_hash in (h_auth, h_seed):
+        return "ok", None
+
+    # Legacy pledge with no stored hash: auto-register on first use
+    if not stored_auth_hash and not stored_seed_hash:
+        pledges = load_json(PLEDGE_CHAIN, [])
+        for p in pledges:
+            if p.get("thr_address") == pledge.get("thr_address"):
+                p["send_auth_hash"] = h_auth
+                p["send_seed_hash"] = h_seed
+                p["auth_migrated_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+                break
+        save_json(PLEDGE_CHAIN, pledges)
+        logger.info("[pool_access] Auto-registered auth hash for %s", thr_address[:10])
+        return "ok", None
+
+    return "invalid_auth_secret", "Invalid auth_secret"
+
+
 # ─── PR-182: Write Protection for Replica Nodes ────────────────────────────────
 def _is_chain_file(path: str) -> bool:
     """Check if a file is a critical chain/ledger file that replicas shouldn't write."""
@@ -33446,20 +33519,14 @@ def api_v1_pools_add_liquidity_crosschain():
     token_standard = token_meta["token_standard"]
     network_label = token_meta["network_label"]
 
-    # Auth: verify auth_secret matches provider
-    if not auth_secret:
-        return jsonify(ok=False, error="missing_auth_secret"), 400
-    passphrase = (data.get("passphrase") or "").strip()
-    auth_ok, _auth_state, auth_err = validate_effective_auth(provider, auth_secret, passphrase)
-    if not auth_ok:
-        logger.warning("[add_liquidity_intent] invalid_credentials provider=%s err=%s",
-                       provider[:10] if provider else "", auth_err)
-        return jsonify(ok=False, error="invalid_credentials", message="Invalid auth_secret"), 401
-
-    # Pledge access check
-    if not has_pledge_access(provider):
-        return jsonify(ok=False, error="no_pledge_access",
-                       message="Provider must have an active pledge"), 403
+    # V1 wallet access gate: covers new pledge users, old/migration users, whitelisted users
+    _access_err, _access_msg = _validate_pool_access(provider, auth_secret)
+    if _access_err != "ok":
+        logger.warning("[add_liquidity_intent] pool_access_denied provider=%s err=%s",
+                       provider[:10] if provider else "", _access_err)
+        return jsonify(ok=False, error=_access_err, message=_access_msg), (
+            401 if _access_err == "invalid_auth_secret" else 403
+        )
 
     # Load pool
     pools = load_pools()

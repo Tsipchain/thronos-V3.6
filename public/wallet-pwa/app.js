@@ -3340,7 +3340,7 @@ const HISTORY_CHAIN_MAP = {
 
 // Explorer base URLs for history events (no RPC, display only)
 const EXPLORER_BASES = {
-  thronos:  { tx: 'https://api.thronoschain.org/v1/viewer?address={addr}', label: 'Thronos' },
+  thronos:  { tx: 'https://api.thronoschain.org/viewer?tx={txid}', label: 'Thronos' },
   bsc:      { tx: 'https://bscscan.com/tx/{txid}',  label: 'BscScan' },
   arbitrum: { tx: 'https://arbiscan.io/tx/{txid}',  label: 'Arbiscan' },
   base:     { tx: 'https://basescan.org/tx/{txid}', label: 'BaseScan' },

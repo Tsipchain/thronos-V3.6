@@ -16101,6 +16101,7 @@ def api_admin_pythia_addresses():
     bsc_cfg = WITHDRAW_CHAIN_CONFIG.get("bsc", {})
     base_cfg = WITHDRAW_CHAIN_CONFIG.get("base", {})
     arb_cfg = WITHDRAW_CHAIN_CONFIG.get("arbitrum", {})
+    eth_cfg = WITHDRAW_CHAIN_CONFIG.get("eth", {})
 
     def _vault_addr(cfg: dict) -> str:
         return (cfg.get("pool_vault") or "").strip()
@@ -16121,7 +16122,7 @@ def api_admin_pythia_addresses():
     pythia_bsc,  src_bsc  = _resolve_pythia_addr("PYTHIA_SYSTEM_EVM_BSC_ADDRESS",       _vault_addr(bsc_cfg))
     pythia_base, src_base = _resolve_pythia_addr("PYTHIA_SYSTEM_EVM_BASE_ADDRESS",      _vault_addr(base_cfg))
     pythia_arb,  src_arb  = _resolve_pythia_addr("PYTHIA_SYSTEM_EVM_ARBITRUM_ADDRESS",  _vault_addr(arb_cfg))
-    pythia_eth,  src_eth  = _resolve_pythia_addr("PYTHIA_SYSTEM_EVM_ETHEREUM_ADDRESS",  "")
+    pythia_eth,  src_eth  = _resolve_pythia_addr("PYTHIA_SYSTEM_EVM_ETHEREUM_ADDRESS",  _vault_addr(eth_cfg))
 
     signer_available = bool(_env_live("GATEWAY_SECRET"))
 
@@ -16180,7 +16181,7 @@ def api_admin_pythia_addresses():
                 "fee_collector": (_env_live("BASE_FEE_COLLECTOR_ADDRESS") or BASE_FEE_COLLECTOR_ADDRESS or "").strip() or None,
                 "gas_wallet":    None,
                 "treasury":      None,
-                "payout_wallet": (base_cfg.get("hot_wallet") or "").strip() or None,
+                "payout_wallet": (base_cfg.get("payout_wallet") or "").strip() or None,
                 "pythia_signer_public_address": pythia_base or None,
                 "pool_vault_status": _pool_vault_status("base")[0],
                 "pool_vault_source": (
@@ -16192,14 +16193,28 @@ def api_admin_pythia_addresses():
                 "pledge_vault":  None,
                 "pool_vault":    (arb_cfg.get("pool_vault") or "").strip() or None,
                 "fee_collector": (_env_live("ARB_FEE_COLLECTOR_ADDRESS") or ARB_FEE_COLLECTOR_ADDRESS or "").strip() or None,
-                "gas_wallet":    None,
+                "gas_wallet":    (arb_cfg.get("gas_wallet") or "").strip() or None,
                 "treasury":      None,
-                "payout_wallet": (arb_cfg.get("hot_wallet") or "").strip() or None,
+                "payout_wallet": (arb_cfg.get("payout_wallet") or "").strip() or None,
                 "pythia_signer_public_address": pythia_arb or None,
                 "pool_vault_status": _pool_vault_status("arbitrum")[0],
                 "pool_vault_source": (
                     "ARB_POOL_VAULT_ADDRESS" if _env_live("ARB_POOL_VAULT_ADDRESS")
                     else "PYTHIA_SYSTEM_EVM_ARBITRUM_ADDRESS (fallback)"
+                ),
+            },
+            "eth": {
+                "pledge_vault":  None,
+                "pool_vault":    (eth_cfg.get("pool_vault") or "").strip() or None,
+                "fee_collector": (_env_live("ETH_FEE_COLLECTOR_ADDRESS") or ETH_FEE_COLLECTOR_ADDRESS or "").strip() or None,
+                "gas_wallet":    (eth_cfg.get("gas_wallet") or "").strip() or None,
+                "treasury":      None,
+                "payout_wallet": (eth_cfg.get("payout_wallet") or "").strip() or None,
+                "pythia_signer_public_address": pythia_eth or None,
+                "pool_vault_status": _pool_vault_status("eth")[0],
+                "pool_vault_source": (
+                    "ETH_POOL_VAULT_ADDRESS" if _env_live("ETH_POOL_VAULT_ADDRESS")
+                    else "PYTHIA_SYSTEM_EVM_ETHEREUM_ADDRESS (fallback)"
                 ),
             },
         },
@@ -28688,21 +28703,56 @@ WITHDRAW_CHAIN_CONFIG: dict = {
 }
 
 
+def _is_valid_evm_address(addr: str) -> bool:
+    """
+    Return True only if addr is a real 42-char 0x-prefixed EVM address.
+
+    Rejects:
+    - Empty strings
+    - Placeholder strings containing env var names (e.g. PYTHIA_PUBLIC_BSC)
+    - Strings that are not exactly 42 chars
+    - Strings that do not match 0x[0-9a-fA-F]{40}
+
+    Phase 2.2: All chain-specific wallet addresses must pass this check before
+    being considered 'configured'. Invalid/placeholder values → pending_config.
+    """
+    if not addr or not isinstance(addr, str):
+        return False
+    addr = addr.strip()
+    if len(addr) != 42:
+        return False
+    if not re.match(r"^0x[0-9a-fA-F]{40}$", addr):
+        return False
+    # Reject obvious placeholder patterns
+    _PLACEHOLDER_PATTERNS = (
+        "PYTHIA",
+        "PLACEHOLDER",
+        "REPLACE",
+        "YOUR_",
+        "0x0000000000000000000000000000000000000000",
+    )
+    addr_upper = addr.upper()
+    if any(p in addr_upper for p in _PLACEHOLDER_PATTERNS):
+        return False
+    return True
+
+
 def _get_pool_vault(chain: str) -> str:
     """
     Returns the configured pool vault address for a chain.
     Prefers BSC_POOL_VAULT_ADDRESS / ARB_POOL_VAULT_ADDRESS / BASE_POOL_VAULT_ADDRESS / ETH_POOL_VAULT_ADDRESS.
     Falls back to payout_wallet with a warning.
     NEVER uses treasury, gas_wallet, or fee_collector.
+    Only returns an address if it passes _is_valid_evm_address().
     """
     cfg = WITHDRAW_CHAIN_CONFIG.get(chain, {})
-    vault = cfg.get("pool_vault", "").strip()
-    if vault:
+    vault = (cfg.get("pool_vault") or "").strip()
+    if vault and _is_valid_evm_address(vault):
         return vault
-    payout = cfg.get("payout_wallet", "").strip()
-    if payout:
+    payout = (cfg.get("payout_wallet") or "").strip()
+    if payout and _is_valid_evm_address(payout):
         logger.warning(
-            "[pool_vault] %s_POOL_VAULT_ADDRESS not configured — falling back to payout_wallet. "
+            "[pool_vault] %s_POOL_VAULT_ADDRESS not configured or invalid — falling back to payout_wallet. "
             "Set %s_POOL_VAULT_ADDRESS for production.", chain.upper(), chain.upper()
         )
         return payout
@@ -28712,18 +28762,22 @@ def _get_pool_vault(chain: str) -> str:
 def _pool_vault_status(chain: str) -> tuple[str, str]:
     """
     Returns (status, vault_address).
-    status = 'configured' | 'pending_config'
+    status = 'configured' | 'pending_config' | 'invalid_config'
 
-    pending_config when any of:
-      - No pool vault address is set for the chain (or doesn't start with '0x')
-      - GATEWAY_SECRET not configured (no authorized confirmer / signer)
-      - For BSC: bnb_pledge_watcher not available (no deposit watcher)
+    pending_config when:
+      - No pool vault address set for the chain
+      - GATEWAY_SECRET not configured
+
+    invalid_config when:
+      - Address is set but fails EVM validation (placeholder, wrong length, bad format)
 
     NEVER falls back to treasury/fee/gas wallets.
     """
     vault = WITHDRAW_CHAIN_CONFIG.get(chain, {}).get("pool_vault", "").strip()
-    if not vault or not vault.startswith("0x"):
+    if not vault:
         return ("pending_config", vault)
+    if not _is_valid_evm_address(vault):
+        return ("invalid_config", vault)
     if not os.getenv("GATEWAY_SECRET", "").strip():
         return ("pending_config", vault)
     if chain == "bsc" and not _BNB_WATCHER_AVAILABLE:
@@ -29209,18 +29263,25 @@ def _compute_withdrawal_fee(
         amount_net = round(amount - external_service_fee, 6)
         resolved_mode = WITHDRAWAL_FEE_MODE_HYBRID
 
+    # Pre-compute the external fee split for display in quotes (Phase 2.2)
+    gas_split = calculate_external_fee_split(CROSSCHAIN_GAS_FEE_USD)
+
     return {
-        "protocol_fee_thr":      protocol_fee_thr,
-        "external_service_fee":  external_service_fee,
-        "external_service_token": token,
-        "gas_fee_usd_estimate":  CROSSCHAIN_GAS_FEE_USD,
-        "amount_gross":          amount,
-        "amount_net":            amount_net,
-        "thr_price_usd":         thr_price_usd,
-        "thr_rate":              dynamic_rate,
-        "fee_mode":              resolved_mode,
-        "fee_collector_thr":     fee_collector_thr,
-        "fee_collector_ext":     fee_collector_ext,
+        "protocol_fee_thr":           protocol_fee_thr,
+        "external_service_fee":        external_service_fee,
+        "external_service_token":      token,
+        "gas_fee_usd_estimate":        CROSSCHAIN_GAS_FEE_USD,
+        # Phase 2.2 split breakdown (how the gas_fee_usd_estimate is distributed)
+        "external_service_fee_total":  CROSSCHAIN_GAS_FEE_USD,
+        "external_fee_collector_amount": gas_split["fee_collector_usd"],
+        "external_pool_topup_amount":  gas_split["pool_topup_usd"],
+        "amount_gross":                amount,
+        "amount_net":                  amount_net,
+        "thr_price_usd":               thr_price_usd,
+        "thr_rate":                    dynamic_rate,
+        "fee_mode":                    resolved_mode,
+        "fee_collector_thr":           fee_collector_thr,
+        "fee_collector_ext":           fee_collector_ext,
     }
 
 
@@ -29291,7 +29352,9 @@ def api_v1_withdrawal_quote():
     signer_available = bool(os.getenv("GATEWAY_SECRET", "").strip())
 
     disabled_reasons = []
-    if vault_status != "configured":
+    if vault_status == "invalid_config":
+        disabled_reasons.append("pool_vault_invalid_address")
+    elif vault_status != "configured":
         disabled_reasons.append("pool_vault_not_configured")
     if not signer_available:
         disabled_reasons.append("signer_not_available")
@@ -29311,10 +29374,23 @@ def api_v1_withdrawal_quote():
     # Balance buckets (informational)
     buckets = _get_address_buckets(thr_address)
 
-    payout_wallet = (chain_cfg.get("payout_wallet") or "").strip() or None
+    _pw = (chain_cfg.get("payout_wallet") or "").strip()
+    payout_wallet = _pw if _is_valid_evm_address(_pw) else None
 
     # Fee model distinction (Phase 2.2)
     fee_distinction = get_withdrawal_fee_distinction(dest_chain)
+
+    fee_collector_external = (chain_cfg.get("fee_collector") or "").strip() or None
+    pool_vault_addr = (chain_cfg.get("pool_vault") or "").strip() or None
+    gas_wallet_addr = (chain_cfg.get("gas_wallet") or "").strip() or None
+
+    # Only expose addresses that pass EVM validation; replace invalid with None
+    if fee_collector_external and not _is_valid_evm_address(fee_collector_external):
+        fee_collector_external = None
+    if pool_vault_addr and not _is_valid_evm_address(pool_vault_addr):
+        pool_vault_addr = None
+    if gas_wallet_addr and not _is_valid_evm_address(gas_wallet_addr):
+        gas_wallet_addr = None
 
     return jsonify({
         "ok": True,
@@ -29329,11 +29405,19 @@ def api_v1_withdrawal_quote():
             "external_service_fee": fee_breakdown["external_service_fee"],
             "external_service_token": fee_breakdown["external_service_token"],
             "gas_fee_usd_estimate": fee_breakdown["gas_fee_usd_estimate"],
+            # Phase 2.2: external fee split breakdown
+            "external_service_fee_total":    fee_breakdown["external_service_fee_total"],
+            "external_fee_collector_amount": fee_breakdown["external_fee_collector_amount"],
+            "external_pool_topup_amount":    fee_breakdown["external_pool_topup_amount"],
             "thr_price_usd":       fee_breakdown["thr_price_usd"],
             "thr_rate":            fee_breakdown["thr_rate"],
             "fee_mode":            fee_breakdown["fee_mode"],
             "fee_collector_thr":   fee_breakdown["fee_collector_thr"],
             "fee_collector_ext":   fee_breakdown["fee_collector_ext"],
+            # Phase 2.2: role-specific wallet addresses (validated; None if not set or invalid)
+            "fee_collector_external": fee_collector_external,
+            "pool_vault":          pool_vault_addr,
+            "gas_wallet":          gas_wallet_addr,
         },
         "fee_distinction": {
             "is_external_withdrawal": fee_distinction["is_external"],
@@ -29449,6 +29533,11 @@ def api_v1_withdrawal_request():
     liq = _chain_pool_liquidity(dest_chain)
     max_drawable = round(liq["pool_usdt_reserve"] * WITHDRAWAL_MAX_POOL_FRACTION, 6)
 
+    if vault_status == "invalid_config":
+        return jsonify(ok=False, error="withdrawal_not_available",
+                       reason="pool_vault_invalid_address",
+                       detail="Pool vault address is set but is not a valid EVM address (placeholder or malformed).",
+                       chain=dest_chain), 503
     if vault_status != "configured":
         return jsonify(ok=False, error="withdrawal_not_available",
                        reason="pool_vault_not_configured",
@@ -29478,7 +29567,8 @@ def api_v1_withdrawal_request():
     withdraw_id = f"WDREQ-{int(current_ts)}-{secrets.token_hex(5).upper()}"
 
     # ── 7. Build queued request record ────────────────────────────────────────
-    payout_wallet = (chain_cfg.get("payout_wallet") or "").strip() or None
+    _rw = (chain_cfg.get("payout_wallet") or "").strip()
+    payout_wallet = _rw if _is_valid_evm_address(_rw) else None
     request_record = {
         "id":                  withdraw_id,
         "thr_address":         thr_address,

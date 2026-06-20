@@ -73,6 +73,34 @@
             border-bottom-color: #00ff66;
         }
 
+        .subtabs {
+            display: none;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 15px;
+            margin-left: 10px;
+            border-bottom: 1px solid #1a1a2e;
+            padding-bottom: 8px;
+            overflow-x: auto;
+        }
+        .subtabs.visible { display: flex; }
+        .subtab {
+            padding: 6px 12px;
+            background: none;
+            border: none;
+            color: #666;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 400;
+            border-bottom: 2px solid transparent;
+            transition: all 0.2s;
+        }
+        .subtab:hover { color: #00ff66; }
+        .subtab.active {
+            color: #00ff66;
+            border-bottom-color: #00ff66;
+        }
+
         .filters {
             display: flex;
             gap: 10px;
@@ -233,6 +261,15 @@
             <button class="tab {% if default_tab == 'failed' %}active{% endif %}" data-tab="failed">Failed/Review</button>
         </div>
 
+        <!-- Subtabs (shown when "All" tab is selected) -->
+        <div class="subtabs" id="subtabs">
+            <button class="subtab active" data-subtab="all-tx">All Transactions</button>
+            <button class="subtab" data-subtab="native-thr">Native THR</button>
+            <button class="subtab" data-subtab="crosschain-events">🌉 Cross-Chain Events</button>
+            <button class="subtab" data-subtab="bridge">Bridge</button>
+            <button class="subtab" data-subtab="withdrawals">Withdrawals</button>
+        </div>
+
         <!-- Filters -->
         <div class="filters">
             <select class="filter-select" id="chainFilter">
@@ -270,6 +307,7 @@
         const API_URL = '{{ api_url }}';
         let currentAddress = '{{ address }}';
         let currentTab = '{{ default_tab }}' || 'all';
+        let currentSubtab = 'all-tx';
         let currentChain = '';
         let currentStatus = '';
         let currentOffset = 0;
@@ -314,8 +352,9 @@
 
                 totalTransactions = data.total;
                 const transactions = data.transactions;
+                const filteredTransactions = currentTab === 'all' ? filterTransactionsBySubtab(transactions, currentSubtab) : transactions;
 
-                if (transactions.length === 0) {
+                if (filteredTransactions.length === 0) {
                     document.getElementById('content').innerHTML = `
                         <div class="empty-state">
                             <div class="empty-state-icon">📋</div>
@@ -340,7 +379,7 @@
                     </thead>
                     <tbody>`;
 
-                transactions.forEach(tx => {
+                filteredTransactions.forEach(tx => {
                     const icon = getActionIcon(tx.event_type);
                     const statusClass = `status-${tx.status || 'pending'}`;
                     const timestamp = new Date(tx.timestamp * 1000).toLocaleString();
@@ -387,12 +426,62 @@
                 pool_seed: '🏊',
                 pool_withdraw: '💧',
                 bridge: '🌉',
+                bridge_deposit_detected: '⚡',
                 crosschain_withdraw: '🔄',
+                crosschain_withdrawal_requested: '📋',
+                crosschain_withdrawal_confirmed: '✅',
                 gateway_payout: '💰',
+                gateway_payment_received: '📥',
+                gateway_fee_collected: '💸',
+                external_service_fee_collected: '🏦',
+                pool_topup_from_service_fee: '⬆️',
+                gas_reserve_accounted: '⛽',
+                gas_wallet_topped_up: '⛽',
+                swap_to_gas_confirmed: '✅',
                 failed: '❌',
                 manual_review: '👀'
             };
             return icons[actionType] || '•';
+        }
+
+        function isWalletIdentityEvent(eventType) {
+            const identityPatterns = [
+                'wallet_discovered', 'wallet_provisioned', 'wallet_configured',
+                'address_discovered', 'address_attached', 'address_registered',
+                'v1_wallet_', 'public_key', 'key_binding'
+            ];
+            return identityPatterns.some(pattern => eventType.toLowerCase().includes(pattern));
+        }
+
+        function isCrossChainEvent(eventType) {
+            const crosschainPatterns = [
+                'bridge_', 'withdrawal_', 'gateway_', 'crosschain_',
+                'external_service_fee_', 'external_fee_split',
+                'pool_topup_from_service_fee', 'gas_reserve_', 'gas_wallet_', 'swap_to_gas_'
+            ];
+            return crosschainPatterns.some(pattern => eventType.toLowerCase().startsWith(pattern));
+        }
+
+        function filterTransactionsBySubtab(transactions, subtab) {
+            if (subtab === 'crosschain-events') {
+                return transactions.filter(tx => isCrossChainEvent(tx.event_type));
+            } else if (subtab === 'native-thr') {
+                return transactions.filter(tx =>
+                    (tx.asset === 'THR' || tx.event_type === 'token_receive' || tx.event_type === 'token_send')
+                    && !isCrossChainEvent(tx.event_type)
+                    && !isWalletIdentityEvent(tx.event_type)
+                );
+            } else if (subtab === 'bridge') {
+                return transactions.filter(tx => tx.event_type.toLowerCase().startsWith('bridge_'));
+            } else if (subtab === 'withdrawals') {
+                return transactions.filter(tx =>
+                    tx.event_type.toLowerCase().startsWith('withdrawal_') ||
+                    tx.event_type.toLowerCase().startsWith('crosschain_withdrawal')
+                );
+            } else {
+                // 'all-tx' - show all except wallet identity events
+                return transactions.filter(tx => !isWalletIdentityEvent(tx.event_type));
+            }
         }
 
         function updatePagination() {
@@ -426,6 +515,31 @@
                 document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
                 currentTab = btn.dataset.tab;
+                currentOffset = 0;
+
+                // Show/hide subtabs
+                const subtabsContainer = document.getElementById('subtabs');
+                if (currentTab === 'all') {
+                    subtabsContainer.classList.add('visible');
+                    currentSubtab = 'all-tx';
+                    document.querySelectorAll('.subtab').forEach(sb => {
+                        if (sb.dataset.subtab === 'all-tx') sb.classList.add('active');
+                        else sb.classList.remove('active');
+                    });
+                } else {
+                    subtabsContainer.classList.remove('visible');
+                }
+
+                loadTransactions();
+            });
+        });
+
+        // Subtab switching
+        document.querySelectorAll('.subtab').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.subtab').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                currentSubtab = btn.dataset.subtab;
                 currentOffset = 0;
                 loadTransactions();
             });

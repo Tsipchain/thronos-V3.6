@@ -27016,7 +27016,6 @@ if NODE_ROLE == "master" and SCHEDULER_ENABLED and ENABLE_CHAIN:
         print(f"[SCHEDULER] BTC pledge watcher unavailable: {e}")
 
     # BNB/USDT Pledge Watcher – polls BSC for USDT vault deposits via eth_getLogs
-    global _BNB_WATCHER_AVAILABLE
     try:
         from bnb_pledge_watcher import watch_bnb_pledges
         scheduler.add_job(_with_app_context(watch_bnb_pledges), "interval", minutes=5,
@@ -27661,6 +27660,317 @@ def api_pledge_bnb_status():
         send_secret=send_secret,
         pending_confirmation=entry.get("pending_confirmation", True),
     ), 200
+
+
+# ─── PYTHIA SYSTEM WALLET (ADMIN-ONLY) ───────────────────────────────────────
+
+@app.route("/api/admin/pythia/create-evm-address", methods=["POST"])
+def admin_pythia_create_evm_address():
+    """
+    Create or retrieve public EVM addresses for Pythia system wallet.
+
+    Generates real secp256k1 keypair server-side (reuses logic from USDT pledge flow).
+    Returns public addresses only - no private key exposure.
+
+    Response on success:
+    {
+      "ok": true,
+      "pythia_v1_wallet": {
+        "thr_address": "THR...",
+        "public_key": "02...",
+        "evm_public_address": "0x...",
+        "evm_public_address_bsc": "0x...",
+        "evm_public_address_base": "0x...",
+        "evm_public_address_arbitrum": "0x...",
+        "evm_public_address_eth": "0x...",
+        "source": "created_from_server_side_keypair"
+      },
+      "status": "configured",
+      "safe_to_register": true
+    }
+
+    Response if keccak256 unavailable:
+    {
+      "ok": true,
+      "pythia_v1_wallet": {
+        "thr_address": "THR...",
+        "public_key": "02...",
+        "evm_public_address": null,
+        "source": "created_from_server_side_keypair"
+      },
+      "status": "needs_keccak256",
+      "safe_to_register": true,
+      "next_steps": ["Install keccak256: pip install eth_keys", "Try again"]
+    }
+
+    SECURITY: No private key, seed, mnemonic, send_seed, auth_secret, or signer secret exposed.
+    """
+    try:
+        secret = (request.form.get("secret") or (request.get_json() or {}).get("secret") or "").strip()
+        admin_secret = os.getenv("ADMIN_SECRET", "")
+        if admin_secret and secret != admin_secret:
+            return jsonify(ok=False, error="unauthorized"), 403
+
+        # Check if wallet already exists
+        binding_file = os.path.join(DATA_DIR, "wallet_v1_public_key_bindings.json")
+        bindings_data = load_json(binding_file, {"bindings": {}})
+        pythia_binding = bindings_data.get("bindings", {}).get("PYTHIA_SYSTEM_V1_WALLET")
+
+        if pythia_binding:
+            pubkey = pythia_binding.get("public_key", "")
+            thr_addr = pythia_binding.get("address", "")
+            # Try to derive EVM from existing public key
+            evm_result = _try_derive_evm_from_pubkey(pubkey)
+            return jsonify(
+                ok=True,
+                pythia_v1_wallet={
+                    "thr_address": thr_addr,
+                    "public_key": pubkey,
+                    **evm_result,
+                    "source": "discovered_from_binding"
+                },
+                status="configured" if evm_result.get("evm_public_address") else "needs_keccak256",
+                safe_to_register=True
+            ), 200
+
+        # Generate new keypair (pure Python secp256k1 - same as USDT pledge flow)
+        priv_hex, compressed_pub, thr_addr = _generate_secp256k1_keypair_and_thr_address()
+
+        # Try to derive EVM addresses
+        evm_result = _try_derive_evm_from_privkey(priv_hex)
+
+        # Store public key binding (NOT private key)
+        bindings_data["bindings"]["PYTHIA_SYSTEM_V1_WALLET"] = {
+            "address": thr_addr,
+            "public_key": compressed_pub,
+            "bound_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+            "proof": "pythia_system_keypair"
+        }
+        save_json(binding_file, bindings_data)
+
+        status = "configured" if evm_result.get("evm_public_address") else "needs_keccak256"
+        response_data = {
+            "ok": True,
+            "pythia_v1_wallet": {
+                "thr_address": thr_addr,
+                "public_key": compressed_pub,
+                **evm_result,
+                "source": "created_from_server_side_keypair"
+            },
+            "status": status,
+            "safe_to_register": True
+        }
+
+        if status == "needs_keccak256":
+            response_data["next_steps"] = [
+                "Install keccak256: pip install eth_keys",
+                "Call POST /api/admin/pythia/create-evm-address again",
+                "EVM addresses will be populated"
+            ]
+
+        http_code = 201 if status == "configured" else 200
+        return jsonify(**response_data), http_code
+
+    except Exception as e:
+        app.logger.error("[Pythia] create-evm-address error: %s", e, exc_info=True)
+        return jsonify(ok=False, error="internal_error", detail=str(e)), 500
+
+
+def _generate_secp256k1_keypair_and_thr_address():
+    """Generate secp256k1 keypair and derive THR address (pure Python, no deps)."""
+    import os as _os_kp
+
+    _P  = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F
+    _N  = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
+    _Gx = 0x79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798
+    _Gy = 0x483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8
+
+    def _pt_add(P1, P2):
+        if P1 is None: return P2
+        if P2 is None: return P1
+        x1, y1 = P1; x2, y2 = P2
+        if x1 == x2:
+            if y1 != y2: return None
+            m = (3 * x1 * x1 * pow(2 * y1, _P - 2, _P)) % _P
+        else:
+            m = ((y2 - y1) * pow(x2 - x1, _P - 2, _P)) % _P
+        x3 = (m * m - x1 - x2) % _P
+        y3 = (m * (x1 - x3) - y1) % _P
+        return x3, y3
+
+    def _pt_mul(k, G):
+        R = None; A = G
+        while k:
+            if k & 1: R = _pt_add(R, A)
+            A = _pt_add(A, A); k >>= 1
+        return R
+
+    priv_int = int.from_bytes(_os_kp.urandom(32), 'big') % (_N - 1) + 1
+    priv_hex = priv_int.to_bytes(32, 'big').hex()
+    x, y = _pt_mul(priv_int, (_Gx, _Gy))
+    compressed_pub = ('02' if y % 2 == 0 else '03') + hex(x)[2:].zfill(64)
+
+    from wallet_v1_address_derivation import derive_thronos_address
+    thr_address = derive_thronos_address(compressed_pub)
+
+    return priv_hex, compressed_pub, thr_address
+
+
+def _try_derive_evm_from_privkey(priv_hex):
+    """Derive EVM addresses from private key (requires keccak256 library)."""
+    try:
+        keccak_fn = None
+        try:
+            from eth_keys import keys
+            keccak_fn = lambda data: keys.keccak(data)
+        except (ImportError, AttributeError):
+            pass
+
+        if not keccak_fn:
+            try:
+                import sha3
+                keccak_fn = lambda data: sha3.keccak_256(data).digest()
+            except ImportError:
+                pass
+
+        if not keccak_fn:
+            try:
+                from Crypto.Hash import keccak
+                def _keccak_crypto(data):
+                    k = keccak.new(digest_bits=256)
+                    k.update(data)
+                    return k.digest()
+                keccak_fn = _keccak_crypto
+            except ImportError:
+                pass
+
+        if not keccak_fn:
+            return {
+                "evm_public_address": None,
+                "evm_public_address_bsc": None,
+                "evm_public_address_base": None,
+                "evm_public_address_arbitrum": None,
+                "evm_public_address_eth": None,
+            }
+
+        # Derive EVM address
+        priv_int = int(priv_hex, 16)
+        _P  = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F
+        _N  = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
+        _Gx = 0x79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798
+        _Gy = 0x483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8
+
+        def _pt_add(P1, P2):
+            if P1 is None: return P2
+            if P2 is None: return P1
+            x1, y1 = P1; x2, y2 = P2
+            if x1 == x2:
+                if y1 != y2: return None
+                m = (3 * x1 * x1 * pow(2 * y1, _P - 2, _P)) % _P
+            else:
+                m = ((y2 - y1) * pow(x2 - x1, _P - 2, _P)) % _P
+            x3 = (m * m - x1 - x2) % _P
+            y3 = (m * (x1 - x3) - y1) % _P
+            return x3, y3
+
+        def _pt_mul(k, G):
+            R = None; A = G
+            while k:
+                if k & 1: R = _pt_add(R, A)
+                A = _pt_add(A, A); k >>= 1
+            return R
+
+        x, y = _pt_mul(priv_int, (_Gx, _Gy))
+        uncompressed_pub_hex = '04' + hex(x)[2:].zfill(64) + hex(y)[2:].zfill(64)
+        uncompressed_pub_bytes = bytes.fromhex(uncompressed_pub_hex)
+        keccak_hash = keccak_fn(uncompressed_pub_bytes)
+        evm_address = '0x' + keccak_hash[-20:].hex()
+
+        return {
+            "evm_public_address": evm_address,
+            "evm_public_address_bsc": evm_address,
+            "evm_public_address_base": evm_address,
+            "evm_public_address_arbitrum": evm_address,
+            "evm_public_address_eth": evm_address,
+        }
+    except Exception as e:
+        app.logger.warning("[EVM] Error deriving from privkey: %s", e)
+        return {
+            "evm_public_address": None,
+            "evm_public_address_bsc": None,
+            "evm_public_address_base": None,
+            "evm_public_address_arbitrum": None,
+            "evm_public_address_eth": None,
+        }
+
+
+def _try_derive_evm_from_pubkey(compressed_pubkey):
+    """Derive EVM address from compressed public key."""
+    try:
+        keccak_fn = None
+        try:
+            from eth_keys import keys
+            keccak_fn = lambda data: keys.keccak(data)
+        except (ImportError, AttributeError):
+            pass
+
+        if not keccak_fn:
+            try:
+                import sha3
+                keccak_fn = lambda data: sha3.keccak_256(data).digest()
+            except ImportError:
+                pass
+
+        if not keccak_fn:
+            return {
+                "evm_public_address": None,
+                "evm_public_address_bsc": None,
+                "evm_public_address_base": None,
+                "evm_public_address_arbitrum": None,
+                "evm_public_address_eth": None,
+            }
+
+        if not (len(compressed_pubkey) == 66 and compressed_pubkey[:2] in ('02', '03')):
+            return {
+                "evm_public_address": None,
+                "evm_public_address_bsc": None,
+                "evm_public_address_base": None,
+                "evm_public_address_arbitrum": None,
+                "evm_public_address_eth": None,
+            }
+
+        prefix = compressed_pubkey[:2]
+        x_hex = compressed_pubkey[2:]
+        x = int(x_hex, 16)
+        _P = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F
+        y_squared = (pow(x, 3, _P) + 7) % _P
+        y = pow(y_squared, (_P + 1) // 4, _P)
+        if (y % 2 == 0 and prefix == '02') or (y % 2 == 1 and prefix == '03'):
+            pass
+        else:
+            y = _P - y
+
+        uncompressed_pub_hex = '04' + hex(x)[2:].zfill(64) + hex(y)[2:].zfill(64)
+        uncompressed_pub_bytes = bytes.fromhex(uncompressed_pub_hex)
+        keccak_hash = keccak_fn(uncompressed_pub_bytes)
+        evm_address = '0x' + keccak_hash[-20:].hex()
+
+        return {
+            "evm_public_address": evm_address,
+            "evm_public_address_bsc": evm_address,
+            "evm_public_address_base": evm_address,
+            "evm_public_address_arbitrum": evm_address,
+            "evm_public_address_eth": evm_address,
+        }
+    except Exception as e:
+        app.logger.warning("[EVM] Error deriving from pubkey: %s", e)
+        return {
+            "evm_public_address": None,
+            "evm_public_address_bsc": None,
+            "evm_public_address_base": None,
+            "evm_public_address_arbitrum": None,
+            "evm_public_address_eth": None,
+        }
 
 
 # ─── THR/USDT Pool Info ──────────────────────────────────────────────────────

@@ -15728,42 +15728,22 @@ def api_admin_bnb_watcher_reprocess():
         return jsonify(ok=False, error="already_processed",
                        message="This tx is already in the processed list. Pass force=true to reprocess."), 409
 
-    # Call /api/usdt/pledge directly (same as watcher would)
+    # Call shared helper directly (no test_request_context needed)
     try:
-        result = api_usdt_pledge.__wrapped__() if hasattr(api_usdt_pledge, '__wrapped__') else None
-    except Exception:
-        result = None
-
-    # Call the pledge function directly with a fake request context
-    with app.test_request_context(
-        '/api/usdt/pledge', method='POST',
-        json={
-            "secret":      os.getenv("ADMIN_SECRET", ""),
-            "thr_address": thr_address,
-            "bnb_address": bnb_address,
-            "usdt_amount": usdt_amount,
-            "bnb_txid":    bnb_txid,
-        }
-    ):
-        resp = api_usdt_pledge()
-        if isinstance(resp, tuple):
-            resp_data, status_code = resp[0], resp[1]
+        success, result, error = process_usdt_pledge_credit(thr_address, bnb_address, usdt_amount, bnb_txid, source="admin")
+        if success:
+            # Mark as processed
+            if bnb_txid not in processed_txs:
+                processed_txs.append(bnb_txid)
+                save_json(processed_file, processed_txs)
+            logger.info("[bnb_watcher] admin reprocessed tx %s -> THR %s ok", bnb_txid, thr_address)
+            return jsonify(ok=True, bnb_txid=bnb_txid, thr_address=thr_address, result=result), 200
         else:
-            resp_data, status_code = resp, 200
-
-        resp_json = resp_data.get_json() if hasattr(resp_data, 'get_json') else {}
-        success = status_code == 200 and resp_json.get("ok")
-
-    if success:
-        # Mark as processed
-        if bnb_txid not in processed_txs:
-            processed_txs.append(bnb_txid)
-            save_json(processed_file, processed_txs)
-        logger.info("[bnb_watcher] admin reprocessed tx %s -> THR %s ok", bnb_txid, thr_address)
-        return jsonify(ok=True, bnb_txid=bnb_txid, thr_address=thr_address, result=resp_json), 200
-    else:
-        logger.warning("[bnb_watcher] admin reprocess failed tx %s: %s", bnb_txid, resp_json)
-        return jsonify(ok=False, bnb_txid=bnb_txid, error="pledge_call_failed", detail=resp_json), 400
+            logger.warning("[bnb_watcher] admin reprocess failed tx %s: %s", bnb_txid, error)
+            return jsonify(ok=False, bnb_txid=bnb_txid, error=error), 400
+    except Exception as e:
+        logger.error("[bnb_watcher] admin reprocess exception for tx %s: %s", bnb_txid, str(e), exc_info=True)
+        return jsonify(ok=False, bnb_txid=bnb_txid, error="internal_server_error", detail=str(e)), 500
 
 
 @app.route("/d3lfoi", methods=["GET"])
@@ -27611,6 +27591,199 @@ def api_pledge_bnb_register():
     return jsonify(ok=True, thr_address=thr_address, bnb_address=bnb_address, vault_address=BNB_PLEDGE_VAULT), 200
 
 
+def process_usdt_pledge_credit(thr_address, bnb_address, usdt_amount, bnb_txid, source="watcher"):
+    """
+    Shared logic for crediting a USDT pledge to a THR wallet.
+
+    Args:
+        thr_address: THR address to credit
+        bnb_address: BNB sender address
+        usdt_amount: amount in USDT
+        bnb_txid: BSC transaction hash
+        source: "watcher" or "admin" for logging
+
+    Returns:
+        (success: bool, result_data: dict, error_msg: str or None)
+    """
+    try:
+        # Validation
+        if not all([thr_address, bnb_address, bnb_txid]):
+            return False, {}, "Missing required fields"
+        if usdt_amount < MIN_USDT_PLEDGE:
+            return False, {}, f"below_minimum_pledge (minimum {MIN_USDT_PLEDGE} USDT)"
+
+        # Check for duplicate tx in wallet history
+        wallet_hist_file = os.path.join(DATA_DIR, "wallet_history.json")
+        wallet_hist = load_json(wallet_hist_file, [])
+        if any(evt.get("external_txid") == bnb_txid for evt in wallet_hist):
+            return False, {}, "duplicate_tx_already_processed"
+
+        dynamic_rate = get_usdt_thr_rate_dynamic()
+        thr_amount = round(usdt_amount * dynamic_rate, 6)
+        pool_usdt = round(usdt_amount * USDT_PLEDGE_POOL_SPLIT, 6)
+        pool_thr = round(pool_usdt * dynamic_rate, 6)
+
+        ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+
+        # Generate send_seed + PDF + pledge record now that payment is confirmed.
+        pledges = load_json(PLEDGE_CHAIN, [])
+        existing_pledge = next(
+            (p for p in pledges if p.get("bnb_address") == bnb_address and p.get("pledge_type") == "usdt_bnb"),
+            None
+        )
+        if not existing_pledge:
+            pledge_text    = "USDT/BNB Pledge — Thronos Network"
+            phash          = hashlib.sha256((bnb_address + pledge_text).encode()).hexdigest()
+            send_seed      = secrets.token_hex(16)
+            send_seed_hash = hashlib.sha256(send_seed.encode()).hexdigest()
+            auth_string    = f"{send_seed}:auth"
+            send_auth_hash = hashlib.sha256(auth_string.encode()).hexdigest()
+            chain_for_height = load_json(CHAIN_FILE, [])
+            height = len(chain_for_height)
+
+            try:
+                pdf_name = create_secure_pdf_contract(
+                    bnb_address, pledge_text, thr_address, phash, height,
+                    send_seed, CONTRACTS_DIR, None
+                )
+            except Exception as _pdf_err:
+                logger.error(f"USDT pledge PDF generation failed: {_pdf_err}")
+                pdf_name = f"pledge_{thr_address}.pdf"
+
+            pledge_entry = {
+                "bnb_address":          bnb_address,
+                "pledge_type":          "usdt_bnb",
+                "pledge_text":          pledge_text,
+                "timestamp":            ts,
+                "pledge_hash":          phash,
+                "thr_address":          thr_address,
+                "send_seed":            send_seed,
+                "send_seed_hash":       send_seed_hash,
+                "send_auth_hash":       send_auth_hash,
+                "has_passphrase":       False,
+                "pending_confirmation": False,
+                "pdf_filename":         pdf_name,
+            }
+            pledges.append(pledge_entry)
+            save_json(PLEDGE_CHAIN, pledges)
+        else:
+            # Already confirmed — just clear the flag if it was pending
+            if existing_pledge.get("pending_confirmation"):
+                existing_pledge["pending_confirmation"] = False
+                save_json(PLEDGE_CHAIN, pledges)
+
+        # Credit THR to the user's wallet
+        ledger = load_json(LEDGER_FILE, {})
+        current_balance = float(ledger.get(thr_address, 0.0))
+        new_balance = round(current_balance + thr_amount, 6)
+        ledger[thr_address] = new_balance
+        save_json(LEDGER_FILE, ledger)
+
+        # Seed THR/USDT pool with half the pledge (new external capital, no debit)
+        _seed_usdt_thr_pool(pool_usdt, pool_thr)
+
+        # Create pledge transaction on the chain
+        chain = load_json(CHAIN_FILE, [])
+        tx_id = f"USDT_PLEDGE-{int(time.time())}-{secrets.token_hex(4)}"
+
+        tx = {
+            "type": "usdt_pledge",
+            "tx_id": tx_id,
+            "from": bnb_address,
+            "to": thr_address,
+            "thr_address": thr_address,
+            "bnb_address": bnb_address,
+            "usdt_amount": usdt_amount,
+            "thr_amount": thr_amount,
+            "pool_usdt_seeded": pool_usdt,
+            "pool_thr_seeded": pool_thr,
+            "bnb_txid": bnb_txid,
+            "timestamp": ts,
+            "status": "confirmed",
+        }
+
+        chain.append(tx)
+        save_json(CHAIN_FILE, chain)
+        update_last_block(tx, is_block=False)
+
+        try:
+            broadcast_tx(tx)
+        except Exception:
+            pass
+
+        # Add wallet history events
+        current_ts = time.time()
+
+        # 1. Primary pledge event: USDT-on-BSC confirmed (visible on BNB network in history)
+        add_wallet_history_event(
+            thr_address=thr_address,
+            event_type="pledge_usdt_bnb_confirmed",
+            chain="bsc",
+            asset="USDT",
+            amount=usdt_amount,
+            status="confirmed",
+            direction="in",
+            internal_txid=tx_id,
+            external_txid=bnb_txid,
+            token_contract=USDT_BNB_CONTRACT,
+            token_standard="BEP20",
+            network_label="BNB Smart Chain",
+            external_from=bnb_address,
+            external_to=BNB_PLEDGE_VAULT,
+            timestamp=current_ts,
+        )
+
+        # 2. Record THR credit (internal Thronos transaction)
+        add_wallet_history_event(
+            thr_address=thr_address,
+            event_type="token_receive",
+            chain="thronos",
+            asset="THR",
+            amount=thr_amount,
+            status="credited",
+            direction="in",
+            internal_txid=tx_id,
+            external_txid=bnb_txid,
+            token_standard="native",
+            network_label="Thronos",
+            timestamp=current_ts,
+        )
+
+        # 3. Record pool seed event (if pool received funds)
+        if pool_thr > 0:
+            add_wallet_history_event(
+                thr_address=thr_address,
+                event_type="pool_seed",
+                chain="thronos",
+                asset="THR",
+                amount=pool_thr,
+                status="pool_seeded",
+                direction="pool",
+                internal_txid=tx_id,
+                token_standard="native",
+                network_label="Thronos",
+                timestamp=current_ts,
+            )
+
+        result_data = {
+            "tx_id": tx_id,
+            "thr_address": thr_address,
+            "new_balance": new_balance,
+            "bnb_txid": bnb_txid,
+            "pool_usdt_seeded": pool_usdt,
+            "pool_thr_seeded": pool_thr,
+        }
+
+        logger.info("[usdt_pledge] %s processed tx %s -> THR %s (amount: %f USDT, source: %s)",
+                   bnb_address, bnb_txid, thr_address, usdt_amount, source)
+
+        return True, result_data, None
+
+    except Exception as e:
+        logger.error("[usdt_pledge] process_usdt_pledge_credit failed: %s", str(e), exc_info=True)
+        return False, {}, str(e)
+
+
 @app.route("/api/usdt/pledge", methods=["POST"])
 def api_usdt_pledge():
     """
@@ -27634,171 +27807,17 @@ def api_usdt_pledge():
 
     thr_address = data.get("thr_address")
     bnb_address = data.get("bnb_address")
-    usdt_amount = float(data.get("usdt_amount", 0))
+    try:
+        usdt_amount = float(data.get("usdt_amount", 0))
+    except (TypeError, ValueError):
+        return jsonify(ok=False, error="invalid_usdt_amount"), 400
     bnb_txid = data.get("bnb_txid")
 
-    if not all([thr_address, bnb_address, bnb_txid]):
-        return jsonify(ok=False, error="Missing required fields"), 400
-    if usdt_amount < MIN_USDT_PLEDGE:
-        return jsonify(ok=False, error="below_minimum_pledge"), 400
-
-    dynamic_rate = get_usdt_thr_rate_dynamic()
-    thr_amount = round(usdt_amount * dynamic_rate, 6)
-    pool_usdt = round(usdt_amount * USDT_PLEDGE_POOL_SPLIT, 6)
-    pool_thr = round(pool_usdt * dynamic_rate, 6)
-
-    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
-
-    # Generate send_seed + PDF + pledge record now that payment is confirmed.
-    # Only create a new pledge record if one doesn't already exist for this BNB address.
-    pledges = load_json(PLEDGE_CHAIN, [])
-    existing_pledge = next(
-        (p for p in pledges if p.get("bnb_address") == bnb_address and p.get("pledge_type") == "usdt_bnb"),
-        None
-    )
-    if not existing_pledge:
-        pledge_text    = "USDT/BNB Pledge — Thronos Network"
-        phash          = hashlib.sha256((bnb_address + pledge_text).encode()).hexdigest()
-        send_seed      = secrets.token_hex(16)
-        send_seed_hash = hashlib.sha256(send_seed.encode()).hexdigest()
-        auth_string    = f"{send_seed}:auth"
-        send_auth_hash = hashlib.sha256(auth_string.encode()).hexdigest()
-        chain_for_height = load_json(CHAIN_FILE, [])
-        height = len(chain_for_height)
-
-        try:
-            pdf_name = create_secure_pdf_contract(
-                bnb_address, pledge_text, thr_address, phash, height,
-                send_seed, CONTRACTS_DIR, None
-            )
-        except Exception as _pdf_err:
-            logger.error(f"USDT pledge PDF generation failed: {_pdf_err}")
-            pdf_name = f"pledge_{thr_address}.pdf"
-
-        pledge_entry = {
-            "bnb_address":          bnb_address,
-            "pledge_type":          "usdt_bnb",
-            "pledge_text":          pledge_text,
-            "timestamp":            ts,
-            "pledge_hash":          phash,
-            "thr_address":          thr_address,
-            "send_seed":            send_seed,
-            "send_seed_hash":       send_seed_hash,
-            "send_auth_hash":       send_auth_hash,
-            "has_passphrase":       False,
-            "pending_confirmation": False,
-            "pdf_filename":         pdf_name,
-        }
-        pledges.append(pledge_entry)
-        save_json(PLEDGE_CHAIN, pledges)
+    success, result, error = process_usdt_pledge_credit(thr_address, bnb_address, usdt_amount, bnb_txid, source="watcher")
+    if success:
+        return jsonify(ok=True, **result), 201
     else:
-        # Already confirmed — just clear the flag if it was pending
-        if existing_pledge.get("pending_confirmation"):
-            existing_pledge["pending_confirmation"] = False
-            save_json(PLEDGE_CHAIN, pledges)
-
-    # Credit THR to the user's wallet
-    ledger = load_json(LEDGER_FILE, {})
-    current_balance = float(ledger.get(thr_address, 0.0))
-    new_balance = round(current_balance + thr_amount, 6)
-    ledger[thr_address] = new_balance
-    save_json(LEDGER_FILE, ledger)
-
-    # Seed THR/USDT pool with half the pledge (new external capital, no debit)
-    _seed_usdt_thr_pool(pool_usdt, pool_thr)
-
-    # Create pledge transaction on the chain
-    chain = load_json(CHAIN_FILE, [])
-    tx_id = f"USDT_PLEDGE-{int(time.time())}-{secrets.token_hex(4)}"
-
-    tx = {
-        "type": "usdt_pledge",
-        "tx_id": tx_id,
-        "from": bnb_address,
-        "to": thr_address,
-        "thr_address": thr_address,
-        "bnb_address": bnb_address,
-        "usdt_amount": usdt_amount,
-        "thr_amount": thr_amount,
-        "pool_usdt_seeded": pool_usdt,
-        "pool_thr_seeded": pool_thr,
-        "bnb_txid": bnb_txid,
-        "timestamp": ts,
-        "status": "confirmed",
-    }
-
-    chain.append(tx)
-    save_json(CHAIN_FILE, chain)
-    update_last_block(tx, is_block=False)
-
-    try:
-        broadcast_tx(tx)
-    except Exception:
-        pass
-
-    # Add wallet history events
-    current_ts = time.time()
-
-    # 1. Primary pledge event: USDT-on-BSC confirmed (visible on BNB network in history)
-    add_wallet_history_event(
-        thr_address=thr_address,
-        event_type="pledge_usdt_bnb_confirmed",
-        chain="bsc",
-        asset="USDT",
-        amount=usdt_amount,
-        status="confirmed",
-        direction="in",
-        internal_txid=tx_id,
-        external_txid=bnb_txid,
-        token_contract=USDT_BNB_CONTRACT,
-        token_standard="BEP20",
-        network_label="BNB Smart Chain",
-        external_from=bnb_address,
-        external_to=BNB_PLEDGE_VAULT,
-        timestamp=current_ts,
-    )
-
-    # 2. Record THR credit (internal Thronos transaction)
-    add_wallet_history_event(
-        thr_address=thr_address,
-        event_type="token_receive",
-        chain="thronos",
-        asset="THR",
-        amount=thr_amount,
-        status="credited",
-        direction="in",
-        internal_txid=tx_id,
-        external_txid=bnb_txid,
-        token_standard="native",
-        network_label="Thronos",
-        timestamp=current_ts,
-    )
-
-    # 3. Record pool seed event (if pool received funds)
-    if pool_thr > 0:
-        add_wallet_history_event(
-            thr_address=thr_address,
-            event_type="pool_seed",
-            chain="thronos",
-            asset="THR",
-            amount=pool_thr,
-            status="pool_seeded",
-            direction="pool",
-            internal_txid=tx_id,
-            token_standard="native",
-            network_label="Thronos",
-            timestamp=current_ts,
-        )
-
-    return jsonify(
-        ok=True,
-        tx_id=tx_id,
-        thr_address=thr_address,
-        new_balance=new_balance,
-        bnb_txid=bnb_txid,
-        pool_usdt_seeded=pool_usdt,
-        pool_thr_seeded=pool_thr,
-    ), 201
+        return jsonify(ok=False, error=error), 400
 
 
 @app.route("/api/pledge/bnb/status", methods=["GET"])

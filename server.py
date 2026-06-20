@@ -1398,7 +1398,8 @@ XRP_RPC_URL = os.getenv("XRP_RPC_URL", os.getenv("XRPL_RPC_URL", "https://xrplcl
 # ─── USDT-on-BNB-Chain Pledge (mobile/PWA only) ────────────────────────────
 # Vault EVM address that watches for incoming USDT (BEP20) pledge deposits.
 # Uses BSC_RPC_URL above — no separate RPC needed.
-BNB_PLEDGE_VAULT = os.getenv("BNB_PLEDGE_VAULT", "")
+# (Now sourced from WITHDRAW_CHAIN_CONFIG["bsc"]["usdt_pledge_vault"] — see line ~27580)
+BNB_PLEDGE_VAULT = os.getenv("BSC_USDT_PLEDGE_VAULT", os.getenv("BNB_PLEDGE_VAULT", ""))  # backwards-compatible
 USDT_BNB_CONTRACT = os.getenv("USDT_BNB_CONTRACT", "0x55d398326f99059fF775485246999027B3197955")  # BEP20 USDT, 18 decimals
 USDT_THR_RATE = float(_strip_env_quotes(os.getenv("USDT_THR_RATE", "100")))  # legacy static rate (overridden by dynamic pricing)
 MIN_USDT_PLEDGE = float(_strip_env_quotes(os.getenv("MIN_USDT_PLEDGE", "10")))  # minimum 10 USDT
@@ -27573,14 +27574,29 @@ WITHDRAW_CHAIN_CONFIG: dict = {
         "label":          "BNB Chain (BSC)",
         "tokens":         ["USDT"],
         "rpc_url":        BSC_RPC_URL,  # defined globally above
+        # hot_wallet = payout address for cross-chain withdrawals (BNB_HOT_WALLET)
         "hot_wallet":     _strip_env_quotes(os.getenv("BNB_HOT_WALLET", "")),
+        # pool_vault = vault that receives USDT from LP contributors (BSC_POOL_VAULT_ADDRESS)
+        # If not set, falls back to hot_wallet with a log warning.
+        "pool_vault":     _strip_env_quotes(os.getenv("BSC_POOL_VAULT_ADDRESS", "")),
+        # usdt_pledge_vault = where users send USDT to pledge (BSC_USDT_PLEDGE_VAULT)
+        # If not set, falls back to hot_wallet for backward compat.
+        "usdt_pledge_vault": _strip_env_quotes(os.getenv("BSC_USDT_PLEDGE_VAULT", "")),
         "usdt_contract":  USDT_BNB_CONTRACT,
+        # treasury = Thronos project treasury (BSC_TREASURY_ADDRESS, informational only)
+        "treasury":       _strip_env_quotes(os.getenv("BSC_TREASURY_ADDRESS", "")),
+        # fee_collector = collects protocol fees (BSC_FEE_COLLECTOR_ADDRESS)
+        "fee_collector":  _strip_env_quotes(os.getenv("BSC_FEE_COLLECTOR_ADDRESS", "")),
+        # gas_wallet = dedicated gas replenishment wallet (BSC_GAS_WALLET_ADDRESS)
+        # Never used as token vault.
+        "gas_wallet":     _strip_env_quotes(os.getenv("BSC_GAS_WALLET_ADDRESS", "")),
     },
     "base": {
         "label":          "Base",
         "tokens":         ["USDC"],
         "rpc_url":        _strip_env_quotes(os.getenv("BASE_RPC_URL", "")),
         "hot_wallet":     _strip_env_quotes(os.getenv("BASE_HOT_WALLET", "")),
+        "pool_vault":     _strip_env_quotes(os.getenv("BASE_POOL_VAULT_ADDRESS", "")),
         "usdc_contract":  _strip_env_quotes(os.getenv("BASE_USDC_CONTRACT", "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913")),
     },
     "arbitrum": {
@@ -27588,10 +27604,33 @@ WITHDRAW_CHAIN_CONFIG: dict = {
         "tokens":         ["USDT", "USDC"],
         "rpc_url":        _strip_env_quotes(os.getenv("ARB_RPC_URL", "")),
         "hot_wallet":     _strip_env_quotes(os.getenv("ARB_HOT_WALLET", "")),
+        "pool_vault":     _strip_env_quotes(os.getenv("ARB_POOL_VAULT_ADDRESS", "")),
         "usdt_contract":  _strip_env_quotes(os.getenv("ARB_USDT_CONTRACT", "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9")),
         "usdc_contract":  _strip_env_quotes(os.getenv("ARB_USDC_CONTRACT", "0xaf88d065e77c8cC2239327C5EDb3A432268e5831")),
     },
 }
+
+
+def _get_pool_vault(chain: str) -> str:
+    """
+    Returns the configured pool vault address for a chain.
+    Prefers BSC_POOL_VAULT_ADDRESS / ARB_POOL_VAULT_ADDRESS / BASE_POOL_VAULT_ADDRESS.
+    Falls back to hot_wallet with a warning.
+    NEVER uses treasury, gas_wallet, or fee_collector.
+    """
+    cfg = WITHDRAW_CHAIN_CONFIG.get(chain, {})
+    vault = cfg.get("pool_vault", "").strip()
+    if vault:
+        return vault
+    hot = cfg.get("hot_wallet", "").strip()
+    if hot:
+        logger.warning(
+            "[pool_vault] %s_POOL_VAULT_ADDRESS not configured — falling back to hot_wallet. "
+            "Set %s_POOL_VAULT_ADDRESS for production.", chain.upper(), chain.upper()
+        )
+        return hot
+    return ""
+
 
 WITHDRAW_SUPPORTED_TOKENS = {"USDT", "USDC"}
 WITHDRAW_QUEUE_FILE = os.path.join(DATA_DIR, "withdraw_queue.json")
@@ -32392,16 +32431,28 @@ def api_v1_add_liquidity():
     reserves_b = float(pool["reserves_b"])
     total_shares = float(pool["total_shares"])
 
-    # Check if amounts maintain the ratio (allow small slippage)
+    # Check if amounts maintain the ratio (allow 2% slippage)
     expected_ratio = reserves_a / reserves_b if reserves_b > 0 else 0
     provided_ratio = amt_a / amt_b if amt_b > 0 else 0
 
-    if abs(expected_ratio - provided_ratio) / max(expected_ratio, 0.0001) > 0.02:  # 2% slippage tolerance
+    if reserves_a > 0 and reserves_b > 0 and abs(expected_ratio - provided_ratio) / max(expected_ratio, 0.0001) > 0.02:
+        required_b = round(amt_a / expected_ratio, 6) if expected_ratio > 0 else 0
+        min_b = round(required_b * 0.98, 6)
+        max_b = round(required_b * 1.02, 6)
         return jsonify(
             status="error",
-            message="Amounts don't match pool ratio",
-            expected_ratio=expected_ratio,
-            provided_ratio=provided_ratio
+            error="ratio_mismatch",
+            message=(
+                f"Amount mismatch: {amt_a} {token_a} requires {required_b} {token_b} "
+                f"(±2% = {min_b}–{max_b}). You provided {amt_b} {token_b}."
+            ),
+            required_amount_b=required_b,
+            min_amount_b=min_b,
+            max_amount_b=max_b,
+            expected_ratio=round(expected_ratio, 6),
+            provided_ratio=round(provided_ratio, 6),
+            token_a=token_a,
+            token_b=token_b,
         ), 400
 
     # Check balances
@@ -33337,13 +33388,24 @@ def api_v1_pools_add_liquidity_crosschain():
         provided_ratio = amt_b / amt_a if amt_a > 0 else 0
         ratio_deviation = abs(expected_ratio - provided_ratio) / max(expected_ratio, 0.000001)
         if ratio_deviation > 0.02:
+            required_b = round(amt_a * expected_ratio, 6)
+            min_b = round(required_b * 0.98, 6)
+            max_b = round(required_b * 1.02, 6)
             return jsonify(
                 ok=False,
                 error="ratio_mismatch",
-                message="Amounts don't match pool ratio within 2% tolerance",
+                message=(
+                    f"Amount mismatch: {amt_a} {token_a} requires {required_b} {ext_token} "
+                    f"(±2% = {min_b}–{max_b}). You provided {amt_b} {ext_token}."
+                ),
+                required_amount_b=required_b,
+                min_amount_b=min_b,
+                max_amount_b=max_b,
                 expected_ratio=round(expected_ratio, 6),
                 provided_ratio=round(provided_ratio, 6),
                 deviation_pct=round(ratio_deviation * 100, 2),
+                token_a=token_a,
+                token_b=ext_token,
             ), 400
 
     # Check THR balance on Thronos ledger (for reservation, not deduction)
@@ -33367,9 +33429,10 @@ def api_v1_pools_add_liquidity_crosschain():
     import secrets as _secrets
     intent_id = f"INTENT-{int(time.time())}-{_secrets.token_hex(6)}"
 
-    # Get pool vault address from WITHDRAW_CHAIN_CONFIG (same hot wallet for now)
-    chain_cfg = WITHDRAW_CHAIN_CONFIG.get(chain, {})
-    vault_address = chain_cfg.get("hot_wallet", "").strip()
+    # Get pool vault address — uses BSC_POOL_VAULT_ADDRESS / ARB_POOL_VAULT_ADDRESS etc.
+    # Falls back to hot_wallet with a warning if dedicated pool vault not set.
+    # NEVER uses treasury, gas_wallet, or fee_collector.
+    vault_address = _get_pool_vault(chain)
     if not vault_address:
         return jsonify(ok=False, error="vault_not_configured",
                        message=f"Pool vault not configured for chain {chain}"), 500

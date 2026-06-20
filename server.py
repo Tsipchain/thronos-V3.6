@@ -15439,6 +15439,73 @@ def api_sentinel_fiat_session():
     }), 200
 
 
+@app.route("/api/admin/system-addresses", methods=["GET"])
+def api_admin_system_addresses():
+    """
+    Returns the system/AMM wallet public addresses and vault role assignments.
+    Protected by admin auth. NEVER exposes private keys, seeds, mnemonics, or secrets.
+
+    signer_available = GATEWAY_SECRET is configured (authorized confirmer for cross-chain intents)
+    watcher_available = bnb_pledge_watcher loaded successfully at startup
+    """
+    denied = require_admin()
+    if denied:
+        return denied
+
+    gateway_configured = bool(os.getenv("GATEWAY_SECRET", "").strip())
+
+    bsc_cfg  = WITHDRAW_CHAIN_CONFIG.get("bsc", {})
+    base_cfg = WITHDRAW_CHAIN_CONFIG.get("base", {})
+    arb_cfg  = WITHDRAW_CHAIN_CONFIG.get("arbitrum", {})
+
+    def _addr(cfg: dict, key: str) -> str | None:
+        v = cfg.get(key, "").strip()
+        return v if v else None
+
+    bsc_vault_status,  _  = _pool_vault_status("bsc")
+    base_vault_status, __ = _pool_vault_status("base")
+    arb_vault_status,  ___ = _pool_vault_status("arbitrum")
+
+    return jsonify({
+        "ok": True,
+        # Thronos chain identity — THR address of the system/AI-agent wallet
+        "system_wallet":       AI_WALLET_ADDRESS,
+        # Configured pool vault EVM addresses (admin copies these from the signer-controlled wallet)
+        "evm_bsc_address":       _addr(bsc_cfg,  "pool_vault"),
+        "evm_base_address":      _addr(base_cfg, "pool_vault"),
+        "evm_arbitrum_address":  _addr(arb_cfg,  "pool_vault"),
+        # Service availability
+        "signer_available":  gateway_configured,
+        "watcher_available": _BNB_WATCHER_AVAILABLE,
+        # Per-chain vault role breakdown (safe public addresses only)
+        "roles": {
+            "bsc": {
+                "pool_vault":        _addr(bsc_cfg, "pool_vault"),
+                "pool_vault_status": bsc_vault_status,
+                "usdt_pledge_vault": _addr(bsc_cfg, "usdt_pledge_vault"),
+                "treasury":          _addr(bsc_cfg, "treasury"),
+                "fee_collector":     _addr(bsc_cfg, "fee_collector"),
+                "gas_wallet":        _addr(bsc_cfg, "gas_wallet"),
+                "payout":            _addr(bsc_cfg, "hot_wallet"),
+            },
+            "base": {
+                "pool_vault":        _addr(base_cfg, "pool_vault"),
+                "pool_vault_status": base_vault_status,
+                "payout":            _addr(base_cfg, "hot_wallet"),
+            },
+            "arbitrum": {
+                "pool_vault":        _addr(arb_cfg, "pool_vault"),
+                "pool_vault_status": arb_vault_status,
+                "payout":            _addr(arb_cfg, "hot_wallet"),
+            },
+        },
+        "note": (
+            "Set BSC_POOL_VAULT_ADDRESS to the AMM/system BSC address controlled by your signer. "
+            "Add-liquidity is disabled per chain until pool_vault_status == 'configured'."
+        ),
+    }), 200
+
+
 @app.route("/d3lfoi", methods=["GET"])
 @app.route("/d3lfoi_admin", methods=["GET"])
 def d3lfoi_admin_console():
@@ -26807,6 +26874,10 @@ def tx_registry_view():
 
 
 # ─── SCHEDULER ─────────────────────────────────────
+# Set by start_scheduler(); True only when bnb_pledge_watcher imports successfully.
+_BNB_WATCHER_AVAILABLE: bool = False
+
+
 def _with_app_context(fn):
     """Wrap a scheduler job so it runs inside Flask's app context.
     Required by jobs that call jsonify, url_for, or access g/current_app."""
@@ -26856,13 +26927,16 @@ if NODE_ROLE == "master" and SCHEDULER_ENABLED and ENABLE_CHAIN:
         print(f"[SCHEDULER] BTC pledge watcher unavailable: {e}")
 
     # BNB/USDT Pledge Watcher – polls BSC for USDT vault deposits via eth_getLogs
+    global _BNB_WATCHER_AVAILABLE
     try:
         from bnb_pledge_watcher import watch_bnb_pledges
         scheduler.add_job(_with_app_context(watch_bnb_pledges), "interval", minutes=5,
                          coalesce=True, max_instances=1, id="bnb_pledge_watcher")
         print("[SCHEDULER] BNB/USDT pledge watcher scheduled (every 5 min)")
+        _BNB_WATCHER_AVAILABLE = True
     except ImportError as e:
         print(f"[SCHEDULER] BNB/USDT pledge watcher unavailable: {e}")
+        _BNB_WATCHER_AVAILABLE = False
 
     # PYTHEIA Worker – system health monitoring & governance advice
     try:
@@ -27630,6 +27704,28 @@ def _get_pool_vault(chain: str) -> str:
         )
         return hot
     return ""
+
+
+def _pool_vault_status(chain: str) -> tuple[str, str]:
+    """
+    Returns (status, vault_address).
+    status = 'configured' | 'pending_config'
+
+    pending_config when any of:
+      - No pool vault address is set for the chain
+      - GATEWAY_SECRET not configured (no authorized confirmer)
+      - For BSC: bnb_pledge_watcher not available (no deposit watcher)
+
+    NEVER falls back to treasury/fee/gas wallets.
+    """
+    vault = WITHDRAW_CHAIN_CONFIG.get(chain, {}).get("pool_vault", "").strip()
+    if not vault:
+        return ("pending_config", "")
+    if not os.getenv("GATEWAY_SECRET", "").strip():
+        return ("pending_config", vault)
+    if chain == "bsc" and not _BNB_WATCHER_AVAILABLE:
+        return ("pending_config", vault)
+    return ("configured", vault)
 
 
 WITHDRAW_SUPPORTED_TOKENS = {"USDT", "USDC"}
@@ -33429,13 +33525,20 @@ def api_v1_pools_add_liquidity_crosschain():
     import secrets as _secrets
     intent_id = f"INTENT-{int(time.time())}-{_secrets.token_hex(6)}"
 
-    # Get pool vault address — uses BSC_POOL_VAULT_ADDRESS / ARB_POOL_VAULT_ADDRESS etc.
-    # Falls back to hot_wallet with a warning if dedicated pool vault not set.
+    # Get pool vault address — only proceeds when fully configured + signer + watcher available.
     # NEVER uses treasury, gas_wallet, or fee_collector.
-    vault_address = _get_pool_vault(chain)
-    if not vault_address:
-        return jsonify(ok=False, error="vault_not_configured",
-                       message=f"Pool vault not configured for chain {chain}"), 500
+    _vault_status, vault_address = _pool_vault_status(chain)
+    if _vault_status == "pending_config" or not vault_address:
+        return jsonify(
+            ok=False,
+            error="vault_pending_config",
+            message=(
+                f"Add-liquidity is disabled for {chain}: pool vault is pending configuration. "
+                f"Set {chain.upper()}_POOL_VAULT_ADDRESS to the AMM/system address controlled by the signer, "
+                f"and ensure GATEWAY_SECRET and the chain watcher are configured. "
+                f"See GET /api/admin/system-addresses for current status."
+            ),
+        ), 503
 
     # Store intent in intents file
     intents_file = os.path.join(DATA_DIR, "pool_liquidity_intents.json")

@@ -20882,6 +20882,138 @@ def api_v1_wallet_history(thr_addr):
         }), 400
 
 
+@app.route("/api/wallet/history/normalized", methods=["GET"])
+def api_wallet_history_normalized():
+    """
+    Normalized wallet history for PWA/mobile/extensions consumption.
+
+    Classifies all wallet events into standard categories understood by
+    all client types (Web, PWA, mobile, extensions).
+
+    Query params:
+    - address: THR address (required)
+    - limit: max results (default 50, max 500)
+    - category: filter by category ('transaction', 'wallet_identity', 'cross_chain', 'all')
+
+    Response:
+    {
+      "ok": true,
+      "address": "THR...",
+      "history": [
+        {
+          "id": "...",
+          "original_event_type": "token_send",
+          "category": "transaction",
+          "event_name": "Sent THR",
+          "chain": "thronos",
+          "asset": "THR",
+          "amount": 10.0,
+          "direction": "out",
+          "status": "confirmed",
+          "timestamp": 1234567890,
+          "icon": "📤"
+        }
+      ],
+      "total": 42
+    }
+
+    Categories:
+    - transaction: token_send, token_receive, pool operations, pledges
+    - wallet_identity: wallet_provisioned, address_registered, key_binding
+    - cross_chain: bridge, withdrawal, gateway, cross-chain transfers
+    - all: all events
+    """
+    try:
+        address = (request.args.get("address") or "").strip().upper()
+        if not address or not address.startswith("THR"):
+            return jsonify(ok=False, error="valid_thr_address_required"), 400
+
+        limit = min(int(request.args.get("limit", 50)), 500)
+        category = (request.args.get("category") or "all").lower()
+
+        history = get_wallet_history(address, limit=limit * 2)
+
+        normalized = []
+        for event in history:
+            event_type = event.get("event_type", "")
+            norm_event = _normalize_event(event, event_type)
+
+            if category == "all" or norm_event.get("category") == category:
+                normalized.append(norm_event)
+
+            if len(normalized) >= limit:
+                break
+
+        return jsonify(
+            ok=True,
+            address=address,
+            category_filter=category,
+            history=normalized,
+            total=len(normalized)
+        ), 200
+
+    except Exception as e:
+        logger.error(f"[NormalizedHistory] Error: {e}")
+        return jsonify(ok=False, error=str(e)), 500
+
+
+def _normalize_event(event, event_type):
+    """Normalize a wallet event to standard category + name for all clients."""
+    category = "transaction"
+    event_name = event_type
+    icon = "•"
+
+    # Classify by category
+    if event_type in ("wallet_discovered", "wallet_provisioned", "wallet_configured",
+                      "address_registered", "address_discovered", "public_key_binding",
+                      "v1_wallet_discovered", "v1_wallet_provisioned", "v1_wallet_configured"):
+        category = "wallet_identity"
+        event_name = "Wallet Identity"
+        icon = "🔐"
+
+    elif event_type in ("bridge", "bridge_deposit_detected",
+                        "crosschain_withdraw", "crosschain_withdrawal_requested",
+                        "crosschain_withdrawal_confirmed", "withdrawal_",
+                        "gateway_payment_received", "gateway_payout"):
+        category = "cross_chain"
+        event_name = "Cross-Chain Transfer"
+        icon = "🌉"
+
+    elif event_type == "token_send":
+        category = "transaction"
+        event_name = f"Sent {event.get('asset', 'Token')}"
+        icon = "📤"
+
+    elif event_type == "token_receive":
+        category = "transaction"
+        event_name = f"Received {event.get('asset', 'Token')}"
+        icon = "📥"
+
+    elif event_type == "pledge":
+        category = "transaction"
+        event_name = "Pledge"
+        icon = "💵"
+
+    elif event_type.startswith("pool_"):
+        category = "transaction"
+        event_name = "Pool Operation"
+        icon = "💧"
+
+    return {
+        "id": event.get("id", ""),
+        "original_event_type": event_type,
+        "category": category,
+        "event_name": event_name,
+        "chain": event.get("chain", "thronos"),
+        "asset": event.get("asset", ""),
+        "amount": float(event.get("amount", 0)),
+        "direction": event.get("direction", ""),
+        "status": event.get("status", "pending"),
+        "timestamp": event.get("timestamp", 0),
+        "icon": icon
+    }
+
+
 @app.route("/api/balances", methods=["GET"])
 def api_balances():
     address = (request.args.get("address") or request.args.get("wallet") or "").strip()
@@ -27016,7 +27148,6 @@ if NODE_ROLE == "master" and SCHEDULER_ENABLED and ENABLE_CHAIN:
         print(f"[SCHEDULER] BTC pledge watcher unavailable: {e}")
 
     # BNB/USDT Pledge Watcher – polls BSC for USDT vault deposits via eth_getLogs
-    global _BNB_WATCHER_AVAILABLE
     try:
         from bnb_pledge_watcher import watch_bnb_pledges
         scheduler.add_job(_with_app_context(watch_bnb_pledges), "interval", minutes=5,

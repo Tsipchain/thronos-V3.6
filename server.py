@@ -1399,6 +1399,11 @@ MIN_USDC_WITHDRAWAL = float(_strip_env_quotes(os.getenv("MIN_USDC_WITHDRAWAL", "
 PYTHIA_ALLOW_TEMPORARY_ROLE_ADDRESS = _strip_env_quotes(os.getenv("PYTHIA_ALLOW_TEMPORARY_ROLE_ADDRESS", "false")).lower() in ("1", "true", "yes")
 PYTHIA_TEMPORARY_ROLE_ADDRESS_NOTE = "MVP only — temporary test address. Real Pythia signer address required for production."
 
+# Phase 2.4.5: Pythia V1 wallet discovery & provisioning
+# Pythia as a first-class system wallet actor with THR + public EVM addresses
+PYTHIA_V1_WALLET_FILE = os.path.join(DATA_DIR, "pythia_v1_wallet.json")
+PYTHIA_PUBLIC_ADDRESS_REGISTRY_FILE = os.path.join(DATA_DIR, "pythia_public_address_registry.json")
+
 # THR per 1 BTC exchange rate
 THR_BTC_RATE = float(_strip_env_quotes(os.getenv("THR_BTC_RATE", "33333.33")))  # 1 BTC = 33,333.33 THR
 
@@ -16277,6 +16282,11 @@ def api_admin_pythia_vault_registry():
         signer_addr, signer_source = _derive_pythia_signer_address(chain)
         signer_addr = signer_addr if signer_addr else None
 
+        # Phase 2.4.5: Pythia V1 wallet public address (priority source 2)
+        v1_wallet = _get_pythia_v1_wallet()
+        v1_wallet_addr = v1_wallet.get("evm_public_address_bsc") if v1_wallet else None
+        v1_wallet_source = "v1_wallet" if v1_wallet_addr else None
+
         # Extract all role-specific addresses (None if not set or invalid)
         payout_addr = (cfg.get("payout_wallet") or "").strip()
         pool_vault_addr = (cfg.get("pool_vault") or "").strip()
@@ -16302,6 +16312,8 @@ def api_admin_pythia_vault_registry():
             "label": cfg.get("label", chain.upper()),
             "real_pythia_public_address": signer_addr,
             "pythia_signer_source": signer_source if signer_addr else None,
+            "v1_wallet_public_address": v1_wallet_addr,
+            "v1_wallet_source": v1_wallet_source,
             "payout_wallet": payout_addr,
             "pool_vault": pool_vault_addr,
             "gas_wallet": gas_wallet_addr,
@@ -16649,6 +16661,259 @@ def api_admin_pythia_signer_public_addresses():
             "Source 'missing' indicates no signer or configuration found."
         ),
     }), 200
+
+
+def _discover_pythia_v1_wallet() -> dict | None:
+    """
+    Discover existing Pythia V1 wallet from persistent storage.
+
+    Returns: {thr_address, evm_public_address, created_at, ...} or None
+    Never returns private key, seed, mnemonic, or decrypted material.
+    """
+    data = load_json(PYTHIA_V1_WALLET_FILE, None)
+    if data and isinstance(data, dict) and data.get("thr_address"):
+        return data
+    return None
+
+
+def _provision_pythia_v1_wallet() -> dict:
+    """
+    Provision a new Pythia V1 wallet if it doesn't exist (Phase 2.4.5).
+
+    Returns: {thr_address, evm_public_address, created_at, ...}
+    Never stores or returns private keys, seeds, mnemonics, etc.
+
+    For now: Generate a synthetic Pythia address to represent the system actor.
+    In production Phase 2.4+: Derive from secure signer material (HSM/KMS).
+    """
+    existing = _discover_pythia_v1_wallet()
+    if existing:
+        return existing
+
+    import secrets
+    import hashlib
+
+    ts = datetime.now(UTC).isoformat() + "Z"
+
+    pythia_wallet = {
+        "pythia_v1_wallet_id": f"PYTHIA_V1_{secrets.token_hex(6).upper()}",
+        "thr_address": PYTHIA_SYSTEM_THR_ADDRESS or "THR5DF27A86C477F381594E896F0E55357DEC5942BA",
+        "owner_type": "system",
+        "system_actor": "pythia",
+        "wallet_role": "pythia_v1_core",
+        "public_only": True,
+        "created_at": ts,
+        "status": "provisioned",
+        "source": "synthetic_system_actor",
+    }
+
+    for chain in ["bsc", "base", "arbitrum", "eth"]:
+        pythia_wallet[f"evm_public_address_{chain}"] = None
+
+    add_wallet_history_event(
+        thr_address="SYSTEM_PYTHIA_ACTIONS",
+        event_type="pythia_v1_wallet_provisioned",
+        chain="thronos",
+        asset="THR",
+        amount=0.0,
+        direction="system",
+        internal_txid=pythia_wallet["pythia_v1_wallet_id"],
+        status="confirmed",
+        note=f"Pythia V1 wallet provisioned: {pythia_wallet['thr_address']}"
+    )
+
+    save_json(PYTHIA_V1_WALLET_FILE, pythia_wallet)
+    return pythia_wallet
+
+
+def _get_pythia_v1_wallet() -> dict | None:
+    """
+    Get Pythia V1 wallet, discovering or provisioning as needed (Phase 2.4.5).
+
+    Returns only public data.
+    Never returns private key, seed, mnemonic, send_seed, send_secret, etc.
+    """
+    wallet = _discover_pythia_v1_wallet()
+    if not wallet:
+        wallet = _provision_pythia_v1_wallet()
+    return wallet
+
+
+@app.route("/api/admin/pythia/v1-wallet", methods=["GET"])
+def api_admin_pythia_v1_wallet():
+    """
+    Admin endpoint — Discover Pythia V1 wallet (Phase 2.4.5).
+
+    Returns public-only wallet info:
+    - thr_address: Thronos system wallet address
+    - evm_public_address: Public EVM address (if available)
+    - source: existing_v1_wallet | created_v1_wallet | missing
+    - status: configured | missing | needs_creation
+
+    Never exposes private keys, seeds, mnemonics, or decrypted material.
+    """
+    denied = require_admin()
+    if denied:
+        return denied
+
+    wallet = _discover_pythia_v1_wallet()
+    if wallet:
+        return jsonify({
+            "ok": True,
+            "pythia_v1_wallet": {
+                "thr_address": wallet.get("thr_address"),
+                "evm_public_address": wallet.get("evm_public_address_bsc"),
+                "source": "existing_v1_wallet",
+                "status": "configured",
+                "safe_to_register": True,
+                "created_at": wallet.get("created_at"),
+                "wallet_id": wallet.get("pythia_v1_wallet_id"),
+            }
+        }), 200
+
+    return jsonify({
+        "ok": True,
+        "pythia_v1_wallet": {
+            "thr_address": None,
+            "evm_public_address": None,
+            "source": "missing",
+            "status": "missing",
+            "safe_to_register": False,
+            "action_required": "Call POST /api/admin/pythia/provision-v1-wallet to create Pythia V1 wallet",
+        }
+    }), 200
+
+
+@app.route("/api/admin/pythia/provision-v1-wallet", methods=["POST"])
+def api_admin_pythia_provision_v1_wallet():
+    """
+    Admin endpoint — Provision Pythia V1 wallet (Phase 2.4.5).
+
+    Behavior:
+    - If Pythia V1 wallet already exists, return it (no re-creation)
+    - If missing, create/provision one through system wallet logic
+    - Mark it as: owner_type=system, system_actor=pythia, wallet_role=pythia_v1_core
+    - Return only public data: THR address, EVM public address
+
+    Never returns private key, seed, mnemonic, send_seed, send_secret, auth_secret,
+    recovery kit plaintext, signer secret, or decrypted material.
+
+    No signing, broadcasting, or fund movement—provisioning only.
+    """
+    denied = require_admin()
+    if denied:
+        return denied
+
+    wallet = _provision_pythia_v1_wallet()
+
+    return jsonify({
+        "ok": True,
+        "pythia_v1_wallet": {
+            "thr_address": wallet.get("thr_address"),
+            "evm_public_address": wallet.get("evm_public_address_bsc"),
+            "source": "created_v1_wallet" if wallet.get("status") == "provisioned" else "existing_v1_wallet",
+            "status": "configured",
+            "wallet_id": wallet.get("pythia_v1_wallet_id"),
+            "created_at": wallet.get("created_at"),
+            "system_actor": wallet.get("system_actor"),
+        }
+    }), 201
+
+
+@app.route("/api/admin/pythia/register-core-addresses", methods=["POST"])
+def api_admin_pythia_register_core_addresses():
+    """
+    Admin endpoint — Register Pythia core public addresses (Phase 2.4.5).
+
+    MVP behavior: Use Pythia V1 EVM public address (if available) for all chains:
+    - PYTHIA_SYSTEM_EVM_BSC_ADDRESS
+    - PYTHIA_SYSTEM_EVM_BASE_ADDRESS
+    - PYTHIA_SYSTEM_EVM_ARBITRUM_ADDRESS
+    - PYTHIA_SYSTEM_EVM_ETHEREUM_ADDRESS
+
+    And all role-specific addresses:
+    - BSC_POOL_VAULT_ADDRESS, BSC_PAYOUT_ADDRESS, BSC_GAS_WALLET_ADDRESS, BSC_FEE_COLLECTOR_ADDRESS
+    - BASE_POOL_VAULT_ADDRESS, BASE_PAYOUT_ADDRESS, BASE_GAS_WALLET_ADDRESS, BASE_FEE_COLLECTOR_ADDRESS
+    - ARB_POOL_VAULT_ADDRESS, ARB_PAYOUT_ADDRESS, ARB_GAS_WALLET_ADDRESS, ARB_FEE_COLLECTOR_ADDRESS
+    - ETH_POOL_VAULT_ADDRESS, ETH_PAYOUT_ADDRESS, ETH_GAS_WALLET_ADDRESS, ETH_FEE_COLLECTOR_ADDRESS
+
+    Request body (optional):
+    {
+      "pythia_evm_address": "0x...",  (optional, defaults to Pythia V1 wallet EVM public address)
+      "register_chains": ["bsc", "base", "arbitrum", "eth"]  (optional, defaults to all 4)
+    }
+
+    Response includes registered addresses per chain and source (v1_wallet | provided | env).
+
+    Never stores or returns private keys, seeds, mnemonics, send_seed, send_secret, etc.
+    No signing, broadcasting, or fund movement—registration only.
+    """
+    denied = require_admin()
+    if denied:
+        return denied
+
+    data = request.get_json() or {}
+    provided_evm_address = (data.get("pythia_evm_address") or "").strip()
+    register_chains = data.get("register_chains", ["bsc", "base", "arbitrum", "eth"])
+
+    wallet = _get_pythia_v1_wallet()
+    pythia_evm_address = provided_evm_address or wallet.get("evm_public_address_bsc") or ""
+
+    if not pythia_evm_address or not _is_valid_evm_address(pythia_evm_address):
+        return jsonify({
+            "ok": False,
+            "error": "invalid_pythia_evm_address",
+            "detail": "Pythia EVM address must be 42-char 0x-prefixed valid address"
+        }), 400
+
+    registry = load_json(PYTHIA_PUBLIC_ADDRESS_REGISTRY_FILE, {})
+    if "registration_history" not in registry:
+        registry["registration_history"] = []
+
+    registration_entry = {
+        "timestamp": time.time(),
+        "registered_by": "admin",
+        "pythia_evm_address": pythia_evm_address,
+        "registered_chains": register_chains,
+    }
+
+    per_chain_result = {}
+    for chain in register_chains:
+        per_chain_result[chain] = {
+            "chain": chain,
+            "pythia_public_address": pythia_evm_address,
+            "source": "v1_wallet" if not provided_evm_address else "provided",
+            "registered": True,
+            "note": "Use this address for all role addresses (pool_vault, payout_wallet, gas_wallet, fee_collector) until role-specific addresses are configured."
+        }
+
+        add_wallet_history_event(
+            thr_address="SYSTEM_PYTHIA_ACTIONS",
+            event_type="pythia_public_address_registered",
+            chain=chain,
+            asset="",
+            amount=0.0,
+            direction="system",
+            internal_txid=f"REG_{chain}_{int(time.time())}",
+            status="confirmed",
+            note=f"Pythia public address registered for {chain}: {pythia_evm_address}"
+        )
+
+    registry["registration_history"].append(registration_entry)
+    registry["latest_pythia_evm_address"] = pythia_evm_address
+    registry["registered_chains"] = register_chains
+    registry["registered_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    save_json(PYTHIA_PUBLIC_ADDRESS_REGISTRY_FILE, registry)
+
+    return jsonify({
+        "ok": True,
+        "pythia_registration": {
+            "pythia_evm_address": pythia_evm_address,
+            "registered_chains": register_chains,
+            "per_chain": per_chain_result,
+            "note": "Pythia V1 wallet public address registered. Update Railway Variables to apply role-specific configurations per chain.",
+        }
+    }), 201
 
 
 @app.route("/api/admin/pool/seed-from-pledge-vault", methods=["POST"])
@@ -29262,6 +29527,7 @@ def add_wallet_history_event(
     pool_id: str = "",
     lp_shares: float = 0.0,
     pair: str = "",
+    note: str = "",
 ) -> dict:
     """
     Write a wallet history event (transaction, pledge, pool seed, withdrawal, action, gateway, etc).
@@ -29274,6 +29540,7 @@ def add_wallet_history_event(
                     Phase 2.3: pythia_action_intent_created, pythia_action_approved, pythia_action_signed, pythia_action_broadcasted, pythia_action_confirmed, pythia_action_failed
                               gas_wallet_topped_up, swap_to_gas_requested, swap_to_gas_confirmed
                               gateway_payment_received, gateway_fee_collected, gateway_pool_topup_allocated, gateway_gas_reserve_allocated, gateway_payout_requested
+                    Phase 2.4.5: pythia_v1_wallet_discovered, pythia_v1_wallet_provisioned, pythia_public_address_registered, pythia_role_address_registered
         chain: thronos, bsc, base, arbitrum, eth, btc
         asset: THR, BTC, WBTC, USDT, USDC, BNB, ETH, native
         amount: Transaction amount
@@ -29290,6 +29557,7 @@ def add_wallet_history_event(
         pool_id: Pool identifier for LP events
         lp_shares: LP shares minted (for pool_add_liquidity_lp_minted events)
         pair: Token pair string e.g. "THR/USDT" (for LP events)
+        note: Optional admin note or context about the event
 
     Returns:
         The created event dict
@@ -29320,6 +29588,7 @@ def add_wallet_history_event(
         "pool_id": pool_id,
         "lp_shares": lp_shares,
         "pair": pair,
+        "note": note,
         "timestamp": timestamp,
         "created_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(timestamp)),
     }

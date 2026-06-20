@@ -29313,6 +29313,9 @@ def api_v1_withdrawal_quote():
 
     payout_wallet = (chain_cfg.get("payout_wallet") or "").strip() or None
 
+    # Fee model distinction (Phase 2.2)
+    fee_distinction = get_withdrawal_fee_distinction(dest_chain)
+
     return jsonify({
         "ok": True,
         "quote": {
@@ -29331,6 +29334,13 @@ def api_v1_withdrawal_quote():
             "fee_mode":            fee_breakdown["fee_mode"],
             "fee_collector_thr":   fee_breakdown["fee_collector_thr"],
             "fee_collector_ext":   fee_breakdown["fee_collector_ext"],
+        },
+        "fee_distinction": {
+            "is_external_withdrawal": fee_distinction["is_external"],
+            "fee_model_applied": fee_distinction["fee_model"],
+            "applies_protocol_fee_thr": fee_distinction["applies_protocol_fee_thr"],
+            "applies_external_service_fee": fee_distinction["applies_external_fee"],
+            "description": fee_distinction["description"],
         },
         "pool_liquidity": {
             "usdt_reserve":        liq["pool_usdt_reserve"],
@@ -29592,6 +29602,18 @@ def api_v1_withdrawal_request():
             internal_txid=withdraw_id,
             network_label="Thronos",
             timestamp=current_ts,
+        )
+
+    # ── 13. Record external service fee (Phase 2.2) if applicable ───────────────
+    if fee["external_service_fee"] > 0 and fee["fee_mode"] in ("HYBRID", "EXTERNAL_TOKEN_ONLY"):
+        fee_collector_ext = chain_cfg.get("fee_collector", "") or fee["fee_collector_ext"] or ""
+        record_external_service_fee_collection(
+            withdrawal_id=withdraw_id,
+            thr_address=thr_address,
+            chain=dest_chain,
+            token=token,
+            gas_fee_usd=fee["gas_fee_usd_estimate"],
+            fee_collector_address=fee_collector_ext,
         )
 
     try:

@@ -1309,6 +1309,9 @@ async function showWallet() {
         </div>
       </div>
 
+      <!-- LP Positions panel (populated async) -->
+      <div id="lpPositionsPanel"></div>
+
       <!-- Quick actions — matches web wallet -->
       <div class="actions mt8" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px">
         <button class="action-btn" id="sendBtn"><span class="action-btn__icon">💸</span>Send</button>
@@ -1335,6 +1338,37 @@ async function showWallet() {
     unlocked.delete(address);
     showUnlock();
   });
+
+  // Load LP positions async — show only when Thronos network is active
+  async function loadLpPositions() {
+    const panel = document.getElementById('lpPositionsPanel');
+    if (!panel) return;
+    try {
+      const r = await fetch(`${API_BASE}/api/v1/pools/positions/${address}`).then(x => x.json()).catch(() => null);
+      const positions = r?.positions || [];
+      if (!positions.length) { panel.innerHTML = ''; return; }
+      const rows = positions.map(p => {
+        const pct = p.share_pct != null ? `${Number(p.share_pct).toFixed(4)}%` : '—';
+        const valThr = p.value_thr != null ? `≈ ${Number(p.value_thr).toFixed(4)} THR` : '';
+        return `<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid #ffffff10;cursor:pointer"
+                     onclick="showPools()">
+          <div>
+            <div style="font-size:.85rem;font-weight:600;color:#fff">${escHtml(p.token_a || '')}/${escHtml(p.token_b || '')}</div>
+            <div style="font-size:.72rem;color:var(--muted)">${Number(p.liquidity_share || 0).toFixed(6)} LP shares · ${pct} of pool</div>
+          </div>
+          <div style="text-align:right">
+            <div style="font-size:.82rem;color:#b08cf8">${valThr}</div>
+            <div style="font-size:.68rem;color:var(--muted)">${p.pending_rewards > 0 ? `+${Number(p.pending_rewards).toFixed(6)} pending` : ''}</div>
+          </div>
+        </div>`;
+      }).join('');
+      panel.innerHTML = `
+        <div class="card" style="padding:10px 12px;margin-bottom:10px">
+          <div style="font-size:.7rem;text-transform:uppercase;letter-spacing:1px;color:#b08cf8;margin-bottom:6px">Pool Positions</div>
+          ${rows}
+        </div>`;
+    } catch { panel.innerHTML = ''; }
+  }
 
   document.getElementById('accBtn')?.addEventListener('click', showAccountPicker);
   document.getElementById('addAccBtn').addEventListener('click', () => showImport(true));
@@ -1502,14 +1536,20 @@ async function showWallet() {
     homeChainBalances = null; // always re-fetch on network switch
     const netId = e.target.value;
     LS.set(`thr_network_${address}`, netId); // persist per wallet
-    if (netId === 'thronos') { loadThronosAssets(); return; }
-    loadOtherNetworkAssets(netId);
+    const lpPanel = document.getElementById('lpPositionsPanel');
+    if (netId === 'thronos') {
+      loadThronosAssets();
+      loadLpPositions();
+    } else {
+      if (lpPanel) lpPanel.innerHTML = ''; // hide LP panel on external networks
+      loadOtherNetworkAssets(netId);
+    }
   });
 
   // Load balances — same API as web wallet
   // Load persisted network (or Thronos default)
   const _initNet = document.getElementById('homeNetSel')?.value || 'thronos';
-  if (_initNet === 'thronos') { loadThronosAssets(); } else { loadOtherNetworkAssets(_initNet); }
+  if (_initNet === 'thronos') { loadThronosAssets(); loadLpPositions(); } else { loadOtherNetworkAssets(_initNet); }
 
   // Auto-refresh every 30s while wallet is open
   const _autoRefreshId = setInterval(() => {
@@ -3362,10 +3402,30 @@ function _parseTxDate(ts) {
   return isNaN(d2.getTime()) ? null : d2;
 }
 
+const _EVENT_TYPE_LABELS = {
+  pool_add_liquidity_intent_created:        '💧 LP intent created',
+  pool_add_liquidity_external_tx_confirmed: '✅ External deposit confirmed',
+  pool_add_liquidity_lp_minted:             '🌱 LP shares minted',
+  pledge_usdt_bnb_confirmed:                '💵 USDT pledge confirmed',
+  crosschain_deposit_detected:              '📥 Cross-chain deposit',
+  crosschain_transfer_received:             '📥 Cross-chain transfer received',
+  crosschain_transfer_sent:                 '📤 Cross-chain transfer sent',
+  bridge_deposit_detected:                  '⚡ Bridge deposit',
+  pool_seed:                                '💧 Pool seeded',
+  pool_withdraw:                            '↩ Pool withdraw',
+  pool_add_liquidity:                       '💧 Add liquidity',
+  pledge:                                   '🔒 Pledge',
+  token_receive:                            '📥 Received',
+  token_send:                               '📤 Sent',
+  crosschain_withdraw:                      '🔄 Cross-chain withdrawal',
+  gateway_payout:                           '💰 Gateway payout',
+  bridge:                                   '⚡ Bridge',
+};
+
 function _renderHistoryRow(tx) {
-  const kind = tx.kind || tx.type || tx.category || 'transfer';
-  const label = tx.category_label || kind.replace(/_/g, ' ');
-  const direction = tx.direction || (tx.kind === 'swap' ? 'swap' : 'out');
+  const kind = tx.event_type || tx.kind || tx.type || tx.category || 'transfer';
+  const label = tx.category_label || _EVENT_TYPE_LABELS[kind] || kind.replace(/_/g, ' ');
+  const direction = tx.direction || (kind === 'swap' ? 'swap' : 'out');
   const symbol = (tx.asset_symbol || tx.symbol || 'THR').toUpperCase();
   const amount = tx.display_amount !== undefined ? tx.display_amount : (tx.amount_in !== undefined ? tx.amount_in : tx.amount);
   const date = _parseTxDate(tx.timestamp);
@@ -3396,20 +3456,21 @@ function _renderHistoryRow(tx) {
   const links = [];
   const chain = tx.chain || '';
   const expBase = EXPLORER_BASES[chain];
-  if (tx.internal_txid && chain === 'thronos') {
-    const url = `https://api.thronoschain.org/v1/viewer?address=${encodeURIComponent(tx.thr_address || '')}`;
-    links.push(`<a href="${url}" target="_blank" rel="noopener" style="font-size:.68rem;color:#b08cf8;text-decoration:none">Thronos ↗</a>`);
-  } else if (tx.internal_txid) {
-    const url = `https://api.thronoschain.org/v1/viewer?address=${encodeURIComponent(tx.thr_address || '')}`;
-    links.push(`<a href="${url}" target="_blank" rel="noopener" style="font-size:.68rem;color:#b08cf8;text-decoration:none">View ↗</a>`);
+
+  // Internal Thronos viewer link — always available if we have an internal txid
+  if (tx.internal_txid) {
+    const thrUrl = `https://api.thronoschain.org/viewer?tx=${encodeURIComponent(tx.internal_txid)}`;
+    links.push(`<a href="${thrUrl}" target="_blank" rel="noopener" style="font-size:.68rem;color:#b08cf8;text-decoration:none">Thronos ↗</a>`);
   }
+
+  // External chain explorer link
   if (tx.external_txid && expBase) {
-    const url = expBase.tx.replace('{txid}', tx.external_txid).replace('{addr}', tx.thr_address || '');
+    const url = expBase.tx.replace('{txid}', tx.external_txid);
     links.push(`<a href="${url}" target="_blank" rel="noopener" style="font-size:.68rem;color:#b08cf8;text-decoration:none">${expBase.label} ↗</a>`);
+  } else if (tx.explorer_url) {
+    links.push(`<a href="${tx.explorer_url}" target="_blank" rel="noopener" style="font-size:.68rem;color:#b08cf8;text-decoration:none">Explorer ↗</a>`);
   } else if (tx.explorer_link) {
     links.push(`<a href="${tx.explorer_link}" target="_blank" rel="noopener" style="font-size:.68rem;color:#b08cf8;text-decoration:none">View ↗</a>`);
-  } else if (tx.explorer_url) {
-    links.push(`<a href="${tx.explorer_url}" target="_blank" rel="noopener" style="font-size:.68rem;color:#b08cf8;text-decoration:none">View ↗</a>`);
   }
   const linkHtml = links.length ? `<div style="display:flex;gap:6px">${links.join('')}</div>` : '';
 

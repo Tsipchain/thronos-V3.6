@@ -84,13 +84,24 @@ const CATEGORY_MAP: Record<string, string> = {
   thr: 'thr',
   transfer: 'thr',
   token_transfer: 'tokens',
+  token_receive: 'thr',
   tokens: 'tokens',
   mining: 'mining',
   mining_reward: 'mining',
   swaps: 'swaps',
   swap: 'swaps',
   liquidity: 'liquidity',
+  pool_seed: 'liquidity',
+  pool_withdraw: 'liquidity',
+  pool_add_liquidity: 'liquidity',
+  pool_add_liquidity_intent_created: 'liquidity',
+  pool_add_liquidity_external_tx_confirmed: 'liquidity',
+  pool_add_liquidity_lp_minted: 'liquidity',
   bridge: 'bridge',
+  bridge_deposit_detected: 'bridge',
+  crosschain_deposit_detected: 'bridge',
+  crosschain_transfer_received: 'bridge',
+  crosschain_transfer_sent: 'bridge',
   music_tip: 'music',
   music_stream: 'music',
   music_royalty: 'music',
@@ -109,6 +120,7 @@ const CATEGORY_MAP: Record<string, string> = {
   gps_mining: 'iot',
   music_gps_telemetry: 'iot',
   pledge: 'staking',
+  pledge_usdt_bnb_confirmed: 'staking',
   staking: 'staking',
   nft: 'nft',
   nft_mint: 'nft',
@@ -179,9 +191,36 @@ function formatAmount(amount: number): string {
 }
 
 function describeTransaction(tx: any, walletAddr: string): string {
+  const eventType = (tx.event_type || '').toLowerCase();
   const kind = (tx.kind || tx.type || '').toLowerCase();
   const cat = (tx.category || '').toLowerCase();
   const dir = tx.direction || (tx.to === walletAddr ? 'received' : tx.from === walletAddr ? 'sent' : 'related');
+
+  // LP / pool events
+  if (eventType === 'pool_add_liquidity_intent_created') {
+    const pair = tx.pair || tx.meta?.pair || '';
+    return pair ? `LP Intent: ${pair}` : 'Add Liquidity Intent';
+  }
+  if (eventType === 'pool_add_liquidity_external_tx_confirmed') {
+    const chain = (tx.chain || '').toUpperCase();
+    return chain ? `${chain} Deposit Confirmed` : 'External Deposit Confirmed';
+  }
+  if (eventType === 'pool_add_liquidity_lp_minted') {
+    const pair = tx.pair || tx.meta?.pair || '';
+    return pair ? `LP Minted: ${pair}` : 'LP Shares Minted';
+  }
+  if (eventType === 'pool_seed') return 'Pool Seeded';
+  if (eventType === 'pool_withdraw') return 'Liquidity Withdrawn';
+
+  // Pledge / staking events
+  if (eventType === 'pledge_usdt_bnb_confirmed') return 'USDT Pledge Confirmed (BNB)';
+  if (eventType === 'pledge') return 'Pledge';
+
+  // Cross-chain / bridge events
+  if (eventType === 'crosschain_deposit_detected') return 'Cross-Chain Deposit';
+  if (eventType === 'crosschain_transfer_received') return 'Cross-Chain Transfer Received';
+  if (eventType === 'crosschain_transfer_sent') return 'Cross-Chain Transfer Sent';
+  if (eventType === 'bridge_deposit_detected') return 'Bridge Deposit';
 
   if (kind === 'mining_reward' || cat === 'mining') return 'Mining Reward';
   if (cat === 'music_tip' || kind === 'music_tip') return dir === 'received' ? 'Music Tip Received' : 'Music Tip Sent';
@@ -213,15 +252,16 @@ function describeTransaction(tx: any, walletAddr: string): string {
 
 function normalizeTx(raw: any, walletAddr: string): Transaction {
   const addrLower = walletAddr.toLowerCase();
-  const from = raw.from || raw.sender || '';
-  const to = raw.to || raw.recipient || '';
+  const from = raw.from || raw.sender || raw.external_from || '';
+  const to = raw.to || raw.recipient || raw.external_to || '';
   const isFromWallet = from.toLowerCase() === addrLower;
   const isToWallet = to.toLowerCase() === addrLower;
   const direction = raw.direction || (isToWallet ? 'received' : isFromWallet ? 'sent' : 'related');
 
-  const kind = (raw.kind || raw.type || '').toLowerCase();
-  const rawCategory = (raw.category || raw.source || kind).toLowerCase();
-  const category = CATEGORY_MAP[rawCategory] || CATEGORY_MAP[kind] || 'thr';
+  const eventType = (raw.event_type || '').toLowerCase();
+  const kind = (raw.kind || raw.type || eventType).toLowerCase();
+  const rawCategory = (raw.category || raw.source || eventType || kind).toLowerCase();
+  const category = CATEGORY_MAP[rawCategory] || CATEGORY_MAP[eventType] || CATEGORY_MAP[kind] || 'thr';
 
   const symbol = (raw.symbol || raw.asset_symbol || raw.token_symbol || raw.token || 'THR').toUpperCase();
   const amount = safeFloat(raw.display_amount ?? raw.amount);
@@ -231,13 +271,16 @@ function normalizeTx(raw: any, walletAddr: string): Transaction {
   const status = raw.pending ? 'pending' : (raw.status || 'confirmed');
   const chain = raw.chain || raw.network || 'thronos';
 
-  // Determine service label from category/kind
+  // Determine service label from event_type / category / kind
   let service = '';
-  if (kind === 'mining_reward') service = 'Mining';
+  if (eventType.startsWith('pool_add_liquidity') || eventType === 'pool_seed' || eventType === 'pool_withdraw') service = 'Liquidity Pool';
+  else if (eventType === 'pledge_usdt_bnb_confirmed') service = 'Staking';
+  else if (eventType.startsWith('crosschain_') || eventType === 'bridge_deposit_detected') service = 'Cross-Chain';
+  else if (kind === 'mining_reward') service = 'Mining';
   else if (rawCategory.includes('music')) service = 'Decent Music';
   else if (rawCategory.includes('swap')) service = 'DEX';
-  else if (rawCategory.includes('liquidity')) service = 'Liquidity Pool';
-  else if (rawCategory.includes('bridge')) service = 'Bridge';
+  else if (rawCategory.includes('liquidity') || rawCategory.includes('pool')) service = 'Liquidity Pool';
+  else if (rawCategory.includes('bridge') || rawCategory.includes('crosschain')) service = 'Cross-Chain';
   else if (rawCategory.includes('ai') || rawCategory.includes('architect')) service = 'Pytheia AI';
   else if (rawCategory.includes('iot') || rawCategory.includes('gps')) service = 'IoT';
   else if (rawCategory.includes('nft')) service = 'NFT Market';
@@ -264,7 +307,15 @@ function normalizeTx(raw: any, walletAddr: string): Transaction {
     service,
     description: raw.description || describeTransaction(raw, walletAddr),
     direction: direction as any,
-    metadata: raw.meta || raw.metadata || {},
+    metadata: {
+      ...(raw.meta || raw.metadata || {}),
+      event_type: raw.event_type,
+      pool_id: raw.pool_id,
+      lp_shares: raw.lp_shares,
+      pair: raw.pair,
+      external_from: raw.external_from,
+      external_to: raw.external_to,
+    },
   };
 }
 
@@ -538,12 +589,17 @@ export default function HistoryScreen() {
                   { label: 'Service', value: selectedTx.service },
                   { label: 'Category', value: getCategoryDef(selectedTx.category).label },
                   { label: 'Chain', value: CHAIN_INFO[selectedTx.chain]?.label || 'Thronos' },
+                  selectedTx.metadata?.pair ? { label: 'Pool Pair', value: selectedTx.metadata.pair } : null,
+                  selectedTx.metadata?.lp_shares ? { label: 'LP Shares', value: String(selectedTx.metadata.lp_shares) } : null,
+                  selectedTx.metadata?.pool_id ? { label: 'Pool ID', value: selectedTx.metadata.pool_id, mono: true } : null,
                   { label: 'From', value: selectedTx.from || 'N/A', mono: true },
                   { label: 'To', value: selectedTx.to || 'N/A', mono: true },
+                  selectedTx.metadata?.external_from ? { label: 'EVM From', value: selectedTx.metadata.external_from, mono: true } : null,
+                  selectedTx.metadata?.external_to ? { label: 'EVM To', value: selectedTx.metadata.external_to, mono: true } : null,
                   { label: 'Fee', value: selectedTx.fee > 0 ? `${selectedTx.fee} THR` : 'Free' },
                   { label: 'Time', value: formatFullDate(selectedTx.timestampMs) },
                   { label: 'TX Hash', value: selectedTx.hash || 'Pending...', mono: true },
-                ].map((row) => (
+                ].filter((r): r is { label: string; value: string; mono?: boolean } => r !== null).map((row) => (
                   <View key={row.label} style={styles.detailRow}>
                     <Text style={styles.detailRowLabel}>{row.label}</Text>
                     <Text style={[styles.detailRowValue, row.mono && styles.monoText]} numberOfLines={1}>

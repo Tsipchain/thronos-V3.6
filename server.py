@@ -20738,15 +20738,31 @@ def api_viewer_transactions():
         history = get_wallet_history(address, limit=limit * 3)
 
         # Apply tab filter
+        _LP_EVENT_TYPES = {
+            "pool_add_liquidity_intent_created",
+            "pool_add_liquidity_external_tx_confirmed",
+            "pool_add_liquidity_lp_minted",
+        }
+        _CROSSCHAIN_EVENT_TYPES = _LP_EVENT_TYPES | {
+            "crosschain_withdraw",
+            "crosschain_deposit_detected",
+            "crosschain_transfer_received",
+            "crosschain_transfer_sent",
+            "bridge_deposit_detected",
+            "pledge_usdt_bnb_confirmed",
+        }
         tab_filters = {
             "native_thr": lambda e: e.get("asset") == "THR" and e.get("chain") == "thronos",
             "tokens": lambda e: e.get("asset") != "THR" and e.get("event_type") in ("token_send", "token_receive"),
-            "pledges": lambda e: e.get("event_type") == "pledge",
-            "pools": lambda e: e.get("event_type") in ("pool_seed", "pool_withdraw"),
-            "bridge": lambda e: e.get("event_type") == "bridge",
-            "crosschain": lambda e: e.get("event_type") == "crosschain_withdraw",
+            "pledges": lambda e: e.get("event_type") in ("pledge", "pledge_usdt_bnb_confirmed"),
+            "pools": lambda e: e.get("event_type") in (
+                "pool_seed", "pool_withdraw", "pool_add_liquidity",
+                "pool_add_liquidity_lp_minted",
+            ),
+            "bridge": lambda e: e.get("event_type") in ("bridge", "bridge_deposit_detected"),
+            "crosschain": lambda e: e.get("event_type") in _CROSSCHAIN_EVENT_TYPES,
             "withdrawals": lambda e: e.get("event_type") in ("crosschain_withdraw", "gateway_payout"),
-            "failed": lambda e: e.get("status") in ("failed", "manual_review"),
+            "failed": lambda e: e.get("status") in ("failed", "manual_review", "expired"),
         }
 
         if tab != "all" and tab in tab_filters:
@@ -27537,10 +27553,10 @@ def api_usdt_pledge():
     # Add wallet history events
     current_ts = time.time()
 
-    # 1. Record USDT pledge on BNB Chain (external)
+    # 1. Primary pledge event: USDT-on-BSC confirmed (visible on BNB network in history)
     add_wallet_history_event(
         thr_address=thr_address,
-        event_type="pledge",
+        event_type="pledge_usdt_bnb_confirmed",
         chain="bsc",
         asset="USDT",
         amount=usdt_amount,
@@ -27551,6 +27567,8 @@ def api_usdt_pledge():
         token_contract=USDT_BNB_CONTRACT,
         token_standard="BEP20",
         network_label="BNB Smart Chain",
+        external_from=bnb_address,
+        external_to=BNB_PLEDGE_VAULT,
         timestamp=current_ts,
     )
 
@@ -27564,6 +27582,7 @@ def api_usdt_pledge():
         status="credited",
         direction="in",
         internal_txid=tx_id,
+        external_txid=bnb_txid,
         token_standard="native",
         network_label="Thronos",
         timestamp=current_ts,
@@ -27844,13 +27863,22 @@ def add_wallet_history_event(
     token_standard: str = "native",
     network_label: str = "",
     timestamp: float = None,
+    external_from: str = "",
+    external_to: str = "",
+    pool_id: str = "",
+    lp_shares: float = 0.0,
+    pair: str = "",
 ) -> dict:
     """
     Write a wallet history event (transaction, pledge, pool seed, withdrawal, etc).
 
     Args:
         thr_address: Thronos wallet address
-        event_type: pledge, token_receive, token_send, pool_seed, pool_withdraw, bridge, crosschain_withdraw, gateway_payout, failed, manual_review
+        event_type: pledge, token_receive, token_send, pool_seed, pool_withdraw,
+                    bridge, crosschain_withdraw, gateway_payout, failed, manual_review,
+                    pool_add_liquidity_intent_created, pool_add_liquidity_external_tx_confirmed,
+                    pool_add_liquidity_lp_minted, pledge_usdt_bnb_confirmed,
+                    crosschain_deposit_detected, crosschain_transfer_received
         chain: thronos, bsc, base, arbitrum, eth, btc
         asset: THR, BTC, WBTC, USDT, USDC, BNB, ETH
         amount: Transaction amount
@@ -27862,6 +27890,11 @@ def add_wallet_history_event(
         token_standard: native, BEP20, ERC20
         network_label: Human-readable chain name
         timestamp: Unix timestamp (defaults to now)
+        external_from: EVM sender address
+        external_to: EVM recipient/vault address
+        pool_id: Pool identifier for LP events
+        lp_shares: LP shares minted (for pool_add_liquidity_lp_minted events)
+        pair: Token pair string e.g. "THR/USDT" (for LP events)
 
     Returns:
         The created event dict
@@ -27886,7 +27919,12 @@ def add_wallet_history_event(
         "direction": direction,
         "internal_txid": internal_txid,
         "external_txid": external_txid,
+        "external_from": external_from,
+        "external_to": external_to,
         "explorer_url": explorer_url,
+        "pool_id": pool_id,
+        "lp_shares": lp_shares,
+        "pair": pair,
         "timestamp": timestamp,
         "created_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(timestamp)),
     }
@@ -33634,10 +33672,11 @@ def api_v1_pools_add_liquidity_crosschain():
     intents.append(intent)
     save_json(intents_file, intents)
 
-    # Record initial pending event in wallet history
+    # Phase 1: intent created — THR not yet deducted, waiting for external deposit
+    _pair_label = f"{token_a}/{token_b}"
     add_wallet_history_event(
         thr_address=provider,
-        event_type="pool_add_liquidity",
+        event_type="pool_add_liquidity_intent_created",
         chain="thronos",
         asset="THR",
         amount=amt_a,
@@ -33646,6 +33685,26 @@ def api_v1_pools_add_liquidity_crosschain():
         internal_txid=intent_id,
         token_standard="native",
         network_label="Thronos",
+        external_to=vault_address,
+        pool_id=pool_id,
+        pair=_pair_label,
+    )
+    # Phase 1 (external side): inform history that USDT/USDC deposit is expected on-chain
+    add_wallet_history_event(
+        thr_address=provider,
+        event_type="pool_add_liquidity_intent_created",
+        chain=chain,
+        asset=ext_token,
+        amount=amt_b,
+        status="pending",
+        direction="pool",
+        internal_txid=intent_id,
+        token_contract=token_contract,
+        token_standard=token_standard,
+        network_label=network_label,
+        external_to=vault_address,
+        pool_id=pool_id,
+        pair=_pair_label,
     )
 
     logger.info(
@@ -33829,24 +33888,15 @@ def api_v1_pools_add_liquidity_confirm():
     })
     save_json(CHAIN_FILE, chain_data)
 
-    # 4. Update wallet history with confirmations
+    # 4. Write phased wallet history events
     network_label = intent.get("network_label", "")
+    _pair_label   = f"{token_a}/{token_b}"
+    _evm_address  = intent.get("evm_address", "")
+
+    # Phase 2: external deposit confirmed on-chain
     add_wallet_history_event(
         thr_address=provider,
-        event_type="pool_add_liquidity",
-        chain="thronos",
-        asset="THR",
-        amount=amt_a,
-        status="confirmed",
-        direction="pool",
-        internal_txid=intent_id,
-        external_txid=external_txid,
-        token_standard="native",
-        network_label="Thronos",
-    )
-    add_wallet_history_event(
-        thr_address=provider,
-        event_type="pool_add_liquidity",
+        event_type="pool_add_liquidity_external_tx_confirmed",
         chain=chain,
         asset=token_b,
         amount=amt_b,
@@ -33857,6 +33907,45 @@ def api_v1_pools_add_liquidity_confirm():
         token_contract=intent.get("token_contract"),
         token_standard=intent.get("token_standard"),
         network_label=network_label,
+        external_from=_evm_address,
+        external_to=vault_address,
+        pool_id=pool_id,
+        pair=_pair_label,
+    )
+
+    # Phase 3a: THR committed (deducted from wallet)
+    add_wallet_history_event(
+        thr_address=provider,
+        event_type="pool_add_liquidity_external_tx_confirmed",
+        chain="thronos",
+        asset="THR",
+        amount=amt_a,
+        status="confirmed",
+        direction="pool",
+        internal_txid=intent_id,
+        external_txid=external_txid,
+        token_standard="native",
+        network_label="Thronos",
+        pool_id=pool_id,
+        pair=_pair_label,
+    )
+
+    # Phase 3b: LP shares minted — primary LP event visible under THR wallet
+    add_wallet_history_event(
+        thr_address=provider,
+        event_type="pool_add_liquidity_lp_minted",
+        chain="thronos",
+        asset="THR",
+        amount=amt_a,
+        status="confirmed",
+        direction="pool",
+        internal_txid=intent_id,
+        external_txid=external_txid,
+        token_standard="native",
+        network_label="Thronos",
+        pool_id=pool_id,
+        lp_shares=shares_minted,
+        pair=_pair_label,
     )
 
     # 5. Mark intent as confirmed

@@ -1398,7 +1398,8 @@ XRP_RPC_URL = os.getenv("XRP_RPC_URL", os.getenv("XRPL_RPC_URL", "https://xrplcl
 # ─── USDT-on-BNB-Chain Pledge (mobile/PWA only) ────────────────────────────
 # Vault EVM address that watches for incoming USDT (BEP20) pledge deposits.
 # Uses BSC_RPC_URL above — no separate RPC needed.
-BNB_PLEDGE_VAULT = os.getenv("BNB_PLEDGE_VAULT", "")
+# (Now sourced from WITHDRAW_CHAIN_CONFIG["bsc"]["usdt_pledge_vault"] — see line ~27580)
+BNB_PLEDGE_VAULT = os.getenv("BSC_USDT_PLEDGE_VAULT", os.getenv("BNB_PLEDGE_VAULT", ""))  # backwards-compatible
 USDT_BNB_CONTRACT = os.getenv("USDT_BNB_CONTRACT", "0x55d398326f99059fF775485246999027B3197955")  # BEP20 USDT, 18 decimals
 USDT_THR_RATE = float(_strip_env_quotes(os.getenv("USDT_THR_RATE", "100")))  # legacy static rate (overridden by dynamic pricing)
 MIN_USDT_PLEDGE = float(_strip_env_quotes(os.getenv("MIN_USDT_PLEDGE", "10")))  # minimum 10 USDT

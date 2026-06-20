@@ -16680,18 +16680,20 @@ def _provision_pythia_v1_wallet() -> dict:
     """
     Provision a new Pythia V1 wallet if it doesn't exist (Phase 2.4.5).
 
-    Returns: {thr_address, evm_public_address, created_at, ...}
+    Returns: {thr_address, evm_public_address, status, ...}
     Never stores or returns private keys, seeds, mnemonics, etc.
 
-    For now: Generate a synthetic Pythia address to represent the system actor.
-    In production Phase 2.4+: Derive from secure signer material (HSM/KMS).
+    For now: Create skeleton with THR address only, mark status="needs_creation".
+    In production Phase 2.4+: Derive real EVM public addresses from secure signer material (HSM/KMS).
+
+    Phase 2.4.5-MVP does NOT invent fake EVM addresses.
+    If real wallet creation logic is unavailable, status remains "needs_creation".
     """
     existing = _discover_pythia_v1_wallet()
     if existing:
         return existing
 
     import secrets
-    import hashlib
 
     ts = datetime.now(UTC).isoformat() + "Z"
 
@@ -16703,8 +16705,8 @@ def _provision_pythia_v1_wallet() -> dict:
         "wallet_role": "pythia_v1_core",
         "public_only": True,
         "created_at": ts,
-        "status": "provisioned",
-        "source": "synthetic_system_actor",
+        "status": "needs_creation",
+        "source": "skeleton_awaiting_signer_material",
     }
 
     for chain in ["bsc", "base", "arbitrum", "eth"]:
@@ -16719,7 +16721,7 @@ def _provision_pythia_v1_wallet() -> dict:
         direction="system",
         internal_txid=pythia_wallet["pythia_v1_wallet_id"],
         status="confirmed",
-        note=f"Pythia V1 wallet provisioned: {pythia_wallet['thr_address']}"
+        note=f"Pythia V1 wallet skeleton created (awaiting real signer material): {pythia_wallet['thr_address']}"
     )
 
     save_json(PYTHIA_V1_WALLET_FILE, pythia_wallet)
@@ -16747,8 +16749,8 @@ def api_admin_pythia_v1_wallet():
     Returns public-only wallet info:
     - thr_address: Thronos system wallet address
     - evm_public_address: Public EVM address (if available)
-    - source: existing_v1_wallet | created_v1_wallet | missing
-    - status: configured | missing | needs_creation
+    - source: existing_v1_wallet | missing
+    - status: configured | needs_creation | missing
 
     Never exposes private keys, seeds, mnemonics, or decrypted material.
     """
@@ -16758,16 +16760,24 @@ def api_admin_pythia_v1_wallet():
 
     wallet = _discover_pythia_v1_wallet()
     if wallet:
+        evm_addr = wallet.get("evm_public_address_bsc")
+        has_real_evm = evm_addr and _is_valid_evm_address(evm_addr)
+
         return jsonify({
             "ok": True,
             "pythia_v1_wallet": {
                 "thr_address": wallet.get("thr_address"),
-                "evm_public_address": wallet.get("evm_public_address_bsc"),
+                "evm_public_address": evm_addr if has_real_evm else None,
                 "source": "existing_v1_wallet",
-                "status": "configured",
-                "safe_to_register": True,
+                "status": "configured" if has_real_evm else wallet.get("status", "needs_creation"),
+                "safe_to_register": has_real_evm,
                 "created_at": wallet.get("created_at"),
                 "wallet_id": wallet.get("pythia_v1_wallet_id"),
+                "action_required": (
+                    "Create or register real Pythia EVM public addresses. "
+                    "If using secure signer material (HSM/KMS), ensure it is accessible."
+                    if not has_real_evm else None
+                ),
             }
         }), 200
 
@@ -16791,12 +16801,16 @@ def api_admin_pythia_provision_v1_wallet():
 
     Behavior:
     - If Pythia V1 wallet already exists, return it (no re-creation)
-    - If missing, create/provision one through system wallet logic
+    - If missing, create skeleton THR address record
     - Mark it as: owner_type=system, system_actor=pythia, wallet_role=pythia_v1_core
-    - Return only public data: THR address, EVM public address
+    - Return only public data: THR address, EVM public address (if available)
+    - status: configured (if real EVM address), needs_creation (if EVM awaiting signer material)
 
     Never returns private key, seed, mnemonic, send_seed, send_secret, auth_secret,
     recovery kit plaintext, signer secret, or decrypted material.
+
+    Never invents fake EVM addresses. If real signer material unavailable, returns
+    status=needs_creation with action_required guidance.
 
     No signing, broadcasting, or fund movement—provisioning only.
     """
@@ -16805,17 +16819,25 @@ def api_admin_pythia_provision_v1_wallet():
         return denied
 
     wallet = _provision_pythia_v1_wallet()
+    evm_addr = wallet.get("evm_public_address_bsc")
+    has_real_evm = evm_addr and _is_valid_evm_address(evm_addr)
 
     return jsonify({
         "ok": True,
         "pythia_v1_wallet": {
             "thr_address": wallet.get("thr_address"),
-            "evm_public_address": wallet.get("evm_public_address_bsc"),
-            "source": "created_v1_wallet" if wallet.get("status") == "provisioned" else "existing_v1_wallet",
-            "status": "configured",
+            "evm_public_address": evm_addr if has_real_evm else None,
+            "source": "created_v1_wallet" if wallet.get("status") == "needs_creation" else "existing_v1_wallet",
+            "status": "configured" if has_real_evm else wallet.get("status", "needs_creation"),
             "wallet_id": wallet.get("pythia_v1_wallet_id"),
             "created_at": wallet.get("created_at"),
             "system_actor": wallet.get("system_actor"),
+            "action_required": (
+                "Create or register real Pythia EVM public addresses via secure signer material. "
+                "For Phase 2.4.5-MVP: If no HSM/KMS available yet, register addresses manually "
+                "via POST /api/admin/pythia/register-core-addresses."
+                if not has_real_evm else None
+            ),
         }
     }), 201
 

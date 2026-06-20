@@ -16256,15 +16256,18 @@ def api_admin_pythia_vault_registry():
     if denied:
         return denied
 
-    pythia_thr = _env_live("PYTHIA_SYSTEM_THR_ADDRESS") or PYTHIA_SYSTEM_THR_ADDRESS
+    def _live(key: str) -> str:
+        return _strip_env_quotes(os.getenv(key, "")).strip()
+
+    pythia_thr = _live("PYTHIA_SYSTEM_THR_ADDRESS") or PYTHIA_SYSTEM_THR_ADDRESS
 
     def _get_chain_registry(chain: str) -> dict:
         """Get vault registry for a single chain (validated addresses only)."""
         cfg = WITHDRAW_CHAIN_CONFIG.get(chain, {})
-        pool_vault, pool_status = _pool_vault_status(chain)
+        vault_status, _ = _pool_vault_status(chain)
 
         # Extract all role-specific addresses (None if not set or invalid)
-        pythia_pub = (_env_live(f"PYTHIA_SYSTEM_EVM_{chain.upper()}_ADDRESS") or "").strip()
+        pythia_pub = (_live(f"PYTHIA_SYSTEM_EVM_{chain.upper()}_ADDRESS") or "").strip()
         payout_addr = (cfg.get("payout_wallet") or "").strip()
         pool_vault_addr = (cfg.get("pool_vault") or "").strip()
         fee_collector_addr = (cfg.get("fee_collector") or "").strip()
@@ -16285,8 +16288,8 @@ def api_admin_pythia_vault_registry():
             "payout_wallet": payout_addr,
             "gas_wallet": gas_wallet_addr,
             "fee_collector": fee_collector_addr,
-            "status": pool_status,
-            "signer_available": bool(_env_live("GATEWAY_SECRET", "")),
+            "status": vault_status,
+            "signer_available": bool(_live("GATEWAY_SECRET")),
         }
 
     return jsonify({
@@ -16522,8 +16525,9 @@ def api_admin_gateway_event():
         return jsonify(ok=False, error="unknown_gateway_event",
                        supported=valid_gateway_events), 400
 
-    if not chain or amount == 0:
-        return jsonify(ok=False, error="missing_required_fields"), 400
+    if not chain or not asset or amount <= 0:
+        return jsonify(ok=False, error="missing_required_fields",
+                       detail="chain, asset, and amount (>0) are required"), 400
 
     # Record in wallet history (system audit trail)
     event = add_wallet_history_event(

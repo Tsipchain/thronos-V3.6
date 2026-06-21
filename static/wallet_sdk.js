@@ -242,10 +242,11 @@
     return resp.json();
   }
 
-  async function getLiquidityHistory({ address, chain } = {}) {
+  async function getLiquidityHistory({ address, chain, source, limit } = {}) {
     const addr = address || ensureWallet();
-    const p = new URLSearchParams({ address: addr, domain: 'liquidity', limit: '100' });
-    if (chain) p.set('chain', chain);
+    const p = new URLSearchParams({ address: addr, domain: 'liquidity', limit: String(limit || 100) });
+    if (chain)  p.set('chain', chain);
+    if (source) p.set('source', source);
     const resp = await fetch(resolveApiBase(API_READ_BASE, `/api/wallet/history/normalized?${p}`));
     return resp.json();
   }

@@ -116,6 +116,11 @@
       <div id="txHistory" class="wallet-card">
           <span class="lang-el">Φόρτωση...</span><span class="lang-en">Loading...</span>
       </div>
+
+      <h3>💧 <span class="lang-el">Ιστορικό Ρευστότητας / Cross-chain</span><span class="lang-en">Liquidity / Cross-chain History</span></h3>
+      <div id="liqHistory" class="wallet-card">
+          <span class="lang-el">Φόρτωση...</span><span class="lang-en">Loading...</span>
+      </div>
   </div>
 
 {% endblock %}
@@ -214,6 +219,60 @@
         console.error(e);
         $('txHistory').textContent = "Error loading data.";
       }
+      loadLiquidityHistory(addr);
+    }
+
+    const _WALLET_LIQ_LABELS = {
+        pool_deposit:                   '💧 Pool In · THR',
+        pool_external_deposit_detected: '🌉 External Pool Deposit',
+        pool_withdraw_intent:           '⏳ Withdrawal Intent',
+        pool_withdraw:                  '↩ Pool Out',
+        pool_out:                       '↩ Pool Out',
+        bridge_deposit_detected:        '⚡ Bridge Deposit',
+        bridge:                         '⚡ Bridge',
+        pledge:                         '🔒 Pledge',
+        pledge_deposit:                 '🔒 Pledge',
+        external_withdrawal_request:    '📤 External Withdrawal',
+        crosschain_withdrawal_request:  '📤 External Withdrawal',
+    };
+
+    async function loadLiquidityHistory(addr) {
+        const div = $('liqHistory');
+        try {
+            const p = new URLSearchParams({ address: addr, domain: 'liquidity', limit: '50' });
+            const res = await fetch(`/api/wallet/history/normalized?${p}`);
+            const data = await res.json();
+            const rows = data.history || data.transactions || [];
+            if (!rows.length) {
+                div.innerHTML = '<p style="color:#666;">No liquidity events found.</p>';
+                return;
+            }
+            let html = '';
+            rows.forEach(r => {
+                const et = r.original_event_type || r.event_type || '';
+                const label = _WALLET_LIQ_LABELS[et] || et.replace(/_/g, ' ');
+                const statusColor = r.status === 'confirmed' ? '#0f0' : r.status === 'pending' ? '#ff0' : '#f66';
+                html += `<div class="tx">
+                  <div style="display:flex;justify-content:space-between;">
+                    <span style="color:#aaf;">${label}</span>
+                    <span style="color:#eee;font-weight:bold;">${r.amount !== undefined ? Number(r.amount).toFixed(6) : '—'} ${r.asset || 'THR'}</span>
+                  </div>
+                  <div style="font-size:0.78em;color:#888;margin-top:4px;line-height:1.5">
+                    <span style="color:#8af">pool:</span> ${r.pool_id || '—'} &nbsp;
+                    <span style="color:#8af">chain:</span> ${r.chain || '—'} &nbsp;
+                    <span style="color:#8af">scope:</span> ${r.transfer_scope || '—'} &nbsp;
+                    <span style="color:#8af">settlement:</span> ${r.settlement_chain || '—'} &nbsp;
+                    <span style="color:#8af">origin:</span> ${r.asset_origin_chain || '—'}<br>
+                    <span style="color:#8af">source:</span> ${r.source || '—'} &nbsp;
+                    <span style="color:${statusColor}">● ${r.status || '—'}</span> &nbsp;
+                    <span style="color:#555;font-size:0.9em">${r.pool_event_id || r.id || ''}</span>
+                  </div>
+                </div>`;
+            });
+            div.innerHTML = html;
+        } catch (e) {
+            div.textContent = 'Error loading liquidity history.';
+        }
     }
 
     // Init

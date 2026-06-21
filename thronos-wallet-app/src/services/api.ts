@@ -738,8 +738,14 @@ export async function getPythiaWithdrawalQuote(params: PythiaWithdrawalQuotePara
   return request(`/api/v1/withdrawal/quote?${p}`);
 }
 
-export async function getPythiaLiquidityHistory(address: string, chain?: string): Promise<{ ok: boolean; history: any[]; total: number }> {
-  const p = new URLSearchParams({ address, domain: 'liquidity', limit: '100' });
-  if (chain) p.set('chain', chain);
+export async function getPythiaLiquidityHistory(
+  address: string,
+  chain?: string,
+  source?: string,
+  limit = 100,
+): Promise<{ ok: boolean; history: any[]; total: number }> {
+  const p = new URLSearchParams({ address, domain: 'liquidity', limit: String(limit) });
+  if (chain)  p.set('chain', chain);
+  if (source) p.set('source', source);
   return request(`/api/wallet/history/normalized?${p}`);
 }

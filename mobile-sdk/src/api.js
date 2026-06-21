@@ -487,9 +487,10 @@ export default class ThronosAPI {
      * Get normalized liquidity history for a wallet.
      * @param {{ address, chain }} params
      */
-    async getLiquidityHistory({ address, chain } = {}) {
-        const p = new URLSearchParams({ address, domain: 'liquidity', limit: '100' });
-        if (chain) p.set('chain', chain);
+    async getLiquidityHistory({ address, chain, source, limit } = {}) {
+        const p = new URLSearchParams({ address, domain: 'liquidity', limit: String(limit || 100) });
+        if (chain)  p.set('chain', chain);
+        if (source) p.set('source', source);
         return await this.request(`/api/wallet/history/normalized?${p}`);
     }
 }

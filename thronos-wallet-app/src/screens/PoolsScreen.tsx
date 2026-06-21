@@ -26,6 +26,7 @@ import {
   depositToPythiaPool,
   createPythiaPoolWithdrawIntent,
   getPythiaWithdrawalQuote,
+  getPythiaLiquidityHistory,
   type AvailablePool,
   type ExternalChainInfo,
   type PythiaPoolStatus,
@@ -69,6 +70,7 @@ export default function PoolsScreen({ navigation }: { navigation: any }) {
   const [pythiaAmount, setPythiaAmount] = useState('');
   const [pythiaQuoteAmount, setPythiaQuoteAmount] = useState('');
   const [pythiaMsg, setPythiaMsg] = useState('');
+  const [liqHistory, setLiqHistory] = useState<any[]>([]);
 
   // Modal state for selected pool
   const [selectedPool, setSelectedPool] = useState<Pool | null>(null);
@@ -88,18 +90,20 @@ export default function PoolsScreen({ navigation }: { navigation: any }) {
   const loadData = useCallback(async () => {
     if (!wallet.address) return;
     try {
-      const [poolsRes, posRes, availRes, secret, pythiaRes] = await Promise.allSettled([
+      const [poolsRes, posRes, availRes, secret, pythiaRes, liqRes] = await Promise.allSettled([
         getLiquidityPools(),
         getLPPositions(wallet.address),
         getAvailablePools(),
         getAuthSecret(),
         getPythiaPoolsStatus(),
+        getPythiaLiquidityHistory(wallet.address),
       ]);
       if (poolsRes.status === 'fulfilled') setPools(poolsRes.value.pools || []);
       if (posRes.status === 'fulfilled') setPositions(posRes.value.positions || []);
       if (availRes.status === 'fulfilled') setAvailablePools(availRes.value.pools || []);
       if (secret.status === 'fulfilled') setCachedSecret(secret.value);
       if (pythiaRes.status === 'fulfilled') setPythiaPools(pythiaRes.value.pools || []);
+      if (liqRes.status === 'fulfilled') setLiqHistory(liqRes.value.history || []);
     } catch (err) {
       console.warn('Pools: failed to load', err);
     } finally {
@@ -479,6 +483,60 @@ export default function PoolsScreen({ navigation }: { navigation: any }) {
               )}
             </>
           )}
+
+          {/* Liquidity / Cross-chain History */}
+          {liqHistory.length > 0 && (
+            <>
+              <Text style={styles.sectionLabel}>📋 Liquidity History</Text>
+              {liqHistory.map((ev, i) => {
+                const et = ev.original_event_type || ev.event_type || '';
+                const LIQ_LABELS: Record<string, string> = {
+                  pool_deposit:                   '💧 Pool In · THR',
+                  pool_external_deposit_detected: '🌉 External Deposit',
+                  pool_withdraw_intent:           '⏳ Withdrawal Intent',
+                  pool_withdraw:                  '↩ Pool Out',
+                  pool_out:                       '↩ Pool Out',
+                  bridge_deposit_detected:        '⚡ Bridge Deposit',
+                  pledge:                         '🔒 Pledge',
+                  external_withdrawal_request:    '📤 External Withdrawal',
+                };
+                const label = LIQ_LABELS[et] || et.replace(/_/g, ' ');
+                const statusColor = ev.status === 'confirmed' ? COLORS.gold : ev.status === 'pending' ? '#fa0' : '#f66';
+                return (
+                  <View key={ev.pool_event_id || ev.id || i} style={styles.posCard}>
+                    <Text style={[styles.posPair, { fontSize: 13 }]}>{label}</Text>
+                    <View style={styles.posRow}>
+                      <Text style={styles.posLabel}>Amount</Text>
+                      <Text style={styles.posValue}>{ev.amount !== undefined ? Number(ev.amount).toFixed(6) : '—'} {ev.asset || 'THR'}</Text>
+                    </View>
+                    {ev.pool_id && (
+                      <View style={styles.posRow}>
+                        <Text style={styles.posLabel}>Pool</Text>
+                        <Text style={styles.posValue}>{ev.pool_id}</Text>
+                      </View>
+                    )}
+                    <View style={styles.posRow}>
+                      <Text style={styles.posLabel}>Chain</Text>
+                      <Text style={styles.posValue}>{ev.chain || '—'}</Text>
+                    </View>
+                    <View style={styles.posRow}>
+                      <Text style={styles.posLabel}>Scope</Text>
+                      <Text style={styles.posValue}>{ev.transfer_scope || '—'}</Text>
+                    </View>
+                    <View style={styles.posRow}>
+                      <Text style={styles.posLabel}>Settlement</Text>
+                      <Text style={styles.posValue}>{ev.settlement_chain || '—'}</Text>
+                    </View>
+                    <View style={styles.posRow}>
+                      <Text style={styles.posLabel}>Status</Text>
+                      <Text style={[styles.posValue, { color: statusColor }]}>{ev.status || '—'}</Text>
+                    </View>
+                  </View>
+                );
+              })}
+            </>
+          )}
+
           <View style={{ height: SPACING.xxl }} />
         </ScrollView>
       </LinearGradient>

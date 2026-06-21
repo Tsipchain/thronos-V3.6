@@ -3375,11 +3375,22 @@ const _PLEDGE_EVENT_TYPES = new Set([
   'pledge', 'pledge_usdt_bnb_confirmed',
 ]);
 
+// Event types that belong to "liquidity" filter category
+const _LIQUIDITY_FILTER_TYPES = new Set([
+  'pool_deposit',
+  'pool_external_deposit_detected',
+  'pool_withdraw_intent',
+  'pool_withdraw',
+  'pool_out',
+  'pool_seed',
+  'pool_add_liquidity',
+  'pool_add_liquidity_lp_minted',
+]);
+
 // Event types that belong to "crosschain" filter category
 const _CROSSCHAIN_FILTER_TYPES = new Set([
   'pool_add_liquidity_intent_created',
   'pool_add_liquidity_external_tx_confirmed',
-  'pool_add_liquidity_lp_minted',
   'crosschain_deposit_detected',
   'crosschain_transfer_received',
   'crosschain_transfer_sent',
@@ -3431,9 +3442,15 @@ const _EVENT_TYPE_LABELS = {
   crosschain_transfer_received:             '📥 Cross-chain transfer received',
   crosschain_transfer_sent:                 '📤 Cross-chain transfer sent',
   bridge_deposit_detected:                  '⚡ Bridge deposit',
+  pool_deposit:                             '💧 Pool In · THR',
+  pool_external_deposit_detected:           '🌉 External Pool Deposit',
+  pool_withdraw_intent:                     '⏳ Withdrawal Intent',
+  pool_out:                                 '↩ Pool Out',
   pool_seed:                                '💧 Pool seeded',
-  pool_withdraw:                            '↩ Pool withdraw',
+  pool_withdraw:                            '↩ Pool Out',
   pool_add_liquidity:                       '💧 Add liquidity',
+  external_withdrawal_request:              '📤 External Withdrawal',
+  crosschain_withdrawal_request:            '📤 External Withdrawal',
   pledge:                                   '🔒 Pledge',
   token_receive:                            '📥 Received',
   token_send:                               '📤 Sent',
@@ -3566,6 +3583,12 @@ async function showHistory(address) {
       const et = tx => tx.event_type || tx.kind || tx.type || tx.category || '';
       if (activeFilter === 'pledge') {
         filtered = allTx.filter(tx => _PLEDGE_EVENT_TYPES.has(et(tx)));
+      } else if (activeFilter === 'liquidity') {
+        filtered = allTx.filter(tx =>
+          _LIQUIDITY_FILTER_TYPES.has(et(tx)) ||
+          (tx.domain === 'liquidity') ||
+          (tx._raw_category === 'liquidity')
+        );
       } else if (activeFilter === 'crosschain') {
         filtered = allTx.filter(tx => _CROSSCHAIN_FILTER_TYPES.has(et(tx)));
       } else {

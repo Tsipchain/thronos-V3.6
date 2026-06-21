@@ -1,0 +1,11 @@
+# BzMiner — Thronos pool config example
+# Download BzMiner: https://www.bzminer.com
+#
+# Usage (after starting stratum_proxy.py):
+#   bzminer -a sha256 -p stratum+tcp://127.0.0.1:3334 -w YOUR_THR_ADDRESS --pass x
+
+# Pool (local proxy)
+pool_address: stratum+tcp://127.0.0.1:3334
+wallet: YOUR_THR_ADDRESS
+pool_password: x
+algorithm: sha256

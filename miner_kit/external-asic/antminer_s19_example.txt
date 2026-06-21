@@ -1,0 +1,21 @@
+# Antminer S19 / S19 Pro / S19j Pro — Thronos Pool Config
+#
+# Access your miner at http://MINER_IP (default: 192.168.1.100)
+# Settings → Miner Configuration → Pool Settings
+#
+# ── Pool 1 (Primary) ────────────────────────────────────────────
+Pool 1 URL    : stratum+tcp://api.thronoschain.org:3334
+Pool 1 Worker : YOUR_THR_ADDRESS.antminer1
+Pool 1 Pass   : x
+
+# ── Pool 2 (Failover) ────────────────────────────────────────────
+Pool 2 URL    : stratum+tcp://api.thronoschain.org:3334
+Pool 2 Worker : YOUR_THR_ADDRESS.antminer2
+Pool 2 Pass   : x
+
+# ── Pool 3 (Failover) ────────────────────────────────────────────
+Pool 3 URL    : stratum+tcp://api.thronoschain.org:3334
+Pool 3 Worker : YOUR_THR_ADDRESS.antminer3
+Pool 3 Pass   : x
+
+# Default fan/frequency settings — leave at manufacturer defaults unless you know what you are doing.

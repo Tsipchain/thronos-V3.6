@@ -1,0 +1,14 @@
+# Canaan Avalon A12 / A13 / A1566 — Thronos Pool Config
+#
+# Access via Avalon Control Board web UI at http://CONTROLLER_IP
+# LuCI → Avalon Miner → Pool
+#
+# ── Pool 1 (Primary) ────────────────────────────────────────────
+Pool 1 URL    : stratum+tcp://api.thronoschain.org:3334
+Pool 1 Worker : YOUR_THR_ADDRESS.avalon1
+Pool 1 Pass   : x
+
+# ── Pool 2 (Failover) ────────────────────────────────────────────
+Pool 2 URL    : stratum+tcp://api.thronoschain.org:3334
+Pool 2 Worker : YOUR_THR_ADDRESS.avalon2
+Pool 2 Pass   : x

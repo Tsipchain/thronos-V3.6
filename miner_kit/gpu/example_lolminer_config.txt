@@ -1,0 +1,17 @@
+# lolMiner — Thronos pool config example
+# Download lolMiner: https://github.com/Lolliedieb/lolMiner-releases
+#
+# Usage (after starting stratum_proxy.py):
+#   ./lolMiner --algo SHA256 --pool stratum+tcp://127.0.0.1:3334 --user YOUR_THR_ADDRESS --pass x
+
+# ── Connection settings ──────────────────────────────────────────
+# For local proxy (recommended):
+POOL_HOST=127.0.0.1
+POOL_PORT=3334
+
+# ── Miner identity ───────────────────────────────────────────────
+WALLET=YOUR_THR_ADDRESS
+PASSWORD=x
+
+# ── Example command line ─────────────────────────────────────────
+# ./lolMiner --algo SHA256 --pool stratum+tcp://$POOL_HOST:$POOL_PORT --user $WALLET --pass $PASSWORD --watchdog exit

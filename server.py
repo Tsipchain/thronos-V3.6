@@ -8419,6 +8419,57 @@ def add_node_headers(response):
     return response
 
 
+# ─── Secret-scanner path blocking ─────────────────────────────────────────────
+# Paths commonly probed by automated credential scanners.  We return 403
+# immediately with no file content and log at DEBUG level only to keep logs clean.
+_SCANNER_BLOCKED_PATHS = frozenset({
+    "/.env", "/.env.local", "/.env.backup", "/.env.bak", "/.env.production",
+    "/.env.staging", "/.env.development",
+    "/wp-config.php", "/wp-config.txt", "/wp-config.php.bak",
+    "/wordpress/wp-config.php",
+    "/.aws/credentials", "/.aws/config",
+    "/admin/config.php",
+    "/.git/config", "/.git/HEAD",
+    "/docker-compose.yml.bak", "/docker-compose.yaml.bak",
+    "/.htpasswd", "/etc/passwd",
+    "/config.php", "/configuration.php",
+    "/phpinfo.php", "/info.php",
+    "/backup.sql", "/database.sql", "/dump.sql",
+})
+_SCANNER_SUFFIXES = (".php.bak", ".bak", ".orig", ".swp", "~")
+_scanner_blocked_count = 0
+
+
+@app.before_request
+def block_secret_scanners():
+    """Return 403 for well-known credential/config scanner paths without logging noise."""
+    global _scanner_blocked_count
+    path = request.path
+    if path in _SCANNER_BLOCKED_PATHS:
+        _scanner_blocked_count += 1
+        app.logger.debug("[scanner] blocked %s %s from %s",
+                         request.method, path, request.remote_addr)
+        return "", 403
+    # Block common scanner path patterns without touching normal endpoints
+    lower = path.lower()
+    if lower.endswith(_SCANNER_SUFFIXES) and lower not in ("/", "/health"):
+        _scanner_blocked_count += 1
+        app.logger.debug("[scanner] blocked suffix %s %s from %s",
+                         request.method, path, request.remote_addr)
+        return "", 403
+    return None
+
+
+@app.route("/api/admin/security/scanner-stats", methods=["GET"])
+def api_admin_scanner_stats():
+    """Return count of scanner-blocked requests since last restart."""
+    denied = require_admin()
+    if denied:
+        return denied
+    return jsonify(ok=True, scanner_blocked_total=_scanner_blocked_count), 200
+# ──────────────────────────────────────────────────────────────────────────────
+
+
 @app.route("/api/whoami", methods=["GET"])
 def api_whoami():
     return jsonify({
@@ -21910,63 +21961,122 @@ def download_miner_kit_zip():
 
         server_url = os.getenv("THRONOS_SERVER_URL", os.getenv("THRONOS_SERVER", "https://thrchain.up.railway.app"))
 
-        cgminer_conf = _read("cgminer.conf").replace("YOUR_V1_WALLET_ADDRESS", thr_address)
-        pow_miner_cpu = _read("pow_miner_cpu.py").replace(
-            'THR_ADDRESS = "THR_PUT_YOUR_ADDRESS_HERE"', f'THR_ADDRESS = "{thr_address}"'
-        )
-        stratum_proxy = _read("stratum_proxy.py").replace(
-            'STRATUM_PROXY_ADDRESS = os.getenv("STRATUM_PROXY_ADDRESS", "")',
-            f'STRATUM_PROXY_ADDRESS = os.getenv("STRATUM_PROXY_ADDRESS", "{thr_address}")',
-        )
+        stratum_port = int(os.getenv("STRATUM_PORT", "3334"))
 
-        readme = f"""Thronos Miner Kit — pre-configured for {thr_address}
-=====================================================================
+        def _sub(s):
+            """Substitute user address and server URL into a config string."""
+            return (s
+                .replace("YOUR_THR_ADDRESS", thr_address)
+                .replace("YOUR_V1_WALLET_ADDRESS", thr_address)
+                .replace("THR_PUT_YOUR_ADDRESS_HERE", thr_address)
+                .replace("https://thrchain.up.railway.app", server_url)
+                .replace("https://api.thronoschain.org", server_url))
 
-This kit already has your THR address filled in everywhere it's
-needed. Extract the zip and pick the mining method that matches your
-hardware:
+        def _sub_proxy(s):
+            return s.replace(
+                'STRATUM_PROXY_ADDRESS = os.getenv("STRATUM_PROXY_ADDRESS", "")',
+                f'STRATUM_PROXY_ADDRESS = os.getenv("STRATUM_PROXY_ADDRESS", "{thr_address}")',
+            )
 
-CPU MINING
-----------
-1. pip install requests
-2. python pow_miner_cpu.py
-(Uses the HTTP mining contract: GET /api/miner/work, POST /api/miner/submit)
+        def _read_sub(name):
+            return _sub(_read(name))
 
-GPU MINING
-----------
-No dedicated GPU binary is shipped yet — the CPU script's HTTP contract
-(GET /api/miner/work, POST /api/miner/submit) is hardware-agnostic, so a
-GPU miner can reuse it by submitting nonce/pow_hash/address the same way.
+        pow_miner_cpu = _sub(_read("pow_miner_cpu.py"))
+        stratum_proxy = _sub_proxy(_sub(_read("stratum_proxy.py")))
 
-ASIC MINING (Stratum)
-----------------------
-1. python stratum_proxy.py        (bridges Stratum -> Thronos HTTP API)
-2. run_miner.bat                  (Windows, requires cgminer.exe)
-   or: cgminer -c cgminer.conf    (Linux/Mac)
+        readme_root = f"""Thronos Miner Kit — personalised for {thr_address}
+================================================================
 
-USB STICK MINERS (e.g. GekkoScience, Antminer USB)
-----------------------------------------------------
-Same as ASIC above — plug in the USB miner, run stratum_proxy.py, then
-point cgminer at cgminer.conf. USB stick miners are detected by cgminer
-automatically; no separate config is required.
+Your address : {thr_address}
+Server       : {server_url}
+Stratum port : {stratum_port}
+Build        : {APP_VERSION}
 
-DUAL MINING (Thronos + NiceHash, Windows only)
-------------------------------------------------
-start_dual_mining.bat
+DIRECTORY LAYOUT
+----------------
+  README.md            ← this file
+  QUICKSTART_WINDOWS.md
+  QUICKSTART_LINUX.md
+  cpu/                 ← CPU miner (any hardware, no extra software needed)
+  gpu/                 ← GPU config templates (binary not included)
+  usb-asic/            ← USB SHA-256 stick configs (cgminer/bfgminer binary not included)
+  external-asic/       ← Antminer/Whatsminer/Avalon pool configs
+  proxy/               ← Stratum bridge proxy
+  examples/            ← Sample env and pool config files
 
-Your THR address: {thr_address}
-Server: {server_url}
+QUICK START
+-----------
+CPU:     pip install requests && python cpu/pow_miner_cpu.py
+ASIC:    python proxy/stratum_proxy.py  (then point miner at 127.0.0.1:{stratum_port})
+GPU:     see gpu/README_GPU.md
+USB:     see usb-asic/README_USB_ASIC.md
+
+HTTP 202 RESPONSES ARE SUCCESS
+-------------------------------
+The server returns HTTP 202 when your block is queued for processing.
+This is not an error. The miner scripts handle this correctly.
+
+SECURITY NOTE
+-------------
+No private keys, seeds, or mnemonics are required for mining.
+Mining only uses your public THR address.
 """
+
+        def _read_kit(rel_path):
+            """Read a file from the new kit subfolder structure."""
+            return _read(rel_path)
 
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr("README.txt", readme)
-            zf.writestr("cgminer.conf", cgminer_conf)
-            zf.writestr("pow_miner_cpu.py", pow_miner_cpu)
-            zf.writestr("stratum_proxy.py", stratum_proxy)
-            zf.writestr("run_miner.bat", _read("run_miner.bat"))
+            # Root
+            zf.writestr("README.md", readme_root)
+            zf.writestr("QUICKSTART_WINDOWS.md", _sub(_read("QUICKSTART_WINDOWS.md")))
+            zf.writestr("QUICKSTART_LINUX.md",   _sub(_read("QUICKSTART_LINUX.md")))
+
+            # CPU
+            zf.writestr("cpu/pow_miner_cpu.py",   pow_miner_cpu)
+            zf.writestr("cpu/run_cpu_miner.bat",   _sub(_read("cpu/run_cpu_miner.bat")))
+            zf.writestr("cpu/run_cpu_miner.sh",    _sub(_read("cpu/run_cpu_miner.sh")))
+
+            # GPU
+            zf.writestr("gpu/README_GPU.md",                _sub(_read("gpu/README_GPU.md")))
+            zf.writestr("gpu/example_lolminer_config.txt",  _sub(_read("gpu/example_lolminer_config.txt")))
+            zf.writestr("gpu/example_bzminer_config.txt",   _sub(_read("gpu/example_bzminer_config.txt")))
+            zf.writestr("gpu/example_srbminer_config.txt",  _sub(_read("gpu/example_srbminer_config.txt")))
+            zf.writestr("gpu/run_gpu_example.bat",          _sub(_read("gpu/run_gpu_example.bat")))
+
+            # USB ASIC
+            zf.writestr("usb-asic/README_USB_ASIC.md",  _sub(_read("usb-asic/README_USB_ASIC.md")))
+            zf.writestr("usb-asic/cgminer.conf",         _sub(_read("usb-asic/cgminer.conf")))
+            zf.writestr("usb-asic/bfgminer.conf",        _sub(_read("usb-asic/bfgminer.conf")))
+            zf.writestr("usb-asic/run_cgminer_usb.bat",  _sub(_read("usb-asic/run_cgminer_usb.bat")))
+            zf.writestr("usb-asic/run_bfgminer_usb.bat", _sub(_read("usb-asic/run_bfgminer_usb.bat")))
+            zf.writestr("usb-asic/drivers/README_DRIVERS.md",
+                        _sub(_read("usb-asic/drivers/README_DRIVERS.md")))
+
+            # External ASIC
+            zf.writestr("external-asic/README_EXTERNAL_ASIC.md", _sub(_read("external-asic/README_EXTERNAL_ASIC.md")))
+            zf.writestr("external-asic/antminer_s19_example.txt", _sub(_read("external-asic/antminer_s19_example.txt")))
+            zf.writestr("external-asic/whatsminer_example.txt",   _sub(_read("external-asic/whatsminer_example.txt")))
+            zf.writestr("external-asic/avalon_example.txt",        _sub(_read("external-asic/avalon_example.txt")))
+
+            # Proxy
+            zf.writestr("proxy/stratum_proxy.py",      stratum_proxy)
+            zf.writestr("proxy/phantom_miner_proxy.py", _sub(_read("proxy/phantom_miner_proxy.py")))
+            zf.writestr("proxy/job_sniffer.py",         _read("proxy/job_sniffer.py"))
+            zf.writestr("proxy/run_proxy.bat",          _sub(_read("proxy/run_proxy.bat")))
+
+            # Examples
+            zf.writestr("examples/sample_wallet.env",      _sub(_read("examples/sample_wallet.env")))
+            zf.writestr("examples/sample_pool_config.json", _sub(_read("examples/sample_pool_config.json")))
+
+            # Legacy flat files (backward compat)
+            zf.writestr("cgminer.conf",         _sub(_read("usb-asic/cgminer.conf")))
+            zf.writestr("pow_miner_cpu.py",     pow_miner_cpu)
+            zf.writestr("stratum_proxy.py",     stratum_proxy)
+            zf.writestr("run_miner.bat",        _read("run_miner.bat"))
             zf.writestr("start_dual_mining.bat", _read("start_dual_mining.bat"))
-            zf.writestr("job_sniffer.py", _read("job_sniffer.py"))
+            zf.writestr("job_sniffer.py",       _read("job_sniffer.py"))
         buf.seek(0)
 
         return send_file(

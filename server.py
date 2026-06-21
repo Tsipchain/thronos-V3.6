@@ -22829,18 +22829,25 @@ def _collect_normalized_history_from_pledges(
             ta = (p.get("thr_address") or "").strip()
             if ta not in aliases and ta.upper() not in aliases:
                 continue
+            pid = p.get("pledge_id") or p.get("id") or ""
             events.append({
-                "id": p.get("pledge_id") or p.get("id") or "",
-                "thr_address": ta,
-                "event_type": "pledge",
-                "_source": "pledge_chain",
-                "chain": p.get("chain") or p.get("send_chain") or "bsc",
-                "asset": p.get("token") or p.get("currency") or "USDT",
-                "amount": float(p.get("amount") or p.get("send_amount") or 0),
-                "direction": "in",
-                "status": p.get("status") or "confirmed",
-                "timestamp": p.get("timestamp") or p.get("created_at") or 0,
-                "note": p.get("note") or "",
+                "id":               pid,
+                "thr_address":      ta,
+                "event_type":       "pledge",
+                "_source":          "pledge_chain",
+                "pledge_id":        pid,
+                "correlation_id":   p.get("correlation_id") or "",
+                "transfer_scope":   "cross_chain",   # pledge always spans chains
+                "asset_origin_chain": p.get("chain") or p.get("send_chain") or "bsc",
+                "source_wallet_id": p.get("sender_wallet_id") or p.get("from_wallet_id") or "",
+                "target_wallet_id": p.get("thr_address") or ta,
+                "chain":            p.get("chain") or p.get("send_chain") or "bsc",
+                "asset":            p.get("token") or p.get("currency") or "USDT",
+                "amount":           float(p.get("amount") or p.get("send_amount") or 0),
+                "direction":        "in",
+                "status":           p.get("status") or "confirmed",
+                "timestamp":        p.get("timestamp") or p.get("created_at") or 0,
+                "note":             p.get("note") or "",
             })
             source_counts["pledge_chain.json"] += 1
     except Exception as ex:
@@ -22871,17 +22878,20 @@ def _collect_normalized_history_from_action_intents(
             if not (actors & aliases) and not ({a.upper() for a in actors} & aliases):
                 continue
             events.append({
-                "id": intent.get("action_id") or "",
-                "thr_address": next(iter(aliases)),
-                "event_type": f"pythia_action_{intent.get('action_type', 'intent')}",
-                "_source": "pythia_action_intents",
-                "chain": intent.get("chain") or "thronos",
-                "asset": intent.get("token") or "",
-                "amount": float(intent.get("amount") or 0),
-                "direction": "system",
-                "status": intent.get("status") or "intent",
-                "timestamp": intent.get("created_timestamp") or 0,
-                "note": intent.get("reason") or "",
+                "id":              intent.get("action_id") or "",
+                "thr_address":     next(iter(aliases)),
+                "event_type":      f"pythia_action_{intent.get('action_type', 'intent')}",
+                "_source":         "pythia_action_intents",
+                "correlation_id":  intent.get("correlation_id") or "",
+                "withdrawal_id":   intent.get("withdrawal_id") or "",
+                "pool_event_id":   intent.get("pool_event_id") or "",
+                "chain":           intent.get("chain") or "thronos",
+                "asset":           intent.get("token") or "",
+                "amount":          float(intent.get("amount") or 0),
+                "direction":       "system",
+                "status":          intent.get("status") or "intent",
+                "timestamp":       intent.get("created_timestamp") or 0,
+                "note":            intent.get("reason") or "",
             })
             source_counts["pythia_action_intents.json"] += 1
     except Exception as ex:
@@ -22911,6 +22921,7 @@ def api_wallet_history_normalized():
     - domain   (optional): thr | token | music | ai | iot | l2e | t2e |
                            parking | nft | liquidity | gateway | swap |
                            pledge | pythia | vault | migration | unknown | all
+    - chain    (optional): all | thronos | btc | bsc | base | arbitrum | eth | xrp | stellar
 
     Response items:
     {
@@ -22918,6 +22929,7 @@ def api_wallet_history_normalized():
       "original_event_type": "music_tip",
       "category": "transaction",
       "domain": "music",
+      "source": "wallet_history",
       "event_name": "Music",
       "icon": "🎵",
       "chain": "thronos",
@@ -22925,10 +22937,16 @@ def api_wallet_history_normalized():
       "amount": 1.5,
       "direction": "in",
       "status": "confirmed",
-      "timestamp": 1234567890
+      "timestamp": 1234567890,
+      "correlation_id": "...",  // if present — links both sides of a cross-chain event
+      "pledge_id":      "...",  // if present
+      "bridge_id":      "...",  // if present
+      "withdrawal_id":  "...",  // if present — links withdrawal request to payout event
+      "pool_event_id":  "..."   // if present — links LP deposit/withdraw events
     }
 
     Top-level response also includes:
+      chain_filter, category_filter, domain_filter,
       resolved_addresses, sources_checked, source_counts
     """
     try:
@@ -22939,6 +22957,8 @@ def api_wallet_history_normalized():
         limit         = min(int(request.args.get("limit", 50)), 500)
         cat_filter    = (request.args.get("category") or "all").lower()
         domain_filter = (request.args.get("domain")   or "all").lower()
+        chain_raw     = (request.args.get("chain")    or "all").lower()
+        chain_filter  = _CHAIN_CANONICAL.get(chain_raw, "all") if chain_raw != "all" else "all"
         overfetch     = limit * 6  # over-fetch across sources before dedup + filter
 
         # ── Resolve all address aliases for this wallet ─────────────────────
@@ -22984,7 +23004,7 @@ def api_wallet_history_normalized():
             reverse=True,
         )
 
-        # ── Normalize, filter by category + domain, trim to limit ───────────
+        # ── Normalize, filter by category + domain + chain, trim to limit ─────
         normalized = []
         for event in raw_events:
             event_type = event.get("event_type", "")
@@ -22992,6 +23012,8 @@ def api_wallet_history_normalized():
             if cat_filter != "all" and norm["category"] != cat_filter:
                 continue
             if domain_filter != "all" and norm["domain"] != domain_filter:
+                continue
+            if not _event_matches_chain(norm["chain"], chain_filter, norm["domain"]):
                 continue
             normalized.append(norm)
             if len(normalized) >= limit:
@@ -23007,6 +23029,7 @@ def api_wallet_history_normalized():
             address=address,
             category_filter=cat_filter,
             domain_filter=domain_filter,
+            chain_filter=chain_filter,
             history=normalized,
             total=len(normalized),
             resolved_addresses=sorted(aliases),
@@ -23021,6 +23044,139 @@ def api_wallet_history_normalized():
 
 _EVM_CHAINS   = frozenset({"bsc", "base", "arbitrum", "eth", "ethereum", "polygon", "avax"})
 _EVM_ASSETS   = frozenset({"bnb", "eth", "usdt", "usdc", "busd", "weth", "wbnb"})
+
+# Normalise the ?chain= query param to a canonical key.
+_CHAIN_CANONICAL: dict = {
+    "thronos": "thronos", "thr": "thronos",
+    "btc": "btc",         "bitcoin": "btc",
+    "bsc": "bsc",         "binance": "bsc",  "bnb": "bsc",  "binance_smart_chain": "bsc",
+    "base": "base",
+    "arbitrum": "arbitrum", "arb": "arbitrum",
+    "eth": "eth",           "ethereum": "eth",
+    "xrp": "xrp",           "xrpl": "xrp",
+    "stellar": "stellar",   "xlm": "stellar",
+}
+
+# Event record chain-field values that belong to each canonical chain.
+_CHAIN_EVENT_VALUES: dict = {
+    "thronos": frozenset({"thronos", "thr", ""}),
+    "btc":     frozenset({"btc", "bitcoin"}),
+    "bsc":     frozenset({"bsc", "binance", "bnb", "binance_smart_chain"}),
+    "base":    frozenset({"base"}),
+    "arbitrum":frozenset({"arbitrum", "arb"}),
+    "eth":     frozenset({"eth", "ethereum"}),
+    "xrp":     frozenset({"xrp", "xrpl"}),
+    "stellar": frozenset({"stellar", "xlm"}),
+}
+
+# Domains that are always Thronos-native even when the event has no chain field.
+_THRONOS_NATIVE_DOMAINS = frozenset({
+    "thr", "token", "music", "ai", "iot", "l2e", "t2e",
+    "parking", "nft", "pledge", "pythia", "migration", "unknown",
+})
+
+
+def _event_matches_chain(ev_chain: str, chain_filter: str, domain: str) -> bool:
+    """Return True if this event should be included for the requested chain."""
+    if chain_filter == "all":
+        return True
+    ev_chain_lower = (ev_chain or "").lower()
+    if ev_chain_lower in _CHAIN_EVENT_VALUES.get(chain_filter, frozenset()):
+        return True
+    # Events with no explicit chain that belong to Thronos-native domains
+    if chain_filter == "thronos" and not ev_chain_lower and domain in _THRONOS_NATIVE_DOMAINS:
+        return True
+    return False
+
+
+def _is_thr_wallet_identity(addr: str) -> bool:
+    """
+    Return True if addr is a Thronos-native wallet identifier, not an external
+    blockchain address.  Used to distinguish internal vs external transfers.
+    """
+    if not addr:
+        return False
+    a = addr.strip()
+    au = a.upper()
+    return (
+        au.startswith("THR") or          # THR on-chain address
+        a.startswith("SYSTEM_") or       # system actor IDs
+        au.startswith("PYTHIA_") or      # Pythia system wallet IDs
+        au.startswith("WALLET_") or      # generic wallet ID prefix
+        au.startswith("V1_WALLET_")      # legacy V1 wallet IDs
+    )
+
+
+def _is_external_address(addr: str) -> bool:
+    """
+    Return True if addr looks like an external (non-THR) blockchain address.
+    Covers EVM, BTC (legacy + bech32), XRP, and Stellar.
+    """
+    if not addr:
+        return False
+    a = addr.strip()
+    if a.startswith("0x") and len(a) == 42:          # EVM
+        return True
+    al = a.lower()
+    if al.startswith("bc1"):                           # BTC bech32
+        return True
+    if a[0] in "13" and 25 <= len(a) <= 34:          # BTC P2PKH / P2SH
+        return True
+    if a[0] == "r" and 25 <= len(a) <= 35:           # XRP
+        return True
+    if a[0] == "G" and len(a) == 56:                  # Stellar
+        return True
+    return False
+
+
+def _classify_transfer_scope(event: dict, category: str) -> str:
+    """
+    Classify every normalized event into one of:
+      internal   — both sender and receiver are Thronos wallet identities
+      external   — receiver is an external (EVM/BTC/XRP/Stellar) address
+      cross_chain — bridge/withdrawal/pledge lifecycle, or category=cross_chain
+
+    Rule 1: sender + receiver are both THR wallet IDs → internal
+            settlement_chain=thronos, fee_asset=THR, fee_chain=thronos
+    Rule 2: bridge/withdrawal/pledge linkage present, or category=cross_chain
+            → cross_chain
+    Rule 3: receiver is an external blockchain address → external
+    Default: internal (thronos-native events with no explicit parties)
+    """
+    # Honour an explicit tag set upstream (e.g. by server_ext or pledge flow)
+    explicit = (event.get("transfer_scope") or "").lower()
+    if explicit in ("internal", "external", "cross_chain"):
+        return explicit
+
+    # cross_chain category wins
+    if category == "cross_chain":
+        return "cross_chain"
+
+    # Linkage IDs → cross-chain lifecycle
+    if any(event.get(k) for k in ("bridge_id", "withdrawal_id", "pledge_id")):
+        return "cross_chain"
+
+    # Resolve from / to parties
+    from_addr = (
+        event.get("from") or event.get("from_address") or
+        event.get("sender") or event.get("source_wallet_id") or ""
+    ).strip()
+    to_addr = (
+        event.get("to") or event.get("to_address") or
+        event.get("recipient") or event.get("target_wallet_id") or ""
+    ).strip()
+
+    # Rule 1: both parties are THR wallet identities → internal
+    if from_addr and to_addr:
+        if _is_thr_wallet_identity(from_addr) and _is_thr_wallet_identity(to_addr):
+            return "internal"
+
+    # Rule 3: recipient is an external blockchain address → external
+    if _is_external_address(to_addr):
+        return "external"
+
+    return "internal"
+
 
 # Maps _categorize_transaction() return value → normalized domain.
 # parking is kept separate from iot (both are present in the domain list).
@@ -23233,6 +23389,43 @@ def _wallet_normalize_event(event: dict, event_type: str) -> dict:
     # ── Direction normalisation ──────────────────────────────────────────────
     direction = _normalize_direction(event.get("direction", ""), ev_chain)
 
+    # ── Transfer scope classification ────────────────────────────────────────
+    transfer_scope = _classify_transfer_scope(event, category)
+
+    # settlement_chain: internal transfers always settle on thronos;
+    # cross_chain/external events settle on the event's own chain.
+    if transfer_scope == "internal":
+        settlement_chain = "thronos"
+    else:
+        settlement_chain = ev_chain or event.get("settlement_chain", "")
+
+    # Fee metadata: internal transfers pay fees in THR on thronos.
+    # For external/cross_chain, pass through whatever the event declares.
+    fee_meta: dict = {}
+    if transfer_scope == "internal":
+        fee_meta = {"fee_asset": "THR", "fee_chain": "thronos"}
+    else:
+        fa = event.get("fee_asset", "")
+        fc = event.get("fee_chain", "")
+        if fa or fc:
+            fee_meta = {"fee_asset": fa, "fee_chain": fc}
+
+    # Pass through all cross-chain linkage IDs when present so the UI can link
+    # both sides of a cross-chain event (pledge ↔ gateway, bridge_in ↔ bridge_out,
+    # withdrawal_request ↔ payout, pool_event_id for LP operations).
+    linkage: dict = {}
+    for _fld in ("correlation_id", "pledge_id", "bridge_id", "withdrawal_id", "pool_event_id"):
+        _v = event.get(_fld)
+        if _v:
+            linkage[_fld] = _v
+
+    # Optional scope metadata (pass through when present in source record)
+    scope_meta: dict = {}
+    for _sf in ("source_wallet_id", "target_wallet_id", "asset_origin_chain"):
+        _sv = event.get(_sf)
+        if _sv:
+            scope_meta[_sf] = _sv
+
     return {
         "id":                  event.get("id", ""),
         "original_event_type": event_type,
@@ -23247,6 +23440,11 @@ def _wallet_normalize_event(event: dict, event_type: str) -> dict:
         "direction":           direction,
         "status":              status,
         "timestamp":           event.get("timestamp", 0),
+        "transfer_scope":      transfer_scope,
+        "settlement_chain":    settlement_chain,
+        **fee_meta,
+        **scope_meta,
+        **linkage,
     }
 
 
@@ -23339,6 +23537,10 @@ def _collect_normalized_history_from_chain(
                 "event_type":      event_type,
                 "_raw_category":   raw_category,  # consumed by _wallet_normalize_event
                 "_source":         "phantom_tx_chain",
+                "correlation_id":  tx.get("correlation_id") or tx_meta.get("correlation_id", ""),
+                "bridge_id":       tx.get("bridge_id") or tx_meta.get("bridge_id", ""),
+                "withdrawal_id":   tx.get("withdrawal_id") or tx_meta.get("withdrawal_id", ""),
+                "pool_event_id":   tx.get("pool_event_id") or tx_meta.get("pool_event_id", ""),
                 "chain":           tx.get("chain") or tx.get("network") or "thronos",
                 "asset":           asset,
                 "amount":          amount,
@@ -23391,6 +23593,9 @@ def api_wallet_balance_normalized():
 
     Query params:
     - address (required): THR address
+    - chain   (optional): all | thronos | btc | bsc | base | arbitrum | eth | xrp | stellar
+                          Filters domain_contributions and domain_amounts to events from that chain.
+                          Full balance totals (THR, WBTC, L2E, AI_CREDITS) are always returned.
 
     Response:
     {
@@ -23416,9 +23621,12 @@ def api_wallet_balance_normalized():
     auth_secret, or decrypted material returned.
     """
     try:
-        address = (request.args.get("address") or "").strip().upper()
+        address      = (request.args.get("address") or "").strip().upper()
         if not address or not address.startswith("THR"):
             return jsonify(ok=False, error="valid_thr_address_required"), 400
+
+        chain_raw    = (request.args.get("chain") or "all").lower()
+        chain_filter = _CHAIN_CANONICAL.get(chain_raw, "all") if chain_raw != "all" else "all"
 
         # ── Resolve all address aliases ──────────────────────────────────────
         aliases, alias_debug = _resolve_normalized_address_aliases(address)
@@ -23498,12 +23706,16 @@ def api_wallet_balance_normalized():
         if ai_treasury_thr > 0 and ai_treasury_thr != thr_total:
             balances["AI_TREASURY_THR"] = round(ai_treasury_thr, 6)
 
-        # ── 6. Domain contributions from chain scan ──────────────────────────
-        # Shows which domains have balance-affecting events; the balance numbers
-        # themselves come from the ledgers above (already accumulated totals).
+        # ── 6. Domain contributions + chain_balances from chain scan ────────
+        # domain_contributions / domain_amounts are filtered by chain_filter.
+        # chain_balances gives the UI a chain-scoped asset view:
+        #   thronos → ledger balances (THR, L2E, AI_CREDITS)
+        #   EVM/BTC/XRP/Stellar → aggregated asset amounts from chain-filtered events
+        #   all → same as full balances dict
         sources_checked.append("phantom_tx_chain.json+tx_ledger.json (domain scan)")
         domain_contributions: dict = {}
         domain_amts: dict = {}
+        chain_asset_amts: dict = {}    # asset → total amount from chain-filtered events
         try:
             chain_evs, chain_cnts = _collect_normalized_history_from_chain(aliases, 5000)
             source_counts["phantom_tx_chain.json+tx_ledger.json"] = chain_cnts.get(
@@ -23511,20 +23723,38 @@ def api_wallet_balance_normalized():
             )
             for ev in chain_evs:
                 norm = _wallet_normalize_event(ev, ev.get("event_type", ""))
+                if not _event_matches_chain(norm["chain"], chain_filter, norm["domain"]):
+                    continue
                 d = norm["domain"]
                 domain_contributions[d] = domain_contributions.get(d, 0) + 1
                 try:
                     a = float(ev.get("amount") or 0)
                     domain_amts[d] = round(domain_amts.get(d, 0.0) + a, 6)
+                    asset_key = (norm.get("asset") or "THR").upper()
+                    chain_asset_amts[asset_key] = round(
+                        chain_asset_amts.get(asset_key, 0.0) + a, 8
+                    )
                 except Exception:
                     pass
         except Exception as ex:
             logger.debug("[BalanceNormalized] domain contributions: %s", ex)
 
+        # Build chain_balances view
+        _THRONOS_LEDGER_ASSETS = {"THR", "WBTC", "L2E", "AI_CREDITS", "AI_TREASURY_THR"}
+        if chain_filter == "all":
+            chain_balances = dict(balances)
+        elif chain_filter == "thronos":
+            chain_balances = {k: v for k, v in balances.items() if k in _THRONOS_LEDGER_ASSETS}
+        else:
+            # EVM/BTC/XRP/Stellar: asset amounts aggregated from chain-filtered events
+            chain_balances = {k: round(v, 8) for k, v in chain_asset_amts.items() if v > 0}
+
         return jsonify(
             ok=True,
             address=address,
+            chain_filter=chain_filter,
             balances=balances,
+            chain_balances=chain_balances,
             domain_contributions=domain_contributions,
             domain_amounts=domain_amts,
             resolved_addresses=sorted(aliases),

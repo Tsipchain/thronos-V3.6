@@ -22667,6 +22667,225 @@ def api_v1_wallet_history(thr_addr):
         }), 400
 
 
+def _resolve_normalized_address_aliases(address: str) -> tuple[set, dict]:
+    """
+    Build the full alias set for a given THR address.
+
+    For Pythia/system addresses this expands to include:
+    - The canonical THR address itself
+    - pythia_v1_wallet_id (e.g. PYTHIA_V1_304BE5F4A4CA) from pythia_v1_wallet.json
+    - SYSTEM_PYTHIA_ACTIONS (always included for the Pythia system address)
+    - Any legacy THR address from wallet_v1_public_key_bindings.json
+    - Any migrated-from address from pythia_public_address_registry.json
+    - PYTHIA_SYSTEM_THR_ADDRESS env var if it matches the requested address
+
+    Returns (aliases: set[str], debug_info: dict)
+    """
+    aliases = {address}
+    debug: dict = {"sources_checked": [], "alias_sources": {}}
+
+    # ── 1. pythia_v1_wallet.json ────────────────────────────────────────────
+    try:
+        pv1 = load_json(PYTHIA_V1_WALLET_FILE, None)
+        debug["sources_checked"].append("pythia_v1_wallet.json")
+        if isinstance(pv1, dict):
+            thr = (pv1.get("thr_address") or "").strip().upper()
+            wid = (pv1.get("pythia_v1_wallet_id") or "").strip()
+            if thr == address or thr == address.upper():
+                # This wallet.json IS for the requested address
+                if wid:
+                    aliases.add(wid)
+                    debug["alias_sources"][wid] = "pythia_v1_wallet.pythia_v1_wallet_id"
+                # Always include canonical system actor for Pythia
+                aliases.add("SYSTEM_PYTHIA_ACTIONS")
+                debug["alias_sources"]["SYSTEM_PYTHIA_ACTIONS"] = "pythia_v1_wallet (system actor)"
+            elif thr:
+                # Check if the requested address is the wallet_id itself
+                if address == wid:
+                    aliases.add(thr)
+                    aliases.add("SYSTEM_PYTHIA_ACTIONS")
+                    debug["alias_sources"][thr] = "pythia_v1_wallet.thr_address"
+                    debug["alias_sources"]["SYSTEM_PYTHIA_ACTIONS"] = "pythia_v1_wallet (system actor)"
+    except Exception as e:
+        logger.debug("[NormalizedHistory] pythia_v1_wallet.json probe: %s", e)
+
+    # ── 2. PYTHIA_SYSTEM_THR_ADDRESS env var ────────────────────────────────
+    try:
+        env_pythia = (PYTHIA_SYSTEM_THR_ADDRESS or "").strip().upper()
+        debug["sources_checked"].append("PYTHIA_SYSTEM_THR_ADDRESS")
+        if env_pythia and (env_pythia == address or address in aliases):
+            aliases.add(env_pythia)
+            aliases.add("SYSTEM_PYTHIA_ACTIONS")
+            debug["alias_sources"][env_pythia] = "PYTHIA_SYSTEM_THR_ADDRESS env"
+            debug["alias_sources"]["SYSTEM_PYTHIA_ACTIONS"] = "pythia system env"
+    except Exception as e:
+        logger.debug("[NormalizedHistory] env pythia probe: %s", e)
+
+    # ── 3. pythia_public_address_registry.json ──────────────────────────────
+    try:
+        registry = load_json(PYTHIA_PUBLIC_ADDRESS_REGISTRY_FILE, {})
+        debug["sources_checked"].append("pythia_public_address_registry.json")
+        if isinstance(registry, dict):
+            for entry in registry.get("registration_history", []):
+                if not isinstance(entry, dict):
+                    continue
+                reg_addr = (entry.get("pythia_evm_address") or "").strip()
+                if reg_addr:
+                    # Registry relates to this wallet if we already have its alias
+                    aliases.add(reg_addr)
+                    debug["alias_sources"][reg_addr] = "pythia_public_address_registry"
+    except Exception as e:
+        logger.debug("[NormalizedHistory] registry probe: %s", e)
+
+    # ── 4. wallet_v1_public_key_bindings.json ───────────────────────────────
+    try:
+        bindings = load_json(WALLET_V1_PUBLIC_KEY_BINDINGS_FILE, {})
+        debug["sources_checked"].append("wallet_v1_public_key_bindings.json")
+        if isinstance(bindings, dict):
+            # bindings is {thr_address: {public_key, ...}}
+            for bound_addr, meta in bindings.items():
+                if not isinstance(meta, dict):
+                    continue
+                bound_upper = bound_addr.strip().upper()
+                if bound_upper in aliases:
+                    # Collect any linked old/migration addresses stored here
+                    old = (meta.get("legacy_address") or meta.get("old_address") or "").strip().upper()
+                    if old:
+                        aliases.add(old)
+                        debug["alias_sources"][old] = "wallet_v1_public_key_bindings.legacy_address"
+    except Exception as e:
+        logger.debug("[NormalizedHistory] bindings probe: %s", e)
+
+    # ── 5. wallet_v1_migration (optional module) ─────────────────────────────
+    try:
+        debug["sources_checked"].append("wallet_v1_migration")
+        from wallet_v1_migration import search_all_migration_sources  # type: ignore
+        for alias in list(aliases):
+            try:
+                rec = search_all_migration_sources(canonical_v1_address=alias)
+                if rec:
+                    old_a = (rec.get("legacy_address") or rec.get("old_address") or "").strip().upper()
+                    if old_a:
+                        aliases.add(old_a)
+                        debug["alias_sources"][old_a] = "wallet_v1_migration.legacy_address"
+                rec2 = search_all_migration_sources(legacy_address=alias)
+                if rec2:
+                    new_a = (rec2.get("canonical_v1_address") or rec2.get("new_address") or "").strip().upper()
+                    if new_a:
+                        aliases.add(new_a)
+                        debug["alias_sources"][new_a] = "wallet_v1_migration.canonical_v1_address"
+            except Exception:
+                pass
+    except ImportError:
+        debug["sources_checked"][-1] += " (not available)"
+    except Exception as e:
+        logger.debug("[NormalizedHistory] migration probe: %s", e)
+
+    return aliases, debug
+
+
+def _collect_normalized_history_from_wallet_history(
+    aliases: set, limit_overfetch: int
+) -> tuple[list, dict]:
+    """
+    Scan wallet_history.json for all events whose thr_address is in aliases.
+    Returns (events, source_counts).
+    """
+    source_counts: dict = {}
+    try:
+        history = load_json(WALLET_HISTORY_FILE, [])
+        source_counts["wallet_history.json"] = 0
+        events = []
+        for e in history:
+            if not isinstance(e, dict):
+                continue
+            ta = (e.get("thr_address") or "").strip()
+            if ta in aliases or ta.upper() in aliases:
+                events.append(e)
+                source_counts["wallet_history.json"] += 1
+        events.sort(key=lambda e: e.get("timestamp", 0), reverse=True)
+        return events[:limit_overfetch], source_counts
+    except Exception as ex:
+        logger.warning("[NormalizedHistory] wallet_history scan: %s", ex)
+        return [], source_counts
+
+
+def _collect_normalized_history_from_pledges(
+    aliases: set, limit_overfetch: int
+) -> tuple[list, dict]:
+    """
+    Scan pledge_chain.json for pledge events for this wallet.
+    Returns pledge events cast to wallet-history-event shape.
+    """
+    source_counts: dict = {"pledge_chain.json": 0}
+    events = []
+    try:
+        pledges = load_json(PLEDGE_CHAIN, [])
+        for p in pledges:
+            if not isinstance(p, dict):
+                continue
+            ta = (p.get("thr_address") or "").strip()
+            if ta not in aliases and ta.upper() not in aliases:
+                continue
+            events.append({
+                "id": p.get("pledge_id") or p.get("id") or "",
+                "thr_address": ta,
+                "event_type": "pledge",
+                "chain": p.get("chain") or p.get("send_chain") or "bsc",
+                "asset": p.get("token") or p.get("currency") or "USDT",
+                "amount": float(p.get("amount") or p.get("send_amount") or 0),
+                "direction": "in",
+                "status": p.get("status") or "confirmed",
+                "timestamp": p.get("timestamp") or p.get("created_at") or 0,
+                "note": p.get("note") or "",
+            })
+            source_counts["pledge_chain.json"] += 1
+    except Exception as ex:
+        logger.warning("[NormalizedHistory] pledge_chain scan: %s", ex)
+    events.sort(key=lambda e: e.get("timestamp", 0) if isinstance(e.get("timestamp"), (int, float)) else 0, reverse=True)
+    return events[:limit_overfetch], source_counts
+
+
+def _collect_normalized_history_from_action_intents(
+    aliases: set, limit_overfetch: int
+) -> tuple[list, dict]:
+    """
+    Scan pythia_action_intents.json for system actions related to this wallet.
+    """
+    source_counts: dict = {"pythia_action_intents.json": 0}
+    events = []
+    try:
+        intents = load_json(PYTHIA_ACTION_INTENTS_FILE, [])
+        for intent in intents:
+            if not isinstance(intent, dict):
+                continue
+            actors = {
+                (intent.get("from_address") or "").strip(),
+                (intent.get("to_address") or "").strip(),
+                (intent.get("thr_address") or "").strip(),
+            }
+            actors = {a for a in actors if a}
+            if not (actors & aliases) and not ({a.upper() for a in actors} & aliases):
+                continue
+            events.append({
+                "id": intent.get("action_id") or "",
+                "thr_address": next(iter(aliases)),
+                "event_type": f"pythia_action_{intent.get('action_type', 'intent')}",
+                "chain": intent.get("chain") or "thronos",
+                "asset": intent.get("token") or "",
+                "amount": float(intent.get("amount") or 0),
+                "direction": "system",
+                "status": intent.get("status") or "intent",
+                "timestamp": intent.get("created_timestamp") or 0,
+                "note": intent.get("reason") or "",
+            })
+            source_counts["pythia_action_intents.json"] += 1
+    except Exception as ex:
+        logger.warning("[NormalizedHistory] action_intents scan: %s", ex)
+    events.sort(key=lambda e: e.get("timestamp", 0) if isinstance(e.get("timestamp"), (int, float)) else 0, reverse=True)
+    return events[:limit_overfetch], source_counts
+
+
 @app.route("/api/wallet/history/normalized", methods=["GET"])
 def api_wallet_history_normalized():
     """
@@ -22674,6 +22893,10 @@ def api_wallet_history_normalized():
 
     Classifies every event into a standard category so clients do not need to
     know server-internal event_type strings.
+
+    Address alias resolution: for Pythia/system addresses this expands the
+    lookup to include SYSTEM_PYTHIA_ACTIONS, pythia_v1_wallet_id, legacy
+    migrated addresses, etc., so that history stored under any alias is returned.
 
     Query params:
     - address (required): THR address
@@ -22700,7 +22923,10 @@ def api_wallet_history_normalized():
           "icon": "📤"
         }
       ],
-      "total": 42
+      "total": 42,
+      "resolved_addresses": ["THR...", "SYSTEM_PYTHIA_ACTIONS", ...],
+      "sources_checked": ["wallet_history.json", ...],
+      "source_counts": {"wallet_history.json": 3, "pledge_chain.json": 1}
     }
 
     Categories
@@ -22715,13 +22941,50 @@ def api_wallet_history_normalized():
         if not address or not address.startswith("THR"):
             return jsonify(ok=False, error="valid_thr_address_required"), 400
 
-        limit    = min(int(request.args.get("limit", 50)), 500)
+        limit      = min(int(request.args.get("limit", 50)), 500)
         cat_filter = (request.args.get("category") or "all").lower()
+        overfetch  = limit * 4  # over-fetch across sources before dedup + filter
 
-        raw_history = get_wallet_history(address, limit=limit * 3)  # over-fetch before filter
+        # ── Resolve all address aliases for this wallet ─────────────────────
+        aliases, alias_debug = _resolve_normalized_address_aliases(address)
 
+        # ── Aggregate from all sources ──────────────────────────────────────
+        all_source_counts: dict = {}
+
+        wh_events, wh_counts = _collect_normalized_history_from_wallet_history(aliases, overfetch)
+        all_source_counts.update(wh_counts)
+
+        pledge_events, pledge_counts = _collect_normalized_history_from_pledges(aliases, overfetch)
+        all_source_counts.update(pledge_counts)
+
+        intent_events, intent_counts = _collect_normalized_history_from_action_intents(aliases, overfetch)
+        all_source_counts.update(intent_counts)
+
+        # ── Merge and deduplicate by event id ───────────────────────────────
+        seen_ids: set = set()
+        raw_events: list = []
+        for ev in wh_events + pledge_events + intent_events:
+            eid = (ev.get("id") or ev.get("event_id") or "").strip()
+            dedup_key = eid or f"{ev.get('event_type','')}{ev.get('timestamp','')}{ev.get('amount','')}"
+            if dedup_key and dedup_key in seen_ids:
+                continue
+            if dedup_key:
+                seen_ids.add(dedup_key)
+            raw_events.append(ev)
+
+        # Sort merged set descending by timestamp
+        def _ts(ev):
+            t = ev.get("timestamp", 0)
+            try:
+                return float(t)
+            except Exception:
+                return 0.0
+
+        raw_events.sort(key=_ts, reverse=True)
+
+        # ── Normalize and apply category filter ─────────────────────────────
         normalized = []
-        for event in raw_history:
+        for event in raw_events:
             event_type = event.get("event_type", "")
             norm = _wallet_normalize_event(event, event_type)
             if cat_filter == "all" or norm["category"] == cat_filter:
@@ -22729,12 +22992,19 @@ def api_wallet_history_normalized():
             if len(normalized) >= limit:
                 break
 
+        all_sources_checked = alias_debug.get("sources_checked", []) + [
+            "wallet_history.json", "pledge_chain.json", "pythia_action_intents.json"
+        ]
+
         return jsonify(
             ok=True,
             address=address,
             category_filter=cat_filter,
             history=normalized,
             total=len(normalized),
+            resolved_addresses=sorted(aliases),
+            sources_checked=all_sources_checked,
+            source_counts=all_source_counts,
         ), 200
 
     except Exception as e:

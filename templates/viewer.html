@@ -413,8 +413,24 @@
                             ${tx.pool_event_id ? `<br>event_id: ${tx.pool_event_id}` : ''}
                         </div>` : '';
 
+                    const _LIQ_VIEWER_LABELS = {
+                        pool_deposit:                     'Pool In · THR',
+                        pool_external_deposit_detected:   'External Pool Deposit',
+                        pool_withdraw_intent:             'Withdrawal Intent',
+                        pool_withdraw:                    'Pool Out',
+                        pool_out:                         'Pool Out',
+                        bridge_deposit_detected:          'Bridge Deposit',
+                        bridge:                           'Bridge Deposit',
+                        pledge:                           'Pledge',
+                        pledge_deposit:                   'Pledge',
+                        external_withdrawal_request:      'External Withdrawal',
+                        crosschain_withdrawal_request:    'External Withdrawal',
+                    };
+                    const displayLabel = isLiquidityTab
+                        ? (_LIQ_VIEWER_LABELS[tx.event_type] || tx.event_type)
+                        : tx.event_type;
                     html += `<tr>
-                        <td><div class="tx-type"><div class="tx-icon">${icon}</div> ${tx.event_type}${poolMeta}</div></td>
+                        <td><div class="tx-type"><div class="tx-icon">${icon}</div> ${displayLabel}${poolMeta}</div></td>
                         <td><strong>${tx.amount.toFixed(6)} ${tx.asset}</strong></td>
                         <td><span class="chain-badge">${tx.network_label || tx.chain || '—'}</span></td>
                         <td><span class="status-badge ${statusClass}">${tx.status || 'pending'}</span></td>
@@ -496,6 +512,12 @@
                 pythia_evm_address_created: '✨',
                 pythia_public_address_registered: '📍',
                 pythia_role_address_registered: '🔐',
+                // PR #722 internal THR deposits + PR #720 watcher deposits
+                pool_external_deposit_detected: '🌉',
+                pool_out: '↩',
+                external_withdrawal_request: '📤',
+                crosschain_withdrawal_request: '📤',
+                pledge_deposit: '🔒',
                 failed: '❌',
                 manual_review: '👀',
             };

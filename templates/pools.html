@@ -818,17 +818,20 @@
 
     <!-- Tabs -->
     <div class="pools-tabs">
-        <button class="pool-tab active" onclick="showTab('all-pools')">
+        <button class="pool-tab active" data-tab="all-pools" onclick="showTab('all-pools',this)">
             <span class="lang-el">Όλα τα Pools</span><span class="lang-en">All Pools</span>
         </button>
-        <button class="pool-tab" onclick="showTab('my-pools')">
+        <button class="pool-tab" data-tab="my-pools" onclick="showTab('my-pools',this)">
             <span class="lang-el">Τα Pools μου</span><span class="lang-en">My Pools</span>
         </button>
-        <button class="pool-tab" onclick="showTab('pythia-amm')">
+        <button class="pool-tab" data-tab="pythia-amm" onclick="showTab('pythia-amm',this)">
             ⚙️ Pythia AMM
         </button>
-        <button class="pool-tab" onclick="showTab('create-pool')">
+        <button class="pool-tab" data-tab="create-pool" onclick="showTab('create-pool',this)">
             ➕ <span class="lang-el">Δημιουργία Pool</span><span class="lang-en">Create Pool</span>
+        </button>
+        <button class="pool-tab" data-tab="liq-history" onclick="showTab('liq-history',this)">
+            📋 <span class="lang-el">Ιστορικό</span><span class="lang-en">History</span>
         </button>
     </div>
 
@@ -999,6 +1002,23 @@
             <div id="createPoolMessage" class="form-message"></div>
         </div>
     </div>
+
+    <!-- Liquidity / Cross-chain History Tab -->
+    <div id="liq-history-tab" class="tab-content">
+        <div style="padding:12px 0;">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+                <span style="font-size:1.1rem;font-weight:600;">📋 <span class="lang-el">Ιστορικό Ρευστότητας</span><span class="lang-en">Liquidity &amp; Cross-chain History</span></span>
+                <button onclick="loadLiquidityHistory()" style="font-size:11px;padding:3px 10px;background:#1a2a3a;border:1px solid #334;border-radius:6px;color:#8af;cursor:pointer;">⟳ Refresh</button>
+            </div>
+            <div id="liqHistoryStatus" style="font-size:12px;color:#8af;margin-bottom:8px;"></div>
+            <div id="liqHistoryTable" style="overflow-x:auto;">
+                <div style="color:#556;font-size:13px;padding:20px 0;text-align:center;">
+                    <span class="lang-el">Επιλέξτε την καρτέλα History για φόρτωση.</span>
+                    <span class="lang-en">Select the History tab to load.</span>
+                </div>
+            </div>
+        </div>
+    </div>
 </div>
 
 <script>
@@ -1012,24 +1032,33 @@ function getPoolActiveWalletAddress() {
     return localStorage.getItem('thr_address') || '';
 }
 
-// Tab Management
-function showTab(tabName) {
-    // Hide all tabs
-    document.querySelectorAll('.tab-content').forEach(tab => {
-        tab.classList.remove('active');
-    });
-    document.querySelectorAll('.pool-tab').forEach(btn => {
-        btn.classList.remove('active');
-    });
+// Tab Management — unified, idempotent, non-recursive.
+// Uses explicit btn parameter (never the implicit global event).
+let _activePoolTab = 'all-pools';
+function showTab(tabName, btn) {
+    if (_activePoolTab === tabName) return;   // idempotent — already active
+    _activePoolTab = tabName;
 
-    // Show selected tab
-    document.getElementById(tabName + '-tab').classList.add('active');
-    event.target.classList.add('active');
+    // Deactivate all tab content panels and buttons
+    document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.pool-tab').forEach(b => b.classList.remove('active'));
 
-    // Load data if needed
-    if (tabName === 'my-pools') {
-        renderMyPools();
+    // Activate target panel
+    const panel = document.getElementById(tabName + '-tab');
+    if (panel) panel.classList.add('active');
+
+    // Activate the button that was clicked, or find it by data-tab
+    if (btn) {
+        btn.classList.add('active');
+    } else {
+        const found = document.querySelector(`.pool-tab[data-tab="${tabName}"]`);
+        if (found) found.classList.add('active');
     }
+
+    // Lazy-load tab data on first open
+    if (tabName === 'my-pools')     renderMyPools();
+    if (tabName === 'pythia-amm')   loadPythiaPools();
+    if (tabName === 'liq-history')  loadLiquidityHistory();
 }
 
 // Lock Period Selection
@@ -2201,11 +2230,77 @@ async function fetchWithdrawalQuote() {
     }
 }
 
-// Wire "Pythia AMM" tab to load
-const _origShowTab = showTab;
-function showTab(tabName) {
-    _origShowTab.call(this, tabName);
-    if (tabName === 'pythia-amm') loadPythiaPools();
+// ─── Liquidity History ───────────────────────────────────────────────────────
+const _LIQ_LABELS = {
+    pool_deposit:                       '💧 Pool In · THR',
+    pool_external_deposit_detected:     '🌉 External Pool Deposit',
+    pool_withdraw_intent:               '⏳ Withdrawal Intent',
+    pool_withdraw:                      '↩ Pool Out',
+    pool_out:                           '↩ Pool Out',
+    pool_add_liquidity:                 '💧 Add Liquidity',
+    pool_seed:                          '🌱 Pool Seeded',
+    bridge_deposit_detected:            '⚡ Bridge Deposit',
+    bridge:                             '⚡ Bridge Deposit',
+    pledge:                             '🔒 Pledge',
+    pledge_usdt_bnb_confirmed:          '💵 Pledge (USDT)',
+    crosschain_withdrawal_request:      '📤 External Withdrawal',
+    external_withdrawal_request:        '📤 External Withdrawal',
+    crosschain_deposit_detected:        '📥 Cross-chain Deposit',
+};
+
+async function loadLiquidityHistory() {
+    const addr = getPoolActiveWalletAddress();
+    const statusEl = document.getElementById('liqHistoryStatus');
+    const tableEl  = document.getElementById('liqHistoryTable');
+    if (!addr) {
+        if (statusEl) statusEl.textContent = 'Connect wallet to view history.';
+        return;
+    }
+    if (statusEl) statusEl.textContent = 'Loading…';
+    try {
+        const p = new URLSearchParams({ address: addr, domain: 'liquidity', limit: '50' });
+        const resp = await fetch(`/api/wallet/history/normalized?${p}`);
+        const data = await resp.json();
+        const rows = data.history || data.transactions || [];
+        if (statusEl) statusEl.textContent = `${rows.length} event(s) · address ${addr.slice(0,12)}…`;
+        if (!rows.length) {
+            tableEl.innerHTML = '<div style="color:#556;font-size:13px;padding:20px 0;text-align:center;">No liquidity history found.</div>';
+            return;
+        }
+        const cols = ['Event','Amount','Asset','Pool','Chain','Scope','Settlement','Origin','Source','Status','TX / ID'];
+        tableEl.innerHTML = `
+        <table style="width:100%;border-collapse:collapse;font-size:12px;">
+          <thead>
+            <tr>${cols.map(c=>`<th style="text-align:left;padding:6px 8px;border-bottom:1px solid #223;color:#8af;white-space:nowrap">${c}</th>`).join('')}</tr>
+          </thead>
+          <tbody>
+            ${rows.map(r => {
+                const et = r.original_event_type || r.event_type || '';
+                const label = _LIQ_LABELS[et] || et.replace(/_/g,' ');
+                const txId  = r.tx_hash || r.pool_event_id || r.id || '—';
+                const txShort = txId.length > 16 ? txId.slice(0,16)+'…' : txId;
+                const from  = r.from_address ? `<span title="${r.from_address}" style="color:#8af">from:${r.from_address.slice(0,8)}…</span>` : '';
+                const to    = r.to_address   ? `<span title="${r.to_address}"   style="color:#8af"> to:${r.to_address.slice(0,8)}…</span>` : '';
+                const statusColor = r.status === 'confirmed' ? '#4f8' : r.status === 'pending' ? '#fa0' : '#f66';
+                return `<tr style="border-bottom:1px solid #1a2030;">
+                  <td style="padding:5px 8px;white-space:nowrap">${label}</td>
+                  <td style="padding:5px 8px;color:#eee">${r.amount !== undefined ? Number(r.amount).toLocaleString(undefined,{maximumFractionDigits:8}) : '—'}</td>
+                  <td style="padding:5px 8px;color:#8af">${r.asset || '—'}</td>
+                  <td style="padding:5px 8px;color:#aaf">${r.pool_id || r.pool_event_id?.split('-')[1] || '—'}</td>
+                  <td style="padding:5px 8px">${r.chain || '—'}</td>
+                  <td style="padding:5px 8px">${r.transfer_scope || '—'}</td>
+                  <td style="padding:5px 8px">${r.settlement_chain || '—'}</td>
+                  <td style="padding:5px 8px">${r.asset_origin_chain || '—'}</td>
+                  <td style="padding:5px 8px;color:#8af">${r.source || '—'}</td>
+                  <td style="padding:5px 8px;color:${statusColor}">${r.status || '—'}</td>
+                  <td style="padding:5px 8px;font-size:10px;color:#8af" title="${txId}">${txShort}${from}${to}</td>
+                </tr>`;
+            }).join('')}
+          </tbody>
+        </table>`;
+    } catch (err) {
+        if (statusEl) statusEl.textContent = `Error: ${err.message}`;
+    }
 }
 </script>
 {% endblock %}

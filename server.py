@@ -22874,17 +22874,20 @@ def _collect_normalized_history_from_action_intents(
             if not (actors & aliases) and not ({a.upper() for a in actors} & aliases):
                 continue
             events.append({
-                "id": intent.get("action_id") or "",
-                "thr_address": next(iter(aliases)),
-                "event_type": f"pythia_action_{intent.get('action_type', 'intent')}",
-                "_source": "pythia_action_intents",
-                "chain": intent.get("chain") or "thronos",
-                "asset": intent.get("token") or "",
-                "amount": float(intent.get("amount") or 0),
-                "direction": "system",
-                "status": intent.get("status") or "intent",
-                "timestamp": intent.get("created_timestamp") or 0,
-                "note": intent.get("reason") or "",
+                "id":              intent.get("action_id") or "",
+                "thr_address":     next(iter(aliases)),
+                "event_type":      f"pythia_action_{intent.get('action_type', 'intent')}",
+                "_source":         "pythia_action_intents",
+                "correlation_id":  intent.get("correlation_id") or "",
+                "withdrawal_id":   intent.get("withdrawal_id") or "",
+                "pool_event_id":   intent.get("pool_event_id") or "",
+                "chain":           intent.get("chain") or "thronos",
+                "asset":           intent.get("token") or "",
+                "amount":          float(intent.get("amount") or 0),
+                "direction":       "system",
+                "status":          intent.get("status") or "intent",
+                "timestamp":       intent.get("created_timestamp") or 0,
+                "note":            intent.get("reason") or "",
             })
             source_counts["pythia_action_intents.json"] += 1
     except Exception as ex:
@@ -22932,12 +22935,15 @@ def api_wallet_history_normalized():
       "status": "confirmed",
       "timestamp": 1234567890,
       "correlation_id": "...",  // if present — links both sides of a cross-chain event
-      "pledge_id": "...",       // if present
-      "bridge_id": "..."        // if present
+      "pledge_id":      "...",  // if present
+      "bridge_id":      "...",  // if present
+      "withdrawal_id":  "...",  // if present — links withdrawal request to payout event
+      "pool_event_id":  "..."   // if present — links LP deposit/withdraw events
     }
 
     Top-level response also includes:
-      chain_filter, resolved_addresses, sources_checked, source_counts
+      chain_filter, category_filter, domain_filter,
+      resolved_addresses, sources_checked, source_counts
     """
     try:
         address = (request.args.get("address") or "").strip().upper()
@@ -23289,10 +23295,11 @@ def _wallet_normalize_event(event: dict, event_type: str) -> dict:
     # ── Direction normalisation ──────────────────────────────────────────────
     direction = _normalize_direction(event.get("direction", ""), ev_chain)
 
-    # Pass through correlation/linkage IDs when present so UI can link both
-    # sides of a cross-chain event (pledge ↔ gateway, bridge_in ↔ bridge_out).
+    # Pass through all cross-chain linkage IDs when present so the UI can link
+    # both sides of a cross-chain event (pledge ↔ gateway, bridge_in ↔ bridge_out,
+    # withdrawal_request ↔ payout, pool_event_id for LP operations).
     linkage: dict = {}
-    for _fld in ("correlation_id", "pledge_id", "bridge_id"):
+    for _fld in ("correlation_id", "pledge_id", "bridge_id", "withdrawal_id", "pool_event_id"):
         _v = event.get(_fld)
         if _v:
             linkage[_fld] = _v
@@ -23406,6 +23413,8 @@ def _collect_normalized_history_from_chain(
                 "_source":         "phantom_tx_chain",
                 "correlation_id":  tx.get("correlation_id") or tx_meta.get("correlation_id", ""),
                 "bridge_id":       tx.get("bridge_id") or tx_meta.get("bridge_id", ""),
+                "withdrawal_id":   tx.get("withdrawal_id") or tx_meta.get("withdrawal_id", ""),
+                "pool_event_id":   tx.get("pool_event_id") or tx_meta.get("pool_event_id", ""),
                 "chain":           tx.get("chain") or tx.get("network") or "thronos",
                 "asset":           asset,
                 "amount":          amount,
@@ -23571,12 +23580,16 @@ def api_wallet_balance_normalized():
         if ai_treasury_thr > 0 and ai_treasury_thr != thr_total:
             balances["AI_TREASURY_THR"] = round(ai_treasury_thr, 6)
 
-        # ── 6. Domain contributions from chain scan ──────────────────────────
-        # Shows which domains have balance-affecting events; the balance numbers
-        # themselves come from the ledgers above (already accumulated totals).
+        # ── 6. Domain contributions + chain_balances from chain scan ────────
+        # domain_contributions / domain_amounts are filtered by chain_filter.
+        # chain_balances gives the UI a chain-scoped asset view:
+        #   thronos → ledger balances (THR, L2E, AI_CREDITS)
+        #   EVM/BTC/XRP/Stellar → aggregated asset amounts from chain-filtered events
+        #   all → same as full balances dict
         sources_checked.append("phantom_tx_chain.json+tx_ledger.json (domain scan)")
         domain_contributions: dict = {}
         domain_amts: dict = {}
+        chain_asset_amts: dict = {}    # asset → total amount from chain-filtered events
         try:
             chain_evs, chain_cnts = _collect_normalized_history_from_chain(aliases, 5000)
             source_counts["phantom_tx_chain.json+tx_ledger.json"] = chain_cnts.get(
@@ -23591,16 +23604,31 @@ def api_wallet_balance_normalized():
                 try:
                     a = float(ev.get("amount") or 0)
                     domain_amts[d] = round(domain_amts.get(d, 0.0) + a, 6)
+                    asset_key = (norm.get("asset") or "THR").upper()
+                    chain_asset_amts[asset_key] = round(
+                        chain_asset_amts.get(asset_key, 0.0) + a, 8
+                    )
                 except Exception:
                     pass
         except Exception as ex:
             logger.debug("[BalanceNormalized] domain contributions: %s", ex)
+
+        # Build chain_balances view
+        _THRONOS_LEDGER_ASSETS = {"THR", "WBTC", "L2E", "AI_CREDITS", "AI_TREASURY_THR"}
+        if chain_filter == "all":
+            chain_balances = dict(balances)
+        elif chain_filter == "thronos":
+            chain_balances = {k: v for k, v in balances.items() if k in _THRONOS_LEDGER_ASSETS}
+        else:
+            # EVM/BTC/XRP/Stellar: asset amounts aggregated from chain-filtered events
+            chain_balances = {k: round(v, 8) for k, v in chain_asset_amts.items() if v > 0}
 
         return jsonify(
             ok=True,
             address=address,
             chain_filter=chain_filter,
             balances=balances,
+            chain_balances=chain_balances,
             domain_contributions=domain_contributions,
             domain_amounts=domain_amts,
             resolved_addresses=sorted(aliases),

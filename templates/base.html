@@ -2185,9 +2185,13 @@
                     <span style="font-size: 16px;">🔶</span>
                     <span style="font-size: 11px;">BNB</span>
                 </div>
-                <div class="send-network-option" data-network="xrp" onclick="selectReceiveNetwork('xrp')">
-                    <span style="font-size: 16px;">◆</span>
-                    <span style="font-size: 11px;">XRP</span>
+                <div class="send-network-option" data-network="arbitrum" onclick="selectReceiveNetwork('arbitrum')">
+                    <span style="font-size: 16px;">🔵</span>
+                    <span style="font-size: 11px;">Arbitrum</span>
+                </div>
+                <div class="send-network-option" data-network="base" onclick="selectReceiveNetwork('base')">
+                    <span style="font-size: 16px;">⬛</span>
+                    <span style="font-size: 11px;">Base</span>
                 </div>
             </div>
         </div>
@@ -3186,6 +3190,15 @@ function renderWalletBalances(data) {
         <div class="wallet-popup-address">
             <div class="wallet-popup-address-text" title="${escapeHtml(wallet)}">${escapeHtml(shortAddr)}</div>
             <button class="wallet-popup-copy-btn" onclick="copyToClipboard('${escapeHtml(wallet)}'); this.textContent='✓'; setTimeout(()=>this.textContent='Copy', 1500);">Copy</button>
+        </div>
+        <!-- Network indicator -->
+        <div id="walletNetworkBar" style="display:flex;align-items:center;justify-content:space-between;padding:4px 0 8px;border-bottom:1px solid #1a2a1a;margin-bottom:8px;">
+            <span style="font-size:11px;color:#888;">🌐 ${(() => {
+                const savedNet = localStorage.getItem('thr_network_' + wallet);
+                const nets = {thronos:'⬡ Thronos',bitcoin:'₿ Bitcoin',ethereum:'Ξ Ethereum',bnb:'🔶 BNB',arbitrum:'🔵 Arbitrum',base:'⬛ Base'};
+                return nets[savedNet] || '⬡ Thronos';
+            })()}</span>
+            <button onclick="openReceiveModal()" style="background:none;border:1px solid #1a3;color:#8af;padding:2px 8px;border-radius:3px;font-size:10px;cursor:pointer;">Switch / Receive</button>
         </div>
         ${migrationBanner}
 
@@ -4594,6 +4607,19 @@ function closeSendModal(event) {
 }
 
 function openReceiveModal() {
+    const _tAddr = walletSession?.getAddress?.() || '';
+    if (_tAddr) {
+        const saved = localStorage.getItem(`thr_network_${_tAddr}`);
+        if (saved && saved !== 'thronos') {
+            selectedReceiveNetwork = saved;
+            const modal = document.getElementById('receiveModal');
+            if (modal) {
+                modal.querySelectorAll('.send-network-option').forEach(o => o.classList.remove('selected'));
+                const opt = modal.querySelector(`[data-network="${saved}"]`);
+                if (opt) opt.classList.add('selected');
+            }
+        }
+    }
     updateReceiveModal();
     document.getElementById('receiveModal').classList.add('active');
     const savedLang = getCurrentLang();
@@ -4610,6 +4636,8 @@ let selectedReceiveNetwork = 'thronos';
 
 async function selectReceiveNetwork(network) {
     selectedReceiveNetwork = network;
+    const _tAddr = walletSession?.getAddress?.() || '';
+    if (_tAddr) localStorage.setItem(`thr_network_${_tAddr}`, network);
 
     // Update UI selection
     const modal = document.getElementById('receiveModal');
@@ -4628,7 +4656,8 @@ async function selectReceiveNetwork(network) {
         'bitcoin': 'Bitcoin Network',
         'ethereum': 'Ethereum Network',
         'bnb': 'BNB Chain',
-        'xrp': 'XRP Ledger'
+        'arbitrum': 'Arbitrum',
+        'base': 'Base'
     };
     if (networkLabel) {
         const name = networkNames[network] || network;

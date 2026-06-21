@@ -251,6 +251,21 @@
     return resp.json();
   }
 
+  async function getNetworkHistory({ network = 'thronos', limit = 100 } = {}) {
+    const address = ensureWallet();
+    const CHAIN_MAP = { thronos:['thronos'], bnb:['bsc'], arbitrum:['arbitrum'], base:['base'], ethereum:['eth'], bitcoin:['btc'] };
+    const chains = CHAIN_MAP[network] || [];
+    const resp = await fetch(resolveApiBase(API_READ_BASE, `/api/wallet/history/normalized?address=${encodeURIComponent(address)}&domain=all&limit=${limit}`));
+    const data = await resp.json();
+    const txs = Array.isArray(data.events) ? data.events : (Array.isArray(data.transactions) ? data.transactions : []);
+    const filtered = chains.length ? txs.filter(tx => {
+        const c = (tx.chain || '').toLowerCase();
+        if (!c) return network === 'thronos';
+        return chains.includes(c);
+    }) : txs;
+    return { address, network, transactions: filtered };
+  }
+
   window.ThronosWallet = {
     EVENTS,
     open,
@@ -268,6 +283,7 @@
     createPoolWithdrawIntent,
     getWithdrawalQuote,
     getLiquidityHistory,
+    getNetworkHistory,
   };
 
   // Hooks container for mobile/extension wrappers to inject biometric/passkey helpers

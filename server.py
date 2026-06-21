@@ -22831,19 +22831,23 @@ def _collect_normalized_history_from_pledges(
                 continue
             pid = p.get("pledge_id") or p.get("id") or ""
             events.append({
-                "id":             pid,
-                "thr_address":    ta,
-                "event_type":     "pledge",
-                "_source":        "pledge_chain",
-                "pledge_id":      pid,
-                "correlation_id": p.get("correlation_id") or "",
-                "chain":          p.get("chain") or p.get("send_chain") or "bsc",
-                "asset":          p.get("token") or p.get("currency") or "USDT",
-                "amount":         float(p.get("amount") or p.get("send_amount") or 0),
-                "direction":      "in",
-                "status":         p.get("status") or "confirmed",
-                "timestamp":      p.get("timestamp") or p.get("created_at") or 0,
-                "note":           p.get("note") or "",
+                "id":               pid,
+                "thr_address":      ta,
+                "event_type":       "pledge",
+                "_source":          "pledge_chain",
+                "pledge_id":        pid,
+                "correlation_id":   p.get("correlation_id") or "",
+                "transfer_scope":   "cross_chain",   # pledge always spans chains
+                "asset_origin_chain": p.get("chain") or p.get("send_chain") or "bsc",
+                "source_wallet_id": p.get("sender_wallet_id") or p.get("from_wallet_id") or "",
+                "target_wallet_id": p.get("thr_address") or ta,
+                "chain":            p.get("chain") or p.get("send_chain") or "bsc",
+                "asset":            p.get("token") or p.get("currency") or "USDT",
+                "amount":           float(p.get("amount") or p.get("send_amount") or 0),
+                "direction":        "in",
+                "status":           p.get("status") or "confirmed",
+                "timestamp":        p.get("timestamp") or p.get("created_at") or 0,
+                "note":             p.get("note") or "",
             })
             source_counts["pledge_chain.json"] += 1
     except Exception as ex:
@@ -23084,6 +23088,96 @@ def _event_matches_chain(ev_chain: str, chain_filter: str, domain: str) -> bool:
         return True
     return False
 
+
+def _is_thr_wallet_identity(addr: str) -> bool:
+    """
+    Return True if addr is a Thronos-native wallet identifier, not an external
+    blockchain address.  Used to distinguish internal vs external transfers.
+    """
+    if not addr:
+        return False
+    a = addr.strip()
+    au = a.upper()
+    return (
+        au.startswith("THR") or          # THR on-chain address
+        a.startswith("SYSTEM_") or       # system actor IDs
+        au.startswith("PYTHIA_") or      # Pythia system wallet IDs
+        au.startswith("WALLET_") or      # generic wallet ID prefix
+        au.startswith("V1_WALLET_")      # legacy V1 wallet IDs
+    )
+
+
+def _is_external_address(addr: str) -> bool:
+    """
+    Return True if addr looks like an external (non-THR) blockchain address.
+    Covers EVM, BTC (legacy + bech32), XRP, and Stellar.
+    """
+    if not addr:
+        return False
+    a = addr.strip()
+    if a.startswith("0x") and len(a) == 42:          # EVM
+        return True
+    al = a.lower()
+    if al.startswith("bc1"):                           # BTC bech32
+        return True
+    if a[0] in "13" and 25 <= len(a) <= 34:          # BTC P2PKH / P2SH
+        return True
+    if a[0] == "r" and 25 <= len(a) <= 35:           # XRP
+        return True
+    if a[0] == "G" and len(a) == 56:                  # Stellar
+        return True
+    return False
+
+
+def _classify_transfer_scope(event: dict, category: str) -> str:
+    """
+    Classify every normalized event into one of:
+      internal   — both sender and receiver are Thronos wallet identities
+      external   — receiver is an external (EVM/BTC/XRP/Stellar) address
+      cross_chain — bridge/withdrawal/pledge lifecycle, or category=cross_chain
+
+    Rule 1: sender + receiver are both THR wallet IDs → internal
+            settlement_chain=thronos, fee_asset=THR, fee_chain=thronos
+    Rule 2: bridge/withdrawal/pledge linkage present, or category=cross_chain
+            → cross_chain
+    Rule 3: receiver is an external blockchain address → external
+    Default: internal (thronos-native events with no explicit parties)
+    """
+    # Honour an explicit tag set upstream (e.g. by server_ext or pledge flow)
+    explicit = (event.get("transfer_scope") or "").lower()
+    if explicit in ("internal", "external", "cross_chain"):
+        return explicit
+
+    # cross_chain category wins
+    if category == "cross_chain":
+        return "cross_chain"
+
+    # Linkage IDs → cross-chain lifecycle
+    if any(event.get(k) for k in ("bridge_id", "withdrawal_id", "pledge_id")):
+        return "cross_chain"
+
+    # Resolve from / to parties
+    from_addr = (
+        event.get("from") or event.get("from_address") or
+        event.get("sender") or event.get("source_wallet_id") or ""
+    ).strip()
+    to_addr = (
+        event.get("to") or event.get("to_address") or
+        event.get("recipient") or event.get("target_wallet_id") or ""
+    ).strip()
+
+    # Rule 1: both parties are THR wallet identities → internal
+    if from_addr and to_addr:
+        if _is_thr_wallet_identity(from_addr) and _is_thr_wallet_identity(to_addr):
+            return "internal"
+
+    # Rule 3: recipient is an external blockchain address → external
+    if _is_external_address(to_addr):
+        return "external"
+
+    return "internal"
+
+
 # Maps _categorize_transaction() return value → normalized domain.
 # parking is kept separate from iot (both are present in the domain list).
 _CATEGORY_TO_DOMAIN: dict = {
@@ -23295,6 +23389,27 @@ def _wallet_normalize_event(event: dict, event_type: str) -> dict:
     # ── Direction normalisation ──────────────────────────────────────────────
     direction = _normalize_direction(event.get("direction", ""), ev_chain)
 
+    # ── Transfer scope classification ────────────────────────────────────────
+    transfer_scope = _classify_transfer_scope(event, category)
+
+    # settlement_chain: internal transfers always settle on thronos;
+    # cross_chain/external events settle on the event's own chain.
+    if transfer_scope == "internal":
+        settlement_chain = "thronos"
+    else:
+        settlement_chain = ev_chain or event.get("settlement_chain", "")
+
+    # Fee metadata: internal transfers pay fees in THR on thronos.
+    # For external/cross_chain, pass through whatever the event declares.
+    fee_meta: dict = {}
+    if transfer_scope == "internal":
+        fee_meta = {"fee_asset": "THR", "fee_chain": "thronos"}
+    else:
+        fa = event.get("fee_asset", "")
+        fc = event.get("fee_chain", "")
+        if fa or fc:
+            fee_meta = {"fee_asset": fa, "fee_chain": fc}
+
     # Pass through all cross-chain linkage IDs when present so the UI can link
     # both sides of a cross-chain event (pledge ↔ gateway, bridge_in ↔ bridge_out,
     # withdrawal_request ↔ payout, pool_event_id for LP operations).
@@ -23303,6 +23418,13 @@ def _wallet_normalize_event(event: dict, event_type: str) -> dict:
         _v = event.get(_fld)
         if _v:
             linkage[_fld] = _v
+
+    # Optional scope metadata (pass through when present in source record)
+    scope_meta: dict = {}
+    for _sf in ("source_wallet_id", "target_wallet_id", "asset_origin_chain"):
+        _sv = event.get(_sf)
+        if _sv:
+            scope_meta[_sf] = _sv
 
     return {
         "id":                  event.get("id", ""),
@@ -23318,6 +23440,10 @@ def _wallet_normalize_event(event: dict, event_type: str) -> dict:
         "direction":           direction,
         "status":              status,
         "timestamp":           event.get("timestamp", 0),
+        "transfer_scope":      transfer_scope,
+        "settlement_chain":    settlement_chain,
+        **fee_meta,
+        **scope_meta,
         **linkage,
     }
 

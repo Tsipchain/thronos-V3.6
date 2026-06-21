@@ -17058,37 +17058,42 @@ def api_admin_pythia_attach_evm_address():
 @app.route("/api/admin/pythia/create-evm-address", methods=["POST"])
 def api_admin_pythia_create_evm_address():
     """
-    Admin endpoint — Create a real EVM public address for Pythia by generating
-    a secp256k1 keypair server-side (reuses logic from USDT pledge flow).
+    Admin endpoint — create a real EVM public address for Pythia by generating
+    a secp256k1 keypair server-side.
 
-    The private key is encrypted with AES-256-GCM using PYTHIA_EVM_KEY_SECRET
-    env var (falls back to ADMIN_SECRET).  If no encryption key is configured
-    this endpoint returns needs_secure_key_storage rather than generating a key
-    that would be permanently lost.
+    PYTHIA_EVM_KEY_SECRET (32+ chars) is required in Railway env before calling
+    this endpoint.  If missing or too short the endpoint returns
+    needs_secure_key_storage and refuses to generate any key.
 
-    Responses
-    ---------
-    A) Existing wallet already has a valid EVM address:
-       status=configured, safe_to_register=true, evm_public_address=0x...
+    Flow
+    ----
+    1. If wallet already has a valid EVM address → return configured (idempotent).
+    2. Require PYTHIA_EVM_KEY_SECRET (32+ chars) or return needs_secure_key_storage.
+    3. Pre-check keccak256 provider (Cryptodome / eth-hash / pysha3) — fail fast.
+    4. Generate secp256k1 keypair (pure Python, no external deps).
+    5. Derive EVM address: keccak256(x||y 64-byte pubkey), last 20 bytes.
+    6. Encrypt private key: AES-256-GCM + PBKDF2/SHA-256, 250 000 iterations.
+    7. Store only the ciphertext envelope in pythia_v1_wallet.json.
 
-    B) Key generated and encrypted successfully (first-time):
-       HTTP 201, status=configured, safe_to_register=true, evm_public_address=0x...
+    Response shapes
+    ---------------
+    A) configured (existing or just created):
+       { ok, status="configured", safe_to_register=true, pythia_v1_wallet={…},
+         recommended_env={…}, mvp_role_consolidation=true }
 
-    C) keccak256 library not installed:
-       status=needs_keccak256, safe_to_register=false
-       next_steps: ["pip install eth_keys", "retry"]
+    B) needs_secure_key_storage:
+       { ok, status="needs_secure_key_storage", safe_to_register=false,
+         action_required="Set PYTHIA_EVM_KEY_SECRET…" }
 
-    D) No encryption key env var configured:
-       status=needs_secure_key_storage, safe_to_register=false
-       action_required: "Set PYTHIA_EVM_KEY_SECRET env var to a 32-char+ secret"
+    C) needs_keccak256:
+       { ok, status="needs_keccak256", safe_to_register=false, next_steps=[…] }
 
     Security
     --------
     - Private key NEVER returned in any response
     - Private key NEVER logged
     - Stored ONLY as AES-256-GCM ciphertext in pythia_v1_wallet.json
-    - EVM address is derived from public key (non-reversible)
-    - No signing, broadcast, or fund movement
+    - No signing, broadcast, RPC call, or fund movement
     """
     denied = require_admin()
     if denied:
@@ -17100,87 +17105,100 @@ def api_admin_pythia_create_evm_address():
         if wallet:
             existing_evm = wallet.get("evm_public_address_bsc") or wallet.get("evm_public_address")
             if existing_evm and _is_valid_evm_address(existing_evm):
+                evm_bsc  = wallet.get("evm_public_address_bsc",       existing_evm)
+                evm_base = wallet.get("evm_public_address_base",       existing_evm)
+                evm_arb  = wallet.get("evm_public_address_arbitrum",   existing_evm)
+                evm_eth  = wallet.get("evm_public_address_eth",        existing_evm)
                 return jsonify({
-                    "ok": True,
+                    "ok":               True,
+                    "status":           "configured",
+                    "safe_to_register": True,
                     "pythia_v1_wallet": {
-                        "thr_address": wallet.get("thr_address"),
-                        "evm_public_address": existing_evm,
-                        "evm_public_address_bsc": existing_evm,
-                        "evm_public_address_base": wallet.get("evm_public_address_base", existing_evm),
-                        "evm_public_address_arbitrum": wallet.get("evm_public_address_arbitrum", existing_evm),
-                        "evm_public_address_eth": wallet.get("evm_public_address_eth", existing_evm),
-                        "status": "configured",
-                        "safe_to_register": True,
-                        "source": "existing_v1_wallet",
-                    }
+                        "thr_address":              wallet.get("thr_address"),
+                        "evm_public_address":        existing_evm,
+                        "evm_public_address_bsc":    evm_bsc,
+                        "evm_public_address_base":   evm_base,
+                        "evm_public_address_arbitrum": evm_arb,
+                        "evm_public_address_eth":    evm_eth,
+                    },
+                    "recommended_env":    _pythia_recommended_env(existing_evm),
+                    "mvp_role_consolidation": True,
+                    "source":             "existing_v1_wallet",
                 }), 200
 
-        # ── 2. Require secure key storage ────────────────────────────────────
-        enc_secret = os.getenv("PYTHIA_EVM_KEY_SECRET") or os.getenv("ADMIN_SECRET") or ""
-        if len(enc_secret) < 16:
+        # ── 2. Require PYTHIA_EVM_KEY_SECRET (32+ chars) ────────────────────
+        enc_secret = os.getenv("PYTHIA_EVM_KEY_SECRET") or ""
+        if len(enc_secret) < 32:
             return jsonify({
-                "ok": True,
+                "ok":               True,
+                "status":           "needs_secure_key_storage",
+                "safe_to_register": False,
                 "pythia_v1_wallet": {
-                    "thr_address": wallet.get("thr_address") if wallet else None,
+                    "thr_address":       wallet.get("thr_address") if wallet else None,
                     "evm_public_address": None,
-                    "status": "needs_secure_key_storage",
-                    "safe_to_register": False,
                 },
                 "action_required": (
-                    "Set PYTHIA_EVM_KEY_SECRET env var (32+ chars) before creating "
-                    "Pythia EVM signer address. Without it the private key cannot be "
-                    "stored securely and generation is refused."
+                    "Set PYTHIA_EVM_KEY_SECRET env var (32+ chars) in Railway before "
+                    "calling this endpoint. Without it the private key cannot be stored "
+                    "securely and EVM address generation is refused."
                 ),
             }), 200
 
-        # ── 3. Generate secp256k1 keypair (pure Python, no external deps) ────
-        priv_hex, compressed_pub, thr_addr = _pythia_generate_secp256k1_keypair()
-
-        # ── 4. Derive EVM address (requires keccak256 library) ───────────────
-        evm_address = _pythia_derive_evm_address(priv_hex)
-        if not evm_address:
+        # ── 3. Pre-check keccak256 provider before generating any key ────────
+        if not _pythia_keccak_available():
             return jsonify({
-                "ok": True,
-                "pythia_v1_wallet": {
-                    "thr_address": thr_addr,
-                    "public_key": compressed_pub,
-                    "evm_public_address": None,
-                    "status": "needs_keccak256",
-                    "safe_to_register": False,
-                },
+                "ok":               True,
+                "status":           "needs_keccak256",
+                "safe_to_register": False,
+                "pythia_v1_wallet": {"evm_public_address": None},
                 "next_steps": [
-                    "pip install eth_keys   # preferred",
-                    "pip install pysha3     # alternative",
-                    "pip install pycryptodome  # alternative",
+                    "pip install pycryptodomex   # already in requirements.txt — check Railway build",
+                    "pip install eth-hash[pycryptodome]   # alternative",
+                    "pip install eth-keys                 # alternative",
                     "Then retry POST /api/admin/pythia/create-evm-address",
                 ],
             }), 200
 
-        # ── 5. Encrypt private key with AES-256-GCM ──────────────────────────
+        # ── 4. Generate secp256k1 keypair (pure Python, no external deps) ────
+        priv_hex, compressed_pub, thr_addr = _pythia_generate_secp256k1_keypair()
+
+        # ── 5. Derive EVM address via keccak256 ──────────────────────────────
+        evm_address = _pythia_derive_evm_address(priv_hex)
+        if not evm_address:
+            # Should not happen after step 3 pre-check; safety net only
+            return jsonify({
+                "ok":               True,
+                "status":           "needs_keccak256",
+                "safe_to_register": False,
+                "pythia_v1_wallet": {"evm_public_address": None},
+            }), 200
+
+        # ── 6. Encrypt private key with AES-256-GCM + PBKDF2/SHA256 ─────────
         enc_blob = _pythia_encrypt_private_key(priv_hex, enc_secret)
+        del priv_hex  # discard plaintext from locals immediately after use
         if not enc_blob:
             return jsonify({
-                "ok": False,
+                "ok":    False,
                 "error": "encryption_failed",
                 "detail": "cryptography library required: pip install cryptography",
             }), 500
 
-        # ── 6. Persist to pythia_v1_wallet.json ──────────────────────────────
+        # ── 7. Persist to pythia_v1_wallet.json ──────────────────────────────
         if not wallet:
             result = _provision_pythia_v1_wallet()
             if isinstance(result, tuple):
                 return jsonify({"ok": False, "error": result[1]}), 500
             wallet = result
 
-        wallet["evm_public_address"] = evm_address
-        wallet["evm_public_address_bsc"] = evm_address
-        wallet["evm_public_address_base"] = evm_address
+        wallet["evm_public_address"]          = evm_address
+        wallet["evm_public_address_bsc"]      = evm_address
+        wallet["evm_public_address_base"]     = evm_address
         wallet["evm_public_address_arbitrum"] = evm_address
-        wallet["evm_public_address_eth"] = evm_address
-        wallet["evm_public_key"] = compressed_pub
-        wallet["evm_private_key_encrypted"] = enc_blob   # ciphertext only, never plaintext
-        wallet["evm_address_created_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
-        wallet["evm_address_source"] = "server_side_secp256k1"
+        wallet["evm_public_address_eth"]      = evm_address
+        wallet["evm_public_key"]              = compressed_pub
+        wallet["evm_private_key_encrypted"]   = enc_blob   # ciphertext only, never plaintext
+        wallet["evm_address_created_at"]      = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+        wallet["evm_address_source"]          = "server_side_secp256k1"
 
         try:
             save_json(PYTHIA_V1_WALLET_FILE, wallet)
@@ -17197,23 +17215,24 @@ def api_admin_pythia_create_evm_address():
             direction="system",
             internal_txid=f"CREATE_EVM_{int(time.time())}",
             status="confirmed",
-            note=f"Pythia EVM address created from server-side keypair: {evm_address}",
+            note=f"Pythia EVM address created (server-side secp256k1): {evm_address}",
         )
 
         return jsonify({
-            "ok": True,
+            "ok":               True,
+            "status":           "configured",
+            "safe_to_register": True,
             "pythia_v1_wallet": {
-                "thr_address": wallet.get("thr_address"),
-                "public_key": compressed_pub,
-                "evm_public_address": evm_address,
-                "evm_public_address_bsc": evm_address,
-                "evm_public_address_base": evm_address,
+                "thr_address":              wallet.get("thr_address"),
+                "evm_public_address":        evm_address,
+                "evm_public_address_bsc":    evm_address,
+                "evm_public_address_base":   evm_address,
                 "evm_public_address_arbitrum": evm_address,
-                "evm_public_address_eth": evm_address,
-                "status": "configured",
-                "safe_to_register": True,
-                "source": "created_from_server_side_keypair",
-            }
+                "evm_public_address_eth":    evm_address,
+            },
+            "recommended_env":    _pythia_recommended_env(evm_address),
+            "mvp_role_consolidation": True,
+            "source":             "created_from_server_side_keypair",
         }), 201
 
     except Exception as e:
@@ -17266,40 +17285,81 @@ def _pythia_generate_secp256k1_keypair():
     return priv_hex, compressed_pub, thr_address
 
 
+def _pythia_keccak_available() -> bool:
+    """Return True if any supported keccak256 provider is importable."""
+    for _try in (
+        lambda: __import__('Cryptodome.Hash.keccak', fromlist=['new']),  # pycryptodomex
+        lambda: __import__('eth_hash.auto', fromlist=['keccak']),         # eth-hash[pycryptodome]
+        lambda: __import__('Crypto.Hash.keccak', fromlist=['new']),       # pycryptodome
+        lambda: __import__('sha3'),                                        # pysha3
+    ):
+        try:
+            _try()
+            return True
+        except ImportError:
+            pass
+    return False
+
+
 def _pythia_derive_evm_address(priv_hex: str):
     """
     Derive 0x EVM address from private key hex.
-    Requires keccak256 (eth_keys, pysha3, or pycryptodome).
-    Returns address string or None if keccak256 unavailable.
+
+    EVM standard: keccak256 of the 64-byte uncompressed public key (x||y,
+    WITHOUT the 04 prefix), then take the last 20 bytes as the address.
+
+    Provider priority:
+      1. Cryptodome.Hash.keccak  (pycryptodomex — already in requirements.txt)
+      2. eth_hash.auto.keccak    (eth-hash[pycryptodome] or eth-hash[pysha3])
+      3. Crypto.Hash.keccak      (pycryptodome)
+      4. sha3.keccak_256         (pysha3)
 
     IMPORTANT: priv_hex is never stored or logged; only the derived 0x address
     is kept.  The caller is responsible for persisting the encrypted private key.
     """
     try:
         keccak_fn = None
-        try:
-            from eth_keys import keys as _eth_keys
-            keccak_fn = lambda d: _eth_keys.keccak(d)
-        except (ImportError, AttributeError):
-            pass
+
+        # Primary: pycryptodomex — already in requirements.txt
+        if not keccak_fn:
+            try:
+                from Cryptodome.Hash import keccak as _kmod
+                def _kk_cryptodome(d):
+                    k = _kmod.new(digest_bits=256); k.update(d); return k.digest()
+                keccak_fn = _kk_cryptodome
+            except ImportError:
+                pass
+
+        # Fallback: eth-hash (eth-hash[pycryptodome] / eth-hash[pysha3])
+        if not keccak_fn:
+            try:
+                from eth_hash.auto import keccak as _eth_keccak
+                keccak_fn = _eth_keccak
+            except ImportError:
+                pass
+
+        # Fallback: pycryptodome (Crypto namespace)
+        if not keccak_fn:
+            try:
+                from Crypto.Hash import keccak as _kmod2
+                def _kk_crypto(d):
+                    k = _kmod2.new(digest_bits=256); k.update(d); return k.digest()
+                keccak_fn = _kk_crypto
+            except ImportError:
+                pass
+
+        # Fallback: pysha3
         if not keccak_fn:
             try:
                 import sha3 as _sha3
                 keccak_fn = lambda d: _sha3.keccak_256(d).digest()
             except ImportError:
                 pass
-        if not keccak_fn:
-            try:
-                from Crypto.Hash import keccak as _keccak_mod
-                def _keccak_crypto(d):
-                    k = _keccak_mod.new(digest_bits=256); k.update(d); return k.digest()
-                keccak_fn = _keccak_crypto
-            except ImportError:
-                pass
+
         if not keccak_fn:
             return None
 
-        # Recompute uncompressed public key from private key scalar
+        # Recompute public key coordinates from private key scalar
         priv_int = int(priv_hex, 16)
         _P  = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F
         _Gx = 0x79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798
@@ -17325,8 +17385,9 @@ def _pythia_derive_evm_address(priv_hex: str):
             return R
 
         x, y = _pt_mul(priv_int, (_Gx, _Gy))
-        uncompressed = bytes.fromhex('04' + hex(x)[2:].zfill(64) + hex(y)[2:].zfill(64))
-        return '0x' + keccak_fn(uncompressed)[-20:].hex()
+        # EVM: keccak256 of 64-byte x||y (no 04 prefix), last 20 bytes = address
+        pub64 = x.to_bytes(32, 'big') + y.to_bytes(32, 'big')
+        return '0x' + keccak_fn(pub64)[-20:].hex()
     except Exception as e:
         logger.warning("[Pythia EVM derive] %s", e)
         return None
@@ -17356,6 +17417,31 @@ def _pythia_encrypt_private_key(priv_hex: str, secret: str) -> dict | None:
     except Exception as e:
         logger.warning("[Pythia EVM encrypt] %s", e)
         return None
+
+
+def _pythia_recommended_env(evm_address: str) -> dict:
+    """
+    Build the recommended Railway env block for an EVM address.
+
+    For MVP all role addresses equal the Pythia EVM public address.
+    Production can split roles later without changing this API shape.
+    """
+    return {
+        "PYTHIA_SYSTEM_EVM_BSC_ADDRESS":      evm_address,
+        "PYTHIA_SYSTEM_EVM_BASE_ADDRESS":      evm_address,
+        "PYTHIA_SYSTEM_EVM_ARBITRUM_ADDRESS":  evm_address,
+        "PYTHIA_SYSTEM_EVM_ETHEREUM_ADDRESS":  evm_address,
+
+        "BSC_PAYOUT_ADDRESS":      evm_address,
+        "BSC_POOL_VAULT_ADDRESS":  evm_address,
+        "BSC_GAS_WALLET_ADDRESS":  evm_address,
+        "BSC_FEE_COLLECTOR_ADDRESS": evm_address,
+
+        "BASE_PAYOUT_ADDRESS":      evm_address,
+        "BASE_POOL_VAULT_ADDRESS":  evm_address,
+        "BASE_GAS_WALLET_ADDRESS":  evm_address,
+        "BASE_FEE_COLLECTOR_ADDRESS": evm_address,
+    }
 
 
 @app.route("/api/admin/pythia/register-core-addresses", methods=["POST"])

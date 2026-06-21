@@ -22891,59 +22891,51 @@ def api_wallet_history_normalized():
     """
     Normalized wallet history for PWA / mobile / extensions.
 
-    Classifies every event into a standard category so clients do not need to
-    know server-internal event_type strings.
+    Aggregates all history domains (music, AI, IoT, L2E, T2E, NFT, liquidity,
+    gateway, swaps, pledges, parking, Pythia system, migration) from the same
+    sources the Web Wallet viewer uses, then classifies each event into a
+    standard category + domain so clients do not need to know internal strings.
 
-    Address alias resolution: for Pythia/system addresses this expands the
-    lookup to include SYSTEM_PYTHIA_ACTIONS, pythia_v1_wallet_id, legacy
-    migrated addresses, etc., so that history stored under any alias is returned.
+    Address alias resolution: for Pythia/system addresses expands the lookup
+    to include SYSTEM_PYTHIA_ACTIONS, pythia_v1_wallet_id, legacy migrated
+    addresses, etc., so history stored under any alias is returned.
 
     Query params:
-    - address (required): THR address
-    - limit (optional, default 50, max 500)
-    - category (optional): 'transaction' | 'wallet_identity' | 'cross_chain' | 'all'
+    - address  (required): THR address
+    - limit    (optional, default 50, max 500)
+    - category (optional): transaction | wallet_identity | cross_chain | all
+    - domain   (optional): thr | token | music | ai | iot | l2e | t2e |
+                           parking | nft | liquidity | gateway | swap |
+                           pledge | pythia | vault | migration | unknown | all
 
-    Response:
+    Response items:
     {
-      "ok": true,
-      "address": "THR...",
-      "category_filter": "all",
-      "history": [
-        {
-          "id": "...",
-          "original_event_type": "token_send",
-          "category": "transaction",
-          "event_name": "Sent THR",
-          "chain": "thronos",
-          "asset": "THR",
-          "amount": 10.0,
-          "direction": "out",
-          "status": "confirmed",
-          "timestamp": 1234567890,
-          "icon": "📤"
-        }
-      ],
-      "total": 42,
-      "resolved_addresses": ["THR...", "SYSTEM_PYTHIA_ACTIONS", ...],
-      "sources_checked": ["wallet_history.json", ...],
-      "source_counts": {"wallet_history.json": 3, "pledge_chain.json": 1}
+      "id": "...",
+      "original_event_type": "music_tip",
+      "category": "transaction",
+      "domain": "music",
+      "event_name": "Music",
+      "icon": "🎵",
+      "chain": "thronos",
+      "asset": "THR",
+      "amount": 1.5,
+      "direction": "in",
+      "status": "confirmed",
+      "timestamp": 1234567890
     }
 
-    Categories
-    ----------
-    transaction    — token transfers, pledges, pool operations
-    wallet_identity — provisioning, address registration, key binding
-    cross_chain     — bridge, withdrawal, gateway, external fee lifecycle
-    all             — all of the above (default)
+    Top-level response also includes:
+      resolved_addresses, sources_checked, source_counts
     """
     try:
         address = (request.args.get("address") or "").strip().upper()
         if not address or not address.startswith("THR"):
             return jsonify(ok=False, error="valid_thr_address_required"), 400
 
-        limit      = min(int(request.args.get("limit", 50)), 500)
-        cat_filter = (request.args.get("category") or "all").lower()
-        overfetch  = limit * 4  # over-fetch across sources before dedup + filter
+        limit         = min(int(request.args.get("limit", 50)), 500)
+        cat_filter    = (request.args.get("category") or "all").lower()
+        domain_filter = (request.args.get("domain")   or "all").lower()
+        overfetch     = limit * 6  # over-fetch across sources before dedup + filter
 
         # ── Resolve all address aliases for this wallet ─────────────────────
         aliases, alias_debug = _resolve_normalized_address_aliases(address)
@@ -22951,55 +22943,66 @@ def api_wallet_history_normalized():
         # ── Aggregate from all sources ──────────────────────────────────────
         all_source_counts: dict = {}
 
+        # 1. wallet_history.json (pledge, pool, bridge, Pythia system events)
         wh_events, wh_counts = _collect_normalized_history_from_wallet_history(aliases, overfetch)
         all_source_counts.update(wh_counts)
 
+        # 2. pledge_chain.json (pledge records not yet in wallet_history)
         pledge_events, pledge_counts = _collect_normalized_history_from_pledges(aliases, overfetch)
         all_source_counts.update(pledge_counts)
 
+        # 3. pythia_action_intents.json
         intent_events, intent_counts = _collect_normalized_history_from_action_intents(aliases, overfetch)
         all_source_counts.update(intent_counts)
+
+        # 4. phantom_tx_chain.json + tx_ledger.json (music, AI, IoT, L2E, T2E,
+        #    NFT, liquidity, swaps, gateway, parking, native THR transfers)
+        chain_events, chain_counts = _collect_normalized_history_from_chain(aliases, overfetch)
+        all_source_counts.update(chain_counts)
 
         # ── Merge and deduplicate by event id ───────────────────────────────
         seen_ids: set = set()
         raw_events: list = []
-        for ev in wh_events + pledge_events + intent_events:
+        for ev in wh_events + pledge_events + intent_events + chain_events:
             eid = (ev.get("id") or ev.get("event_id") or "").strip()
-            dedup_key = eid or f"{ev.get('event_type','')}{ev.get('timestamp','')}{ev.get('amount','')}"
+            dedup_key = eid or "{}{}{:.4f}".format(
+                ev.get("event_type", ""), ev.get("timestamp", ""),
+                float(ev.get("amount") or 0)
+            )
             if dedup_key and dedup_key in seen_ids:
                 continue
             if dedup_key:
                 seen_ids.add(dedup_key)
             raw_events.append(ev)
 
-        # Sort merged set descending by timestamp
-        def _ts(ev):
-            t = ev.get("timestamp", 0)
-            try:
-                return float(t)
-            except Exception:
-                return 0.0
+        raw_events.sort(
+            key=lambda e: float(e["timestamp"]) if isinstance(e.get("timestamp"), (int, float)) else 0,
+            reverse=True,
+        )
 
-        raw_events.sort(key=_ts, reverse=True)
-
-        # ── Normalize and apply category filter ─────────────────────────────
+        # ── Normalize, filter by category + domain, trim to limit ───────────
         normalized = []
         for event in raw_events:
             event_type = event.get("event_type", "")
             norm = _wallet_normalize_event(event, event_type)
-            if cat_filter == "all" or norm["category"] == cat_filter:
-                normalized.append(norm)
+            if cat_filter != "all" and norm["category"] != cat_filter:
+                continue
+            if domain_filter != "all" and norm["domain"] != domain_filter:
+                continue
+            normalized.append(norm)
             if len(normalized) >= limit:
                 break
 
         all_sources_checked = alias_debug.get("sources_checked", []) + [
-            "wallet_history.json", "pledge_chain.json", "pythia_action_intents.json"
+            "wallet_history.json", "pledge_chain.json",
+            "pythia_action_intents.json", "phantom_tx_chain.json+tx_ledger.json",
         ]
 
         return jsonify(
             ok=True,
             address=address,
             category_filter=cat_filter,
+            domain_filter=domain_filter,
             history=normalized,
             total=len(normalized),
             resolved_addresses=sorted(aliases),
@@ -23015,23 +23018,106 @@ def api_wallet_history_normalized():
 _EVM_CHAINS   = frozenset({"bsc", "base", "arbitrum", "eth", "ethereum", "polygon", "avax"})
 _EVM_ASSETS   = frozenset({"bnb", "eth", "usdt", "usdc", "busd", "weth", "wbnb"})
 
+# Maps _categorize_transaction() return value → normalized domain.
+# parking is kept separate from iot (both are present in the domain list).
+_CATEGORY_TO_DOMAIN: dict = {
+    "thr": "thr",           "mining": "thr",       "mining_reward": "thr",
+    "bridge": "thr",        "verifyid": "thr",      "sentinel": "thr",
+    "token_transfer": "token", "tokens": "token",
+    "music_tip": "music",   "music_stream": "music", "music_royalty": "music",
+    "music": "music",
+    "ai_credits": "ai",     "ai_credit": "ai",      "architect_job": "ai",
+    "architect": "ai",      "ai_reward": "ai",       "ai": "ai",
+    "t2e": "t2e",           "t2e_reward_thr": "t2e",
+    "l2e": "l2e",
+    "iot": "iot",           "iot_telemetry": "iot",  "iot_reward": "iot",
+    "iot_mining_reward": "iot", "gps_mining": "iot", "route_contribution": "iot",
+    "parking": "parking",   "iot_parking": "parking", "iot_parking_reservation": "parking",
+    "nft": "nft",           "nft_mint": "nft",       "nft_buy": "nft",
+    "liquidity": "liquidity",
+    "gateway": "gateway",   "fiat_buy": "gateway",   "fiat_deposit": "gateway",
+    "fiat_onramp": "gateway", "fiat_sell_request": "gateway",
+    "fiat_withdrawal": "gateway", "fiat_offramp": "gateway", "iot_purchase": "gateway",
+    "swaps": "swap",        "swap": "swap",
+    "pledge": "pledge",
+    "other": "unknown",
+}
+
+
+def _event_type_to_domain(et: str, raw_category: str, top_category: str) -> str:
+    """
+    Derive domain from (event_type_lower, raw_category, top_category).
+    Called by _wallet_normalize_event after top-level category is determined.
+    """
+    # Fast path: raw_category already gives us a good domain
+    d = _CATEGORY_TO_DOMAIN.get(raw_category, "")
+    if d:
+        return d
+
+    # Top-level category overrides
+    if top_category == "wallet_identity":
+        if any(p in et for p in ("migration", "legacy", "migrated", "v1_wallet_migrat")):
+            return "migration"
+        return "pythia"
+
+    if top_category == "cross_chain":
+        if et.startswith("pythia_action_"):
+            return "pythia"
+        return "gateway"
+
+    # Fine-grained pattern matching on event_type string
+    if "music" in et:                                  return "music"
+    if "parking" in et:                                return "parking"
+    if any(p in et for p in ("iot", "gps", "telemetry", "route_contribution")): return "iot"
+    if any(p in et for p in ("ai_credit", "credits_consume", "service_payment",
+                              "architect", "ai_job", "ai_reward")):              return "ai"
+    if "l2e" in et:                                    return "l2e"
+    if "t2e" in et:                                    return "t2e"
+    if "nft" in et:                                    return "nft"
+    if any(p in et for p in ("liquidity", "lp_", "add_lp", "remove_lp")):       return "liquidity"
+    if any(p in et for p in ("swap",)):                return "swap"
+    if any(p in et for p in ("gateway", "fiat", "onramp", "offramp")):          return "gateway"
+    if any(p in et for p in ("bridge", "crosschain", "withdrawal")):             return "gateway"
+    if "pledge" in et:                                 return "pledge"
+    if any(p in et for p in ("pythia", "system_pythia", "pythia_action")):       return "pythia"
+    if any(p in et for p in ("vault", "pool_vault", "pool_seed")):               return "vault"
+    if any(p in et for p in ("migration", "migrate", "legacy", "v1_wallet_")):   return "migration"
+    if any(p in et for p in ("token_send", "token_receive", "token_transfer")):  return "token"
+    return "thr"
+
+
+def _normalize_direction(raw: str, ev_chain: str) -> str:
+    """Normalize direction to in|out|system|internal."""
+    r = (raw or "").lower()
+    if r in ("in", "received", "credit", "earn", "reward"): return "in"
+    if r in ("out", "sent", "debit", "spend"):               return "out"
+    if r in ("system", "internal", "pool", "bridge",
+             "crosschain", "gateway"):                        return "system"
+    if ev_chain and ev_chain != "thronos":                   return "system"
+    return "internal"
+
 
 def _wallet_normalize_event(event: dict, event_type: str) -> dict:
     """
     Map a raw wallet history event to a normalized client-facing record.
 
-    Categories:
-    - wallet_identity : provisioning, address/key registration
-    - cross_chain     : bridge, withdrawal, gateway, external fee, gas,
-                        AND pythia_action_* events that operate on EVM chains
-                        or EVM assets (BNB/ETH/USDT/USDC/…)
-    - transaction     : everything else (token send/receive, pledge, pool)
+    Each entry includes:
+    - category  : wallet_identity | cross_chain | transaction | system
+    - domain    : thr | token | music | ai | iot | l2e | t2e | parking |
+                  nft | liquidity | gateway | swap | pledge | pythia |
+                  vault | migration | unknown
+    - direction : in | out | system | internal
+    - status    : confirmed | pending | failed | legacy_migrated
     """
     et = event_type.lower()
     ev_chain = (event.get("chain") or "").lower()
     ev_asset = (event.get("asset") or event.get("token") or "").lower()
 
-    # wallet_identity patterns
+    # raw_category: if the event was pre-categorised by the chain collector use
+    # that value; otherwise derive from event_type patterns.
+    pre_cat = (event.get("_raw_category") or "").lower()
+
+    # ── Top-level category ───────────────────────────────────────────────────
     _identity_patterns = (
         "wallet_discovered", "wallet_provisioned", "wallet_configured",
         "address_discovered", "address_attached", "address_registered",
@@ -23041,7 +23127,6 @@ def _wallet_normalize_event(event: dict, event_type: str) -> dict:
         "pythia_public_address_registered", "pythia_role_address_registered",
         "pythia_evm_address_created",
     )
-    # cross_chain patterns (startswith)
     _crosschain_start = (
         "bridge_", "withdrawal_", "gateway_", "crosschain_",
         "external_service_fee_", "external_fee_split",
@@ -23049,8 +23134,7 @@ def _wallet_normalize_event(event: dict, event_type: str) -> dict:
         "gas_reserve_", "gas_wallet_", "swap_to_gas_",
     )
 
-    # pythia_action_* on EVM chains or with EVM assets → cross_chain
-    _is_pythia_action = et.startswith("pythia_action_")
+    _is_pythia_action    = et.startswith("pythia_action_")
     _pythia_is_crosschain = _is_pythia_action and (
         ev_chain in _EVM_CHAINS or ev_asset in _EVM_ASSETS
     )
@@ -23075,12 +23159,55 @@ def _wallet_normalize_event(event: dict, event_type: str) -> dict:
         category   = "transaction"
         event_name = "Pledge"
         icon       = "💵"
+    elif pre_cat == "music_tip" or ("music" in et and "gps" not in et and "telemetry" not in et):
+        category   = "transaction"
+        event_name = "Music"
+        icon       = "🎵"
+    elif pre_cat in ("ai_credits", "architect_job") or any(
+        p in et for p in ("ai_credit", "credits_consume", "architect", "ai_job", "ai_reward")
+    ):
+        category   = "transaction"
+        event_name = "AI / Architect"
+        icon       = "🤖"
+    elif pre_cat in ("iot", "iot_telemetry", "iot_reward") or any(
+        p in et for p in ("iot", "gps", "telemetry", "route_contribution")
+    ):
+        category   = "transaction"
+        event_name = "IoT"
+        icon       = "📡"
+    elif "parking" in et:
+        category   = "transaction"
+        event_name = "Parking"
+        icon       = "🅿️"
+    elif pre_cat == "l2e" or "l2e" in et:
+        category   = "transaction"
+        event_name = "Learn-to-Earn"
+        icon       = "📚"
+    elif pre_cat == "t2e" or "t2e" in et:
+        category   = "transaction"
+        event_name = "Train-to-Earn"
+        icon       = "🏋️"
+    elif pre_cat == "nft" or "nft" in et:
+        category   = "transaction"
+        event_name = "NFT"
+        icon       = "🖼️"
+    elif pre_cat == "liquidity" or any(p in et for p in ("liquidity", "lp_", "add_lp", "remove_lp")):
+        category   = "transaction"
+        event_name = "Liquidity"
+        icon       = "💧"
+    elif pre_cat in ("gateway",) or any(p in et for p in ("gateway", "fiat", "onramp", "offramp")):
+        category   = "transaction"
+        event_name = "Gateway"
+        icon       = "🔄"
+    elif pre_cat in ("swaps", "swap") or "swap" in et:
+        category   = "transaction"
+        event_name = "Swap"
+        icon       = "🔁"
     elif et.startswith("pool_"):
         category   = "transaction"
         event_name = "Pool Operation"
         icon       = "💧"
     elif _is_pythia_action:
-        # pythia_action on non-EVM chain (e.g. thronos internal action)
         category   = "transaction"
         event_name = "Pythia System Action"
         icon       = "⚙️"
@@ -23089,19 +23216,141 @@ def _wallet_normalize_event(event: dict, event_type: str) -> dict:
         event_name = event_type.replace("_", " ").title()
         icon       = "•"
 
+    # ── Domain (granular) ────────────────────────────────────────────────────
+    domain = _event_type_to_domain(et, pre_cat, category)
+
+    # ── Status normalisation ─────────────────────────────────────────────────
+    raw_status = (event.get("status") or "pending").lower()
+    if raw_status in ("legacy", "migrated", "legacy_migrated"):
+        status = "legacy_migrated"
+    else:
+        status = raw_status
+
+    # ── Direction normalisation ──────────────────────────────────────────────
+    direction = _normalize_direction(event.get("direction", ""), ev_chain)
+
     return {
         "id":                  event.get("id", ""),
         "original_event_type": event_type,
         "category":            category,
+        "domain":              domain,
         "event_name":          event_name,
         "icon":                icon,
         "chain":               event.get("chain", "thronos"),
         "asset":               event.get("asset", ""),
         "amount":              float(event.get("amount", 0)),
-        "direction":           event.get("direction", ""),
-        "status":              event.get("status", "pending"),
+        "direction":           direction,
+        "status":              status,
         "timestamp":           event.get("timestamp", 0),
     }
+
+
+def _collect_normalized_history_from_chain(
+    aliases: set, limit_overfetch: int
+) -> tuple[list, dict]:
+    """
+    Scan phantom_tx_chain.json and tx_ledger.json — the same sources the Web
+    Wallet viewer uses — and return all transactions for any address in aliases.
+
+    This is the primary source for Music, AI, IoT, L2E, T2E, NFT, Liquidity,
+    Swaps, Gateway, parking, and native THR transfer records.
+    """
+    source_counts: dict = {"phantom_tx_chain.json+tx_ledger.json": 0}
+    aliases_lower = {a.lower() for a in aliases}
+
+    try:
+        chain  = load_json(CHAIN_FILE, [])
+        tx_log = load_json(TX_LOG_FILE, [])
+
+        seen_ids: set = set()
+        all_txs: list = []
+        for tx in chain + tx_log:
+            if not isinstance(tx, dict):
+                continue
+            tid = tx.get("tx_id") or tx.get("id")
+            if tid and tid in seen_ids:
+                continue
+            if tid:
+                seen_ids.add(tid)
+            all_txs.append(tx)
+
+        events = []
+        for tx in all_txs:
+            tx_type = (tx.get("type") or tx.get("kind") or "").lower()
+
+            # Mining/coinbase is already captured in wallet_history — skip here
+            if tx_type in ("coinbase", "mining_reward", "mint") or (
+                tx.get("reward") is not None and not tx_type
+            ):
+                continue
+
+            # Build parties set (same logic as _collect_wallet_history_transactions)
+            tx_meta = tx.get("meta") if isinstance(tx.get("meta"), dict) else {}
+            parties_lower = {
+                str(p).lower()
+                for p in [
+                    tx.get("from"), tx.get("to"),
+                    tx.get("thr_address"), tx.get("wallet"), tx.get("wallet_address"),
+                    tx.get("owner"), tx.get("user_wallet"), tx.get("sender_wallet"),
+                    tx.get("recipient_wallet"), tx.get("trader"), tx.get("provider"),
+                    tx.get("address"),
+                    tx_meta.get("wallet"), tx_meta.get("thr_address"),
+                    tx_meta.get("owner"), tx_meta.get("artist_wallet"),
+                    tx_meta.get("tipper_wallet"), tx_meta.get("trader"),
+                ]
+                if p
+            }
+
+            if not (parties_lower & aliases_lower):
+                continue
+
+            raw_category = _categorize_transaction(tx)
+
+            # Direction relative to requested address
+            tx_from = (tx.get("from") or tx.get("sender") or "").lower()
+            tx_to   = (tx.get("to")   or tx.get("recipient") or "").lower()
+            if tx_to in aliases_lower:
+                raw_dir = "in"
+            elif tx_from in aliases_lower:
+                raw_dir = "out"
+            else:
+                raw_dir = "internal"
+
+            asset = (
+                tx.get("symbol") or tx.get("asset_symbol") or
+                tx.get("token_symbol") or tx.get("token") or
+                tx.get("asset") or "THR"
+            ).upper()
+            try:
+                amount = float(tx.get("amount") or tx.get("value") or 0)
+            except Exception:
+                amount = 0.0
+
+            event_type = tx.get("type") or tx.get("kind") or raw_category
+
+            events.append({
+                "id":              tx.get("tx_id") or tx.get("id") or "",
+                "thr_address":     next((tx.get(k) for k in ("thr_address", "wallet", "from", "to") if tx.get(k)), ""),
+                "event_type":      event_type,
+                "_raw_category":   raw_category,  # consumed by _wallet_normalize_event
+                "chain":           tx.get("chain") or tx.get("network") or "thronos",
+                "asset":           asset,
+                "amount":          amount,
+                "direction":       raw_dir,
+                "status":          tx.get("status") or "confirmed",
+                "timestamp":       tx.get("timestamp") or 0,
+                "note":            (tx_meta.get("note") or tx.get("note") or "") if tx_meta else (tx.get("note") or ""),
+            })
+            source_counts["phantom_tx_chain.json+tx_ledger.json"] += 1
+
+    except Exception as ex:
+        logger.warning("[NormalizedHistory] chain scan: %s", ex)
+
+    events.sort(
+        key=lambda e: float(e["timestamp"]) if isinstance(e.get("timestamp"), (int, float)) else 0,
+        reverse=True,
+    )
+    return events[:limit_overfetch], source_counts
 
 
 @app.route("/api/balances", methods=["GET"])
@@ -23243,10 +23492,35 @@ def api_wallet_balance_normalized():
         if ai_treasury_thr > 0 and ai_treasury_thr != thr_total:
             balances["AI_TREASURY_THR"] = round(ai_treasury_thr, 6)
 
+        # ── 6. Domain contributions from chain scan ──────────────────────────
+        # Shows which domains have balance-affecting events; the balance numbers
+        # themselves come from the ledgers above (already accumulated totals).
+        sources_checked.append("phantom_tx_chain.json+tx_ledger.json (domain scan)")
+        domain_contributions: dict = {}
+        domain_amts: dict = {}
+        try:
+            chain_evs, chain_cnts = _collect_normalized_history_from_chain(aliases, 5000)
+            source_counts["phantom_tx_chain.json+tx_ledger.json"] = chain_cnts.get(
+                "phantom_tx_chain.json+tx_ledger.json", 0
+            )
+            for ev in chain_evs:
+                norm = _wallet_normalize_event(ev, ev.get("event_type", ""))
+                d = norm["domain"]
+                domain_contributions[d] = domain_contributions.get(d, 0) + 1
+                try:
+                    a = float(ev.get("amount") or 0)
+                    domain_amts[d] = round(domain_amts.get(d, 0.0) + a, 6)
+                except Exception:
+                    pass
+        except Exception as ex:
+            logger.debug("[BalanceNormalized] domain contributions: %s", ex)
+
         return jsonify(
             ok=True,
             address=address,
             balances=balances,
+            domain_contributions=domain_contributions,
+            domain_amounts=domain_amts,
             resolved_addresses=sorted(aliases),
             sources_checked=sources_checked,
             source_counts=source_counts,

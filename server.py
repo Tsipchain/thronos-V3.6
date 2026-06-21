@@ -22829,18 +22829,21 @@ def _collect_normalized_history_from_pledges(
             ta = (p.get("thr_address") or "").strip()
             if ta not in aliases and ta.upper() not in aliases:
                 continue
+            pid = p.get("pledge_id") or p.get("id") or ""
             events.append({
-                "id": p.get("pledge_id") or p.get("id") or "",
-                "thr_address": ta,
-                "event_type": "pledge",
-                "_source": "pledge_chain",
-                "chain": p.get("chain") or p.get("send_chain") or "bsc",
-                "asset": p.get("token") or p.get("currency") or "USDT",
-                "amount": float(p.get("amount") or p.get("send_amount") or 0),
-                "direction": "in",
-                "status": p.get("status") or "confirmed",
-                "timestamp": p.get("timestamp") or p.get("created_at") or 0,
-                "note": p.get("note") or "",
+                "id":             pid,
+                "thr_address":    ta,
+                "event_type":     "pledge",
+                "_source":        "pledge_chain",
+                "pledge_id":      pid,
+                "correlation_id": p.get("correlation_id") or "",
+                "chain":          p.get("chain") or p.get("send_chain") or "bsc",
+                "asset":          p.get("token") or p.get("currency") or "USDT",
+                "amount":         float(p.get("amount") or p.get("send_amount") or 0),
+                "direction":      "in",
+                "status":         p.get("status") or "confirmed",
+                "timestamp":      p.get("timestamp") or p.get("created_at") or 0,
+                "note":           p.get("note") or "",
             })
             source_counts["pledge_chain.json"] += 1
     except Exception as ex:
@@ -22911,6 +22914,7 @@ def api_wallet_history_normalized():
     - domain   (optional): thr | token | music | ai | iot | l2e | t2e |
                            parking | nft | liquidity | gateway | swap |
                            pledge | pythia | vault | migration | unknown | all
+    - chain    (optional): all | thronos | btc | bsc | base | arbitrum | eth | xrp | stellar
 
     Response items:
     {
@@ -22918,6 +22922,7 @@ def api_wallet_history_normalized():
       "original_event_type": "music_tip",
       "category": "transaction",
       "domain": "music",
+      "source": "wallet_history",
       "event_name": "Music",
       "icon": "🎵",
       "chain": "thronos",
@@ -22925,11 +22930,14 @@ def api_wallet_history_normalized():
       "amount": 1.5,
       "direction": "in",
       "status": "confirmed",
-      "timestamp": 1234567890
+      "timestamp": 1234567890,
+      "correlation_id": "...",  // if present — links both sides of a cross-chain event
+      "pledge_id": "...",       // if present
+      "bridge_id": "..."        // if present
     }
 
     Top-level response also includes:
-      resolved_addresses, sources_checked, source_counts
+      chain_filter, resolved_addresses, sources_checked, source_counts
     """
     try:
         address = (request.args.get("address") or "").strip().upper()
@@ -22939,6 +22947,8 @@ def api_wallet_history_normalized():
         limit         = min(int(request.args.get("limit", 50)), 500)
         cat_filter    = (request.args.get("category") or "all").lower()
         domain_filter = (request.args.get("domain")   or "all").lower()
+        chain_raw     = (request.args.get("chain")    or "all").lower()
+        chain_filter  = _CHAIN_CANONICAL.get(chain_raw, "all") if chain_raw != "all" else "all"
         overfetch     = limit * 6  # over-fetch across sources before dedup + filter
 
         # ── Resolve all address aliases for this wallet ─────────────────────
@@ -22984,7 +22994,7 @@ def api_wallet_history_normalized():
             reverse=True,
         )
 
-        # ── Normalize, filter by category + domain, trim to limit ───────────
+        # ── Normalize, filter by category + domain + chain, trim to limit ─────
         normalized = []
         for event in raw_events:
             event_type = event.get("event_type", "")
@@ -22992,6 +23002,8 @@ def api_wallet_history_normalized():
             if cat_filter != "all" and norm["category"] != cat_filter:
                 continue
             if domain_filter != "all" and norm["domain"] != domain_filter:
+                continue
+            if not _event_matches_chain(norm["chain"], chain_filter, norm["domain"]):
                 continue
             normalized.append(norm)
             if len(normalized) >= limit:
@@ -23007,6 +23019,7 @@ def api_wallet_history_normalized():
             address=address,
             category_filter=cat_filter,
             domain_filter=domain_filter,
+            chain_filter=chain_filter,
             history=normalized,
             total=len(normalized),
             resolved_addresses=sorted(aliases),
@@ -23021,6 +23034,49 @@ def api_wallet_history_normalized():
 
 _EVM_CHAINS   = frozenset({"bsc", "base", "arbitrum", "eth", "ethereum", "polygon", "avax"})
 _EVM_ASSETS   = frozenset({"bnb", "eth", "usdt", "usdc", "busd", "weth", "wbnb"})
+
+# Normalise the ?chain= query param to a canonical key.
+_CHAIN_CANONICAL: dict = {
+    "thronos": "thronos", "thr": "thronos",
+    "btc": "btc",         "bitcoin": "btc",
+    "bsc": "bsc",         "binance": "bsc",  "bnb": "bsc",  "binance_smart_chain": "bsc",
+    "base": "base",
+    "arbitrum": "arbitrum", "arb": "arbitrum",
+    "eth": "eth",           "ethereum": "eth",
+    "xrp": "xrp",           "xrpl": "xrp",
+    "stellar": "stellar",   "xlm": "stellar",
+}
+
+# Event record chain-field values that belong to each canonical chain.
+_CHAIN_EVENT_VALUES: dict = {
+    "thronos": frozenset({"thronos", "thr", ""}),
+    "btc":     frozenset({"btc", "bitcoin"}),
+    "bsc":     frozenset({"bsc", "binance", "bnb", "binance_smart_chain"}),
+    "base":    frozenset({"base"}),
+    "arbitrum":frozenset({"arbitrum", "arb"}),
+    "eth":     frozenset({"eth", "ethereum"}),
+    "xrp":     frozenset({"xrp", "xrpl"}),
+    "stellar": frozenset({"stellar", "xlm"}),
+}
+
+# Domains that are always Thronos-native even when the event has no chain field.
+_THRONOS_NATIVE_DOMAINS = frozenset({
+    "thr", "token", "music", "ai", "iot", "l2e", "t2e",
+    "parking", "nft", "pledge", "pythia", "migration", "unknown",
+})
+
+
+def _event_matches_chain(ev_chain: str, chain_filter: str, domain: str) -> bool:
+    """Return True if this event should be included for the requested chain."""
+    if chain_filter == "all":
+        return True
+    ev_chain_lower = (ev_chain or "").lower()
+    if ev_chain_lower in _CHAIN_EVENT_VALUES.get(chain_filter, frozenset()):
+        return True
+    # Events with no explicit chain that belong to Thronos-native domains
+    if chain_filter == "thronos" and not ev_chain_lower and domain in _THRONOS_NATIVE_DOMAINS:
+        return True
+    return False
 
 # Maps _categorize_transaction() return value → normalized domain.
 # parking is kept separate from iot (both are present in the domain list).
@@ -23233,6 +23289,14 @@ def _wallet_normalize_event(event: dict, event_type: str) -> dict:
     # ── Direction normalisation ──────────────────────────────────────────────
     direction = _normalize_direction(event.get("direction", ""), ev_chain)
 
+    # Pass through correlation/linkage IDs when present so UI can link both
+    # sides of a cross-chain event (pledge ↔ gateway, bridge_in ↔ bridge_out).
+    linkage: dict = {}
+    for _fld in ("correlation_id", "pledge_id", "bridge_id"):
+        _v = event.get(_fld)
+        if _v:
+            linkage[_fld] = _v
+
     return {
         "id":                  event.get("id", ""),
         "original_event_type": event_type,
@@ -23247,6 +23311,7 @@ def _wallet_normalize_event(event: dict, event_type: str) -> dict:
         "direction":           direction,
         "status":              status,
         "timestamp":           event.get("timestamp", 0),
+        **linkage,
     }
 
 
@@ -23339,6 +23404,8 @@ def _collect_normalized_history_from_chain(
                 "event_type":      event_type,
                 "_raw_category":   raw_category,  # consumed by _wallet_normalize_event
                 "_source":         "phantom_tx_chain",
+                "correlation_id":  tx.get("correlation_id") or tx_meta.get("correlation_id", ""),
+                "bridge_id":       tx.get("bridge_id") or tx_meta.get("bridge_id", ""),
                 "chain":           tx.get("chain") or tx.get("network") or "thronos",
                 "asset":           asset,
                 "amount":          amount,
@@ -23391,6 +23458,9 @@ def api_wallet_balance_normalized():
 
     Query params:
     - address (required): THR address
+    - chain   (optional): all | thronos | btc | bsc | base | arbitrum | eth | xrp | stellar
+                          Filters domain_contributions and domain_amounts to events from that chain.
+                          Full balance totals (THR, WBTC, L2E, AI_CREDITS) are always returned.
 
     Response:
     {
@@ -23416,9 +23486,12 @@ def api_wallet_balance_normalized():
     auth_secret, or decrypted material returned.
     """
     try:
-        address = (request.args.get("address") or "").strip().upper()
+        address      = (request.args.get("address") or "").strip().upper()
         if not address or not address.startswith("THR"):
             return jsonify(ok=False, error="valid_thr_address_required"), 400
+
+        chain_raw    = (request.args.get("chain") or "all").lower()
+        chain_filter = _CHAIN_CANONICAL.get(chain_raw, "all") if chain_raw != "all" else "all"
 
         # ── Resolve all address aliases ──────────────────────────────────────
         aliases, alias_debug = _resolve_normalized_address_aliases(address)
@@ -23511,6 +23584,8 @@ def api_wallet_balance_normalized():
             )
             for ev in chain_evs:
                 norm = _wallet_normalize_event(ev, ev.get("event_type", ""))
+                if not _event_matches_chain(norm["chain"], chain_filter, norm["domain"]):
+                    continue
                 d = norm["domain"]
                 domain_contributions[d] = domain_contributions.get(d, 0) + 1
                 try:
@@ -23524,6 +23599,7 @@ def api_wallet_balance_normalized():
         return jsonify(
             ok=True,
             address=address,
+            chain_filter=chain_filter,
             balances=balances,
             domain_contributions=domain_contributions,
             domain_amounts=domain_amts,

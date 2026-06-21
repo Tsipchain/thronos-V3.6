@@ -3271,6 +3271,8 @@ function renderWalletBalances(data) {
                 <div id="walletPoolPositionsList"></div>
             </div>
 
+        </div><!-- end balancesTabContent -->
+
         <!-- Music Tab Content -->
         <div class="wallet-tab-content" id="musicTabContent">
             <div class="wallet-popup-loading">
@@ -4737,16 +4739,19 @@ async function updateReceiveModal() {
                     return; // Success, exit early
                 }
             } else {
-                // Other networks: Use new unified endpoint (when implemented)
-                response = await fetch(`/api/bridge/deposit?network=${network}&thr_address=${encodeURIComponent(thrAddr)}`);
-                data = await response.json();
+                // EVM networks: derive address from public key (same address for all EVM chains)
+                // Uses /api/wallet/v1/evm-address?pubkey= — no private key involved
+                const pubkey = walletSession.getPublicKey ? walletSession.getPublicKey() : null;
+                if (pubkey) {
+                    response = await fetch(`/api/wallet/v1/evm-address?pubkey=${encodeURIComponent(pubkey)}`);
+                    data = await response.json();
+                }
 
-                if (data.ok && data.deposit_address) {
-                    const depositAddr = data.deposit_address;
-
+                if (data && data.ok && data.evm_address) {
+                    const depositAddr = data.evm_address;
                     if (addrEl) addrEl.textContent = depositAddr;
                     if (qrEl) {
-                        qrEl.src = `/api/bridge/qr?network=${network}&address=${encodeURIComponent(depositAddr)}`;
+                        qrEl.src = `/api/wallet/qr/${encodeURIComponent(depositAddr)}`;
                         qrEl.style.display = 'inline';
                         qrEl.onerror = () => { qrEl.style.display = 'none'; };
                     }
@@ -4755,38 +4760,37 @@ async function updateReceiveModal() {
                     if (emptyEl) emptyEl.style.display = 'none';
                     if (hintEl) {
                         hintEl.style.display = 'block';
-                        const wrapped = network === 'ethereum' ? 'WETH' : network === 'bnb' ? 'WBNB' : network === 'xrp' ? 'WXRP' : 'tokens';
-                        hintEl.querySelector('.lang-el').textContent = `Κατάθεση ${network.toUpperCase()} σε αυτή τη διεύθυνση για να λάβετε ${wrapped} στο Thronos.`;
-                        hintEl.querySelector('.lang-en').textContent = `Deposit ${network.toUpperCase()} to this address to receive ${wrapped} on Thronos.`;
+                        const assetMap = { ethereum: 'ETH', bnb: 'USDT / BNB', arbitrum: 'ETH / tokens', base: 'USDC / ETH' };
+                        const asset = assetMap[network] || 'tokens';
+                        const poolNote = (network === 'bnb' || network === 'base')
+                            ? ' · Για Add Liquidity χρησιμοποιείστε /pools'
+                            : '';
+                        hintEl.querySelector('.lang-el').textContent = `Η EVM διεύθυνσή σας (ίδια για όλα τα EVM networks). Αποστολή ${asset} εδώ.${poolNote}`;
+                        hintEl.querySelector('.lang-en').textContent = `Your EVM address — same for all EVM chains. Use to receive ${asset} on ${network.charAt(0).toUpperCase() + network.slice(1)}.${network === 'bnb' || network === 'base' ? ' For Add Liquidity use /pools.' : ''}`;
                     }
-                    return; // Success, exit early
+                    return;
                 }
+
+                // Fallback: wallet not unlocked or pubkey unavailable
+                throw new Error('Wallet must be unlocked to derive EVM address');
             }
 
-            // If we reach here, endpoint failed - show helpful error
-            throw new Error(data?.error || 'Endpoint not implemented yet');
+            throw new Error(data?.error || 'Address not available');
 
         } catch (error) {
             console.error(`Failed to load ${network} deposit address:`, error);
-
-            // Show friendly message for non-BTC networks
-            if (network !== 'bitcoin') {
-                if (addrEl) addrEl.textContent = `${network.toUpperCase()} bridge coming soon`;
-                if (qrEl) qrEl.style.display = 'none';
-                if (hintEl) {
-                    hintEl.style.display = 'block';
-                    hintEl.querySelector('.lang-el').textContent = `Το ${network.toUpperCase()} bridge θα είναι διαθέσιμο σύντομα. Backend endpoint: /api/bridge/deposit?network=${network}&thr_address=...`;
-                    hintEl.querySelector('.lang-en').textContent = `${network.toUpperCase()} bridge coming soon. Backend endpoint needed: /api/bridge/deposit?network=${network}&thr_address=...`;
-                }
-            } else {
-                // BTC should work - show actual error
-                if (addrEl) addrEl.textContent = 'Error loading BTC deposit address';
-                if (qrEl) qrEl.style.display = 'none';
-                if (hintEl) {
-                    hintEl.style.display = 'block';
-                    hintEl.querySelector('.lang-el').textContent = 'Σφάλμα φόρτωσης διεύθυνσης κατάθεσης BTC.';
-                    hintEl.querySelector('.lang-en').textContent = 'Error loading BTC deposit address.';
-                }
+            if (addrEl) addrEl.textContent = error.message.includes('unlocked')
+                ? 'Unlock wallet to see address'
+                : '—';
+            if (qrEl) qrEl.style.display = 'none';
+            if (hintEl) {
+                hintEl.style.display = 'block';
+                hintEl.querySelector('.lang-el').textContent = error.message.includes('unlocked')
+                    ? 'Ξεκλειδώστε το wallet για να δείτε τη διεύθυνση.'
+                    : 'Σφάλμα φόρτωσης διεύθυνσης.';
+                hintEl.querySelector('.lang-en').textContent = error.message.includes('unlocked')
+                    ? 'Unlock your wallet to view address.'
+                    : `Error: ${error.message}`;
             }
         }
     }

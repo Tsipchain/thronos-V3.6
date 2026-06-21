@@ -23012,16 +23012,24 @@ def api_wallet_history_normalized():
         return jsonify(ok=False, error=str(e)), 500
 
 
+_EVM_CHAINS   = frozenset({"bsc", "base", "arbitrum", "eth", "ethereum", "polygon", "avax"})
+_EVM_ASSETS   = frozenset({"bnb", "eth", "usdt", "usdc", "busd", "weth", "wbnb"})
+
+
 def _wallet_normalize_event(event: dict, event_type: str) -> dict:
     """
     Map a raw wallet history event to a normalized client-facing record.
 
     Categories:
     - wallet_identity : provisioning, address/key registration
-    - cross_chain     : bridge, withdrawal, gateway, external fee, gas
+    - cross_chain     : bridge, withdrawal, gateway, external fee, gas,
+                        AND pythia_action_* events that operate on EVM chains
+                        or EVM assets (BNB/ETH/USDT/USDC/…)
     - transaction     : everything else (token send/receive, pledge, pool)
     """
     et = event_type.lower()
+    ev_chain = (event.get("chain") or "").lower()
+    ev_asset = (event.get("asset") or event.get("token") or "").lower()
 
     # wallet_identity patterns
     _identity_patterns = (
@@ -23041,11 +23049,17 @@ def _wallet_normalize_event(event: dict, event_type: str) -> dict:
         "gas_reserve_", "gas_wallet_", "swap_to_gas_",
     )
 
+    # pythia_action_* on EVM chains or with EVM assets → cross_chain
+    _is_pythia_action = et.startswith("pythia_action_")
+    _pythia_is_crosschain = _is_pythia_action and (
+        ev_chain in _EVM_CHAINS or ev_asset in _EVM_ASSETS
+    )
+
     if any(p in et for p in _identity_patterns):
         category   = "wallet_identity"
         event_name = "Wallet Identity"
         icon       = "🔐"
-    elif any(et.startswith(p) for p in _crosschain_start):
+    elif any(et.startswith(p) for p in _crosschain_start) or _pythia_is_crosschain:
         category   = "cross_chain"
         event_name = "Cross-Chain Event"
         icon       = "🌉"
@@ -23065,6 +23079,11 @@ def _wallet_normalize_event(event: dict, event_type: str) -> dict:
         category   = "transaction"
         event_name = "Pool Operation"
         icon       = "💧"
+    elif _is_pythia_action:
+        # pythia_action on non-EVM chain (e.g. thronos internal action)
+        category   = "transaction"
+        event_name = "Pythia System Action"
+        icon       = "⚙️"
     else:
         category   = "transaction"
         event_name = event_type.replace("_", " ").title()
@@ -23103,6 +23122,140 @@ def api_balances():
         "tokens": tokens,
         "last_updated": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
     }), 200
+
+
+@app.route("/api/wallet/balance/normalized", methods=["GET"])
+def api_wallet_balance_normalized():
+    """
+    Alias-aware balance endpoint for PWA / mobile / extensions.
+
+    Uses the same alias resolver as /api/wallet/history/normalized so that
+    system/Pythia addresses (e.g. THR5DF27A86C477F381594E896F0E55357DEC5942BA)
+    aggregate balances held under SYSTEM_PYTHIA_ACTIONS, PYTHIA_V1_<id>, legacy
+    migrated THR addresses, and the AI/system treasury wallet.
+
+    Query params:
+    - address (required): THR address
+
+    Response:
+    {
+      "ok": true,
+      "address": "THR...",
+      "balances": {
+        "THR": 0.0,
+        "WBTC": 0.0,
+        "L2E": 0.0,
+        "AI_CREDITS": 0
+      },
+      "resolved_addresses": ["THR...", "SYSTEM_PYTHIA_ACTIONS", "PYTHIA_V1_..."],
+      "sources_checked": ["ledger.json", "wbtc_ledger.json", "ai_credits.json", ...],
+      "source_counts": {
+        "ledger.json": 2,
+        "wbtc_ledger.json": 0,
+        "l2e_ledger.json": 0,
+        "ai_credits.json": 1
+      }
+    }
+
+    Security: no private key, seed, mnemonic, send_seed, send_secret,
+    auth_secret, or decrypted material returned.
+    """
+    try:
+        address = (request.args.get("address") or "").strip().upper()
+        if not address or not address.startswith("THR"):
+            return jsonify(ok=False, error="valid_thr_address_required"), 400
+
+        # ── Resolve all address aliases ──────────────────────────────────────
+        aliases, alias_debug = _resolve_normalized_address_aliases(address)
+
+        source_counts: dict = {}
+        sources_checked: list = list(alias_debug.get("sources_checked", []))
+
+        # ── 1. THR balances from ledger.json / SQLite ────────────────────────
+        thr_total = 0.0
+        thr_sources = 0
+        sources_checked.append("ledger.json (SQLite if enabled)")
+        for alias in aliases:
+            bal, src = get_thr_balance(alias)
+            if bal > 0:
+                thr_total += bal
+                thr_sources += 1
+        source_counts["ledger.json"] = thr_sources
+
+        # ── 2. WBTC balances ─────────────────────────────────────────────────
+        wbtc_total = 0.0
+        wbtc_sources = 0
+        sources_checked.append("wbtc_ledger.json")
+        for alias in aliases:
+            b = get_balance_from_store(alias, "wbtc", 0.0)
+            if b > 0:
+                wbtc_total += b
+                wbtc_sources += 1
+        source_counts["wbtc_ledger.json"] = wbtc_sources
+
+        # ── 3. L2E balances ──────────────────────────────────────────────────
+        l2e_total = 0.0
+        l2e_sources = 0
+        sources_checked.append("l2e_ledger.json")
+        for alias in aliases:
+            b = get_balance_from_store(alias, "l2e", 0.0)
+            if b > 0:
+                l2e_total += b
+                l2e_sources += 1
+        source_counts["l2e_ledger.json"] = l2e_sources
+
+        # ── 4. AI credits ────────────────────────────────────────────────────
+        ai_credits_total = 0
+        ai_credits_sources = 0
+        sources_checked.append("ai_credits.json")
+        try:
+            ai_creds = load_ai_credits()
+            for alias in aliases:
+                c = int(ai_creds.get(alias, ai_creds.get(alias.lower(), 0)) or 0)
+                if c > 0:
+                    ai_credits_total += c
+                    ai_credits_sources += 1
+        except Exception as e:
+            logger.debug("[BalanceNormalized] ai_credits probe: %s", e)
+        source_counts["ai_credits.json"] = ai_credits_sources
+
+        # ── 5. AI wallet / treasury check ────────────────────────────────────
+        sources_checked.append("ai_treasury")
+        ai_treasury_thr = 0.0
+        ai_treasury_sources = 0
+        try:
+            ai_wallet = (AI_WALLET_ADDRESS or "").strip()
+            if ai_wallet and ai_wallet in aliases:
+                b, _ = get_thr_balance(ai_wallet)
+                if b > 0:
+                    ai_treasury_thr = b
+                    ai_treasury_sources += 1
+        except Exception as e:
+            logger.debug("[BalanceNormalized] ai_treasury probe: %s", e)
+        source_counts["ai_treasury"] = ai_treasury_sources
+
+        balances = {
+            "THR":        round(thr_total, 6),
+            "WBTC":       round(wbtc_total, 8),
+            "L2E":        round(l2e_total, 6),
+            "AI_CREDITS": ai_credits_total,
+        }
+        if ai_treasury_thr > 0 and ai_treasury_thr != thr_total:
+            balances["AI_TREASURY_THR"] = round(ai_treasury_thr, 6)
+
+        return jsonify(
+            ok=True,
+            address=address,
+            balances=balances,
+            resolved_addresses=sorted(aliases),
+            sources_checked=sources_checked,
+            source_counts=source_counts,
+            last_updated=time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        ), 200
+
+    except Exception as e:
+        logger.error("[BalanceNormalized] %s", e)
+        return jsonify(ok=False, error=str(e)), 500
 
 
 @app.route("/api/token/prices", methods=["GET"])

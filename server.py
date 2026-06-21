@@ -22801,7 +22801,9 @@ def _collect_normalized_history_from_wallet_history(
                 continue
             ta = (e.get("thr_address") or "").strip()
             if ta in aliases or ta.upper() in aliases:
-                events.append(e)
+                ev = dict(e)
+                ev.setdefault("_source", "wallet_history")
+                events.append(ev)
                 source_counts["wallet_history.json"] += 1
         events.sort(key=lambda e: e.get("timestamp", 0), reverse=True)
         return events[:limit_overfetch], source_counts
@@ -22831,6 +22833,7 @@ def _collect_normalized_history_from_pledges(
                 "id": p.get("pledge_id") or p.get("id") or "",
                 "thr_address": ta,
                 "event_type": "pledge",
+                "_source": "pledge_chain",
                 "chain": p.get("chain") or p.get("send_chain") or "bsc",
                 "asset": p.get("token") or p.get("currency") or "USDT",
                 "amount": float(p.get("amount") or p.get("send_amount") or 0),
@@ -22871,6 +22874,7 @@ def _collect_normalized_history_from_action_intents(
                 "id": intent.get("action_id") or "",
                 "thr_address": next(iter(aliases)),
                 "event_type": f"pythia_action_{intent.get('action_type', 'intent')}",
+                "_source": "pythia_action_intents",
                 "chain": intent.get("chain") or "thronos",
                 "asset": intent.get("token") or "",
                 "amount": float(intent.get("amount") or 0),
@@ -22903,7 +22907,7 @@ def api_wallet_history_normalized():
     Query params:
     - address  (required): THR address
     - limit    (optional, default 50, max 500)
-    - category (optional): transaction | wallet_identity | cross_chain | all
+    - category (optional): transaction | wallet_identity | cross_chain | system | all
     - domain   (optional): thr | token | music | ai | iot | l2e | t2e |
                            parking | nft | liquidity | gateway | swap |
                            pledge | pythia | vault | migration | unknown | all
@@ -23208,7 +23212,7 @@ def _wallet_normalize_event(event: dict, event_type: str) -> dict:
         event_name = "Pool Operation"
         icon       = "💧"
     elif _is_pythia_action:
-        category   = "transaction"
+        category   = "system"
         event_name = "Pythia System Action"
         icon       = "⚙️"
     else:
@@ -23234,6 +23238,7 @@ def _wallet_normalize_event(event: dict, event_type: str) -> dict:
         "original_event_type": event_type,
         "category":            category,
         "domain":              domain,
+        "source":              event.get("_source", "wallet_history"),
         "event_name":          event_name,
         "icon":                icon,
         "chain":               event.get("chain", "thronos"),
@@ -23333,6 +23338,7 @@ def _collect_normalized_history_from_chain(
                 "thr_address":     next((tx.get(k) for k in ("thr_address", "wallet", "from", "to") if tx.get(k)), ""),
                 "event_type":      event_type,
                 "_raw_category":   raw_category,  # consumed by _wallet_normalize_event
+                "_source":         "phantom_tx_chain",
                 "chain":           tx.get("chain") or tx.get("network") or "thronos",
                 "asset":           asset,
                 "amount":          amount,

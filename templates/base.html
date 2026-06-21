@@ -4671,6 +4671,81 @@ async function selectReceiveNetwork(network) {
     await updateReceiveModal();
 }
 
+// ── Cross-chain RPC helpers (mirrors PWA app.js) ──────────────────────────────
+const _W_CC_RPC = {
+    eth:  'https://eth.llamarpc.com',
+    bnb:  'https://bsc-dataseed.binance.org',
+    arb:  'https://arb1.arbitrum.io/rpc',
+    base: 'https://mainnet.base.org',
+};
+const _W_USDT_BNB  = '0x55d398326f99059fF775485246999027B3197955'; // 18 dec
+const _W_USDT_ARB  = '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9'; // 6 dec
+const _W_USDC_BASE = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'; // 6 dec
+
+async function _wFetchEvmNative(evmAddr, rpcUrl) {
+    if (!evmAddr || !rpcUrl) return null;
+    try {
+        const r = await fetch(rpcUrl, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ jsonrpc:'2.0', method:'eth_getBalance', params:[evmAddr,'latest'], id:1 }),
+            signal: AbortSignal.timeout(8000),
+        });
+        const d = await r.json();
+        if (d.error || !d.result) return null;
+        return parseInt(d.result, 16) / 1e18;
+    } catch { return null; }
+}
+
+async function _wFetchErc20(evmAddr, tokenContract, rpcUrl, decimals) {
+    if (!evmAddr || !tokenContract || !rpcUrl) return null;
+    try {
+        const data = '0x70a08231' + evmAddr.replace(/^0x/, '').padStart(64, '0');
+        const r = await fetch(rpcUrl, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ jsonrpc:'2.0', method:'eth_call', params:[{to:tokenContract, data},'latest'], id:1 }),
+            signal: AbortSignal.timeout(8000),
+        });
+        const d = await r.json();
+        if (d.error || !d.result || d.result === '0x' || d.result === '0x' + '0'.repeat(64)) return null;
+        const raw = BigInt(d.result);
+        if (raw === 0n) return null;
+        const divisor = BigInt(10 ** decimals);
+        return Number(raw / divisor) + Number(raw % divisor) / (10 ** decimals);
+    } catch { return null; }
+}
+
+async function _wFetchNetworkBalance(evmAddr, network) {
+    const rpcMap = { ethereum: _W_CC_RPC.eth, bnb: _W_CC_RPC.bnb, arbitrum: _W_CC_RPC.arb, base: _W_CC_RPC.base };
+    const rpc = rpcMap[network];
+    if (!rpc) return null;
+    if (network === 'bnb') {
+        const [native, usdt] = await Promise.all([
+            _wFetchEvmNative(evmAddr, rpc),
+            _wFetchErc20(evmAddr, _W_USDT_BNB, rpc, 18),
+        ]);
+        return { native, nativeSym: 'BNB', token: usdt, tokenSym: 'USDT' };
+    }
+    if (network === 'arbitrum') {
+        const [native, usdt] = await Promise.all([
+            _wFetchEvmNative(evmAddr, rpc),
+            _wFetchErc20(evmAddr, _W_USDT_ARB, rpc, 6),
+        ]);
+        return { native, nativeSym: 'ETH', token: usdt, tokenSym: 'USDT' };
+    }
+    if (network === 'base') {
+        const [native, usdc] = await Promise.all([
+            _wFetchEvmNative(evmAddr, rpc),
+            _wFetchErc20(evmAddr, _W_USDC_BASE, rpc, 6),
+        ]);
+        return { native, nativeSym: 'ETH', token: usdc, tokenSym: 'USDC' };
+    }
+    if (network === 'ethereum') {
+        const native = await _wFetchEvmNative(evmAddr, rpc);
+        return { native, nativeSym: 'ETH', token: null, tokenSym: null };
+    }
+    return null;
+}
+
 async function updateReceiveModal() {
     const network = selectedReceiveNetwork || 'thronos';
     const thrAddr = walletSession.getAddress() || '';
@@ -4760,14 +4835,22 @@ async function updateReceiveModal() {
                     if (emptyEl) emptyEl.style.display = 'none';
                     if (hintEl) {
                         hintEl.style.display = 'block';
-                        const assetMap = { ethereum: 'ETH', bnb: 'USDT / BNB', arbitrum: 'ETH / tokens', base: 'USDC / ETH' };
-                        const asset = assetMap[network] || 'tokens';
                         const poolNote = (network === 'bnb' || network === 'base')
-                            ? ' · Για Add Liquidity χρησιμοποιείστε /pools'
-                            : '';
-                        hintEl.querySelector('.lang-el').textContent = `Η EVM διεύθυνσή σας (ίδια για όλα τα EVM networks). Αποστολή ${asset} εδώ.${poolNote}`;
-                        hintEl.querySelector('.lang-en').textContent = `Your EVM address — same for all EVM chains. Use to receive ${asset} on ${network.charAt(0).toUpperCase() + network.slice(1)}.${network === 'bnb' || network === 'base' ? ' For Add Liquidity use /pools.' : ''}`;
+                            ? ' · <a href="/pools" style="color:#fa0;">Add Liquidity → /pools</a>' : '';
+                        hintEl.querySelector('.lang-el').textContent = '';
+                        hintEl.querySelector('.lang-en').textContent = '';
+                        hintEl.innerHTML = `<span style="color:#9fdfb4;">Your EVM address — valid on all EVM chains.${poolNote}</span>`;
                     }
+                    // Fetch live balance from public RPC (non-blocking)
+                    _wFetchNetworkBalance(depositAddr, network).then(bal => {
+                        if (!bal || !hintEl) return;
+                        const parts = [];
+                        if (bal.native !== null) parts.push(`${bal.native.toFixed(4)} ${bal.nativeSym}`);
+                        if (bal.token  !== null) parts.push(`${bal.token.toFixed(2)} ${bal.tokenSym}`);
+                        if (parts.length) {
+                            hintEl.innerHTML += `<br><span style="color:#00ff66;font-size:11px;">💰 Balance: ${parts.join(' · ')}</span>`;
+                        }
+                    }).catch(() => {});
                     return;
                 }
 

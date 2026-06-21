@@ -199,6 +199,57 @@
     window.removeEventListener(eventName, handler);
   }
 
+  // ── Pool helpers (accounting only — no signing, no broadcast) ──────────────
+  async function getPoolsStatus() {
+    const resp = await fetch(resolveApiBase(API_READ_BASE, '/api/pools/status'));
+    return resp.json();
+  }
+
+  async function getPoolTvl(poolId) {
+    const q = poolId ? `?pool_id=${encodeURIComponent(poolId)}` : '';
+    const resp = await fetch(resolveApiBase(API_READ_BASE, `/api/pools/tvl${q}`));
+    return resp.json();
+  }
+
+  async function getPoolPositions(address) {
+    const addr = address || ensureWallet();
+    const resp = await fetch(resolveApiBase(API_READ_BASE, `/api/pools/positions?address=${encodeURIComponent(addr)}`));
+    return resp.json();
+  }
+
+  async function depositToPool({ address, pool_id, side, asset, amount } = {}) {
+    const resp = await fetch(resolveApiBase(API_WRITE_BASE, '/api/pools/deposit'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ address, pool_id, side, asset, amount }),
+    });
+    return resp.json();
+  }
+
+  async function createPoolWithdrawIntent({ address, pool_id, side, asset, amount } = {}) {
+    const resp = await fetch(resolveApiBase(API_WRITE_BASE, '/api/pools/withdraw-intent'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ address, pool_id, side, asset, amount }),
+    });
+    return resp.json();
+  }
+
+  async function getWithdrawalQuote({ address, amount, token, dest_chain, destination_address } = {}) {
+    const p = new URLSearchParams({ address: address || '', amount: String(amount || 0), token: token || 'USDT', dest_chain: dest_chain || 'bsc' });
+    if (destination_address) p.set('destination_address', destination_address);
+    const resp = await fetch(resolveApiBase(API_READ_BASE, `/api/v1/withdrawal/quote?${p}`));
+    return resp.json();
+  }
+
+  async function getLiquidityHistory({ address, chain } = {}) {
+    const addr = address || ensureWallet();
+    const p = new URLSearchParams({ address: addr, domain: 'liquidity', limit: '100' });
+    if (chain) p.set('chain', chain);
+    const resp = await fetch(resolveApiBase(API_READ_BASE, `/api/wallet/history/normalized?${p}`));
+    return resp.json();
+  }
+
   window.ThronosWallet = {
     EVENTS,
     open,
@@ -207,7 +258,15 @@
     send,
     getHistory,
     on,
-    off
+    off,
+    // Pool helpers
+    getPoolsStatus,
+    getPoolTvl,
+    getPoolPositions,
+    depositToPool,
+    createPoolWithdrawIntent,
+    getWithdrawalQuote,
+    getLiquidityHistory,
   };
 
   // Hooks container for mobile/extension wrappers to inject biometric/passkey helpers

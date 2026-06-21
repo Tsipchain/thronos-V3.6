@@ -3242,12 +3242,21 @@ function renderWalletBalances(data) {
                     <span class="wallet-quick-btn-icon">🔥</span>
                     <span class="wallet-quick-btn-label">${pledgeLabel}</span>
                 </a>
+                <a href="/pools#pythia-amm" class="wallet-quick-btn">
+                    <span class="wallet-quick-btn-icon">💧</span>
+                    <span class="wallet-quick-btn-label">Pools</span>
+                </a>
                 <a href="javascript:void(0)" class="wallet-quick-btn" onclick="openWalletHistoryModal()">
                     <span class="wallet-quick-btn-icon">📜</span>
                     <span class="wallet-quick-btn-label">${historyLabel}</span>
                 </a>
             </div>
-        </div>
+
+            <!-- Pool Positions Mini-Card (loaded async) -->
+            <div id="walletPoolPositionsCard" style="display:none; margin-top:10px; padding:10px 12px; background:rgba(0,200,255,0.06); border:1px solid #00c8ff44; border-radius:8px; font-size:11px;">
+                <div style="color:#00c8ff; font-weight:700; margin-bottom:6px;">⚙️ Pythia AMM Positions</div>
+                <div id="walletPoolPositionsList"></div>
+            </div>
 
         <!-- Music Tab Content -->
         <div class="wallet-tab-content" id="musicTabContent">
@@ -3276,6 +3285,33 @@ function renderWalletBalances(data) {
 
     // Load BTC address derived from V1 public key (non-blocking)
     _loadWalletBtcAddressSection(wallet);
+
+    // Load Pythia AMM pool positions (non-blocking)
+    _loadWalletPoolPositions(wallet);
+}
+
+async function _loadWalletPoolPositions(thrAddress) {
+    try {
+        const res = await fetch(`/api/pools/positions?address=${encodeURIComponent(thrAddress)}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const positions = (data.pool_positions || data.positions || []).filter(p => (p.lp_shares || p.lp_position_balance || 0) > 0);
+        const card = document.getElementById('walletPoolPositionsCard');
+        const list = document.getElementById('walletPoolPositionsList');
+        if (!card || !list) return;
+        if (!positions.length) return;
+        list.innerHTML = positions.map(p => {
+            const ext = p.external_asset || '';
+            const extBal = (p.deposited_external || p.external_side_balance || 0).toFixed(4);
+            const thrBal = (p.deposited_internal || p.thr_side_balance || 0).toFixed(4);
+            return `<div style="margin-bottom:5px; font-family:monospace;">
+                <span style="color:#00c8ff; font-weight:600;">${p.pair || p.pool_id}</span>
+                <span style="color:#888; margin-left:6px;">${p.chain || ''}</span>
+                <div style="color:#e6ffe5;">${thrBal} THR · ${extBal} ${ext}</div>
+            </div>`;
+        }).join('');
+        card.style.display = 'block';
+    } catch (_) { /* non-critical */ }
 }
 
 async function _loadWalletBtcAddressSection(thrAddress) {

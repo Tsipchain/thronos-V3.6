@@ -22,8 +22,14 @@ import {
   getAvailablePools,
   quoteAddLiquidity,
   addLiquidityCrossChain,
+  getPythiaPoolsStatus,
+  depositToPythiaPool,
+  createPythiaPoolWithdrawIntent,
+  getPythiaWithdrawalQuote,
   type AvailablePool,
   type ExternalChainInfo,
+  type PythiaPoolStatus,
+  type PythiaWithdrawalQuoteResult,
 } from '../services/api';
 import { getWallet, getPrivateKey, getAuthSecret } from '../services/wallet';
 
@@ -54,6 +60,15 @@ export default function PoolsScreen({ navigation }: { navigation: any }) {
   const [positions, setPositions] = useState<Position[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [pythiaPools, setPythiaPools] = useState<PythiaPoolStatus[]>([]);
+  const [pythiaDepositModal, setPythiaDepositModal] = useState<PythiaPoolStatus | null>(null);
+  const [pythiaWithdrawModal, setPythiaWithdrawModal] = useState<PythiaPoolStatus | null>(null);
+  const [pythiaQuoteModal, setPythiaQuoteModal] = useState<PythiaPoolStatus | null>(null);
+  const [pythiaQuoteResult, setPythiaQuoteResult] = useState<PythiaWithdrawalQuoteResult | null>(null);
+  const [pythiaDepositSide, setPythiaDepositSide] = useState<'internal' | 'external'>('internal');
+  const [pythiaAmount, setPythiaAmount] = useState('');
+  const [pythiaQuoteAmount, setPythiaQuoteAmount] = useState('');
+  const [pythiaMsg, setPythiaMsg] = useState('');
 
   // Modal state for selected pool
   const [selectedPool, setSelectedPool] = useState<Pool | null>(null);
@@ -73,16 +88,18 @@ export default function PoolsScreen({ navigation }: { navigation: any }) {
   const loadData = useCallback(async () => {
     if (!wallet.address) return;
     try {
-      const [poolsRes, posRes, availRes, secret] = await Promise.allSettled([
+      const [poolsRes, posRes, availRes, secret, pythiaRes] = await Promise.allSettled([
         getLiquidityPools(),
         getLPPositions(wallet.address),
         getAvailablePools(),
         getAuthSecret(),
+        getPythiaPoolsStatus(),
       ]);
       if (poolsRes.status === 'fulfilled') setPools(poolsRes.value.pools || []);
       if (posRes.status === 'fulfilled') setPositions(posRes.value.positions || []);
       if (availRes.status === 'fulfilled') setAvailablePools(availRes.value.pools || []);
       if (secret.status === 'fulfilled') setCachedSecret(secret.value);
+      if (pythiaRes.status === 'fulfilled') setPythiaPools(pythiaRes.value.pools || []);
     } catch (err) {
       console.warn('Pools: failed to load', err);
     } finally {
@@ -237,6 +254,85 @@ export default function PoolsScreen({ navigation }: { navigation: any }) {
     }
   }, [selectedPool, selectedAvailable, selectedChainIdx, amountA, amountB, evmAddress, manualSecret, cachedSecret, wallet.address, loadData]);
 
+  const handlePythiaDeposit = async (pool: PythiaPoolStatus) => {
+    const amt = parseFloat(pythiaAmount) || 0;
+    if (amt <= 0) { setPythiaMsg('Enter a positive amount.'); return; }
+    if (!wallet.address) { setPythiaMsg('No active wallet.'); return; }
+    setSubmitting(true);
+    setPythiaMsg('');
+    try {
+      const asset = pythiaDepositSide === 'internal' ? 'THR' : pool.external_asset;
+      const res = await depositToPythiaPool({
+        address: wallet.address,
+        pool_id: pool.pool_id,
+        side: pythiaDepositSide,
+        asset,
+        amount: amt,
+      });
+      if (res.ok) {
+        Alert.alert(
+          'Deposit Recorded',
+          `pool_event_id: ${res.pool_event_id}\nasset_origin_chain: ${res.asset_origin_chain}\nsettlement_chain: ${res.settlement_chain}\n\n⚠️ Accounting only — no on-chain movement.`,
+          [{ text: 'OK', onPress: () => { setPythiaDepositModal(null); setPythiaAmount(''); loadData(); } }]
+        );
+      } else {
+        setPythiaMsg(res.error || 'Deposit failed.');
+      }
+    } catch (err: any) {
+      setPythiaMsg(err.message || 'Error.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handlePythiaWithdrawIntent = async (pool: PythiaPoolStatus) => {
+    const amt = parseFloat(pythiaAmount) || 0;
+    if (amt <= 0) { setPythiaMsg('Enter a positive amount.'); return; }
+    if (!wallet.address) { setPythiaMsg('No active wallet.'); return; }
+    setSubmitting(true);
+    setPythiaMsg('');
+    try {
+      const asset = pythiaDepositSide === 'internal' ? 'THR' : pool.external_asset;
+      const res = await createPythiaPoolWithdrawIntent({
+        address: wallet.address,
+        pool_id: pool.pool_id,
+        side: pythiaDepositSide,
+        asset,
+        amount: amt,
+      });
+      if (res.ok) {
+        Alert.alert('Intent Queued', `pool_event_id: ${res.pool_event_id}\nstatus: ${res.status}\n\n⚠️ No payout yet — intent queued only.`,
+          [{ text: 'OK', onPress: () => { setPythiaWithdrawModal(null); setPythiaAmount(''); loadData(); } }]
+        );
+      } else {
+        setPythiaMsg(res.error || 'Failed.');
+      }
+    } catch (err: any) {
+      setPythiaMsg(err.message || 'Error.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handlePythiaQuote = async (pool: PythiaPoolStatus) => {
+    const amt = parseFloat(pythiaQuoteAmount) || 0;
+    if (amt <= 0) { setPythiaMsg('Enter a positive amount.'); return; }
+    setPythiaMsg('');
+    try {
+      const token = pool.external_asset as 'USDT' | 'USDC';
+      const dest_chain = pool.chain as any;
+      const res = await getPythiaWithdrawalQuote({
+        address: wallet.address || '',
+        amount: amt,
+        token,
+        dest_chain,
+      });
+      setPythiaQuoteResult(res);
+    } catch (err: any) {
+      setPythiaMsg(err.message || 'Error.');
+    }
+  };
+
   const renderChainPicker = (chains: ExternalChainInfo[]) => (
     <View style={styles.chainRow}>
       {chains.map((c, i) => (
@@ -288,6 +384,62 @@ export default function PoolsScreen({ navigation }: { navigation: any }) {
                 </>
               )}
 
+              {pythiaPools.length > 0 && (
+                <>
+                  <Text style={styles.sectionLabel}>⚙️ Pythia AMM Pools</Text>
+                  {pythiaPools.map((p) => (
+                    <View key={p.pool_id} style={[styles.poolCard, { borderColor: '#00c8ff44' }]}>
+                      <View style={styles.poolHeader}>
+                        <Text style={[styles.poolPair, { color: '#00c8ff' }]}>{p.pair}</Text>
+                        <View style={[styles.apyBadge, { backgroundColor: '#00c8ff18' }]}>
+                          <Text style={[styles.apyText, { color: '#00c8ff' }]}>AMM</Text>
+                        </View>
+                      </View>
+                      <View style={styles.poolRow}>
+                        <Text style={styles.poolLabel}>Chain</Text>
+                        <Text style={styles.poolValue}>{p.chain}</Text>
+                      </View>
+                      <View style={styles.poolRow}>
+                        <Text style={styles.poolLabel}>{p.external_asset} Reserve</Text>
+                        <Text style={styles.poolValue}>{p.external_reserve.toFixed(4)}</Text>
+                      </View>
+                      <View style={styles.poolRow}>
+                        <Text style={styles.poolLabel}>THR Reserve</Text>
+                        <Text style={styles.poolValue}>{p.thr_reserve.toFixed(4)}</Text>
+                      </View>
+                      <View style={styles.poolRow}>
+                        <Text style={styles.poolLabel}>TVL (USD)</Text>
+                        <Text style={styles.poolValue}>${p.tvl_usd.toFixed(2)}</Text>
+                      </View>
+                      <View style={styles.poolRow}>
+                        <Text style={styles.poolLabel}>Safety Mode</Text>
+                        <Text style={[styles.poolValue, { color: '#ffa500' }]}>{p.safety_mode}</Text>
+                      </View>
+                      <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+                        <TouchableOpacity
+                          style={[styles.addBtnRow, { flex: 1, justifyContent: 'center', borderWidth: 1, borderColor: '#00c8ff', borderRadius: 6, padding: 6 }]}
+                          onPress={() => { setPythiaDepositModal(p); setPythiaAmount(''); setPythiaDepositSide('internal'); setPythiaMsg(''); }}
+                        >
+                          <Text style={[styles.addBtnText, { color: '#00c8ff' }]}>💧 Add</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.addBtnRow, { flex: 1, justifyContent: 'center', borderWidth: 1, borderColor: '#00c8ff', borderRadius: 6, padding: 6 }]}
+                          onPress={() => { setPythiaWithdrawModal(p); setPythiaAmount(''); setPythiaDepositSide('internal'); setPythiaMsg(''); }}
+                        >
+                          <Text style={[styles.addBtnText, { color: '#00c8ff' }]}>📋 Intent</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.addBtnRow, { flex: 1, justifyContent: 'center', borderWidth: 1, borderColor: '#00c8ff', borderRadius: 6, padding: 6 }]}
+                          onPress={() => { setPythiaQuoteModal(p); setPythiaQuoteAmount(''); setPythiaQuoteResult(null); setPythiaMsg(''); }}
+                        >
+                          <Text style={[styles.addBtnText, { color: '#00c8ff' }]}>📊 Quote</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  ))}
+                </>
+              )}
+
               <Text style={styles.sectionLabel}>All Pools</Text>
               {pools.length === 0 ? (
                 <View style={styles.emptyBox}>
@@ -330,6 +482,164 @@ export default function PoolsScreen({ navigation }: { navigation: any }) {
           <View style={{ height: SPACING.xxl }} />
         </ScrollView>
       </LinearGradient>
+
+      {/* Pythia Deposit Modal */}
+      <Modal visible={!!pythiaDepositModal} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={[styles.modalTitle, { color: '#00c8ff' }]}>💧 Add Liquidity</Text>
+            {pythiaDepositModal && (
+              <>
+                <Text style={[styles.modalSubtitle, { color: '#ffa500' }]}>⚠️ Accounting deposit only — no on-chain movement</Text>
+                <Text style={styles.inputLabel}>Pool: {pythiaDepositModal.pair}</Text>
+                <Text style={styles.inputLabel}>Side</Text>
+                <View style={{ flexDirection: 'row', gap: 8, marginBottom: 12 }}>
+                  {(['internal', 'external'] as const).map(s => (
+                    <TouchableOpacity
+                      key={s}
+                      style={[styles.chainChip, pythiaDepositSide === s && styles.chainChipActive]}
+                      onPress={() => setPythiaDepositSide(s)}
+                    >
+                      <Text style={[styles.chainChipText, pythiaDepositSide === s && styles.chainChipTextActive]}>
+                        {s === 'internal' ? `THR (internal)` : `${pythiaDepositModal.external_asset} (external)`}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                <Text style={styles.inputLabel}>Amount ({pythiaDepositSide === 'internal' ? 'THR' : pythiaDepositModal.external_asset})</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="0.00"
+                  placeholderTextColor="#888"
+                  value={pythiaAmount}
+                  onChangeText={setPythiaAmount}
+                  keyboardType="decimal-pad"
+                />
+                {!!pythiaMsg && <Text style={{ color: '#ff6666', marginBottom: 8, fontSize: 12 }}>{pythiaMsg}</Text>}
+                <View style={styles.modalActions}>
+                  <TouchableOpacity style={styles.modalCancelBtn} onPress={() => setPythiaDepositModal(null)}>
+                    <Text style={styles.modalCancelText}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.modalConfirmBtn} onPress={() => handlePythiaDeposit(pythiaDepositModal!)} disabled={submitting} activeOpacity={0.8}>
+                    <LinearGradient colors={['#00c8ff', '#0080ff']} style={styles.modalConfirmGradient}>
+                      {submitting ? <ActivityIndicator color="#000" /> : <Text style={styles.modalConfirmText}>Deposit</Text>}
+                    </LinearGradient>
+                  </TouchableOpacity>
+                </View>
+              </>
+            )}
+          </View>
+        </View>
+      </Modal>
+
+      {/* Pythia Withdraw Intent Modal */}
+      <Modal visible={!!pythiaWithdrawModal} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={[styles.modalTitle, { color: '#00c8ff' }]}>📋 Withdraw Intent</Text>
+            {pythiaWithdrawModal && (
+              <>
+                <Text style={[styles.modalSubtitle, { color: '#ffa500' }]}>⚠️ Intent queued only — no payout yet</Text>
+                <Text style={styles.inputLabel}>Pool: {pythiaWithdrawModal.pair}</Text>
+                <Text style={styles.inputLabel}>Side</Text>
+                <View style={{ flexDirection: 'row', gap: 8, marginBottom: 12 }}>
+                  {(['internal', 'external'] as const).map(s => (
+                    <TouchableOpacity
+                      key={s}
+                      style={[styles.chainChip, pythiaDepositSide === s && styles.chainChipActive]}
+                      onPress={() => setPythiaDepositSide(s)}
+                    >
+                      <Text style={[styles.chainChipText, pythiaDepositSide === s && styles.chainChipTextActive]}>
+                        {s === 'internal' ? `THR (internal)` : `${pythiaWithdrawModal.external_asset} (external)`}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                <Text style={styles.inputLabel}>Amount</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="0.00"
+                  placeholderTextColor="#888"
+                  value={pythiaAmount}
+                  onChangeText={setPythiaAmount}
+                  keyboardType="decimal-pad"
+                />
+                {!!pythiaMsg && <Text style={{ color: '#ff6666', marginBottom: 8, fontSize: 12 }}>{pythiaMsg}</Text>}
+                <View style={styles.modalActions}>
+                  <TouchableOpacity style={styles.modalCancelBtn} onPress={() => setPythiaWithdrawModal(null)}>
+                    <Text style={styles.modalCancelText}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.modalConfirmBtn} onPress={() => handlePythiaWithdrawIntent(pythiaWithdrawModal!)} disabled={submitting} activeOpacity={0.8}>
+                    <LinearGradient colors={['#00c8ff', '#0080ff']} style={styles.modalConfirmGradient}>
+                      {submitting ? <ActivityIndicator color="#000" /> : <Text style={styles.modalConfirmText}>Queue Intent</Text>}
+                    </LinearGradient>
+                  </TouchableOpacity>
+                </View>
+              </>
+            )}
+          </View>
+        </View>
+      </Modal>
+
+      {/* Pythia Quote Modal */}
+      <Modal visible={!!pythiaQuoteModal} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <ScrollView contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', padding: 16 }}>
+            <View style={styles.modalContent}>
+              <Text style={[styles.modalTitle, { color: '#00c8ff' }]}>📊 Withdrawal Quote</Text>
+              {pythiaQuoteModal && (
+                <>
+                  <Text style={styles.inputLabel}>Pool: {pythiaQuoteModal.pair}</Text>
+                  <Text style={styles.inputLabel}>Amount ({pythiaQuoteModal.external_asset})</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="10.00"
+                    placeholderTextColor="#888"
+                    value={pythiaQuoteAmount}
+                    onChangeText={setPythiaQuoteAmount}
+                    keyboardType="decimal-pad"
+                  />
+                  {!!pythiaMsg && <Text style={{ color: '#ff6666', marginBottom: 8, fontSize: 12 }}>{pythiaMsg}</Text>}
+                  {pythiaQuoteResult && (() => {
+                    const liq = pythiaQuoteResult.pool_liquidity;
+                    const src = liq?.liquidity_source || 'none';
+                    const srcColor = src === 'pool_liquidity_ledger' ? '#00ff66' : src === 'legacy' ? '#ffa500' : '#ff4444';
+                    return (
+                      <View style={{ backgroundColor: '#0a0a0a', borderRadius: 8, padding: 12, marginBottom: 12 }}>
+                        <Text style={{ color: pythiaQuoteResult.withdrawal_available ? '#00ff66' : '#ff4444', fontWeight: '700', marginBottom: 6 }}>
+                          {pythiaQuoteResult.withdrawal_available ? '✅ Available' : '❌ Not available'}
+                        </Text>
+                        {!pythiaQuoteResult.withdrawal_available && (
+                          <Text style={{ color: '#ff6666', fontSize: 11, marginBottom: 4 }}>
+                            {(pythiaQuoteResult.disabled_reasons || []).join(', ')}
+                          </Text>
+                        )}
+                        <Text style={{ color: srcColor, fontSize: 11, marginBottom: 4 }}>
+                          Source: {src === 'pool_liquidity_ledger' ? 'Pythia AMM ledger' : src}
+                        </Text>
+                        <Text style={{ color: '#e6ffe5', fontSize: 11 }}>Ledger reserve: {liq?.ledger_usdt_reserve ?? '—'}</Text>
+                        <Text style={{ color: '#e6ffe5', fontSize: 11 }}>Effective reserve: {liq?.effective_usdt_reserve ?? '—'}</Text>
+                        <Text style={{ color: '#e6ffe5', fontSize: 11 }}>Max drawable: {liq?.effective_max_drawable ?? '—'}</Text>
+                        <Text style={{ color: '#e6ffe5', fontSize: 11 }}>THR reserve: {liq?.ledger_thr_reserve ?? '—'}</Text>
+                      </View>
+                    );
+                  })()}
+                  <View style={styles.modalActions}>
+                    <TouchableOpacity style={styles.modalCancelBtn} onPress={() => { setPythiaQuoteModal(null); setPythiaQuoteResult(null); }}>
+                      <Text style={styles.modalCancelText}>Close</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.modalConfirmBtn} onPress={() => handlePythiaQuote(pythiaQuoteModal!)} activeOpacity={0.8}>
+                      <LinearGradient colors={['#00c8ff', '#0080ff']} style={styles.modalConfirmGradient}>
+                        <Text style={styles.modalConfirmText}>Get Quote</Text>
+                      </LinearGradient>
+                    </TouchableOpacity>
+                  </View>
+                </>
+              )}
+            </View>
+          </ScrollView>
+        </View>
+      </Modal>
 
       <Modal visible={!!selectedPool} transparent animationType="slide">
         <View style={styles.modalOverlay}>

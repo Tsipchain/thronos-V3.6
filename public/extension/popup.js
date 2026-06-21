@@ -1108,3 +1108,53 @@ function wireEvents() {
 
 // Start
 document.addEventListener('DOMContentLoaded', init);
+
+// ── Pythia AMM Pool helpers (read-only + accounting — no signing, no broadcast) ──
+
+async function apiGetPoolsStatus() {
+  const r = await fetch(`${API}/api/pools/status`);
+  return r.json();
+}
+
+async function apiGetPoolTvl(poolId) {
+  const q = poolId ? `?pool_id=${encodeURIComponent(poolId)}` : '';
+  const r = await fetch(`${API}/api/pools/tvl${q}`);
+  return r.json();
+}
+
+async function apiGetPoolPositions(address) {
+  const r = await fetch(`${API}/api/pools/positions?address=${encodeURIComponent(address)}`);
+  return r.json();
+}
+
+async function apiDepositToPool({ address, pool_id, side, asset, amount }) {
+  const r = await fetch(`${API}/api/pools/deposit`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ address, pool_id, side, asset, amount }),
+  });
+  return r.json();
+}
+
+async function apiCreatePoolWithdrawIntent({ address, pool_id, side, asset, amount }) {
+  const r = await fetch(`${API}/api/pools/withdraw-intent`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ address, pool_id, side, asset, amount }),
+  });
+  return r.json();
+}
+
+async function apiGetWithdrawalQuote({ address, amount, token = 'USDT', dest_chain = 'bsc', destination_address } = {}) {
+  const p = new URLSearchParams({ address: address || '', amount: String(amount || 0), token, dest_chain });
+  if (destination_address) p.set('destination_address', destination_address);
+  const r = await fetch(`${API}/api/v1/withdrawal/quote?${p}`);
+  return r.json();
+}
+
+async function apiGetLiquidityHistory(address, chain) {
+  const p = new URLSearchParams({ address, domain: 'liquidity', limit: '100' });
+  if (chain) p.set('chain', chain);
+  const r = await fetch(`${API}/api/wallet/history/normalized?${p}`);
+  return r.json();
+}

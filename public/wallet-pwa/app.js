@@ -3656,9 +3656,11 @@ async function showPools() {
   document.getElementById('backBtn').addEventListener('click', showWallet);
 
   try {
-    const [pr, posr] = await Promise.all([
+    const [pr, posr, pythiaRes, pythiaPosRes] = await Promise.all([
       fetch(`${API_BASE}/api/v1/pools`).then(r => r.json()).catch(() => ({})),
       fetch(`${API_BASE}/api/v1/pools/positions/${encodeURIComponent(address)}`).then(r => r.json()).catch(() => ({})),
+      fetch(`${API_BASE}/api/pools/status`).then(r => r.json()).catch(() => ({})),
+      fetch(`${API_BASE}/api/pools/positions?address=${encodeURIComponent(address)}`).then(r => r.json()).catch(() => ({})),
     ]);
 
     const pools = pr.pools || [];
@@ -3666,10 +3668,51 @@ async function showPools() {
     const posMap = {};
     positions.forEach(p => { posMap[p.pool_id] = p; });
 
+    const pythiaPools    = pythiaRes.pools || [];
+    const pythiaPositions = (pythiaPosRes.pool_positions || []).filter(p => (p.lp_shares || p.deposited_external || 0) > 0);
+
     const el = document.getElementById('poolsBody');
     if (!el) return;
 
-    if (!pools.length) {
+    // ── Pythia AMM Pools section ────────────────────────────────────────────
+    let pythiaHtml = '';
+    if (pythiaPools.length) {
+      pythiaHtml = `
+        <div style="font-size:.75rem;text-transform:uppercase;letter-spacing:1px;color:#00c8ff;margin:10px 0 6px">⚙️ Pythia AMM Pools</div>
+        <div style="background:rgba(255,165,0,0.08);border:1px solid #ffa50044;border-radius:6px;padding:8px 10px;font-size:.72rem;color:#ffa500;margin-bottom:8px">
+          ⚠️ Accounting pools — no on-chain fund movement. Safety mode: accounting_only.
+        </div>
+        ${pythiaPools.map(p => {
+          const extRes = Number(p.external_reserve || 0).toFixed(4);
+          const thrRes = Number(p.thr_reserve || 0).toFixed(4);
+          const tvl    = `$${Number(p.tvl_usd || 0).toFixed(2)}`;
+          const myPos  = pythiaPositions.find(pp => pp.pool_id === p.pool_id);
+          return `<div class="card" style="padding:12px;margin-bottom:8px;border:1px solid #00c8ff33">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+              <div style="font-size:.95rem;font-weight:700;color:#00c8ff">${p.pair}</div>
+              <div style="font-size:.72rem;color:#ffa500;font-weight:600">${p.safety_mode || 'accounting_only'}</div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;font-size:.75rem;color:var(--muted);margin-bottom:8px">
+              <div>${p.external_asset} reserve: <span style="color:#fff">${extRes}</span></div>
+              <div>THR reserve: <span style="color:#fff">${thrRes}</span></div>
+              <div>TVL: <span style="color:#fff">${tvl}</span></div>
+              <div>Chain: <span style="color:#fff">${p.chain}</span></div>
+              <div>Worker: <span style="color:#fff">${p.worker || 'pythia_amm_worker'}</span></div>
+            </div>
+            ${myPos ? `<div style="background:#001a2a;border-radius:6px;padding:6px 8px;font-size:.75rem;color:#00c8ff;margin-bottom:8px">
+              My position: ${Number(myPos.deposited_internal || 0).toFixed(4)} THR · ${Number(myPos.deposited_external || 0).toFixed(4)} ${p.external_asset}
+            </div>` : ''}
+            <div style="display:flex;gap:6px">
+              <button class="btn btn--ghost" style="flex:1;padding:7px;font-size:.75rem" onclick="showPythiaDeposit('${p.pool_id}','${p.pair}','${p.external_asset}')">💧 Add</button>
+              <button class="btn btn--ghost" style="flex:1;padding:7px;font-size:.75rem" onclick="showPythiaWithdrawIntent('${p.pool_id}','${p.pair}','${p.external_asset}')">📋 Intent</button>
+              <button class="btn btn--ghost" style="flex:1;padding:7px;font-size:.75rem" onclick="showPythiaQuote('${p.chain}','${p.external_asset}')">📊 Quote</button>
+            </div>
+          </div>`;
+        }).join('')}
+      `;
+    }
+
+    if (!pools.length && !pythiaPools.length) {
       el.innerHTML = '<p style="color:var(--muted);text-align:center;padding:20px">No pools available yet.</p>';
       return;
     }
@@ -3688,7 +3731,7 @@ async function showPools() {
       </div>`;
     }
 
-    el.innerHTML = posHtml + pools.map(pool => {
+    el.innerHTML = pythiaHtml + posHtml + (pools.length ? '' : '') + pools.map(pool => {
       const a = pool.token_a || '?';
       const b = pool.token_b || '?';
       const ra = Number(pool.reserves_a || 0);
@@ -3719,6 +3762,73 @@ async function showPools() {
     const el = document.getElementById('poolsBody');
     if (el) el.innerHTML = `<p style="color:#ff6b6b;text-align:center;padding:20px">Error: ${e.message}</p>`;
   }
+}
+
+// ─── Pythia AMM PWA helpers ────────────────────────────────────────────────
+
+async function showPythiaDeposit(poolId, pair, extAsset) {
+  const address = getActiveAddr();
+  if (!address) { showUnlock(); return; }
+  const side  = prompt(`Side: internal (THR) or external (${extAsset})?`, 'internal');
+  if (!side || !['internal','external'].includes(side.trim().toLowerCase())) return;
+  const asset  = side.trim().toLowerCase() === 'internal' ? 'THR' : extAsset;
+  const amount = parseFloat(prompt(`Amount of ${asset} to deposit (accounting only):`));
+  if (!amount || amount <= 0) return;
+  try {
+    const r = await fetch(`${API_BASE}/api/pools/deposit`, {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ address, pool_id: poolId, side: side.trim().toLowerCase(), asset, amount }),
+    });
+    const d = await r.json();
+    alert(d.ok
+      ? `✅ Deposit recorded\npool_event_id: ${d.pool_event_id}\nasset_origin: ${d.asset_origin_chain}\nsettlement: ${d.settlement_chain}\n\n⚠️ Accounting only.`
+      : `❌ ${d.error || 'Failed'}`);
+    if (d.ok) showPools();
+  } catch (e) { alert(`❌ ${e.message}`); }
+}
+
+async function showPythiaWithdrawIntent(poolId, pair, extAsset) {
+  const address = getActiveAddr();
+  if (!address) { showUnlock(); return; }
+  const side  = prompt(`Side: internal (THR) or external (${extAsset})?`, 'internal');
+  if (!side || !['internal','external'].includes(side.trim().toLowerCase())) return;
+  const asset  = side.trim().toLowerCase() === 'internal' ? 'THR' : extAsset;
+  const amount = parseFloat(prompt(`Amount of ${asset} to withdraw intent (queued, no payout yet):`));
+  if (!amount || amount <= 0) return;
+  try {
+    const r = await fetch(`${API_BASE}/api/pools/withdraw-intent`, {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ address, pool_id: poolId, side: side.trim().toLowerCase(), asset, amount }),
+    });
+    const d = await r.json();
+    alert(d.ok
+      ? `✅ Intent queued\npool_event_id: ${d.pool_event_id}\nstatus: ${d.status}\n\n⚠️ No payout yet.`
+      : `❌ ${d.error || 'Failed'}`);
+    if (d.ok) showPools();
+  } catch (e) { alert(`❌ ${e.message}`); }
+}
+
+async function showPythiaQuote(chain, token) {
+  const amount = parseFloat(prompt(`Amount of ${token} to withdraw (quote only, no payout):`));
+  if (!amount || amount <= 0) return;
+  try {
+    const p = new URLSearchParams({ address: getActiveAddr() || '', amount: String(amount), token, dest_chain: chain });
+    const r = await fetch(`${API_BASE}/api/v1/withdrawal/quote?${p}`);
+    const d = await r.json();
+    const liq = d.pool_liquidity || {};
+    const src = liq.liquidity_source || 'none';
+    const srcLabel = src === 'pool_liquidity_ledger' ? 'Pythia AMM ledger' : src;
+    alert(
+      `Withdrawal Quote\n` +
+      `Status: ${d.withdrawal_available ? '✅ Available' : '❌ Not available'}\n` +
+      `${!d.withdrawal_available ? 'Reasons: ' + (d.disabled_reasons||[]).join(', ') + '\n' : ''}` +
+      `Liquidity source: ${srcLabel}\n` +
+      `Ledger reserve: ${liq.ledger_usdt_reserve ?? '—'} ${token}\n` +
+      `Effective reserve: ${liq.effective_usdt_reserve ?? '—'}\n` +
+      `Max drawable: ${liq.effective_max_drawable ?? '—'}\n` +
+      `Amount net: ${(d.quote||{}).amount_net ?? '—'}`
+    );
+  } catch (e) { alert(`❌ ${e.message}`); }
 }
 
 // ─── Withdraw USDT/USDC from Thronos pool ──────────────────────────────────

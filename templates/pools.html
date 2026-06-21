@@ -577,6 +577,202 @@
         align-items: center;
         gap: 5px;
     }
+
+    /* Pythia AMM Pools */
+    .pythia-badge {
+        display: inline-block;
+        padding: 2px 7px;
+        background: linear-gradient(135deg, rgba(0,200,255,0.2) 0%, rgba(0,100,200,0.2) 100%);
+        border: 1px solid #00c8ff;
+        border-radius: 4px;
+        font-size: 10px;
+        font-weight: 700;
+        color: #00c8ff;
+        margin-left: 6px;
+        vertical-align: middle;
+    }
+    .safety-badge {
+        display: inline-block;
+        padding: 2px 7px;
+        background: rgba(255,165,0,0.15);
+        border: 1px solid #ffa500;
+        border-radius: 4px;
+        font-size: 10px;
+        font-weight: 700;
+        color: #ffa500;
+        margin-left: 4px;
+    }
+    .test-liquidity-warning {
+        background: rgba(255,165,0,0.1);
+        border: 1px solid #ffa500;
+        border-radius: 8px;
+        padding: 10px 14px;
+        font-size: 11px;
+        color: #ffa500;
+        margin-bottom: 14px;
+    }
+    .pythia-pool-card {
+        background: linear-gradient(135deg, rgba(0,30,50,0.9) 0%, rgba(0,60,100,0.2) 100%);
+        border: 1px solid #00c8ff44;
+        border-radius: 12px;
+        padding: 20px;
+        margin-bottom: 16px;
+        transition: all 0.3s;
+    }
+    .pythia-pool-card:hover {
+        border-color: #00c8ff;
+        box-shadow: 0 0 20px rgba(0,200,255,0.2);
+    }
+    .pythia-pool-header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 14px;
+    }
+    .pythia-pool-pair {
+        font-size: 18px;
+        font-weight: 700;
+        color: #00c8ff;
+    }
+    .pythia-pool-stats {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        gap: 8px;
+        margin-bottom: 14px;
+    }
+    .pythia-stat {
+        background: rgba(0,0,0,0.3);
+        padding: 8px 10px;
+        border-radius: 6px;
+    }
+    .pythia-stat-label {
+        font-size: 10px;
+        color: #56ff9a;
+        margin-bottom: 3px;
+    }
+    .pythia-stat-value {
+        font-size: 13px;
+        font-weight: 600;
+        color: #e6ffe5;
+        font-family: monospace;
+    }
+    .pythia-actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+    .pythia-action-btn {
+        padding: 9px 16px;
+        background: linear-gradient(135deg, rgba(0,200,255,0.1) 0%, rgba(0,200,255,0.2) 100%);
+        border: 1px solid #00c8ff;
+        color: #00c8ff;
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: 600;
+        border-radius: 6px;
+        transition: all 0.3s;
+        font-family: "Courier New", monospace;
+    }
+    .pythia-action-btn:hover {
+        background: rgba(0,200,255,0.25);
+        box-shadow: 0 0 12px rgba(0,200,255,0.3);
+    }
+    .pythia-quote-card {
+        background: rgba(0,0,0,0.4);
+        border: 1px solid #1a3b2e;
+        border-radius: 8px;
+        padding: 12px 14px;
+        margin-top: 10px;
+        font-size: 12px;
+    }
+    .pythia-quote-row {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 5px;
+        font-family: monospace;
+    }
+    .pythia-quote-key { color: #56ff9a; }
+    .pythia-quote-val { color: #e6ffe5; font-weight: 600; }
+    .quote-source-badge {
+        display: inline-block;
+        padding: 2px 7px;
+        border-radius: 4px;
+        font-size: 10px;
+        font-weight: 700;
+    }
+    .quote-source-ledger { background: rgba(0,255,102,0.15); border: 1px solid #00ff66; color: #00ff66; }
+    .quote-source-legacy { background: rgba(255,165,0,0.15); border: 1px solid #ffa500; color: #ffa500; }
+    .quote-source-none   { background: rgba(255,0,0,0.15); border: 1px solid #ff4444; color: #ff4444; }
+    /* Pythia Modal */
+    .pythia-modal-overlay {
+        display: none;
+        position: fixed;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(0,0,0,0.8);
+        z-index: 10000;
+        align-items: center;
+        justify-content: center;
+    }
+    .pythia-modal-overlay.open { display: flex; }
+    .pythia-modal-box {
+        background: #0a1a0a;
+        border: 1px solid #00c8ff44;
+        border-radius: 14px;
+        padding: 28px;
+        max-width: 480px;
+        width: 95%;
+        max-height: 90vh;
+        overflow-y: auto;
+    }
+    .pythia-modal-title {
+        font-size: 18px;
+        font-weight: 700;
+        color: #00c8ff;
+        margin-bottom: 16px;
+    }
+    .pythia-form-group { margin-bottom: 14px; }
+    .pythia-form-label { font-size: 11px; color: #56ff9a; margin-bottom: 6px; display: block; font-weight: 600; }
+    .pythia-form-input, .pythia-form-select {
+        width: 100%;
+        padding: 10px 12px;
+        background: rgba(0,0,0,0.5);
+        border: 1px solid #1a3b2e;
+        color: #e6ffe5;
+        font-family: "Courier New", monospace;
+        font-size: 13px;
+        border-radius: 6px;
+        box-sizing: border-box;
+    }
+    .pythia-form-input:focus, .pythia-form-select:focus { outline: none; border-color: #00c8ff; }
+    .pythia-submit-btn {
+        width: 100%;
+        padding: 12px;
+        background: linear-gradient(135deg, #00c8ff 0%, #0080ff 100%);
+        border: none;
+        color: #000;
+        font-weight: 700;
+        font-size: 13px;
+        border-radius: 6px;
+        cursor: pointer;
+        margin-top: 14px;
+        font-family: "Courier New", monospace;
+    }
+    .pythia-submit-btn:hover { opacity: 0.9; }
+    .pythia-cancel-btn {
+        width: 100%;
+        padding: 10px;
+        background: transparent;
+        border: 1px solid #1a3b2e;
+        color: #56ff9a;
+        font-size: 12px;
+        border-radius: 6px;
+        cursor: pointer;
+        margin-top: 8px;
+        font-family: "Courier New", monospace;
+    }
+    .pythia-msg { margin-top: 10px; padding: 10px; border-radius: 6px; font-size: 12px; display: none; }
+    .pythia-msg.ok  { background: rgba(0,255,102,0.1); border: 1px solid #00ff66; color: #00ff66; }
+    .pythia-msg.err { background: rgba(255,0,0,0.1); border: 1px solid #ff4444; color: #ff6666; }
 </style>
 {% endblock %}
 
@@ -627,6 +823,9 @@
         </button>
         <button class="pool-tab" onclick="showTab('my-pools')">
             <span class="lang-el">Τα Pools μου</span><span class="lang-en">My Pools</span>
+        </button>
+        <button class="pool-tab" onclick="showTab('pythia-amm')">
+            ⚙️ Pythia AMM
         </button>
         <button class="pool-tab" onclick="showTab('create-pool')">
             ➕ <span class="lang-el">Δημιουργία Pool</span><span class="lang-en">Create Pool</span>
@@ -720,6 +919,19 @@
                 <span class="lang-el">Συνδέστε το πορτοφόλι σας και προσθέστε ρευστότητα</span>
                 <span class="lang-en">Connect your wallet and add liquidity</span>
             </div>
+        </div>
+    </div>
+
+    <!-- Pythia AMM Pools Tab -->
+    <div id="pythia-amm-tab" class="tab-content">
+        <div id="pythiaPoolsLoading" class="empty-state">
+            <div class="empty-state-icon">⏳</div>
+            <div class="empty-state-text">Loading Pythia AMM pools...</div>
+        </div>
+        <div id="pythiaPoolsGrid" style="display:none;"></div>
+        <div id="pythiaPoolsEmpty" class="empty-state" style="display:none;">
+            <div class="empty-state-icon">⚙️</div>
+            <div class="empty-state-text">No Pythia AMM pools configured</div>
         </div>
     </div>
 
@@ -1661,5 +1873,339 @@ window.addEventListener('thronos:wallet:state-changed', async () => {
     loadTokenOptions();
     loadPools();
 });
+</script>
+
+<!-- Pythia Deposit Modal -->
+<div class="pythia-modal-overlay" id="pythiaDepositModal">
+    <div class="pythia-modal-box">
+        <div class="pythia-modal-title">⚙️ Add Liquidity — Pythia AMM</div>
+        <div class="test-liquidity-warning">
+            ⚠️ This is an accounting deposit only. No on-chain fund movement occurs.
+            If funded from test/admin credit, a warning will appear in the response.
+        </div>
+        <div class="pythia-form-group">
+            <label class="pythia-form-label">Pool</label>
+            <select class="pythia-form-select" id="pdPoolId">
+                <option value="bsc-usdt">bsc-usdt — THR-USDT / BSC</option>
+                <option value="base-usdc">base-usdc — THR-USDC / Base</option>
+            </select>
+        </div>
+        <div class="pythia-form-group">
+            <label class="pythia-form-label">Side</label>
+            <select class="pythia-form-select" id="pdSide" onchange="updatePdAsset()">
+                <option value="internal">internal — THR (Thronos ledger)</option>
+                <option value="external">external — USDT/USDC (pool chain)</option>
+            </select>
+        </div>
+        <div class="pythia-form-group">
+            <label class="pythia-form-label">Asset</label>
+            <input class="pythia-form-input" id="pdAsset" value="THR" readonly>
+        </div>
+        <div class="pythia-form-group">
+            <label class="pythia-form-label">Amount</label>
+            <input class="pythia-form-input" id="pdAmount" type="number" step="0.000001" placeholder="0.000000">
+        </div>
+        <div id="pdMsg" class="pythia-msg"></div>
+        <button class="pythia-submit-btn" onclick="submitPythiaDeposit()">💧 Deposit (Accounting)</button>
+        <button class="pythia-cancel-btn" onclick="closePythiaModal('pythiaDepositModal')">Cancel</button>
+    </div>
+</div>
+
+<!-- Pythia Withdraw Intent Modal -->
+<div class="pythia-modal-overlay" id="pythiaWithdrawModal">
+    <div class="pythia-modal-box">
+        <div class="pythia-modal-title">⚙️ Remove Liquidity Intent — Pythia AMM</div>
+        <div class="test-liquidity-warning">
+            ⚠️ This queues a withdrawal intent only. No real payout is executed yet.
+            Payout execution requires Pythia approval in a future PR.
+        </div>
+        <div class="pythia-form-group">
+            <label class="pythia-form-label">Pool</label>
+            <select class="pythia-form-select" id="pwPoolId">
+                <option value="bsc-usdt">bsc-usdt — THR-USDT / BSC</option>
+                <option value="base-usdc">base-usdc — THR-USDC / Base</option>
+            </select>
+        </div>
+        <div class="pythia-form-group">
+            <label class="pythia-form-label">Side</label>
+            <select class="pythia-form-select" id="pwSide" onchange="updatePwAsset()">
+                <option value="internal">internal — THR</option>
+                <option value="external">external — USDT/USDC</option>
+            </select>
+        </div>
+        <div class="pythia-form-group">
+            <label class="pythia-form-label">Asset</label>
+            <input class="pythia-form-input" id="pwAsset" value="THR" readonly>
+        </div>
+        <div class="pythia-form-group">
+            <label class="pythia-form-label">Amount</label>
+            <input class="pythia-form-input" id="pwAmount" type="number" step="0.000001" placeholder="0.000000">
+        </div>
+        <div id="pwMsg" class="pythia-msg"></div>
+        <button class="pythia-submit-btn" onclick="submitPythiaWithdrawIntent()">📋 Queue Withdraw Intent</button>
+        <button class="pythia-cancel-btn" onclick="closePythiaModal('pythiaWithdrawModal')">Cancel</button>
+    </div>
+</div>
+
+<!-- Pythia Withdrawal Quote Modal -->
+<div class="pythia-modal-overlay" id="pythiaQuoteModal">
+    <div class="pythia-modal-box">
+        <div class="pythia-modal-title">📊 Withdrawal Quote</div>
+        <div class="pythia-form-group">
+            <label class="pythia-form-label">Token</label>
+            <select class="pythia-form-select" id="pqToken">
+                <option value="USDT">USDT (BSC)</option>
+                <option value="USDC">USDC (Base)</option>
+            </select>
+        </div>
+        <div class="pythia-form-group">
+            <label class="pythia-form-label">Amount (USDT/USDC)</label>
+            <input class="pythia-form-input" id="pqAmount" type="number" step="0.01" placeholder="10.00">
+        </div>
+        <div class="pythia-form-group">
+            <label class="pythia-form-label">Destination Chain</label>
+            <select class="pythia-form-select" id="pqChain">
+                <option value="bsc">BSC</option>
+                <option value="base">Base</option>
+            </select>
+        </div>
+        <div class="pythia-form-group">
+            <label class="pythia-form-label">Destination Address (0x...)</label>
+            <input class="pythia-form-input" id="pqDest" placeholder="0x...">
+        </div>
+        <button class="pythia-submit-btn" onclick="fetchWithdrawalQuote()">🔍 Get Quote</button>
+        <div id="pqResult" style="display:none; margin-top:14px;"></div>
+        <button class="pythia-cancel-btn" onclick="closePythiaModal('pythiaQuoteModal')">Close</button>
+    </div>
+</div>
+
+<script>
+// ── Pythia AMM helpers ────────────────────────────────────────────────────────
+
+const _PYTHIA_POOL_EXT_ASSET = { 'bsc-usdt': 'USDT', 'base-usdc': 'USDC' };
+
+function updatePdAsset() {
+    const side   = document.getElementById('pdSide').value;
+    const poolId = document.getElementById('pdPoolId').value;
+    document.getElementById('pdAsset').value =
+        side === 'internal' ? 'THR' : (_PYTHIA_POOL_EXT_ASSET[poolId] || 'USDT');
+}
+document.getElementById('pdPoolId').addEventListener('change', updatePdAsset);
+
+function updatePwAsset() {
+    const side   = document.getElementById('pwSide').value;
+    const poolId = document.getElementById('pwPoolId').value;
+    document.getElementById('pwAsset').value =
+        side === 'internal' ? 'THR' : (_PYTHIA_POOL_EXT_ASSET[poolId] || 'USDT');
+}
+document.getElementById('pwPoolId').addEventListener('change', updatePwAsset);
+
+function openPythiaModal(id) {
+    document.getElementById(id).classList.add('open');
+}
+function closePythiaModal(id) {
+    document.getElementById(id).classList.remove('open');
+    ['pdMsg','pwMsg','pqResult'].forEach(mid => {
+        const el = document.getElementById(mid);
+        if (el) { el.style.display = 'none'; el.className = 'pythia-msg'; el.textContent = ''; }
+    });
+}
+
+async function loadPythiaPools() {
+    try {
+        const res  = await fetch('/api/pools/status');
+        const data = await res.json();
+        const grid = document.getElementById('pythiaPoolsGrid');
+        const load = document.getElementById('pythiaPoolsLoading');
+        const empt = document.getElementById('pythiaPoolsEmpty');
+        load.style.display = 'none';
+        const pools = data.pools || [];
+        if (!pools.length) { empt.style.display = 'block'; return; }
+        grid.innerHTML = '';
+        pools.forEach(p => grid.appendChild(buildPythiaCard(p)));
+        grid.style.display = 'block';
+    } catch (err) {
+        document.getElementById('pythiaPoolsLoading').innerHTML =
+            '<div class="empty-state-icon">❌</div><div class="empty-state-text">Error loading Pythia pools</div>';
+    }
+}
+
+function buildPythiaCard(p) {
+    const extRes = p.external_reserve != null ? Number(p.external_reserve).toFixed(4) : '—';
+    const thrRes = p.thr_reserve   != null ? Number(p.thr_reserve).toFixed(4)   : '—';
+    const tvl    = p.tvl_usd       != null ? `$${Number(p.tvl_usd).toFixed(2)}`  : '—';
+    const worker = p.worker || 'pythia_amm_worker';
+    const safety = p.safety_mode   || 'accounting_only';
+    const vault  = p.pool_vault    || '—';
+    const payout = p.payout_wallet || '—';
+
+    const div = document.createElement('div');
+    div.className = 'pythia-pool-card';
+    div.innerHTML = `
+        <div class="pythia-pool-header">
+            <span class="pythia-pool-pair">${p.pair || p.pool_id}</span>
+            <span class="pythia-badge">Pythia AMM</span>
+            <span class="safety-badge">${safety}</span>
+        </div>
+        <div class="pythia-pool-stats">
+            <div class="pythia-stat"><div class="pythia-stat-label">Pool ID</div><div class="pythia-stat-value">${p.pool_id}</div></div>
+            <div class="pythia-stat"><div class="pythia-stat-label">Chain</div><div class="pythia-stat-value">${p.chain || '—'}</div></div>
+            <div class="pythia-stat"><div class="pythia-stat-label">External Reserve</div><div class="pythia-stat-value">${extRes} ${p.external_asset || ''}</div></div>
+            <div class="pythia-stat"><div class="pythia-stat-label">THR Reserve</div><div class="pythia-stat-value">${thrRes} THR</div></div>
+            <div class="pythia-stat"><div class="pythia-stat-label">TVL (USD)</div><div class="pythia-stat-value">${tvl}</div></div>
+            <div class="pythia-stat"><div class="pythia-stat-label">Worker</div><div class="pythia-stat-value">${worker}</div></div>
+            <div class="pythia-stat"><div class="pythia-stat-label">Pool Vault</div><div class="pythia-stat-value" style="font-size:10px; word-break:break-all;">${vault}</div></div>
+            <div class="pythia-stat"><div class="pythia-stat-label">Payout Wallet</div><div class="pythia-stat-value" style="font-size:10px; word-break:break-all;">${payout}</div></div>
+        </div>
+        <div class="pythia-actions">
+            <button class="pythia-action-btn" onclick="openPythiaDepositFor('${p.pool_id}')">💧 Add Liquidity</button>
+            <button class="pythia-action-btn" onclick="openPythiaWithdrawFor('${p.pool_id}')">📋 Withdraw Intent</button>
+            <button class="pythia-action-btn" onclick="openWithdrawalQuote('${p.pool_id}')">📊 Quote</button>
+        </div>
+    `;
+    return div;
+}
+
+function openPythiaDepositFor(poolId) {
+    document.getElementById('pdPoolId').value = poolId;
+    updatePdAsset();
+    openPythiaModal('pythiaDepositModal');
+}
+function openPythiaWithdrawFor(poolId) {
+    document.getElementById('pwPoolId').value = poolId;
+    updatePwAsset();
+    openPythiaModal('pythiaWithdrawModal');
+}
+function openWithdrawalQuote(poolId) {
+    const chainMap = { 'bsc-usdt': 'bsc', 'base-usdc': 'base' };
+    const tokMap   = { 'bsc-usdt': 'USDT', 'base-usdc': 'USDC' };
+    document.getElementById('pqChain').value  = chainMap[poolId] || 'bsc';
+    document.getElementById('pqToken').value  = tokMap[poolId]  || 'USDT';
+    openPythiaModal('pythiaQuoteModal');
+}
+
+async function submitPythiaDeposit() {
+    const address = getPoolActiveWalletAddress();
+    const pool_id = document.getElementById('pdPoolId').value;
+    const side    = document.getElementById('pdSide').value;
+    const asset   = document.getElementById('pdAsset').value;
+    const amount  = parseFloat(document.getElementById('pdAmount').value) || 0;
+    const msgEl   = document.getElementById('pdMsg');
+
+    if (!address || !address.startsWith('THR')) {
+        msgEl.className = 'pythia-msg err'; msgEl.textContent = 'Connect your THR wallet first.'; msgEl.style.display = 'block'; return;
+    }
+    if (amount <= 0) {
+        msgEl.className = 'pythia-msg err'; msgEl.textContent = 'Enter a positive amount.'; msgEl.style.display = 'block'; return;
+    }
+    msgEl.className = 'pythia-msg'; msgEl.textContent = 'Submitting…'; msgEl.style.display = 'block';
+    try {
+        const res  = await fetch('/api/pools/deposit', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ address, pool_id, side, asset, amount })
+        });
+        const data = await res.json();
+        if (res.ok && data.ok) {
+            let msg = `✅ Deposit recorded.\npool_event_id: ${data.pool_event_id}\nasset_origin_chain: ${data.asset_origin_chain}\nsettlement_chain: ${data.settlement_chain}`;
+            if (data.source === 'test_admin_credit' || (data.worker && data.safety_mode === 'accounting_only')) {
+                msg = '⚠️ Test/accounting credit — ' + msg;
+            }
+            msgEl.className = 'pythia-msg ok'; msgEl.textContent = msg; msgEl.style.display = 'block';
+            loadPythiaPools();
+        } else {
+            msgEl.className = 'pythia-msg err'; msgEl.textContent = `❌ ${data.error || 'Deposit failed'}`; msgEl.style.display = 'block';
+        }
+    } catch (err) {
+        msgEl.className = 'pythia-msg err'; msgEl.textContent = `❌ ${err.message}`; msgEl.style.display = 'block';
+    }
+}
+
+async function submitPythiaWithdrawIntent() {
+    const address = getPoolActiveWalletAddress();
+    const pool_id = document.getElementById('pwPoolId').value;
+    const side    = document.getElementById('pwSide').value;
+    const asset   = document.getElementById('pwAsset').value;
+    const amount  = parseFloat(document.getElementById('pwAmount').value) || 0;
+    const msgEl   = document.getElementById('pwMsg');
+
+    if (!address || !address.startsWith('THR')) {
+        msgEl.className = 'pythia-msg err'; msgEl.textContent = 'Connect your THR wallet first.'; msgEl.style.display = 'block'; return;
+    }
+    if (amount <= 0) {
+        msgEl.className = 'pythia-msg err'; msgEl.textContent = 'Enter a positive amount.'; msgEl.style.display = 'block'; return;
+    }
+    msgEl.className = 'pythia-msg'; msgEl.textContent = 'Submitting…'; msgEl.style.display = 'block';
+    try {
+        const res  = await fetch('/api/pools/withdraw-intent', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ address, pool_id, side, asset, amount })
+        });
+        const data = await res.json();
+        if (res.ok && data.ok) {
+            msgEl.className = 'pythia-msg ok';
+            msgEl.textContent = `✅ Withdraw intent queued.\npool_event_id: ${data.pool_event_id}\nstatus: ${data.status}`;
+            msgEl.style.display = 'block';
+            loadPythiaPools();
+        } else {
+            msgEl.className = 'pythia-msg err'; msgEl.textContent = `❌ ${data.error || 'Failed'}`; msgEl.style.display = 'block';
+        }
+    } catch (err) {
+        msgEl.className = 'pythia-msg err'; msgEl.textContent = `❌ ${err.message}`; msgEl.style.display = 'block';
+    }
+}
+
+async function fetchWithdrawalQuote() {
+    const address = getPoolActiveWalletAddress();
+    const token   = document.getElementById('pqToken').value;
+    const amount  = parseFloat(document.getElementById('pqAmount').value) || 0;
+    const chain   = document.getElementById('pqChain').value;
+    const dest    = document.getElementById('pqDest').value.trim();
+    const resEl   = document.getElementById('pqResult');
+
+    if (amount <= 0) { resEl.innerHTML = '<div style="color:#ff6666;">Enter a positive amount.</div>'; resEl.style.display = 'block'; return; }
+    resEl.innerHTML = '<div style="color:#56ff9a;">Loading quote…</div>'; resEl.style.display = 'block';
+
+    try {
+        const p = new URLSearchParams({ address: address || 'SYSTEM', amount, token, dest_chain: chain });
+        if (dest) p.set('destination_address', dest);
+        const res  = await fetch(`/api/v1/withdrawal/quote?${p}`);
+        const data = await res.json();
+        const q    = data.quote    || {};
+        const liq  = data.pool_liquidity || {};
+        const avail = data.withdrawal_available ? '✅ Available' : '❌ Not available';
+        const src   = liq.liquidity_source || 'none';
+        const srcCls = src === 'pool_liquidity_ledger' ? 'quote-source-ledger' : (src === 'legacy' ? 'quote-source-legacy' : 'quote-source-none');
+        const srcLabel = src === 'pool_liquidity_ledger' ? 'Pythia AMM ledger liquidity' : src;
+        const reasons = (data.disabled_reasons || []).join(', ') || '—';
+
+        resEl.innerHTML = `
+            <div class="pythia-quote-card">
+                <div class="pythia-quote-row"><span class="pythia-quote-key">Status</span><span class="pythia-quote-val">${avail}</span></div>
+                ${!data.withdrawal_available ? `<div class="pythia-quote-row"><span class="pythia-quote-key">Disabled reasons</span><span class="pythia-quote-val" style="color:#ff6666;">${reasons}</span></div>` : ''}
+                <div class="pythia-quote-row"><span class="pythia-quote-key">Liquidity source</span><span><span class="quote-source-badge ${srcCls}">${srcLabel}</span></span></div>
+                <div class="pythia-quote-row"><span class="pythia-quote-key">Ledger reserve (${token})</span><span class="pythia-quote-val">${liq.ledger_usdt_reserve ?? '—'}</span></div>
+                <div class="pythia-quote-row"><span class="pythia-quote-key">Effective reserve</span><span class="pythia-quote-val">${liq.effective_usdt_reserve ?? '—'}</span></div>
+                <div class="pythia-quote-row"><span class="pythia-quote-key">Max drawable</span><span class="pythia-quote-val">${liq.effective_max_drawable ?? '—'}</span></div>
+                <div class="pythia-quote-row"><span class="pythia-quote-key">Ledger THR reserve</span><span class="pythia-quote-val">${liq.ledger_thr_reserve ?? '—'}</span></div>
+                <div class="pythia-quote-row"><span class="pythia-quote-key">Amount gross</span><span class="pythia-quote-val">${q.amount_gross ?? amount}</span></div>
+                <div class="pythia-quote-row"><span class="pythia-quote-key">Amount net</span><span class="pythia-quote-val">${q.amount_net ?? '—'}</span></div>
+                <div class="pythia-quote-row"><span class="pythia-quote-key">External fee total</span><span class="pythia-quote-val">${q.external_service_fee_total ?? '—'}</span></div>
+                <div class="pythia-quote-row"><span class="pythia-quote-key">Pool vault</span><span class="pythia-quote-val" style="font-size:10px; word-break:break-all;">${liq.pool_vault || q.pool_vault || '—'}</span></div>
+                <div class="pythia-quote-row"><span class="pythia-quote-key">Payout wallet</span><span class="pythia-quote-val" style="font-size:10px; word-break:break-all;">${data.payout_wallet || '—'}</span></div>
+            </div>
+        `;
+    } catch (err) {
+        resEl.innerHTML = `<div style="color:#ff6666;">❌ ${err.message}</div>`;
+    }
+}
+
+// Wire "Pythia AMM" tab to load
+const _origShowTab = showTab;
+function showTab(tabName) {
+    _origShowTab.call(this, tabName);
+    if (tabName === 'pythia-amm') loadPythiaPools();
+}
 </script>
 {% endblock %}

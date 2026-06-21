@@ -255,6 +255,7 @@
             <button class="tab {% if default_tab == 'pledges' %}active{% endif %}" data-tab="pledges">💵 Pledges</button>
             <button class="tab {% if default_tab == 'crosschain' %}active{% endif %}" data-tab="crosschain">🌉 Cross-Chain</button>
             <button class="tab {% if default_tab == 'pools' %}active{% endif %}" data-tab="pools">💧 Pools</button>
+            <button class="tab {% if default_tab == 'liquidity' %}active{% endif %}" data-tab="liquidity">💧 Liquidity</button>
             <button class="tab {% if default_tab == 'tokens' %}active{% endif %}" data-tab="tokens">Tokens</button>
             <button class="tab {% if default_tab == 'bridge' %}active{% endif %}" data-tab="bridge">Bridge</button>
             <button class="tab {% if default_tab == 'withdrawals' %}active{% endif %}" data-tab="withdrawals">Withdrawals</button>
@@ -330,12 +331,16 @@
             try {
                 const params = new URLSearchParams({
                     address: currentAddress,
-                    tab: currentTab,
+                    tab: currentTab === 'liquidity' ? 'all' : currentTab,
                     chain: currentChain,
                     status: currentStatus,
                     limit: LIMIT,
                     offset: currentOffset
                 });
+                if (currentTab === 'liquidity') {
+                    params.set('domain', 'liquidity');
+                    params.set('source', 'pool_liquidity_ledger');
+                }
 
                 const response = await fetch(`${API_URL}/api/v1/viewer/transactions?${params}`);
                 const data = await response.json();
@@ -381,6 +386,7 @@
                     </thead>
                     <tbody>`;
 
+                const isLiquidityTab = (currentTab === 'liquidity');
                 transactions.forEach(tx => {
                     const icon = getActionIcon(tx.event_type);
                     const statusClass = `status-${tx.status || 'pending'}`;
@@ -394,10 +400,23 @@
                         explorerLinks += `<a class="explorer-link" href="${tx.explorer_url}" target="_blank">${tx.network_label} ↗</a>`;
                     }
 
+                    const poolMeta = isLiquidityTab ? `
+                        <div style="font-size:10px; color:#00c8ff; margin-top:4px;">
+                            ${tx.pool_id ? `pool: ${tx.pool_id}` : ''}
+                            ${tx.side    ? ` · side: ${tx.side}` : ''}
+                            ${tx.transfer_scope ? ` · scope: ${tx.transfer_scope}` : ''}
+                            ${tx.settlement_chain ? ` · settlement: ${tx.settlement_chain}` : ''}
+                            ${tx.asset_origin_chain ? ` · origin: ${tx.asset_origin_chain}` : ''}
+                            ${tx.fee_asset ? ` · fee: ${tx.fee_asset}/${tx.fee_chain}` : ''}
+                            ${tx.worker ? ` · worker: ${tx.worker}` : ''}
+                            ${tx.source ? ` · src: ${tx.source}` : ''}
+                            ${tx.pool_event_id ? `<br>event_id: ${tx.pool_event_id}` : ''}
+                        </div>` : '';
+
                     html += `<tr>
-                        <td><div class="tx-type"><div class="tx-icon">${icon}</div> ${tx.event_type}</div></td>
+                        <td><div class="tx-type"><div class="tx-icon">${icon}</div> ${tx.event_type}${poolMeta}</div></td>
                         <td><strong>${tx.amount.toFixed(6)} ${tx.asset}</strong></td>
-                        <td><span class="chain-badge">${tx.network_label}</span></td>
+                        <td><span class="chain-badge">${tx.network_label || tx.chain || '—'}</span></td>
                         <td><span class="status-badge ${statusClass}">${tx.status || 'pending'}</span></td>
                         <td style="font-size: 12px; color: #888;">${timestamp}</td>
                         <td><div class="explorer-links">${explorerLinks || '—'}</div></td>
@@ -422,6 +441,11 @@
 
         function getActionIcon(actionType) {
             const icons = {
+                pool_deposit: '💧',
+                pool_withdraw: '📤',
+                pool_withdraw_intent: '📋',
+                withdraw_intent: '📋',
+                pool_tvl_snapshot: '📊',
                 pledge: '💵',
                 pledge_usdt_bnb_confirmed: '💵',
                 token_send: '📤',
@@ -513,6 +537,13 @@
             ].some(p => t.toLowerCase().includes(p));
         }
 
+        function isPoolLedgerEvent(t) {
+            return [
+                'pool_deposit','pool_withdraw','pool_withdraw_intent',
+                'withdraw_intent','pool_tvl_snapshot','pool_',
+            ].some(p => t.toLowerCase().startsWith(p));
+        }
+
         function isCrossChainEvent(t) {
             return [
                 'bridge_','withdrawal_','gateway_','crosschain_',
@@ -524,6 +555,7 @@
 
         function filterBySubtab(txs, subtab) {
             if (subtab === 'crosschain-events') return txs.filter(tx => isCrossChainEvent(tx.event_type));
+            if (subtab === 'liquidity-events') return txs.filter(tx => isPoolLedgerEvent(tx.event_type));
             if (subtab === 'native-thr')        return txs.filter(tx =>
                 (tx.asset === 'THR' || tx.event_type === 'token_receive' || tx.event_type === 'token_send')
                 && !isCrossChainEvent(tx.event_type) && !isWalletIdentityEvent(tx.event_type));

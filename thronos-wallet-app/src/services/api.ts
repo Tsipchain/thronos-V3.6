@@ -568,3 +568,178 @@ export async function getMiningInfo(address: string): Promise<{ hashrate: number
 export async function getWalletData(address: string, category = 'all', limit = 50): Promise<any> {
   return request(`/wallet_data/${address}?category=${category}&limit=${limit}`);
 }
+
+// ── Pythia AMM Pool helpers (accounting only — no signing, no broadcast) ─────
+
+export interface PythiaPoolStatus {
+  pool_id: string;
+  pair: string;
+  chain: string;
+  external_asset: string;
+  internal_asset: string;
+  external_reserve: number;
+  thr_reserve: number;
+  tvl_usd: number;
+  pool_vault: string | null;
+  payout_wallet: string | null;
+  gas_wallet: string | null;
+  fee_collector: string | null;
+  worker: string;
+  safety_mode: string;
+}
+
+export interface PythiaPoolsStatusResult {
+  ok: boolean;
+  pools: PythiaPoolStatus[];
+  worker: Record<string, any>;
+}
+
+export async function getPythiaPoolsStatus(): Promise<PythiaPoolsStatusResult> {
+  return request('/api/pools/status');
+}
+
+export interface PythiaTvlResult {
+  ok: boolean;
+  pool_id?: string;
+  pair?: string;
+  chain?: string;
+  external_asset?: string;
+  external_reserve?: number;
+  thr_reserve?: number;
+  tvl_usd?: number;
+  pools?: PythiaTvlResult[];
+}
+
+export async function getPythiaPoolTvl(poolId?: string): Promise<PythiaTvlResult> {
+  const q = poolId ? `?pool_id=${encodeURIComponent(poolId)}` : '';
+  return request(`/api/pools/tvl${q}`);
+}
+
+export interface PythiaPoolPosition {
+  pool_id: string;
+  pair: string;
+  chain: string;
+  external_asset: string;
+  internal_asset: string;
+  lp_shares: number;
+  deposited_external: number;
+  deposited_internal: number;
+  deposited_at: number;
+  last_updated: number;
+}
+
+export interface PythiaPoolPositionsResult {
+  ok: boolean;
+  address: string;
+  pool_positions: PythiaPoolPosition[];
+}
+
+export async function getPythiaPoolPositions(address: string): Promise<PythiaPoolPositionsResult> {
+  return request(`/api/pools/positions?address=${encodeURIComponent(address)}`);
+}
+
+export interface PythiaDepositParams {
+  address: string;
+  pool_id: string;
+  side: 'internal' | 'external';
+  asset: string;
+  amount: number;
+}
+
+export interface PythiaDepositResult {
+  ok: boolean;
+  pool_event_id?: string;
+  pool_id?: string;
+  pair?: string;
+  chain?: string;
+  side?: string;
+  asset?: string;
+  amount?: number;
+  status?: string;
+  transfer_scope?: string;
+  settlement_chain?: string;
+  asset_origin_chain?: string;
+  fee_asset?: string;
+  fee_chain?: string;
+  worker?: string;
+  error?: string;
+}
+
+export async function depositToPythiaPool(params: PythiaDepositParams): Promise<PythiaDepositResult> {
+  return request('/api/pools/deposit', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+}
+
+export interface PythiaWithdrawIntentParams {
+  address: string;
+  pool_id: string;
+  side: 'internal' | 'external';
+  asset: string;
+  amount: number;
+}
+
+export interface PythiaWithdrawIntentResult {
+  ok: boolean;
+  pool_event_id?: string;
+  pool_id?: string;
+  status?: string;
+  error?: string;
+}
+
+export async function createPythiaPoolWithdrawIntent(params: PythiaWithdrawIntentParams): Promise<PythiaWithdrawIntentResult> {
+  return request('/api/pools/withdraw-intent', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+}
+
+export interface PythiaWithdrawalQuoteParams {
+  address: string;
+  amount: number;
+  token: 'USDT' | 'USDC';
+  dest_chain: 'bsc' | 'base' | 'arbitrum' | 'eth';
+  destination_address?: string;
+}
+
+export interface PythiaPoolLiquidity {
+  pool_vault: string | null;
+  pool_vault_status: string;
+  legacy_usdt_reserve: number;
+  legacy_max_drawable: number;
+  ledger_pool_id: string | null;
+  ledger_external_reserve: number;
+  ledger_usdt_reserve: number;
+  ledger_thr_reserve: number;
+  effective_usdt_reserve: number;
+  effective_max_drawable: number;
+  liquidity_source: 'pool_liquidity_ledger' | 'legacy' | 'none';
+}
+
+export interface PythiaWithdrawalQuoteResult {
+  ok: boolean;
+  quote?: Record<string, any>;
+  pool_liquidity?: PythiaPoolLiquidity;
+  withdrawal_available?: boolean;
+  disabled_reasons?: string[];
+  payout_wallet?: string | null;
+  error?: string;
+}
+
+export async function getPythiaWithdrawalQuote(params: PythiaWithdrawalQuoteParams): Promise<PythiaWithdrawalQuoteResult> {
+  const p = new URLSearchParams({
+    address: params.address,
+    amount: String(params.amount),
+    token: params.token,
+    dest_chain: params.dest_chain,
+  });
+  if (params.destination_address) p.set('destination_address', params.destination_address);
+  return request(`/api/v1/withdrawal/quote?${p}`);
+}
+
+export async function getPythiaLiquidityHistory(address: string, chain?: string): Promise<{ ok: boolean; history: any[]; total: number }> {
+  const p = new URLSearchParams({ address, domain: 'liquidity', limit: '100' });
+  if (chain) p.set('chain', chain);
+  return request(`/api/wallet/history/normalized?${p}`);
+}

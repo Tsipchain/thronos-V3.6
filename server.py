@@ -22667,6 +22667,154 @@ def api_v1_wallet_history(thr_addr):
         }), 400
 
 
+@app.route("/api/wallet/history/normalized", methods=["GET"])
+def api_wallet_history_normalized():
+    """
+    Normalized wallet history for PWA / mobile / extensions.
+
+    Classifies every event into a standard category so clients do not need to
+    know server-internal event_type strings.
+
+    Query params:
+    - address (required): THR address
+    - limit (optional, default 50, max 500)
+    - category (optional): 'transaction' | 'wallet_identity' | 'cross_chain' | 'all'
+
+    Response:
+    {
+      "ok": true,
+      "address": "THR...",
+      "category_filter": "all",
+      "history": [
+        {
+          "id": "...",
+          "original_event_type": "token_send",
+          "category": "transaction",
+          "event_name": "Sent THR",
+          "chain": "thronos",
+          "asset": "THR",
+          "amount": 10.0,
+          "direction": "out",
+          "status": "confirmed",
+          "timestamp": 1234567890,
+          "icon": "📤"
+        }
+      ],
+      "total": 42
+    }
+
+    Categories
+    ----------
+    transaction    — token transfers, pledges, pool operations
+    wallet_identity — provisioning, address registration, key binding
+    cross_chain     — bridge, withdrawal, gateway, external fee lifecycle
+    all             — all of the above (default)
+    """
+    try:
+        address = (request.args.get("address") or "").strip().upper()
+        if not address or not address.startswith("THR"):
+            return jsonify(ok=False, error="valid_thr_address_required"), 400
+
+        limit    = min(int(request.args.get("limit", 50)), 500)
+        cat_filter = (request.args.get("category") or "all").lower()
+
+        raw_history = get_wallet_history(address, limit=limit * 3)  # over-fetch before filter
+
+        normalized = []
+        for event in raw_history:
+            event_type = event.get("event_type", "")
+            norm = _wallet_normalize_event(event, event_type)
+            if cat_filter == "all" or norm["category"] == cat_filter:
+                normalized.append(norm)
+            if len(normalized) >= limit:
+                break
+
+        return jsonify(
+            ok=True,
+            address=address,
+            category_filter=cat_filter,
+            history=normalized,
+            total=len(normalized),
+        ), 200
+
+    except Exception as e:
+        logger.error("[NormalizedHistory] %s", e)
+        return jsonify(ok=False, error=str(e)), 500
+
+
+def _wallet_normalize_event(event: dict, event_type: str) -> dict:
+    """
+    Map a raw wallet history event to a normalized client-facing record.
+
+    Categories:
+    - wallet_identity : provisioning, address/key registration
+    - cross_chain     : bridge, withdrawal, gateway, external fee, gas
+    - transaction     : everything else (token send/receive, pledge, pool)
+    """
+    et = event_type.lower()
+
+    # wallet_identity patterns
+    _identity_patterns = (
+        "wallet_discovered", "wallet_provisioned", "wallet_configured",
+        "address_discovered", "address_attached", "address_registered",
+        "v1_wallet_", "pythia_v1_wallet_",
+        "public_key", "key_binding",
+        "pythia_evm_address_attached", "pythia_evm_address_registered",
+        "pythia_public_address_registered", "pythia_role_address_registered",
+        "pythia_evm_address_created",
+    )
+    # cross_chain patterns (startswith)
+    _crosschain_start = (
+        "bridge_", "withdrawal_", "gateway_", "crosschain_",
+        "external_service_fee_", "external_fee_split",
+        "pool_topup_from_service_fee",
+        "gas_reserve_", "gas_wallet_", "swap_to_gas_",
+    )
+
+    if any(p in et for p in _identity_patterns):
+        category   = "wallet_identity"
+        event_name = "Wallet Identity"
+        icon       = "🔐"
+    elif any(et.startswith(p) for p in _crosschain_start):
+        category   = "cross_chain"
+        event_name = "Cross-Chain Event"
+        icon       = "🌉"
+    elif event_type == "token_send":
+        category   = "transaction"
+        event_name = f"Sent {event.get('asset', 'Token')}"
+        icon       = "📤"
+    elif event_type in ("token_receive", "token_receive_crosschain"):
+        category   = "transaction"
+        event_name = f"Received {event.get('asset', 'Token')}"
+        icon       = "📥"
+    elif "pledge" in et:
+        category   = "transaction"
+        event_name = "Pledge"
+        icon       = "💵"
+    elif et.startswith("pool_"):
+        category   = "transaction"
+        event_name = "Pool Operation"
+        icon       = "💧"
+    else:
+        category   = "transaction"
+        event_name = event_type.replace("_", " ").title()
+        icon       = "•"
+
+    return {
+        "id":                  event.get("id", ""),
+        "original_event_type": event_type,
+        "category":            category,
+        "event_name":          event_name,
+        "icon":                icon,
+        "chain":               event.get("chain", "thronos"),
+        "asset":               event.get("asset", ""),
+        "amount":              float(event.get("amount", 0)),
+        "direction":           event.get("direction", ""),
+        "status":              event.get("status", "pending"),
+        "timestamp":           event.get("timestamp", 0),
+    }
+
+
 @app.route("/api/balances", methods=["GET"])
 def api_balances():
     address = (request.args.get("address") or request.args.get("wallet") or "").strip()

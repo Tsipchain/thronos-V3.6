@@ -65,6 +65,39 @@
         0%, 100% { filter: drop-shadow(0 0 8px #ff6600); }
         50% { filter: drop-shadow(0 0 16px #ff9900) drop-shadow(0 0 24px #ff6600); }
     }
+    .net-card {
+        background: #0a0a0a;
+        border: 1px solid #1a2a1a;
+        border-radius: 4px;
+        padding: 10px 14px;
+        margin-bottom: 8px;
+    }
+    .net-addr-box {
+        font-size: 11px;
+        word-break: break-all;
+        color: #eee;
+        padding: 8px 10px;
+        background: #050505;
+        border: 1px solid #1a3;
+        border-radius: 3px;
+        margin: 6px 0;
+        font-family: monospace;
+    }
+    select.net-sel {
+        background: #000;
+        color: #8af;
+        border: 1px solid #0f0;
+        padding: 6px 10px;
+        font-family: monospace;
+        width: 100%;
+        margin: 0;
+        font-size: 13px;
+    }
+    .net-hist-row {
+        border-bottom: 1px dashed #222;
+        padding: 7px 0;
+        font-size: 12px;
+    }
 </style>
 {% endblock %}
 
@@ -112,6 +145,46 @@
           </div>
       </div>
 
+      <!-- NETWORK PANEL — matches PWA HOME_NETWORKS -->
+      <div class="wallet-card" id="networkPanel">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+              <span style="color:#8af;font-size:12px;white-space:nowrap;">🌐 Network:</span>
+              <select class="net-sel" id="netSel" onchange="switchNetwork(this.value)">
+                  <option value="thronos">⬡ Thronos</option>
+                  <option value="bitcoin">₿ Bitcoin</option>
+                  <option value="ethereum">Ξ Ethereum</option>
+                  <option value="bnb">🔶 BNB Chain</option>
+                  <option value="arbitrum">🔵 Arbitrum</option>
+                  <option value="base">⬛ Base</option>
+              </select>
+          </div>
+
+          <!-- Receive address for selected network (personal, NOT Pythia vault) -->
+          <div>
+              <div style="font-size:11px;color:#8af;margin-bottom:4px;">
+                  📥 <span class="lang-el">Διεύθυνση λήψης σε αυτό το δίκτυο</span><span class="lang-en">Receive address on this network</span>
+              </div>
+              <div class="net-addr-box" id="netAddr">—</div>
+              <div style="display:flex;gap:8px;margin-top:4px;">
+                  <button class="secondary" style="width:auto;padding:4px 12px;font-size:11px;" onclick="copyNetAddr()">📋 Copy</button>
+              </div>
+              <div id="netHint" style="font-size:10px;color:#555;margin-top:4px;"></div>
+              <div id="netPoolNote" style="display:none;font-size:10px;color:#fa0;margin-top:4px;">
+                  ⚠️ <span class="lang-el">Για Add Liquidity / Pythia AMM, χρησιμοποιήστε τη σελίδα </span>
+                  <span class="lang-en">For Add Liquidity / Pythia AMM use the </span>
+                  <a href="/pools" style="color:#fa0;">/pools</a>
+                  <span class="lang-el"> page (διαφορετική pool vault διεύθυνση).</span>
+                  <span class="lang-en"> page (separate pool vault address).</span>
+              </div>
+          </div>
+
+          <!-- Network-filtered history -->
+          <div style="margin-top:14px;">
+              <div style="font-size:11px;color:#8af;margin-bottom:6px;">📋 <span class="lang-el">Ιστορικό σε αυτό το δίκτυο</span><span class="lang-en">History on this network</span></div>
+              <div id="netHistory" style="color:#555;font-size:12px;">Loading…</div>
+          </div>
+      </div>
+
       <h3><span class="lang-el">Ιστορικό Συναλλαγών</span><span class="lang-en">Transaction History</span></h3>
       <div id="txHistory" class="wallet-card">
           <span class="lang-el">Φόρτωση...</span><span class="lang-en">Loading...</span>
@@ -137,7 +210,15 @@
             $('connectSection').classList.add('hidden');
             $('dashboardSection').classList.remove('hidden');
             $('displayAddress').textContent = addr;
+            // Restore saved network (same localStorage key as PWA)
+            const savedNet = localStorage.getItem(`thr_network_${addr}`);
+            if (savedNet) {
+                _activeNetwork = savedNet;
+                const sel = $('netSel');
+                if (sel) sel.value = savedNet;
+            }
             loadWalletData(addr);
+            loadNetworkAddress(addr, _activeNetwork);
         } else {
             $('connectSection').classList.remove('hidden');
             $('dashboardSection').classList.add('hidden');
@@ -220,6 +301,138 @@
         $('txHistory').textContent = "Error loading data.";
       }
       loadLiquidityHistory(addr);
+      loadNormalizedHistory(addr);
+    }
+
+    // ── Network switch — mirrors PWA HOME_NETWORKS and HISTORY_CHAIN_MAP ────────
+    const HOME_NETWORKS = [
+        { id: 'thronos',  icon: '⬡',  label: 'Thronos',   hint: 'Your native THR address for Thronos-chain transactions.' },
+        { id: 'bitcoin',  icon: '₿',  label: 'Bitcoin',   hint: 'Your assigned BTC address. Deposit BTC to receive WBTC on Thronos.' },
+        { id: 'ethereum', icon: 'Ξ',  label: 'Ethereum',  hint: 'Your derived EVM address (same for all EVM chains).' },
+        { id: 'bnb',      icon: '🔶', label: 'BNB Chain', hint: 'Your EVM address on BNB Chain — used for USDT/BNB. For pool liquidity use /pools.' },
+        { id: 'arbitrum', icon: '🔵', label: 'Arbitrum',  hint: 'Your EVM address on Arbitrum.' },
+        { id: 'base',     icon: '⬛', label: 'Base',      hint: 'Your EVM address on Base — used for USDC. For pool liquidity use /pools.' },
+    ];
+
+    // Maps app network id → chain field values used in history events (mirrors PWA)
+    const HISTORY_CHAIN_MAP = {
+        thronos:  ['thronos'],
+        bnb:      ['bsc'],
+        arbitrum: ['arbitrum'],
+        base:     ['base'],
+        ethereum: ['eth'],
+        bitcoin:  ['btc'],
+    };
+
+    let _activeNetwork = 'thronos';
+    let _allNormalizedTx = [];
+    let _cachedNetAddr = {};   // { netId: address }
+
+    async function loadNetworkAddress(addr, netId) {
+        const addrEl = $('netAddr');
+        const hintEl = $('netHint');
+        const noteEl = $('netPoolNote');
+        const net    = HOME_NETWORKS.find(n => n.id === netId);
+        if (hintEl) hintEl.textContent = net?.hint || '';
+        // Show pool-liquidity note for EVM chains that have Pythia vaults
+        if (noteEl) noteEl.style.display = ['bnb', 'base'].includes(netId) ? 'block' : 'none';
+
+        if (netId === 'thronos') { addrEl.textContent = addr; return addr; }
+
+        if (_cachedNetAddr[netId]) { addrEl.textContent = _cachedNetAddr[netId]; return _cachedNetAddr[netId]; }
+
+        addrEl.textContent = 'Loading…';
+        try {
+            let url, field;
+            if (netId === 'bitcoin') {
+                url   = `/api/bridge/deposit?wallet=${encodeURIComponent(addr)}`;
+                field = 'btc_address';
+            } else {
+                // EVM chains — backend returns user's derived/assigned address
+                url   = `/api/bridge/deposit?network=${encodeURIComponent(netId)}&thr_address=${encodeURIComponent(addr)}`;
+                field = 'deposit_address';
+            }
+            const res  = await fetch(url);
+            const data = await res.json();
+            const extAddr = data[field] || data.deposit_address || data.btc_address || null;
+            if (extAddr) {
+                _cachedNetAddr[netId] = extAddr;
+                addrEl.textContent = extAddr;
+                return extAddr;
+            } else {
+                addrEl.textContent = 'Not yet assigned — see PWA for full multi-chain support';
+                return null;
+            }
+        } catch {
+            addrEl.textContent = 'Unable to fetch address';
+            return null;
+        }
+    }
+
+    function copyNetAddr() {
+        const text = $('netAddr')?.textContent || '';
+        if (!text || text.startsWith('Not') || text.startsWith('Unable') || text === 'Loading…') return;
+        navigator.clipboard?.writeText(text).then(() => {
+            const btn = document.querySelector('#networkPanel button');
+            if (btn) { const orig = btn.textContent; btn.textContent = '✅ Copied'; setTimeout(() => btn.textContent = orig, 1500); }
+        }).catch(() => {});
+    }
+
+    function renderNetHistory(netId) {
+        const el = $('netHistory');
+        if (!el) return;
+        const netChains = HISTORY_CHAIN_MAP[netId] || [];
+        let filtered = _allNormalizedTx;
+        if (netChains.length) {
+            filtered = filtered.filter(tx => {
+                const c = (tx.chain || '').toLowerCase();
+                if (!c) return netId === 'thronos';  // legacy events → Thronos only
+                return netChains.includes(c);
+            });
+        }
+        if (!filtered.length) {
+            el.innerHTML = '<p style="color:#555;font-size:12px;margin:4px 0;">No events on this network yet.</p>';
+            return;
+        }
+        el.innerHTML = filtered.slice(0, 50).map(tx => {
+            const et    = tx.original_event_type || tx.event_type || '';
+            const label = et.replace(/_/g, ' ');
+            const dir   = tx.direction || '';
+            const col   = dir === 'in' ? '#0f0' : dir === 'out' ? '#f66' : '#eee';
+            const sign  = dir === 'in' ? '+' : dir === 'out' ? '-' : '';
+            const ts    = tx.timestamp ? new Date(Number(tx.timestamp) * 1000).toLocaleString() : '';
+            return `<div class="net-hist-row">
+              <div style="display:flex;justify-content:space-between;">
+                <span style="color:#aaf">${label}</span>
+                <span style="color:${col}">${sign}${tx.amount !== undefined ? Number(tx.amount).toFixed(6) : '—'} ${tx.asset || ''}</span>
+              </div>
+              <div style="color:#555;font-size:10px;margin-top:2px;">
+                ${tx.chain || '—'} · ${tx.status || '—'} · ${ts}
+              </div>
+            </div>`;
+        }).join('');
+    }
+
+    async function switchNetwork(netId) {
+        _activeNetwork = netId;
+        const addr = walletSession.getAddress ? walletSession.getAddress() : (localStorage.getItem('thr_address') || '');
+        if (!addr) return;
+        localStorage.setItem(`thr_network_${addr}`, netId);   // same key as PWA
+        await loadNetworkAddress(addr, netId);
+        renderNetHistory(netId);
+    }
+
+    async function loadNormalizedHistory(addr) {
+        try {
+            const p   = new URLSearchParams({ address: addr, limit: '200' });
+            const res = await fetch(`/api/wallet/history/normalized?${p}`);
+            const d   = await res.json();
+            _allNormalizedTx = d.history || d.transactions || [];
+            renderNetHistory(_activeNetwork);
+        } catch {
+            const el = $('netHistory');
+            if (el) el.innerHTML = '<p style="color:#555;font-size:12px;">Error loading history.</p>';
+        }
     }
 
     const _WALLET_LIQ_LABELS = {

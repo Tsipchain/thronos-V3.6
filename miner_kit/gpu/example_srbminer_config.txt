@@ -1,0 +1,11 @@
+# SRBMiner-MULTI — Thronos pool config example
+# Download: https://github.com/doktor83/SRBMiner-Multi
+#
+# Usage (after starting stratum_proxy.py):
+#   SRBMiner-MULTI --algorithm sha256 --pool 127.0.0.1:3334 --wallet YOUR_THR_ADDRESS --password x
+
+# ── Pool settings ─────────────────────────────────────────────────
+pool=127.0.0.1:3334
+wallet=YOUR_THR_ADDRESS
+password=x
+algorithm=sha256

@@ -1,0 +1,14 @@
+# MicroBT Whatsminer M30S / M50 / M60 — Thronos Pool Config
+#
+# Access your miner at http://MINER_IP
+# Settings → Pool → Configuration
+#
+# ── Pool 1 (Primary) ────────────────────────────────────────────
+Pool 1 URL    : stratum+tcp://api.thronoschain.org:3334
+Pool 1 Worker : YOUR_THR_ADDRESS.whatsminer1
+Pool 1 Pass   : x
+
+# ── Pool 2 (Failover) ────────────────────────────────────────────
+Pool 2 URL    : stratum+tcp://api.thronoschain.org:3334
+Pool 2 Worker : YOUR_THR_ADDRESS.whatsminer2
+Pool 2 Pass   : x

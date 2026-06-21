@@ -1,0 +1,7 @@
+{
+  "pool_url": "stratum+tcp://api.thronoschain.org:3334",
+  "worker": "YOUR_THR_ADDRESS.worker1",
+  "password": "x",
+  "algorithm": "sha256",
+  "notes": "Replace YOUR_THR_ADDRESS with your actual THR wallet address. No private keys here."
+}

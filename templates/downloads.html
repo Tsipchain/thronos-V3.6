@@ -443,14 +443,101 @@
             <span class="lang-en">ASIC miners and IoT devices help with data storage, network speed, and offline transaction support (survival mode). Earn T2E rewards!</span>
         </p>
         <a href="/static/thronos_kit.zip" class="download-btn" download style="margin-top: 20px;">
-            <span class="lang-el">Λήψη Thronos Kit</span>
-            <span class="lang-en">Download Thronos Kit</span>
+            <span class="lang-el">Λήψη Thronos Kit (legacy)</span>
+            <span class="lang-en">Download Thronos Kit (legacy)</span>
         </a>
-        <p style="margin-top:10px;font-size:13px;opacity:0.7;">
-            <span class="lang-el">Κωδικός αρχείου:</span>
-            <span class="lang-en">Archive password:</span>
-            <code style="background:#111;padding:2px 8px;color:#0f0;user-select:all;">thronos2026</code>
+    </div>
+
+    <!-- ── Miner Kit v2 ───────────────────────────────────────────────────── -->
+    <div class="car-section" style="margin-top: 40px;">
+        <h2 style="color:#3CFF7A;">
+            ⛏️ <span class="lang-el">Miner Kit v2 — Πλήρης Υποστήριξη</span>
+            <span class="lang-en">Miner Kit v2 — Full Hardware Support</span>
+        </h2>
+        <p style="color:#b0ffd8;margin-bottom:24px;">
+            <span class="lang-en">Complete kit for CPU, GPU, USB ASIC and external ASIC mining. Enter your THR address to get a personalised build with your address pre-filled in every config file.</span>
+            <span class="lang-el">Πλήρες kit για CPU, GPU, USB ASIC και external ASIC mining. Εισάγετε τη διεύθυνσή σας για να πάρετε ένα εξατομικευμένο build.</span>
         </p>
+
+        <!-- miner kit cards grid -->
+        <style>
+            .miner-cards { display:grid; grid-template-columns: repeat(auto-fill,minmax(240px,1fr)); gap:16px; margin:20px 0; }
+            .miner-card  { background:#0a1a10; border:1px solid #1a5a2f; border-radius:12px; padding:18px; display:flex; flex-direction:column; gap:8px; }
+            .miner-card h3 { color:#3CFF7A; margin:0; font-size:1.05em; }
+            .miner-card p  { color:#b0ffd8; font-size:0.85em; margin:0; flex:1; }
+            .miner-badge { display:inline-block; padding:2px 8px; border-radius:6px; font-size:0.75em; font-weight:600; }
+            .badge-ready        { background:rgba(60,255,122,0.15); color:#3CFF7A; border:1px solid #3CFF7A44; }
+            .badge-experimental { background:rgba(255,200,0,0.12);  color:#ffc800; border:1px solid #ffc80044; }
+            .badge-external-bin { background:rgba(255,100,0,0.12);  color:#ff8040; border:1px solid #ff804044; }
+            .miner-dl-btn { display:inline-block; padding:7px 14px; border-radius:8px; background:linear-gradient(135deg,#1a5a2f,#0d3a1f); color:#3CFF7A; text-decoration:none; font-size:0.85em; border:1px solid #3CFF7A44; text-align:center; transition:background .2s; cursor:pointer; }
+            .miner-dl-btn:hover { background:linear-gradient(135deg,#2a8a4f,#1a5a2f); }
+        </style>
+
+        <div class="miner-cards">
+            <!-- CPU -->
+            <div class="miner-card">
+                <h3>🖥️ CPU Miner</h3>
+                <span class="miner-badge badge-ready">Ready</span>
+                <p>Python HTTP miner. Runs on any CPU — Windows, Linux, macOS. No extra binary needed.</p>
+                <small style="color:#6a9a7a;">Target: CPU &nbsp;|&nbsp; python pow_miner_cpu.py</small>
+            </div>
+            <!-- GPU -->
+            <div class="miner-card">
+                <h3>🎮 GPU Config Pack</h3>
+                <span class="miner-badge badge-experimental">Experimental</span>
+                <p>Config templates for lolMiner, BzMiner, SRBMiner. Requires your own GPU miner binary.</p>
+                <small style="color:#6a9a7a;">Target: GPU &nbsp;|&nbsp; via stratum proxy</small>
+            </div>
+            <!-- USB ASIC -->
+            <div class="miner-card">
+                <h3>🔌 USB ASIC Config</h3>
+                <span class="miner-badge badge-external-bin">Requires binary</span>
+                <p>CGMiner/BFGMiner configs for GekkoScience, Antminer USB, Block Erupters. Binary not included.</p>
+                <small style="color:#6a9a7a;">Target: USB ASIC &nbsp;|&nbsp; cgminer + drivers</small>
+            </div>
+            <!-- External ASIC -->
+            <div class="miner-card">
+                <h3>⚡ External ASIC</h3>
+                <span class="miner-badge badge-ready">Ready</span>
+                <p>Pool configs for Antminer S19, Whatsminer M30/M50, Avalon A12/A13. No software needed.</p>
+                <small style="color:#6a9a7a;">Target: External ASIC &nbsp;|&nbsp; pool config only</small>
+            </div>
+        </div>
+
+        <!-- Personalised download form -->
+        <div id="minerKitForm" style="background:#071510;border:1px solid #1a5a2f;border-radius:12px;padding:20px;margin-top:16px;max-width:520px;">
+            <h3 style="color:#3CFF7A;margin:0 0 12px 0;">Download Full Miner Kit ZIP</h3>
+            <p style="color:#b0ffd8;font-size:0.88em;margin:0 0 14px 0;">
+                Enter your THR address to receive a personalised kit with your address pre-filled in every config file.
+            </p>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                <input id="minerKitAddr" type="text" placeholder="THR..." style="flex:1;min-width:200px;padding:8px 12px;background:#0a1a10;border:1px solid #1a5a2f;border-radius:8px;color:#3CFF7A;font-family:monospace;font-size:0.9em;" />
+                <button onclick="downloadMinerKit()" class="miner-dl-btn" style="padding:8px 18px;">
+                    ⬇ Download Kit
+                </button>
+            </div>
+            <p id="minerKitMsg" style="color:#ffc800;font-size:0.82em;margin:8px 0 0 0;display:none;"></p>
+            <p style="color:#6a9a7a;font-size:0.78em;margin:10px 0 0 0;">
+                Requires a completed THR pledge. No private keys in the kit.
+            </p>
+        </div>
+
+        <script>
+        function downloadMinerKit() {
+            var addr = (document.getElementById('minerKitAddr').value || '').trim();
+            var msg  = document.getElementById('minerKitMsg');
+            if (!addr.startsWith('THR') || addr.length < 20) {
+                msg.textContent = 'Enter a valid THR wallet address.';
+                msg.style.display = 'block';
+                return;
+            }
+            msg.textContent = 'Preparing your kit...';
+            msg.style.color = '#3CFF7A';
+            msg.style.display = 'block';
+            window.location.href = '/download/miner-kit?address=' + encodeURIComponent(addr);
+            setTimeout(function(){ msg.style.display = 'none'; }, 4000);
+        }
+        </script>
     </div>
 </div>
 {% endblock %}

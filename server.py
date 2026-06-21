@@ -1056,6 +1056,10 @@ WITHDRAWALS_FILE    = os.path.join(DATA_DIR, "withdrawals.json") # NEW
 VOTING_FILE         = os.path.join(DATA_DIR, "voting.json") # Feature voting for Crypto Hunters
 PEERS_FILE          = os.path.join(DATA_DIR, "active_peers.json") # Heartbeat tracking
 INDEX_REBUILD_LOCK  = os.path.join(DATA_DIR, "index_rebuild.lock")
+POOL_LIQUIDITY_LEDGER_FILE  = os.path.join(DATA_DIR, "pool_liquidity_ledger.json")
+POOL_POSITIONS_FILE          = os.path.join(DATA_DIR, "pool_positions.json")
+POOL_TVL_SNAPSHOTS_FILE      = os.path.join(DATA_DIR, "pool_tvl_snapshots.json")
+PYTHIA_AMM_WORKER_STATE_FILE = os.path.join(DATA_DIR, "pythia_amm_worker_state.json")
 
 # Active peers tracking (for replicas heartbeating to master)
 PEER_TTL_SECONDS = 60  # Peers expire after 60 seconds without heartbeat
@@ -22979,15 +22983,18 @@ def api_wallet_history_normalized():
         intent_events, intent_counts = _collect_normalized_history_from_action_intents(aliases, overfetch)
         all_source_counts.update(intent_counts)
 
-        # 4. phantom_tx_chain.json + tx_ledger.json (music, AI, IoT, L2E, T2E,
-        #    NFT, liquidity, swaps, gateway, parking, native THR transfers)
+        # 4. phantom_tx_chain.json + tx_ledger.json (music, AI, IoT, L2E, T2E, ...)
         chain_events, chain_counts = _collect_normalized_history_from_chain(aliases, overfetch)
         all_source_counts.update(chain_counts)
+
+        # 5. pool_liquidity_ledger.json (liquidity domain events)
+        pool_events, pool_counts = _collect_normalized_history_from_pool_ledger(aliases, overfetch)
+        all_source_counts.update(pool_counts)
 
         # ── Merge and deduplicate by event id ───────────────────────────────
         seen_ids: set = set()
         raw_events: list = []
-        for ev in wh_events + pledge_events + intent_events + chain_events:
+        for ev in wh_events + pledge_events + intent_events + chain_events + pool_events:
             eid = (ev.get("id") or ev.get("event_id") or "").strip()
             dedup_key = eid or "{}{}{:.4f}".format(
                 ev.get("event_type", ""), ev.get("timestamp", ""),
@@ -23022,6 +23029,7 @@ def api_wallet_history_normalized():
         all_sources_checked = alias_debug.get("sources_checked", []) + [
             "wallet_history.json", "pledge_chain.json",
             "pythia_action_intents.json", "phantom_tx_chain.json+tx_ledger.json",
+            "pool_liquidity_ledger.json",
         ]
 
         return jsonify(
@@ -23044,6 +23052,19 @@ def api_wallet_history_normalized():
 
 _EVM_CHAINS   = frozenset({"bsc", "base", "arbitrum", "eth", "ethereum", "polygon", "avax"})
 _EVM_ASSETS   = frozenset({"bnb", "eth", "usdt", "usdc", "busd", "weth", "wbnb"})
+
+_POOL_CONFIGS: dict = {
+    "bsc-usdt": {
+        "pool_id": "bsc-usdt", "pair": "THR-USDT", "chain": "bsc",
+        "external_asset": "USDT", "internal_asset": "THR", "internal_fee_asset": "THR",
+    },
+    "base-usdc": {
+        "pool_id": "base-usdc", "pair": "THR-USDC", "chain": "base",
+        "external_asset": "USDC", "internal_asset": "THR", "internal_fee_asset": "THR",
+    },
+}
+_AMM_WORKER_NAME = "pythia_amm_worker"
+_THR_USD_RATE    = 0.0042
 
 # Normalise the ?chain= query param to a canonical key.
 _CHAIN_CANONICAL: dict = {
@@ -23448,6 +23469,542 @@ def _wallet_normalize_event(event: dict, event_type: str) -> dict:
     }
 
 
+# ─── Pool Accounting v1 helpers ─────────────────────────────────────────────
+
+def _load_pool_ledger() -> dict:
+    ledger = load_json(POOL_LIQUIDITY_LEDGER_FILE, {})
+    for pid, cfg in _POOL_CONFIGS.items():
+        if pid not in ledger:
+            ledger[pid] = {
+                "pool_id": pid, "pair": cfg["pair"], "chain": cfg["chain"],
+                "external_asset": cfg["external_asset"], "internal_asset": cfg["internal_asset"],
+                "external_reserve": 0.0, "thr_reserve": 0.0,
+                "last_updated": "", "events": [],
+            }
+    return ledger
+
+def _save_pool_ledger(ledger: dict) -> None:
+    save_json(POOL_LIQUIDITY_LEDGER_FILE, ledger)
+
+def _load_pool_positions() -> dict:
+    return load_json(POOL_POSITIONS_FILE, {})
+
+def _save_pool_positions(positions: dict) -> None:
+    save_json(POOL_POSITIONS_FILE, positions)
+
+def _pool_tvl_usd(pool: dict) -> float:
+    ext = float(pool.get("external_reserve") or 0)
+    thr = float(pool.get("thr_reserve") or 0)
+    return round(ext * 1.0 + thr * _THR_USD_RATE, 4)
+
+def _pool_vault_addresses(pool_id: str) -> dict:
+    cfg = _POOL_CONFIGS.get(pool_id, {})
+    chain = cfg.get("chain", "")
+    chain_up = chain.upper()
+    pythia_evm = (
+        os.getenv(f"PYTHIA_SYSTEM_EVM_{chain_up}_ADDRESS") or
+        os.getenv("PYTHIA_SYSTEM_EVM_BSC_ADDRESS") or ""
+    )
+    return {
+        "pool_vault":    os.getenv(f"{chain_up}_POOL_VAULT_ADDRESS")    or pythia_evm,
+        "payout_wallet": os.getenv(f"{chain_up}_PAYOUT_ADDRESS")        or pythia_evm,
+        "gas_wallet":    os.getenv(f"{chain_up}_GAS_WALLET_ADDRESS")    or pythia_evm,
+        "fee_collector": os.getenv(f"{chain_up}_FEE_COLLECTOR_ADDRESS") or pythia_evm,
+    }
+
+def _amm_worker_state() -> dict:
+    state = load_json(PYTHIA_AMM_WORKER_STATE_FILE, {})
+    state.setdefault("ok", True)
+    state.setdefault("worker", _AMM_WORKER_NAME)
+    state.setdefault("status", "active")
+    state.setdefault("managed_pools", list(_POOL_CONFIGS.keys()))
+    state.setdefault("safety_mode", "accounting_only")
+    state.setdefault("last_snapshot_ts", 0)
+    return state
+
+def _new_pool_event_id() -> str:
+    import secrets as _sec
+    return f"POOL-{int(time.time())}-{_sec.token_hex(4).upper()}"
+
+
+@app.route("/api/pools/status", methods=["GET"])
+def api_pools_status():
+    try:
+        ledger = _load_pool_ledger()
+        worker = _amm_worker_state()
+        pools = []
+        for pid, cfg in _POOL_CONFIGS.items():
+            pool = ledger.get(pid, {})
+            addrs = _pool_vault_addresses(pid)
+            pools.append({
+                "pool_id":          pid,
+                "pair":             cfg["pair"],
+                "chain":            cfg["chain"],
+                "external_asset":   cfg["external_asset"],
+                "internal_asset":   cfg["internal_asset"],
+                "external_reserve": float(pool.get("external_reserve") or 0),
+                "thr_reserve":      float(pool.get("thr_reserve") or 0),
+                "tvl_usd":          _pool_tvl_usd(pool),
+                "last_updated":     pool.get("last_updated", ""),
+                **addrs,
+            })
+        return jsonify(ok=True, worker=_AMM_WORKER_NAME,
+                       safety_mode="accounting_only",
+                       pools=pools,
+                       last_snapshot_ts=worker.get("last_snapshot_ts", 0)), 200
+    except Exception as e:
+        logger.error("[pools/status] %s", e)
+        return jsonify(ok=False, error=str(e)), 500
+
+
+@app.route("/api/pools/tvl", methods=["GET"])
+def api_pools_tvl():
+    try:
+        pool_id    = (request.args.get("pool_id") or "").strip().lower()
+        pair_filter= (request.args.get("pair")    or "").strip().upper()
+        chain_f    = (request.args.get("chain")   or "").strip().lower()
+
+        ledger = _load_pool_ledger()
+
+        # Find matching pool
+        matched = None
+        for pid, cfg in _POOL_CONFIGS.items():
+            if pool_id and pid != pool_id:
+                continue
+            if pair_filter and cfg["pair"].upper() != pair_filter:
+                continue
+            if chain_f and cfg["chain"] != chain_f:
+                continue
+            matched = (pid, cfg)
+            break
+
+        if not matched:
+            return jsonify(ok=False, error="pool_not_found"), 404
+
+        pid, cfg = matched
+        pool = ledger.get(pid, {})
+        addrs = _pool_vault_addresses(pid)
+        last_snap = ""
+        try:
+            snaps = load_json(POOL_TVL_SNAPSHOTS_FILE, [])
+            pool_snaps = [s for s in snaps if s.get("pool_id") == pid]
+            if pool_snaps:
+                last_snap = pool_snaps[-1].get("timestamp_iso", "")
+        except Exception:
+            pass
+
+        ext_res = float(pool.get("external_reserve") or 0)
+        thr_res = float(pool.get("thr_reserve") or 0)
+
+        return jsonify(
+            ok=True,
+            worker=_AMM_WORKER_NAME,
+            pool_id=pid,
+            pair=cfg["pair"],
+            chain=cfg["chain"],
+            external_asset=cfg["external_asset"],
+            internal_asset=cfg["internal_asset"],
+            external_reserve=ext_res,
+            thr_reserve=thr_res,
+            usdt_reserve=ext_res,  # alias for convenience
+            tvl_usd=_pool_tvl_usd(pool),
+            last_snapshot=last_snap,
+            **addrs,
+        ), 200
+    except Exception as e:
+        logger.error("[pools/tvl] %s", e)
+        return jsonify(ok=False, error=str(e)), 500
+
+
+@app.route("/api/pools/positions", methods=["GET"])
+def api_pools_positions():
+    try:
+        address = (request.args.get("address") or "").strip().upper()
+        if not address or not address.startswith("THR"):
+            return jsonify(ok=False, error="valid_thr_address_required"), 400
+
+        positions = _load_pool_positions()
+        user_pos = positions.get(address, {})
+        result = []
+        for pid, pos in user_pos.items():
+            if not isinstance(pos, dict):
+                continue
+            cfg = _POOL_CONFIGS.get(pid, {})
+            result.append({
+                "pool_id":              pid,
+                "pair":                 cfg.get("pair", ""),
+                "chain":                cfg.get("chain", ""),
+                "external_asset":       cfg.get("external_asset", ""),
+                "internal_asset":       cfg.get("internal_asset", ""),
+                "lp_position_balance":  float(pos.get("lp_position_balance", 0)),
+                "external_side_balance": float(pos.get("external_side_balance", 0)),
+                "thr_side_balance":     float(pos.get("thr_side_balance", 0)),
+                "last_updated":         pos.get("last_updated", ""),
+            })
+        return jsonify(ok=True, address=address, positions=result, total=len(result)), 200
+    except Exception as e:
+        logger.error("[pools/positions] %s", e)
+        return jsonify(ok=False, error=str(e)), 500
+
+
+@app.route("/api/admin/pools/amm-worker/status", methods=["GET"])
+def api_admin_pools_amm_worker_status():
+    denied = require_admin()
+    if denied: return denied
+    try:
+        return jsonify(**_amm_worker_state()), 200
+    except Exception as e:
+        return jsonify(ok=False, error=str(e)), 500
+
+
+@app.route("/api/pools/deposit", methods=["POST"])
+def api_pools_deposit():
+    try:
+        body    = request.get_json(silent=True) or {}
+        address = (body.get("address") or "").strip().upper()
+        pool_id = (body.get("pool_id") or "").strip().lower()
+        side    = (body.get("side") or "").strip().lower()
+        asset   = (body.get("asset") or "").strip().upper()
+        try:
+            amount = float(body.get("amount") or 0)
+        except Exception:
+            amount = 0.0
+
+        if not address or not address.startswith("THR"):
+            return jsonify(ok=False, error="valid_thr_address_required"), 400
+        if pool_id not in _POOL_CONFIGS:
+            return jsonify(ok=False, error="pool_not_found",
+                           valid_pools=list(_POOL_CONFIGS.keys())), 404
+        if side not in ("external", "internal"):
+            return jsonify(ok=False, error="side must be external or internal"), 400
+        if amount <= 0:
+            return jsonify(ok=False, error="amount must be > 0"), 400
+
+        cfg = _POOL_CONFIGS[pool_id]
+        expected_asset = cfg["external_asset"] if side == "external" else cfg["internal_asset"]
+        if asset != expected_asset:
+            return jsonify(ok=False, error=f"side={side} requires asset={expected_asset}"), 400
+
+        peid = _new_pool_event_id()
+        now_iso = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+
+        ledger = _load_pool_ledger()
+        pool = ledger[pool_id]
+        if side == "external":
+            pool["external_reserve"] = round(float(pool.get("external_reserve") or 0) + amount, 8)
+        else:
+            pool["thr_reserve"] = round(float(pool.get("thr_reserve") or 0) + amount, 8)
+        pool["last_updated"] = now_iso
+
+        pool_event_record = {
+            "pool_event_id": peid,
+            "event_type":    "pool_deposit",
+            "address":       address,
+            "pool_id":       pool_id,
+            "side":          side,
+            "asset":         asset,
+            "amount":        amount,
+            "direction":     "allocate",
+            "status":        "confirmed",
+            "source":        "user_deposit",
+            "timestamp":     int(time.time()),
+            "timestamp_iso": now_iso,
+        }
+        pool.setdefault("events", []).append(pool_event_record)
+        _save_pool_ledger(ledger)
+
+        positions = _load_pool_positions()
+        user_pos = positions.setdefault(address, {})
+        pos = user_pos.setdefault(pool_id, {
+            "address": address, "pool_id": pool_id,
+            "lp_position_balance": 0.0,
+            "external_side_balance": 0.0,
+            "thr_side_balance": 0.0,
+        })
+        pos["lp_position_balance"] = round(float(pos.get("lp_position_balance", 0)) + amount, 8)
+        if side == "external":
+            pos["external_side_balance"] = round(float(pos.get("external_side_balance", 0)) + amount, 8)
+        else:
+            pos["thr_side_balance"] = round(float(pos.get("thr_side_balance", 0)) + amount, 8)
+        pos["last_updated"] = now_iso
+        _save_pool_positions(positions)
+
+        add_wallet_history_event(
+            thr_address=address,
+            event_type="pool_deposit",
+            chain=cfg["chain"],
+            asset=asset,
+            amount=amount,
+            direction="allocate",
+            internal_txid=peid,
+            status="confirmed",
+            note=f"Pool deposit {pool_id} side={side} {asset}={amount}",
+        )
+
+        return jsonify(
+            ok=True,
+            pool_event_id=peid,
+            worker=_AMM_WORKER_NAME,
+            pool_id=pool_id,
+            pair=cfg["pair"],
+            chain=cfg["chain"],
+            side=side,
+            asset=asset,
+            amount=amount,
+            status="confirmed",
+            transfer_scope="internal",
+            settlement_chain="thronos",
+            asset_origin_chain=cfg["chain"],
+            fee_asset="THR",
+            fee_chain="thronos",
+            position={
+                "address":              address,
+                "pool_id":              pool_id,
+                "asset":                asset,
+                "lp_position_balance":  pos["lp_position_balance"],
+                "thr_side_balance":     pos["thr_side_balance"],
+                "external_side_balance": pos["external_side_balance"],
+            },
+            tvl={
+                f"{cfg['external_asset'].lower()}_reserve": float(pool.get("external_reserve", 0)),
+                "thr_reserve":  float(pool.get("thr_reserve", 0)),
+                "tvl_usd":      _pool_tvl_usd(pool),
+            },
+        ), 201
+    except Exception as e:
+        logger.error("[pools/deposit] %s", e)
+        return jsonify(ok=False, error=str(e)), 500
+
+
+@app.route("/api/pools/withdraw-intent", methods=["POST"])
+def api_pools_withdraw_intent():
+    try:
+        body    = request.get_json(silent=True) or {}
+        address = (body.get("address") or "").strip().upper()
+        pool_id = (body.get("pool_id") or "").strip().lower()
+        asset   = (body.get("asset") or "").strip().upper()
+        try:
+            amount = float(body.get("amount") or 0)
+        except Exception:
+            amount = 0.0
+
+        if not address or not address.startswith("THR"):
+            return jsonify(ok=False, error="valid_thr_address_required"), 400
+        if pool_id not in _POOL_CONFIGS:
+            return jsonify(ok=False, error="pool_not_found"), 404
+        if amount <= 0:
+            return jsonify(ok=False, error="amount must be > 0"), 400
+
+        positions = _load_pool_positions()
+        pos = positions.get(address, {}).get(pool_id)
+        if not pos:
+            return jsonify(ok=False, error="no_position_found"), 400
+
+        avail = float(pos.get("external_side_balance") or 0)
+        if avail < amount:
+            return jsonify(ok=False, error="insufficient_position",
+                           available=avail, requested=amount), 400
+
+        peid    = _new_pool_event_id()
+        now_iso = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+
+        pos["external_side_balance"] = round(avail - amount, 8)
+        pos["lp_position_balance"]   = round(float(pos.get("lp_position_balance", 0)) - amount, 8)
+        pos["last_updated"] = now_iso
+        _save_pool_positions(positions)
+
+        ledger = _load_pool_ledger()
+        pool   = ledger[pool_id]
+        pool["external_reserve"] = round(float(pool.get("external_reserve") or 0) - amount, 8)
+        pool["last_updated"] = now_iso
+        pool.setdefault("events", []).append({
+            "pool_event_id": peid, "event_type": "pool_withdraw_intent",
+            "address": address, "pool_id": pool_id, "asset": asset,
+            "amount": amount, "direction": "release", "status": "intent_queued",
+            "source": "user_withdraw_intent",
+            "timestamp": int(time.time()), "timestamp_iso": now_iso,
+        })
+        _save_pool_ledger(ledger)
+
+        cfg = _POOL_CONFIGS[pool_id]
+        add_wallet_history_event(
+            thr_address=address, event_type="pool_withdraw_intent",
+            chain=cfg["chain"], asset=asset, amount=amount,
+            direction="release", internal_txid=peid,
+            status="intent_queued",
+            note=f"Pool withdraw intent {pool_id} {asset}={amount}",
+        )
+
+        return jsonify(
+            ok=True,
+            pool_event_id=peid,
+            worker=_AMM_WORKER_NAME,
+            pool_id=pool_id,
+            asset=asset,
+            amount=amount,
+            status="intent_queued",
+            transfer_scope="cross_chain",
+            settlement_chain="thronos",
+            note="Withdrawal intent queued. No payout initiated. Payout requires separate admin/signer flow.",
+        ), 200
+    except Exception as e:
+        logger.error("[pools/withdraw-intent] %s", e)
+        return jsonify(ok=False, error=str(e)), 500
+
+
+def _admin_credit_test_liquidity(pool_id: str):
+    denied = require_admin()
+    if denied: return denied
+    try:
+        body  = request.get_json(silent=True) or {}
+        asset = (body.get("asset") or _POOL_CONFIGS[pool_id]["external_asset"]).strip().upper()
+        side  = (body.get("side") or "external").strip().lower()
+        try:
+            amount = float(body.get("amount") or 0)
+        except Exception:
+            amount = 0.0
+        if amount <= 0:
+            return jsonify(ok=False, error="amount must be > 0"), 400
+
+        peid    = _new_pool_event_id()
+        now_iso = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+
+        ledger = _load_pool_ledger()
+        pool   = ledger[pool_id]
+        if side == "external":
+            pool["external_reserve"] = round(float(pool.get("external_reserve") or 0) + amount, 8)
+        else:
+            pool["thr_reserve"] = round(float(pool.get("thr_reserve") or 0) + amount, 8)
+        pool["last_updated"] = now_iso
+        pool.setdefault("events", []).append({
+            "pool_event_id": peid, "event_type": "pool_allocate",
+            "pool_id": pool_id, "asset": asset, "amount": amount,
+            "side": side, "direction": "allocate", "status": "confirmed",
+            "source": "test_admin_credit",
+            "timestamp": int(time.time()), "timestamp_iso": now_iso,
+        })
+        _save_pool_ledger(ledger)
+
+        return jsonify(
+            ok=True,
+            pool_event_id=peid,
+            pool_id=pool_id,
+            asset=asset,
+            side=side,
+            amount=amount,
+            source="test_admin_credit",
+            external_reserve=float(pool.get("external_reserve", 0)),
+            thr_reserve=float(pool.get("thr_reserve", 0)),
+            tvl_usd=_pool_tvl_usd(pool),
+            warning="test_admin_credit — not real on-chain funds",
+        ), 200
+    except Exception as e:
+        logger.error("[admin/pools/credit] %s", e)
+        return jsonify(ok=False, error=str(e)), 500
+
+
+@app.route("/api/admin/pools/bsc-usdt/credit-test-liquidity", methods=["POST"])
+def api_admin_pools_bsc_usdt_credit():
+    return _admin_credit_test_liquidity("bsc-usdt")
+
+
+@app.route("/api/admin/pools/base-usdc/credit-test-liquidity", methods=["POST"])
+def api_admin_pools_base_usdc_credit():
+    return _admin_credit_test_liquidity("base-usdc")
+
+
+@app.route("/api/admin/pools/tvl/snapshot", methods=["POST"])
+def api_admin_pools_tvl_snapshot():
+    denied = require_admin()
+    if denied: return denied
+    try:
+        now_ts  = int(time.time())
+        now_iso = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+        ledger  = _load_pool_ledger()
+        snaps   = load_json(POOL_TVL_SNAPSHOTS_FILE, [])
+
+        new_snaps = []
+        for pid in _POOL_CONFIGS:
+            pool = ledger.get(pid, {})
+            snap = {
+                "pool_id":         pid,
+                "external_reserve": float(pool.get("external_reserve") or 0),
+                "thr_reserve":      float(pool.get("thr_reserve") or 0),
+                "tvl_usd":          _pool_tvl_usd(pool),
+                "timestamp":        now_ts,
+                "timestamp_iso":    now_iso,
+                "source":           "admin_snapshot",
+            }
+            snaps.append(snap)
+            new_snaps.append(snap)
+
+        save_json(POOL_TVL_SNAPSHOTS_FILE, snaps)
+
+        state = _amm_worker_state()
+        state["last_snapshot_ts"] = now_ts
+        state["last_snapshot_iso"] = now_iso
+        save_json(PYTHIA_AMM_WORKER_STATE_FILE, state)
+
+        return jsonify(ok=True, worker=_AMM_WORKER_NAME,
+                       snapshots=new_snaps, timestamp=now_ts), 200
+    except Exception as e:
+        logger.error("[admin/pools/tvl/snapshot] %s", e)
+        return jsonify(ok=False, error=str(e)), 500
+
+
+def _collect_normalized_history_from_pool_ledger(
+    aliases: set, limit_overfetch: int
+) -> tuple[list, dict]:
+    """
+    Scan pool_liquidity_ledger.json events for this wallet's pool activity.
+    Returns events classified as domain=liquidity, transfer_scope=internal.
+    """
+    source_counts: dict = {"pool_liquidity_ledger.json": 0}
+    events: list = []
+    aliases_upper = {a.upper() for a in aliases}
+    try:
+        ledger = _load_pool_ledger()
+        for pool_id, pool in ledger.items():
+            cfg  = _POOL_CONFIGS.get(pool_id, {})
+            chain = pool.get("chain") or cfg.get("chain") or "thronos"
+            for ev in pool.get("events", []):
+                if not isinstance(ev, dict):
+                    continue
+                addr = (ev.get("address") or ev.get("thr_address") or "").strip().upper()
+                if addr not in aliases_upper:
+                    continue
+                events.append({
+                    "id":               ev.get("pool_event_id") or ev.get("id") or "",
+                    "thr_address":      ev.get("address") or "",
+                    "event_type":       ev.get("event_type") or "pool_event",
+                    "_source":          "pool_liquidity_ledger",
+                    "_raw_category":    "liquidity",
+                    "pool_event_id":    ev.get("pool_event_id") or "",
+                    "correlation_id":   ev.get("correlation_id") or "",
+                    "transfer_scope":   "internal",
+                    "settlement_chain": "thronos",
+                    "asset_origin_chain": chain,
+                    "fee_asset":        "THR",
+                    "fee_chain":        "thronos",
+                    "worker":           _AMM_WORKER_NAME,
+                    "chain":            chain,
+                    "asset":            ev.get("asset") or "",
+                    "amount":           float(ev.get("amount") or 0),
+                    "direction":        ev.get("direction") or "allocate",
+                    "status":           ev.get("status") or "confirmed",
+                    "timestamp":        ev.get("timestamp") or 0,
+                    "note":             ev.get("note") or "",
+                })
+                source_counts["pool_liquidity_ledger.json"] += 1
+    except Exception as ex:
+        logger.warning("[PoolLedger] history scan: %s", ex)
+    events.sort(
+        key=lambda e: float(e["timestamp"]) if isinstance(e.get("timestamp"), (int, float)) else 0,
+        reverse=True,
+    )
+    return events[:limit_overfetch], source_counts
+
+
 def _collect_normalized_history_from_chain(
     aliases: set, limit_overfetch: int
 ) -> tuple[list, dict]:
@@ -23749,6 +24306,33 @@ def api_wallet_balance_normalized():
             # EVM/BTC/XRP/Stellar: asset amounts aggregated from chain-filtered events
             chain_balances = {k: round(v, 8) for k, v in chain_asset_amts.items() if v > 0}
 
+        # ── 7. Pool positions ────────────────────────────────────────────────
+        pool_position_data = []
+        try:
+            pool_positions_data = _load_pool_positions()
+            for alias in aliases:
+                alias_pos = pool_positions_data.get(alias, pool_positions_data.get(alias.upper(), {}))
+                for pid, pos in alias_pos.items():
+                    if not isinstance(pos, dict):
+                        continue
+                    cfg_p = _POOL_CONFIGS.get(pid, {})
+                    # If chain filter is set and not thronos/all, only include matching chain
+                    if chain_filter not in ("all", "thronos") and cfg_p.get("chain") != chain_filter:
+                        continue
+                    pool_position_data.append({
+                        "pool_id":               pid,
+                        "pair":                  cfg_p.get("pair", ""),
+                        "chain":                 cfg_p.get("chain", ""),
+                        "external_asset":        cfg_p.get("external_asset", ""),
+                        "internal_asset":        cfg_p.get("internal_asset", ""),
+                        "lp_position_balance":   float(pos.get("lp_position_balance", 0)),
+                        "external_side_balance": float(pos.get("external_side_balance", 0)),
+                        "thr_side_balance":      float(pos.get("thr_side_balance", 0)),
+                        "last_updated":          pos.get("last_updated", ""),
+                    })
+        except Exception as ex:
+            logger.debug("[BalanceNormalized] pool positions: %s", ex)
+
         return jsonify(
             ok=True,
             address=address,
@@ -23761,6 +24345,7 @@ def api_wallet_balance_normalized():
             sources_checked=sources_checked,
             source_counts=source_counts,
             last_updated=time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+            pool_positions=pool_position_data,
         ), 200
 
     except Exception as e:
@@ -31531,6 +32116,17 @@ def api_v1_withdrawal_quote():
     max_drawable = round(liq["pool_usdt_reserve"] * WITHDRAWAL_MAX_POOL_FRACTION, 6)
     signer_available = bool(os.getenv("GATEWAY_SECRET", "").strip())
 
+    # Check pool reserve from pool accounting ledger
+    _pool_reserve_available = 0.0
+    try:
+        _wq_pool_id = f"{dest_chain}-{(token or '').lower()}"  # e.g. "bsc-usdt"
+        if _wq_pool_id in _POOL_CONFIGS:
+            _wq_ledger = _load_pool_ledger()
+            _wq_pool   = _wq_ledger.get(_wq_pool_id, {})
+            _pool_reserve_available = float(_wq_pool.get("external_reserve") or 0)
+    except Exception:
+        pass
+
     disabled_reasons = []
     if vault_status == "invalid_config":
         disabled_reasons.append("pool_vault_invalid_address")
@@ -31538,7 +32134,7 @@ def api_v1_withdrawal_quote():
         disabled_reasons.append("pool_vault_not_configured")
     if not signer_available:
         disabled_reasons.append("signer_not_available")
-    if liq["pool_usdt_reserve"] <= 0:
+    if liq["pool_usdt_reserve"] <= 0 and _pool_reserve_available <= 0:
         disabled_reasons.append("no_pool_liquidity")
     if amount > max_drawable > 0:
         disabled_reasons.append("amount_exceeds_drawable_pool_liquidity")

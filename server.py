@@ -24116,12 +24116,21 @@ def api_pools_deposit():
                 float(pool.get("thr_reserve") or 0) + amount, 8)
         pool["last_updated"] = now_iso
         pool.setdefault("events", []).append({
-            "pool_event_id": peid, "event_type": "pool_deposit",
-            "address": address, "pool_id": pool_id, "side": side,
-            "asset": asset, "amount": amount,
-            "direction": "allocate", "status": "confirmed",
-            "source": "user_deposit",
-            "timestamp": int(time.time()), "timestamp_iso": now_iso,
+            "pool_event_id":      peid,
+            "event_type":         "pool_deposit",
+            "address":            address,
+            "pool_id":            pool_id,
+            "side":               side,
+            "asset":              asset,
+            "amount":             amount,
+            "direction":          "allocate",
+            "status":             "confirmed",
+            "source":             "user_deposit",
+            "chain":              cfg["chain"],
+            "asset_origin_chain": "thronos" if side == "internal" else cfg["chain"],
+            "settlement_chain":   "thronos" if side == "internal" else cfg["chain"],
+            "timestamp":          int(time.time()),
+            "timestamp_iso":      now_iso,
         })
         _save_pool_ledger(ledger)
 
@@ -24156,6 +24165,10 @@ def api_pools_deposit():
             note=f"Pool deposit {pool_id} side={side} {asset}={amount}",
         )
 
+        # THR deposits originate and settle on the Thronos ledger regardless of pool chain
+        _deposit_asset_origin = "thronos" if side == "internal" else cfg["chain"]
+        _deposit_settlement   = "thronos" if side == "internal" else cfg["chain"]
+
         return jsonify(
             ok=True,
             pool_event_id=peid,
@@ -24168,8 +24181,8 @@ def api_pools_deposit():
             amount=amount,
             status="confirmed",
             transfer_scope="internal",
-            settlement_chain="thronos",
-            asset_origin_chain=cfg["chain"],
+            settlement_chain=_deposit_settlement,
+            asset_origin_chain=_deposit_asset_origin,
             fee_asset="THR",
             fee_chain="thronos",
             position={
@@ -32548,19 +32561,33 @@ def api_v1_withdrawal_quote():
     # Pool availability check
     vault_status, vault_addr = _pool_vault_status(dest_chain)
     liq = _chain_pool_liquidity(dest_chain)
-    max_drawable = round(liq["pool_usdt_reserve"] * WITHDRAWAL_MAX_POOL_FRACTION, 6)
+    legacy_usdt_reserve = float(liq["pool_usdt_reserve"])
+    legacy_max_drawable = round(legacy_usdt_reserve * WITHDRAWAL_MAX_POOL_FRACTION, 6)
     signer_available = bool(os.getenv("GATEWAY_SECRET", "").strip())
 
-    # Check pool_liquidity_ledger for live reserve (supplements legacy liq dict)
-    _pool_reserve_available = 0.0
+    # Read pool_liquidity_ledger for live reserves
+    _wq_pool_id        = "{}-{}".format(dest_chain, (token or "").lower())
+    ledger_pool_id     = _wq_pool_id if _wq_pool_id in _POOL_CONFIGS else ""
+    ledger_ext_reserve = 0.0
+    ledger_thr_reserve = 0.0
+    ledger_usdt_reserve= 0.0
     try:
-        _wq_pool_id = "{}-{}".format(dest_chain, (token or "").lower())
-        if _wq_pool_id in _POOL_CONFIGS:
-            _wq_ledger = _load_pool_ledger()
-            _wq_pool   = _wq_ledger.get(_wq_pool_id, {})
-            _pool_reserve_available = float(_wq_pool.get("external_reserve") or 0)
+        if ledger_pool_id:
+            _wq_ledger  = _load_pool_ledger()
+            _wq_pool    = _wq_ledger.get(ledger_pool_id, {})
+            ledger_ext_reserve  = float(_wq_pool.get("external_reserve") or 0)
+            ledger_thr_reserve  = float(_wq_pool.get("thr_reserve") or 0)
+            ledger_usdt_reserve = ledger_ext_reserve  # external_reserve is USDT/USDC
     except Exception:
         pass
+
+    # Effective reserve: prefer ledger if available, else legacy
+    effective_usdt_reserve = ledger_usdt_reserve if ledger_usdt_reserve > 0 else legacy_usdt_reserve
+    effective_max_drawable = round(effective_usdt_reserve * WITHDRAWAL_MAX_POOL_FRACTION, 6)
+    liquidity_source = (
+        "pool_liquidity_ledger" if ledger_usdt_reserve > 0
+        else ("legacy" if legacy_usdt_reserve > 0 else "none")
+    )
 
     disabled_reasons = []
     if vault_status == "invalid_config":
@@ -32569,9 +32596,9 @@ def api_v1_withdrawal_quote():
         disabled_reasons.append("pool_vault_not_configured")
     if not signer_available:
         disabled_reasons.append("signer_not_available")
-    if liq["pool_usdt_reserve"] <= 0 and _pool_reserve_available <= 0:
+    if effective_usdt_reserve <= 0:
         disabled_reasons.append("no_pool_liquidity")
-    if amount > max_drawable > 0:
+    if amount > effective_max_drawable > 0:
         disabled_reasons.append("amount_exceeds_drawable_pool_liquidity")
     withdrawal_available = len(disabled_reasons) == 0
 
@@ -32638,10 +32665,17 @@ def api_v1_withdrawal_quote():
             "description": fee_distinction["description"],
         },
         "pool_liquidity": {
-            "usdt_reserve":        liq["pool_usdt_reserve"],
-            "max_drawable":        max_drawable,
-            "pool_vault":          vault_addr or None,
-            "pool_vault_status":   vault_status,
+            "pool_vault":              vault_addr or None,
+            "pool_vault_status":       vault_status,
+            "legacy_usdt_reserve":     legacy_usdt_reserve,
+            "legacy_max_drawable":     legacy_max_drawable,
+            "ledger_pool_id":          ledger_pool_id or None,
+            "ledger_external_reserve": ledger_ext_reserve,
+            "ledger_usdt_reserve":     ledger_usdt_reserve,
+            "ledger_thr_reserve":      ledger_thr_reserve,
+            "effective_usdt_reserve":  effective_usdt_reserve,
+            "effective_max_drawable":  effective_max_drawable,
+            "liquidity_source":        liquidity_source,
         },
         "user": {
             "thr_balance":         round(thr_balance, 6),

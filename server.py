@@ -1134,6 +1134,8 @@ GUEST_TTL_SECONDS = int(_strip_env_quotes(os.getenv("GUEST_TTL_SECONDS", str(7*2
 GUEST_STATE_FILE = os.path.join(DATA_DIR, "guest_state.json")
 _GUEST_STATE_LOCK = threading.Lock()  # guards read-modify-write on guest_state.json
 
+_THR_POOL_DEPOSIT_LOCK = threading.Lock()  # guards thr-deposit read-check-deduct-save
+
 def _now_ts() -> int:
     return int(time.time())
 
@@ -24316,6 +24318,193 @@ def api_pools_deposit():
         ), 201
     except Exception as e:
         logger.error("[pools/deposit] %s", e)
+        return jsonify(ok=False, error=str(e)), 500
+
+
+@app.route("/api/pools/thr-deposit", methods=["POST"])
+def api_pools_thr_deposit():
+    """
+    Deterministic, idempotent internal THR deposit into a pool THR reserve.
+
+    Body: {"address":"THR...","pool_id":"bsc-usdt","amount":100.0,"tx_ref":"<thronos-tx-id>"}
+
+    tx_ref  – caller-supplied Thronos transaction reference used as the
+              deterministic seed for pool_event_id.  Re-submitting the same
+              tx_ref returns the stored event without touching balances again.
+
+    - No RPC, no signing, no blockchain broadcast.
+    - THR is deducted from ledger.json immediately.
+    - thr_reserve and LP position are updated in the same write.
+    - Event appears in normalized liquidity history immediately.
+    """
+    try:
+        body    = request.get_json(silent=True) or {}
+        address = (body.get("address") or "").strip().upper()
+        pool_id = (body.get("pool_id") or "").strip().lower()
+        tx_ref  = (body.get("tx_ref")  or "").strip()
+        try:
+            amount = float(body.get("amount") or 0)
+        except Exception:
+            amount = 0.0
+
+        if not address or not address.startswith("THR"):
+            return jsonify(ok=False, error="valid_thr_address_required"), 400
+        if pool_id not in _POOL_CONFIGS:
+            return jsonify(ok=False, error="pool_not_found",
+                           valid_pools=list(_POOL_CONFIGS.keys())), 404
+        if not tx_ref:
+            return jsonify(ok=False, error="tx_ref_required"), 400
+        if amount <= 0:
+            return jsonify(ok=False, error="amount must be > 0"), 400
+
+        cfg = _POOL_CONFIGS[pool_id]
+
+        # Deterministic event ID derived from pool + caller-supplied tx reference
+        safe_ref = re.sub(r"[^a-zA-Z0-9_\-]", "", tx_ref)[:64]
+        peid     = f"THRDEP-{pool_id.upper()}-{safe_ref}"
+
+        # ── critical section: idempotency check → balance deduct → reserve update ──
+        # _THR_POOL_DEPOSIT_LOCK prevents concurrent requests for the same address
+        # from both passing the balance check before either write commits.
+        _dup_response  = None
+        _err_response  = None
+        _final_pos     = {}
+        _final_pool_snap = {}
+        with _THR_POOL_DEPOSIT_LOCK:
+            ledger = _load_pool_ledger()
+            pool   = ledger[pool_id]
+
+            # Idempotency — return stored result without re-debiting
+            existing = next(
+                (ev for ev in pool.get("events", []) if ev.get("pool_event_id") == peid),
+                None,
+            )
+            if existing:
+                positions = _load_pool_positions()
+                pos = positions.get(address, {}).get(pool_id, {})
+                _dup_response = (peid, existing["amount"],
+                                 existing.get("status", "confirmed"), pos)
+            else:
+                # Balance check + deduction
+                thr_ledger = load_json(LEDGER_FILE, {})
+                balance    = float(thr_ledger.get(address) or 0)
+                if balance < amount:
+                    _err_response = (balance, amount)
+                else:
+                    thr_ledger[address] = round(balance - amount, 8)
+                    save_json(LEDGER_FILE, thr_ledger)
+
+                    now_ts  = int(time.time())
+                    now_iso = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+
+                    # Update pool reserve
+                    pool["thr_reserve"]  = round(float(pool.get("thr_reserve") or 0) + amount, 8)
+                    pool["last_updated"] = now_iso
+                    pool.setdefault("events", []).append({
+                        "pool_event_id":      peid,
+                        "event_type":         "pool_deposit",
+                        "address":            address,
+                        "pool_id":            pool_id,
+                        "side":               "internal",
+                        "asset":              cfg["internal_asset"],
+                        "amount":             amount,
+                        "direction":          "allocate",
+                        "status":             "confirmed",
+                        "source":             "thr_wallet_deposit",
+                        "chain":              cfg["chain"],
+                        "transfer_scope":     "internal",
+                        "settlement_chain":   "thronos",
+                        "asset_origin_chain": "thronos",
+                        "tx_ref":             tx_ref,
+                        "timestamp":          now_ts,
+                        "timestamp_iso":      now_iso,
+                    })
+                    _save_pool_ledger(ledger)
+
+                    # Update LP position
+                    positions = _load_pool_positions()
+                    user_pos  = positions.setdefault(address, {})
+                    pos = user_pos.setdefault(pool_id, {
+                        "address": address, "pool_id": pool_id,
+                        "lp_position_balance": 0.0,
+                        "external_side_balance": 0.0,
+                        "thr_side_balance": 0.0,
+                    })
+                    pos["thr_side_balance"]    = round(float(pos.get("thr_side_balance", 0)) + amount, 8)
+                    pos["lp_position_balance"] = round(float(pos.get("lp_position_balance", 0)) + amount, 8)
+                    pos["last_updated"]        = now_iso
+                    _save_pool_positions(positions)
+
+                    _final_pos      = dict(pos)
+                    _final_pool_snap = {
+                        f"{cfg['external_asset'].lower()}_reserve":
+                            float(pool.get("external_reserve", 0)),
+                        "thr_reserve": float(pool.get("thr_reserve", 0)),
+                        "tvl_usd":     _pool_tvl_usd(pool),
+                    }
+        # ── end critical section ──────────────────────────────────────────────────
+
+        if _dup_response is not None:
+            _peid, _amt, _st, _pos = _dup_response
+            return jsonify(
+                ok=True,
+                pool_event_id=_peid,
+                duplicate=True,
+                pool_id=pool_id,
+                amount=_amt,
+                status=_st,
+                position=_pos,
+            ), 200
+
+        if _err_response is not None:
+            _avail, _req = _err_response
+            return jsonify(
+                ok=False,
+                error="insufficient_thr_balance",
+                available=_avail,
+                required=_req,
+            ), 400
+
+        add_wallet_history_event(
+            thr_address=address,
+            event_type="pool_deposit",
+            chain=cfg["chain"],
+            asset=cfg["internal_asset"],
+            amount=amount,
+            direction="allocate",
+            internal_txid=peid,
+            status="confirmed",
+            note=f"THR deposit {pool_id} ref={tx_ref[:16]}",
+        )
+
+        return jsonify(
+            ok=True,
+            pool_event_id=peid,
+            worker=_AMM_WORKER_NAME,
+            pool_id=pool_id,
+            pair=cfg["pair"],
+            chain=cfg["chain"],
+            side="internal",
+            asset=cfg["internal_asset"],
+            amount=amount,
+            status="confirmed",
+            transfer_scope="internal",
+            settlement_chain="thronos",
+            asset_origin_chain="thronos",
+            fee_asset="THR",
+            fee_chain="thronos",
+            position={
+                "address":               address,
+                "pool_id":               pool_id,
+                "asset":                 cfg["internal_asset"],
+                "lp_position_balance":   _final_pos.get("lp_position_balance", 0),
+                "thr_side_balance":      _final_pos.get("thr_side_balance", 0),
+                "external_side_balance": _final_pos.get("external_side_balance", 0),
+            },
+            tvl=_final_pool_snap,
+        ), 201
+    except Exception as e:
+        logger.error("[pools/thr-deposit] %s", e)
         return jsonify(ok=False, error=str(e)), 500
 
 

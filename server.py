@@ -17055,6 +17055,309 @@ def api_admin_pythia_attach_evm_address():
         }), 500
 
 
+@app.route("/api/admin/pythia/create-evm-address", methods=["POST"])
+def api_admin_pythia_create_evm_address():
+    """
+    Admin endpoint — Create a real EVM public address for Pythia by generating
+    a secp256k1 keypair server-side (reuses logic from USDT pledge flow).
+
+    The private key is encrypted with AES-256-GCM using PYTHIA_EVM_KEY_SECRET
+    env var (falls back to ADMIN_SECRET).  If no encryption key is configured
+    this endpoint returns needs_secure_key_storage rather than generating a key
+    that would be permanently lost.
+
+    Responses
+    ---------
+    A) Existing wallet already has a valid EVM address:
+       status=configured, safe_to_register=true, evm_public_address=0x...
+
+    B) Key generated and encrypted successfully (first-time):
+       HTTP 201, status=configured, safe_to_register=true, evm_public_address=0x...
+
+    C) keccak256 library not installed:
+       status=needs_keccak256, safe_to_register=false
+       next_steps: ["pip install eth_keys", "retry"]
+
+    D) No encryption key env var configured:
+       status=needs_secure_key_storage, safe_to_register=false
+       action_required: "Set PYTHIA_EVM_KEY_SECRET env var to a 32-char+ secret"
+
+    Security
+    --------
+    - Private key NEVER returned in any response
+    - Private key NEVER logged
+    - Stored ONLY as AES-256-GCM ciphertext in pythia_v1_wallet.json
+    - EVM address is derived from public key (non-reversible)
+    - No signing, broadcast, or fund movement
+    """
+    denied = require_admin()
+    if denied:
+        return denied
+
+    try:
+        # ── 1. Return if already configured ─────────────────────────────────
+        wallet = _discover_pythia_v1_wallet()
+        if wallet:
+            existing_evm = wallet.get("evm_public_address_bsc") or wallet.get("evm_public_address")
+            if existing_evm and _is_valid_evm_address(existing_evm):
+                return jsonify({
+                    "ok": True,
+                    "pythia_v1_wallet": {
+                        "thr_address": wallet.get("thr_address"),
+                        "evm_public_address": existing_evm,
+                        "evm_public_address_bsc": existing_evm,
+                        "evm_public_address_base": wallet.get("evm_public_address_base", existing_evm),
+                        "evm_public_address_arbitrum": wallet.get("evm_public_address_arbitrum", existing_evm),
+                        "evm_public_address_eth": wallet.get("evm_public_address_eth", existing_evm),
+                        "status": "configured",
+                        "safe_to_register": True,
+                        "source": "existing_v1_wallet",
+                    }
+                }), 200
+
+        # ── 2. Require secure key storage ────────────────────────────────────
+        enc_secret = os.getenv("PYTHIA_EVM_KEY_SECRET") or os.getenv("ADMIN_SECRET") or ""
+        if len(enc_secret) < 16:
+            return jsonify({
+                "ok": True,
+                "pythia_v1_wallet": {
+                    "thr_address": wallet.get("thr_address") if wallet else None,
+                    "evm_public_address": None,
+                    "status": "needs_secure_key_storage",
+                    "safe_to_register": False,
+                },
+                "action_required": (
+                    "Set PYTHIA_EVM_KEY_SECRET env var (32+ chars) before creating "
+                    "Pythia EVM signer address. Without it the private key cannot be "
+                    "stored securely and generation is refused."
+                ),
+            }), 200
+
+        # ── 3. Generate secp256k1 keypair (pure Python, no external deps) ────
+        priv_hex, compressed_pub, thr_addr = _pythia_generate_secp256k1_keypair()
+
+        # ── 4. Derive EVM address (requires keccak256 library) ───────────────
+        evm_address = _pythia_derive_evm_address(priv_hex)
+        if not evm_address:
+            return jsonify({
+                "ok": True,
+                "pythia_v1_wallet": {
+                    "thr_address": thr_addr,
+                    "public_key": compressed_pub,
+                    "evm_public_address": None,
+                    "status": "needs_keccak256",
+                    "safe_to_register": False,
+                },
+                "next_steps": [
+                    "pip install eth_keys   # preferred",
+                    "pip install pysha3     # alternative",
+                    "pip install pycryptodome  # alternative",
+                    "Then retry POST /api/admin/pythia/create-evm-address",
+                ],
+            }), 200
+
+        # ── 5. Encrypt private key with AES-256-GCM ──────────────────────────
+        enc_blob = _pythia_encrypt_private_key(priv_hex, enc_secret)
+        if not enc_blob:
+            return jsonify({
+                "ok": False,
+                "error": "encryption_failed",
+                "detail": "cryptography library required: pip install cryptography",
+            }), 500
+
+        # ── 6. Persist to pythia_v1_wallet.json ──────────────────────────────
+        if not wallet:
+            result = _provision_pythia_v1_wallet()
+            if isinstance(result, tuple):
+                return jsonify({"ok": False, "error": result[1]}), 500
+            wallet = result
+
+        wallet["evm_public_address"] = evm_address
+        wallet["evm_public_address_bsc"] = evm_address
+        wallet["evm_public_address_base"] = evm_address
+        wallet["evm_public_address_arbitrum"] = evm_address
+        wallet["evm_public_address_eth"] = evm_address
+        wallet["evm_public_key"] = compressed_pub
+        wallet["evm_private_key_encrypted"] = enc_blob   # ciphertext only, never plaintext
+        wallet["evm_address_created_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+        wallet["evm_address_source"] = "server_side_secp256k1"
+
+        try:
+            save_json(PYTHIA_V1_WALLET_FILE, wallet)
+        except Exception as e:
+            logger.error("[Pythia create-evm-address] persist failed: %s", e)
+            return jsonify({"ok": False, "error": "persistence_failed", "detail": str(e)}), 500
+
+        add_wallet_history_event(
+            thr_address="SYSTEM_PYTHIA_ACTIONS",
+            event_type="pythia_evm_address_created",
+            chain="thronos",
+            asset="",
+            amount=0.0,
+            direction="system",
+            internal_txid=f"CREATE_EVM_{int(time.time())}",
+            status="confirmed",
+            note=f"Pythia EVM address created from server-side keypair: {evm_address}",
+        )
+
+        return jsonify({
+            "ok": True,
+            "pythia_v1_wallet": {
+                "thr_address": wallet.get("thr_address"),
+                "public_key": compressed_pub,
+                "evm_public_address": evm_address,
+                "evm_public_address_bsc": evm_address,
+                "evm_public_address_base": evm_address,
+                "evm_public_address_arbitrum": evm_address,
+                "evm_public_address_eth": evm_address,
+                "status": "configured",
+                "safe_to_register": True,
+                "source": "created_from_server_side_keypair",
+            }
+        }), 201
+
+    except Exception as e:
+        logger.error("[Pythia create-evm-address] Unexpected error: %s", e, exc_info=True)
+        return jsonify({"ok": False, "error": "server_error", "detail": str(e)}), 500
+
+
+# ── Helpers for Pythia EVM keypair creation ──────────────────────────────────
+
+def _pythia_generate_secp256k1_keypair():
+    """
+    Generate secp256k1 keypair.  Pure Python — same algorithm as server_ext.py
+    pledge-migrate.  Returns (priv_hex, compressed_pubkey_hex, thr_address).
+
+    IMPORTANT: priv_hex is used ONLY to derive EVM address and encrypt for
+    storage.  It must NEVER be logged, returned in responses, or stored plaintext.
+    """
+    import os as _os_kp
+    _P  = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F
+    _N  = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
+    _Gx = 0x79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798
+    _Gy = 0x483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8
+
+    def _pt_add(P1, P2):
+        if P1 is None: return P2
+        if P2 is None: return P1
+        x1, y1 = P1; x2, y2 = P2
+        if x1 == x2:
+            if y1 != y2: return None
+            m = (3 * x1 * x1 * pow(2 * y1, _P - 2, _P)) % _P
+        else:
+            m = ((y2 - y1) * pow(x2 - x1, _P - 2, _P)) % _P
+        x3 = (m * m - x1 - x2) % _P
+        return x3, (m * (x1 - x3) - y1) % _P
+
+    def _pt_mul(k, G):
+        R = None; A = G
+        while k:
+            if k & 1: R = _pt_add(R, A)
+            A = _pt_add(A, A); k >>= 1
+        return R
+
+    priv_int = int.from_bytes(_os_kp.urandom(32), 'big') % (_N - 1) + 1
+    priv_hex = priv_int.to_bytes(32, 'big').hex()
+    x, y = _pt_mul(priv_int, (_Gx, _Gy))
+    compressed_pub = ('02' if y % 2 == 0 else '03') + hex(x)[2:].zfill(64)
+
+    from wallet_v1_address_derivation import derive_thronos_address
+    thr_address = derive_thronos_address(compressed_pub)
+    return priv_hex, compressed_pub, thr_address
+
+
+def _pythia_derive_evm_address(priv_hex: str):
+    """
+    Derive 0x EVM address from private key hex.
+    Requires keccak256 (eth_keys, pysha3, or pycryptodome).
+    Returns address string or None if keccak256 unavailable.
+
+    IMPORTANT: priv_hex is never stored or logged; only the derived 0x address
+    is kept.  The caller is responsible for persisting the encrypted private key.
+    """
+    try:
+        keccak_fn = None
+        try:
+            from eth_keys import keys as _eth_keys
+            keccak_fn = lambda d: _eth_keys.keccak(d)
+        except (ImportError, AttributeError):
+            pass
+        if not keccak_fn:
+            try:
+                import sha3 as _sha3
+                keccak_fn = lambda d: _sha3.keccak_256(d).digest()
+            except ImportError:
+                pass
+        if not keccak_fn:
+            try:
+                from Crypto.Hash import keccak as _keccak_mod
+                def _keccak_crypto(d):
+                    k = _keccak_mod.new(digest_bits=256); k.update(d); return k.digest()
+                keccak_fn = _keccak_crypto
+            except ImportError:
+                pass
+        if not keccak_fn:
+            return None
+
+        # Recompute uncompressed public key from private key scalar
+        priv_int = int(priv_hex, 16)
+        _P  = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F
+        _Gx = 0x79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798
+        _Gy = 0x483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8
+
+        def _pt_add(P1, P2):
+            if P1 is None: return P2
+            if P2 is None: return P1
+            x1, y1 = P1; x2, y2 = P2
+            if x1 == x2:
+                if y1 != y2: return None
+                m = (3 * x1 * x1 * pow(2 * y1, _P - 2, _P)) % _P
+            else:
+                m = ((y2 - y1) * pow(x2 - x1, _P - 2, _P)) % _P
+            x3 = (m * m - x1 - x2) % _P
+            return x3, (m * (x1 - x3) - y1) % _P
+
+        def _pt_mul(k, G):
+            R = None; A = G
+            while k:
+                if k & 1: R = _pt_add(R, A)
+                A = _pt_add(A, A); k >>= 1
+            return R
+
+        x, y = _pt_mul(priv_int, (_Gx, _Gy))
+        uncompressed = bytes.fromhex('04' + hex(x)[2:].zfill(64) + hex(y)[2:].zfill(64))
+        return '0x' + keccak_fn(uncompressed)[-20:].hex()
+    except Exception as e:
+        logger.warning("[Pythia EVM derive] %s", e)
+        return None
+
+
+def _pythia_encrypt_private_key(priv_hex: str, secret: str) -> dict | None:
+    """
+    Encrypt private key with AES-256-GCM using PBKDF2-SHA256.
+    Returns JSON-serialisable dict (ciphertext envelope) or None on failure.
+
+    The plaintext private key is NEVER stored; only this ciphertext envelope
+    is persisted to pythia_v1_wallet.json under 'evm_private_key_encrypted'.
+    """
+    try:
+        from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        from cryptography.hazmat.primitives import hashes
+        import os as _os_enc
+
+        _salt = _os_enc.urandom(16)
+        _iv   = _os_enc.urandom(12)
+        kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=_salt, iterations=250_000)
+        key = kdf.derive(secret.encode())
+        ct  = AESGCM(key).encrypt(_iv, bytes.fromhex(priv_hex), None)
+        return {"v": 1, "alg": "aes256gcm", "kdf": "pbkdf2-sha256-250k",
+                "salt": _salt.hex(), "iv": _iv.hex(), "ct": ct.hex()}
+    except Exception as e:
+        logger.warning("[Pythia EVM encrypt] %s", e)
+        return None
+
+
 @app.route("/api/admin/pythia/register-core-addresses", methods=["POST"])
 def api_admin_pythia_register_core_addresses():
     """

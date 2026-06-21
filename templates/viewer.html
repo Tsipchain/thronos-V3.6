@@ -73,6 +73,34 @@
             border-bottom-color: #00ff66;
         }
 
+        .subtabs {
+            display: none;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-bottom: 16px;
+            margin-left: 4px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #1a1a2e;
+            overflow-x: auto;
+        }
+        .subtabs.visible { display: flex; }
+        .subtab {
+            padding: 5px 11px;
+            background: none;
+            border: none;
+            color: #666;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 400;
+            border-bottom: 2px solid transparent;
+            transition: all 0.2s;
+        }
+        .subtab:hover { color: #00ff66; }
+        .subtab.active {
+            color: #00ff66;
+            border-bottom-color: #00ff66;
+        }
+
         .filters {
             display: flex;
             gap: 10px;
@@ -233,6 +261,15 @@
             <button class="tab {% if default_tab == 'failed' %}active{% endif %}" data-tab="failed">Failed/Review</button>
         </div>
 
+        <!-- Cross-Chain subtabs: shown only under the "All" tab -->
+        <div class="subtabs" id="subtabs">
+            <button class="subtab active" data-subtab="all-tx">All Transactions</button>
+            <button class="subtab" data-subtab="native-thr">Native THR</button>
+            <button class="subtab" data-subtab="crosschain-events">🌉 Cross-Chain Events</button>
+            <button class="subtab" data-subtab="bridge">Bridge</button>
+            <button class="subtab" data-subtab="withdrawals">Withdrawals</button>
+        </div>
+
         <!-- Filters -->
         <div class="filters">
             <select class="filter-select" id="chainFilter">
@@ -270,6 +307,7 @@
         const API_URL = '{{ api_url }}';
         let currentAddress = '{{ address }}';
         let currentTab = '{{ default_tab }}' || 'all';
+        let currentSubtab = 'all-tx';
         let currentChain = '';
         let currentStatus = '';
         let currentOffset = 0;
@@ -313,7 +351,10 @@
                 }
 
                 totalTransactions = data.total;
-                const transactions = data.transactions;
+                const allTransactions = data.transactions;
+                const transactions = currentTab === 'all'
+                    ? filterBySubtab(allTransactions, currentSubtab)
+                    : allTransactions;
 
                 if (transactions.length === 0) {
                     document.getElementById('content').innerHTML = `
@@ -462,12 +503,65 @@
             }
         }
 
+        function isWalletIdentityEvent(t) {
+            return [
+                'wallet_discovered','wallet_provisioned','wallet_configured',
+                'address_discovered','address_attached','address_registered',
+                'v1_wallet_','pythia_v1_wallet_','public_key','key_binding',
+                'pythia_evm_address_attached','pythia_evm_address_registered',
+                'pythia_public_address_registered','pythia_role_address_registered',
+            ].some(p => t.toLowerCase().includes(p));
+        }
+
+        function isCrossChainEvent(t) {
+            return [
+                'bridge_','withdrawal_','gateway_','crosschain_',
+                'external_service_fee_','external_fee_split',
+                'pool_topup_from_service_fee',
+                'gas_reserve_','gas_wallet_','swap_to_gas_',
+            ].some(p => t.toLowerCase().startsWith(p));
+        }
+
+        function filterBySubtab(txs, subtab) {
+            if (subtab === 'crosschain-events') return txs.filter(tx => isCrossChainEvent(tx.event_type));
+            if (subtab === 'native-thr')        return txs.filter(tx =>
+                (tx.asset === 'THR' || tx.event_type === 'token_receive' || tx.event_type === 'token_send')
+                && !isCrossChainEvent(tx.event_type) && !isWalletIdentityEvent(tx.event_type));
+            if (subtab === 'bridge')       return txs.filter(tx => tx.event_type.toLowerCase().startsWith('bridge_'));
+            if (subtab === 'withdrawals')  return txs.filter(tx =>
+                tx.event_type.toLowerCase().startsWith('withdrawal_') ||
+                tx.event_type.toLowerCase().startsWith('crosschain_withdrawal'));
+            // all-tx: exclude wallet identity events
+            return txs.filter(tx => !isWalletIdentityEvent(tx.event_type));
+        }
+
         // Tab switching
         document.querySelectorAll('.tab').forEach(btn => {
             btn.addEventListener('click', () => {
                 document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
                 currentTab = btn.dataset.tab;
+                currentOffset = 0;
+                const subtabsEl = document.getElementById('subtabs');
+                if (currentTab === 'all') {
+                    subtabsEl.classList.add('visible');
+                    currentSubtab = 'all-tx';
+                    document.querySelectorAll('.subtab').forEach(sb => {
+                        sb.classList.toggle('active', sb.dataset.subtab === 'all-tx');
+                    });
+                } else {
+                    subtabsEl.classList.remove('visible');
+                }
+                loadTransactions();
+            });
+        });
+
+        // Subtab switching
+        document.querySelectorAll('.subtab').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.subtab').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                currentSubtab = btn.dataset.subtab;
                 currentOffset = 0;
                 loadTransactions();
             });

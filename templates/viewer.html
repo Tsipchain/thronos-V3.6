@@ -260,6 +260,7 @@
             <button class="tab {% if default_tab == 'bridge' %}active{% endif %}" data-tab="bridge">Bridge</button>
             <button class="tab {% if default_tab == 'withdrawals' %}active{% endif %}" data-tab="withdrawals">Withdrawals</button>
             <button class="tab {% if default_tab == 'failed' %}active{% endif %}" data-tab="failed">Failed/Review</button>
+            <button class="tab {% if default_tab == 'rpc-crosschain' %}active{% endif %}" data-tab="rpc-crosschain">⛓ RPC / Cross-chain</button>
         </div>
 
         <!-- Cross-Chain subtabs: shown only under the "All" tab -->
@@ -329,9 +330,10 @@
             document.getElementById('content').innerHTML = '<div class="loading">Loading transactions...</div>';
 
             try {
+                const isRpcTab = (currentTab === 'rpc-crosschain');
                 const params = new URLSearchParams({
                     address: currentAddress,
-                    tab: currentTab === 'liquidity' ? 'all' : currentTab,
+                    tab: (currentTab === 'liquidity' || isRpcTab) ? 'all' : currentTab,
                     chain: currentChain,
                     status: currentStatus,
                     limit: LIMIT,
@@ -340,6 +342,9 @@
                 if (currentTab === 'liquidity') {
                     params.set('domain', 'liquidity');
                     params.set('source', 'pool_liquidity_ledger');
+                }
+                if (isRpcTab) {
+                    params.set('domain', 'all');
                 }
 
                 const response = await fetch(`${API_URL}/api/v1/viewer/transactions?${params}`);
@@ -357,9 +362,27 @@
 
                 totalTransactions = data.total;
                 const allTransactions = data.transactions;
-                const transactions = currentTab === 'all'
-                    ? filterBySubtab(allTransactions, currentSubtab)
-                    : allTransactions;
+
+                const _RPC_CROSSCHAIN_TYPES = new Set([
+                    'crosschain_deposit_detected', 'crosschain_transfer_received',
+                    'crosschain_transfer_sent', 'crosschain_withdraw',
+                    'crosschain_withdrawal_request', 'bridge_deposit_detected', 'bridge',
+                    'pool_external_deposit_detected', 'pool_add_liquidity_intent_created',
+                    'pool_add_liquidity_external_tx_confirmed', 'external_withdrawal_request',
+                    'pledge', 'pledge_usdt_bnb_confirmed',
+                ]);
+
+                let transactions;
+                if (currentTab === 'all') {
+                    transactions = filterBySubtab(allTransactions, currentSubtab);
+                } else if (currentTab === 'rpc-crosschain') {
+                    transactions = allTransactions.filter(tx =>
+                        _RPC_CROSSCHAIN_TYPES.has(tx.event_type) ||
+                        (tx.chain && tx.chain.toLowerCase() !== 'thronos')
+                    );
+                } else {
+                    transactions = allTransactions;
+                }
 
                 if (transactions.length === 0) {
                     document.getElementById('content').innerHTML = `
@@ -400,7 +423,7 @@
                         explorerLinks += `<a class="explorer-link" href="${tx.explorer_url}" target="_blank">${tx.network_label} ↗</a>`;
                     }
 
-                    const poolMeta = isLiquidityTab ? `
+                    const poolMeta = (isLiquidityTab || isRpcTab) ? `
                         <div style="font-size:10px; color:#00c8ff; margin-top:4px;">
                             ${tx.pool_id ? `pool: ${tx.pool_id}` : ''}
                             ${tx.side    ? ` · side: ${tx.side}` : ''}
@@ -426,7 +449,7 @@
                         external_withdrawal_request:      'External Withdrawal',
                         crosschain_withdrawal_request:    'External Withdrawal',
                     };
-                    const displayLabel = isLiquidityTab
+                    const displayLabel = (isLiquidityTab || isRpcTab)
                         ? (_LIQ_VIEWER_LABELS[tx.event_type] || tx.event_type)
                         : tx.event_type;
                     html += `<tr>

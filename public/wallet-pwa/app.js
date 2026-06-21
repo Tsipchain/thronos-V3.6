@@ -3365,6 +3365,7 @@ const HISTORY_FILTERS = [
   { key: 'mining_reward', label: 'Mining' },
   { key: 'pledge', label: 'Pledges' },
   { key: 'crosschain', label: 'Cross-Chain' },
+  { key: 'rpc-crosschain', label: 'RPC / Cross-chain' },
   { key: 'bridge', label: 'Bridge' },
   { key: 'mint', label: 'Mint' },
   { key: 'burn', label: 'Burn' },
@@ -3591,6 +3592,13 @@ async function showHistory(address) {
         );
       } else if (activeFilter === 'crosschain') {
         filtered = allTx.filter(tx => _CROSSCHAIN_FILTER_TYPES.has(et(tx)));
+      } else if (activeFilter === 'rpc-crosschain') {
+        filtered = allTx.filter(tx =>
+          _CROSSCHAIN_FILTER_TYPES.has(et(tx)) ||
+          _PLEDGE_EVENT_TYPES.has(et(tx)) ||
+          (_LIQUIDITY_FILTER_TYPES.has(et(tx)) && (tx.chain || '').toLowerCase() !== 'thronos') ||
+          (tx.domain === 'rpc-crosschain')
+        );
       } else {
         filtered = allTx.filter(tx => et(tx) === activeFilter);
       }

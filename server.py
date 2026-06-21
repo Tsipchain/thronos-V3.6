@@ -1063,6 +1063,10 @@ POOL_POSITIONS_FILE          = os.path.join(DATA_DIR, "pool_positions.json")
 POOL_TVL_SNAPSHOTS_FILE      = os.path.join(DATA_DIR, "pool_tvl_snapshots.json")
 PYTHIA_AMM_WORKER_STATE_FILE = os.path.join(DATA_DIR, "pythia_amm_worker_state.json")
 
+# Pool Deposit Watcher data files
+POOL_DEPOSIT_WATCHER_STATE_FILE = os.path.join(DATA_DIR, "pool_deposit_watcher_state.json")
+POOL_EXTERNAL_DEPOSITS_FILE     = os.path.join(DATA_DIR, "pool_external_deposits.json")
+
 # Active peers tracking (for replicas heartbeating to master)
 PEER_TTL_SECONDS = 60  # Peers expire after 60 seconds without heartbeat
 PEERS = {}  # {url: {"url": url, "node_role": role, "height": int, "last_seen": ts}}
@@ -24397,6 +24401,212 @@ def api_admin_pools_tvl_snapshot():
         return jsonify(ok=False, error=str(e)), 500
 
 
+# ─── Pool Deposit Watcher admin routes ────────────────────────────────────────
+
+def _pool_watcher_missing_config() -> list:
+    """Return list of missing env vars needed for the pool deposit watcher."""
+    missing = []
+    if not os.getenv("BSC_RPC_URL"):
+        missing.append("BSC_RPC_URL")
+    if not os.getenv("BASE_RPC_URL"):
+        missing.append("BASE_RPC_URL")
+    if not (os.getenv("BSC_POOL_VAULT_ADDRESS") or os.getenv("PYTHIA_SYSTEM_EVM_BSC_ADDRESS")):
+        missing.append("BSC_POOL_VAULT_ADDRESS or PYTHIA_SYSTEM_EVM_BSC_ADDRESS")
+    if not (os.getenv("BASE_POOL_VAULT_ADDRESS") or os.getenv("PYTHIA_SYSTEM_EVM_BASE_ADDRESS")):
+        missing.append("BASE_POOL_VAULT_ADDRESS or PYTHIA_SYSTEM_EVM_BASE_ADDRESS")
+    return missing
+
+
+@app.route("/api/admin/pools/watcher/status", methods=["GET"])
+def api_admin_pools_watcher_status():
+    """
+    Pool deposit watcher status — vault addresses, scan state, deposit counts.
+    Protected by admin auth.
+    """
+    denied = require_admin()
+    if denied:
+        return denied
+    try:
+        missing = _pool_watcher_missing_config()
+        state   = load_json(POOL_DEPOSIT_WATCHER_STATE_FILE, {})
+        ext_deposits = load_json(POOL_EXTERNAL_DEPOSITS_FILE, [])
+        if not isinstance(ext_deposits, list):
+            ext_deposits = []
+
+        watched_vaults = {}
+        for pid, cfg in _POOL_CONFIGS.items():
+            chain_up = cfg.get("chain", "").upper()
+            vault    = (
+                os.getenv(f"{chain_up}_POOL_VAULT_ADDRESS") or
+                os.getenv(f"PYTHIA_SYSTEM_EVM_{chain_up}_ADDRESS") or
+                "0x76b1926f40c596e10c30ae7a359df8a0b21ac4a2"
+            )
+            rpc_key = f"{chain_up}_RPC_URL"
+            if cfg["external_asset"] == "USDT":
+                contract_key = f"{chain_up}_USDT_CONTRACT"
+            else:
+                contract_key = f"{chain_up}_USDC_CONTRACT"
+            watched_vaults[pid] = {
+                "pool_id":            pid,
+                "chain":              cfg["chain"],
+                "asset":              cfg["external_asset"],
+                "vault_address":      vault,
+                "rpc_configured":     bool(os.getenv(rpc_key)),
+                "rpc_env_var":        rpc_key,
+                "contract_env_var":   contract_key,
+                "last_scanned_block": state.get("last_scanned_block", {}).get(cfg["chain"], 0),
+            }
+
+        return jsonify(
+            ok=True,
+            enabled=os.getenv("POOL_WATCHER_ENABLED", "0") == "1",
+            available=_POOL_WATCHER_AVAILABLE,
+            watched_vaults=watched_vaults,
+            watched_chains=[cfg["chain"] for cfg in _POOL_CONFIGS.values()],
+            last_scanned_block=state.get("last_scanned_block", {}),
+            confirmed_deposits=len(ext_deposits),
+            last_scan_ts=state.get("last_scan_ts"),
+            last_error=state.get("last_error") or None,
+            missing_config=missing if missing else None,
+        ), 200
+    except Exception as exc:
+        logger.error("[admin/pools/watcher/status] %s", exc)
+        return jsonify(ok=False, error=str(exc)), 500
+
+
+@app.route("/api/admin/pools/watcher/scan-once", methods=["POST"])
+def api_admin_pools_watcher_scan_once():
+    """Trigger an immediate watcher scan cycle, bypassing the scheduler."""
+    denied = require_admin()
+    if denied:
+        return denied
+    try:
+        from pool_deposit_watcher import scan_pool_deposits
+        scan_pool_deposits()
+        state        = load_json(POOL_DEPOSIT_WATCHER_STATE_FILE, {})
+        ext_deposits = load_json(POOL_EXTERNAL_DEPOSITS_FILE, [])
+        if not isinstance(ext_deposits, list):
+            ext_deposits = []
+        return jsonify(
+            ok=True,
+            message="scan_complete",
+            confirmed_deposits=len(ext_deposits),
+            last_scanned_block=state.get("last_scanned_block", {}),
+            last_error=state.get("last_error") or None,
+        ), 200
+    except ImportError:
+        return jsonify(ok=False, error="pool_deposit_watcher_unavailable"), 503
+    except Exception as exc:
+        logger.error("[admin/pools/watcher/scan-once] %s", exc)
+        return jsonify(ok=False, error=str(exc)), 500
+
+
+@app.route("/api/admin/pools/watcher/credit-external-deposit", methods=["POST"])
+def api_admin_pools_watcher_credit_external():
+    """
+    Internal endpoint called by pool_deposit_watcher.py to credit a confirmed
+    on-chain deposit into pool_liquidity_ledger.json (external_reserve).
+
+    No signing. No broadcast. No private keys. Accounting update only.
+    Protected by admin auth (ADMIN_SECRET in request body).
+    """
+    denied = require_admin()
+    if denied:
+        return denied
+    try:
+        body       = request.get_json(silent=True) or {}
+        event_id   = (body.get("event_id")      or "").strip()
+        pool_id    = (body.get("pool_id")        or "").strip().lower()
+        chain      = (body.get("chain")          or "").strip().lower()
+        asset      = (body.get("asset")          or "").strip().upper()
+        tx_hash    = (body.get("tx_hash")        or "").strip().lower()
+        from_addr  = (body.get("from_address")   or "").strip().lower()
+        to_addr    = (body.get("to_address")     or "").strip().lower()
+        log_index  = int(body.get("log_index", 0))
+        src_detail = (body.get("source_detail")  or "pool_watcher").strip()
+        confirmations = int(body.get("confirmations", 0))
+
+        try:
+            amount = float(body.get("amount") or 0)
+        except Exception:
+            amount = 0.0
+
+        if not event_id:
+            return jsonify(ok=False, error="event_id_required"), 400
+        if pool_id not in _POOL_CONFIGS:
+            return jsonify(ok=False, error="pool_not_found",
+                           valid_pools=list(_POOL_CONFIGS.keys())), 404
+        if amount <= 0:
+            return jsonify(ok=False, error="amount_must_be_positive"), 400
+        if not tx_hash.startswith("0x"):
+            return jsonify(ok=False, error="invalid_tx_hash"), 400
+
+        # ── Idempotency: check if this event_id was already credited ──────
+        ledger = _load_pool_ledger()
+        pool   = ledger.get(pool_id, {})
+        for ev in pool.get("events", []):
+            if ev.get("pool_event_id") == event_id:
+                return jsonify(ok=True, error="duplicate", event_id=event_id,
+                               pool_id=pool_id, amount=amount), 200
+
+        # ── Credit external_reserve ────────────────────────────────────────
+        cfg     = _POOL_CONFIGS[pool_id]
+        now_iso = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+
+        pool["external_reserve"] = round(
+            float(pool.get("external_reserve") or 0) + amount, 8
+        )
+        pool["last_updated"] = now_iso
+        pool.setdefault("events", []).append({
+            "pool_event_id":      event_id,
+            "event_type":         "pool_external_deposit_detected",
+            "address":            PYTHIA_SYSTEM_THR_ADDRESS,
+            "pool_id":            pool_id,
+            "side":               "external",
+            "asset":              asset,
+            "amount":             amount,
+            "direction":          "allocate",
+            "status":             "confirmed",
+            "source":             "external_watcher",
+            "source_detail":      src_detail,
+            "chain":              chain,
+            "tx_hash":            tx_hash,
+            "log_index":          log_index,
+            "from_address":       from_addr,
+            "to_address":         to_addr,
+            "confirmations":      confirmations,
+            "transfer_scope":     "cross_chain",
+            "settlement_chain":   chain,
+            "asset_origin_chain": chain,
+            "worker":             _AMM_WORKER_NAME,
+            "timestamp":          int(time.time()),
+            "timestamp_iso":      now_iso,
+        })
+        _save_pool_ledger(ledger)
+
+        logger.info("[pool_watcher] credited %.6f %s → %s external_reserve | tx=%s log=%d",
+                    amount, asset, pool_id, tx_hash[:20], log_index)
+
+        return jsonify(
+            ok=True,
+            event_id=event_id,
+            pool_id=pool_id,
+            chain=chain,
+            asset=asset,
+            amount=amount,
+            status="confirmed",
+            transfer_scope="cross_chain",
+            settlement_chain=chain,
+            asset_origin_chain=chain,
+            worker=_AMM_WORKER_NAME,
+            external_reserve=float(pool.get("external_reserve", 0)),
+        ), 200
+
+    except Exception as exc:
+        logger.error("[admin/pools/watcher/credit-external-deposit] %s", exc)
+        return jsonify(ok=False, error=str(exc)), 500
+
+
 def _collect_normalized_history_from_pool_ledger(
     aliases: set, limit_overfetch: int
 ) -> tuple[list, dict]:
@@ -24418,6 +24628,11 @@ def _collect_normalized_history_from_pool_ledger(
                 addr = (ev.get("address") or ev.get("thr_address") or "").strip().upper()
                 if addr not in aliases_upper:
                     continue
+                # Respect transfer_scope/settlement_chain stored in each event
+                # (watcher-credited events use cross_chain/chain; user deposits use internal/thronos)
+                ev_scope    = ev.get("transfer_scope") or "internal"
+                ev_settle   = ev.get("settlement_chain") or "thronos"
+                ev_origin   = ev.get("asset_origin_chain") or chain
                 events.append({
                     "id":               ev.get("pool_event_id") or ev.get("id") or "",
                     "thr_address":      ev.get("address") or "",
@@ -24426,12 +24641,14 @@ def _collect_normalized_history_from_pool_ledger(
                     "_raw_category":    "liquidity",
                     "pool_event_id":    ev.get("pool_event_id") or "",
                     "correlation_id":   ev.get("correlation_id") or "",
-                    "transfer_scope":   "internal",
-                    "settlement_chain": "thronos",
-                    "asset_origin_chain": chain,
+                    "source":           ev.get("source") or "pool_ledger",
+                    "source_detail":    ev.get("source_detail") or "",
+                    "transfer_scope":   ev_scope,
+                    "settlement_chain": ev_settle,
+                    "asset_origin_chain": ev_origin,
                     "fee_asset":        "THR",
                     "fee_chain":        "thronos",
-                    "worker":           _AMM_WORKER_NAME,
+                    "worker":           ev.get("worker") or _AMM_WORKER_NAME,
                     "chain":            chain,
                     "asset":            ev.get("asset") or "",
                     "amount":           float(ev.get("amount") or 0),
@@ -24439,6 +24656,9 @@ def _collect_normalized_history_from_pool_ledger(
                     "status":           ev.get("status") or "confirmed",
                     "timestamp":        ev.get("timestamp") or 0,
                     "note":             ev.get("note") or "",
+                    "tx_hash":          ev.get("tx_hash") or "",
+                    "from_address":     ev.get("from_address") or "",
+                    "to_address":       ev.get("to_address") or "",
                 })
                 source_counts["pool_liquidity_ledger.json"] += 1
     except Exception as ex:
@@ -30862,8 +31082,9 @@ def tx_registry_view():
 
 
 # ─── SCHEDULER ─────────────────────────────────────
-# Set by start_scheduler(); True only when bnb_pledge_watcher imports successfully.
-_BNB_WATCHER_AVAILABLE = False
+# Set by start_scheduler(); True only when the respective watcher imports successfully.
+_BNB_WATCHER_AVAILABLE  = False
+_POOL_WATCHER_AVAILABLE = False
 
 
 def _with_app_context(fn):
@@ -30924,6 +31145,19 @@ if NODE_ROLE == "master" and SCHEDULER_ENABLED and ENABLE_CHAIN:
     except ImportError as e:
         print(f"[SCHEDULER] BNB/USDT pledge watcher unavailable: {e}")
         _BNB_WATCHER_AVAILABLE = False
+
+    # Pool Deposit Watcher – polls BSC/Base vault addresses for real ERC-20 deposits
+    # Separate from pledge watcher; credits pool_liquidity_ledger external_reserve.
+    # Requires POOL_WATCHER_ENABLED=1 to activate scanning.
+    try:
+        from pool_deposit_watcher import scan_pool_deposits
+        scheduler.add_job(_with_app_context(scan_pool_deposits), "interval", minutes=5,
+                         coalesce=True, max_instances=1, id="pool_deposit_watcher")
+        print("[SCHEDULER] Pool deposit watcher scheduled (every 5 min)")
+        _POOL_WATCHER_AVAILABLE = True
+    except ImportError as e:
+        print(f"[SCHEDULER] Pool deposit watcher unavailable: {e}")
+        _POOL_WATCHER_AVAILABLE = False
 
     # PYTHEIA Worker – system health monitoring & governance advice
     try:

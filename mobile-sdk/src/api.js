@@ -432,4 +432,64 @@ export default class ThronosAPI {
     async getTransactionsByCategory(address, category = 'all', limit = 50) {
         return await this.request(`/wallet_data/${address}?category=${category}&limit=${limit}`);
     }
+
+    // ── Pythia AMM Pool helpers (accounting only — no signing, no broadcast) ──
+
+    /** Get status of all Pythia AMM pools (reserves, TVL, worker state). */
+    async getPoolsStatus() {
+        return await this.request('/api/pools/status');
+    }
+
+    /** Get TVL for a specific pool or all pools. */
+    async getPoolTvl(poolId) {
+        const q = poolId ? `?pool_id=${encodeURIComponent(poolId)}` : '';
+        return await this.request(`/api/pools/tvl${q}`);
+    }
+
+    /** Get LP positions for a wallet address. */
+    async getPoolPositions(address) {
+        return await this.request(`/api/pools/positions?address=${encodeURIComponent(address)}`);
+    }
+
+    /**
+     * Record a pool deposit (accounting only — no on-chain movement).
+     * @param {{ address, pool_id, side, asset, amount }} params
+     */
+    async depositToPool({ address, pool_id, side, asset, amount }) {
+        return await this.request('/api/pools/deposit', {
+            method: 'POST',
+            body: JSON.stringify({ address, pool_id, side, asset, amount }),
+        });
+    }
+
+    /**
+     * Queue a withdrawal intent (accounting only — no payout).
+     * @param {{ address, pool_id, side, asset, amount }} params
+     */
+    async createPoolWithdrawIntent({ address, pool_id, side, asset, amount }) {
+        return await this.request('/api/pools/withdraw-intent', {
+            method: 'POST',
+            body: JSON.stringify({ address, pool_id, side, asset, amount }),
+        });
+    }
+
+    /**
+     * Get withdrawal quote including pool ledger liquidity info.
+     * @param {{ address, amount, token, dest_chain, destination_address }} params
+     */
+    async getWithdrawalQuote({ address, amount, token = 'USDT', dest_chain = 'bsc', destination_address } = {}) {
+        const p = new URLSearchParams({ address: address || '', amount: String(amount || 0), token, dest_chain });
+        if (destination_address) p.set('destination_address', destination_address);
+        return await this.request(`/api/v1/withdrawal/quote?${p}`);
+    }
+
+    /**
+     * Get normalized liquidity history for a wallet.
+     * @param {{ address, chain }} params
+     */
+    async getLiquidityHistory({ address, chain } = {}) {
+        const p = new URLSearchParams({ address, domain: 'liquidity', limit: '100' });
+        if (chain) p.set('chain', chain);
+        return await this.request(`/api/wallet/history/normalized?${p}`);
+    }
 }

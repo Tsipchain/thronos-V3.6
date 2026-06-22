@@ -3185,20 +3185,32 @@ function renderWalletBalances(data) {
     const balancesTabLabel = isGreek ? 'Υπόλοιπα' : 'Balances';
     const musicTabLabel = isGreek ? 'Μουσική' : 'Music';
 
+    // Network selector state
+    const savedNet = localStorage.getItem(`thr_network_${wallet}`) || 'thronos';
+    const _NW = [
+        {id:'thronos',icon:'⬡',label:'Thronos'},{id:'bitcoin',icon:'₿',label:'Bitcoin'},
+        {id:'ethereum',icon:'Ξ',label:'Ethereum'},{id:'bnb',icon:'🔶',label:'BNB'},
+        {id:'arbitrum',icon:'🔵',label:'Arbitrum'},{id:'base',icon:'⬛',label:'Base'},
+    ];
+    const netChipsHtml = _NW.map(({id, icon, label}) => {
+        const active = savedNet === id;
+        return `<button class="net-chip${active ? ' active' : ''}" data-net="${id}" onclick="switchPopupNetwork('${id}')" title="${label}" style="background:${active ? 'rgba(0,255,102,0.12)' : 'rgba(0,0,0,0.3)'};border:1px solid ${active ? '#00ff66' : '#1a3a1a'};color:${active ? '#00ff66' : '#666'};padding:3px 8px;border-radius:4px;font-size:12px;cursor:pointer;">${icon}</button>`;
+    }).join('');
+
     const html = `
         <!-- Address Section -->
         <div class="wallet-popup-address">
             <div class="wallet-popup-address-text" title="${escapeHtml(wallet)}">${escapeHtml(shortAddr)}</div>
             <button class="wallet-popup-copy-btn" onclick="copyToClipboard('${escapeHtml(wallet)}'); this.textContent='✓'; setTimeout(()=>this.textContent='Copy', 1500);">Copy</button>
         </div>
-        <!-- Network indicator -->
-        <div id="walletNetworkBar" style="display:flex;align-items:center;justify-content:space-between;padding:4px 0 8px;border-bottom:1px solid #1a2a1a;margin-bottom:8px;">
-            <span style="font-size:11px;color:#888;">🌐 ${(() => {
-                const savedNet = localStorage.getItem('thr_network_' + wallet);
-                const nets = {thronos:'⬡ Thronos',bitcoin:'₿ Bitcoin',ethereum:'Ξ Ethereum',bnb:'🔶 BNB',arbitrum:'🔵 Arbitrum',base:'⬛ Base'};
-                return nets[savedNet] || '⬡ Thronos';
-            })()}</span>
-            <button onclick="openReceiveModal()" style="background:none;border:1px solid #1a3;color:#8af;padding:2px 8px;border-radius:3px;font-size:10px;cursor:pointer;">Switch / Receive</button>
+        <!-- Network selector — switching does NOT open receive modal -->
+        <div id="walletNetworkBar" style="border-bottom:1px solid #1a2a1a;padding-bottom:8px;margin-bottom:8px;">
+            <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:5px;">${netChipsHtml}</div>
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;">
+                <div id="popupNetAddrArea" style="font-size:10px;color:#888;flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-family:monospace;"></div>
+                <button onclick="openReceiveModal()" style="background:none;border:1px solid #1a3;color:#8af;padding:2px 8px;border-radius:3px;font-size:10px;cursor:pointer;white-space:nowrap;flex-shrink:0;">📥 Receive</button>
+            </div>
+            <div id="popupNetRpcBal" style="font-size:10px;color:#56ff9a;margin-top:3px;min-height:14px;"></div>
         </div>
         ${migrationBanner}
 
@@ -3217,23 +3229,39 @@ function renderWalletBalances(data) {
 
         <!-- Balances Tab Content -->
         <div class="wallet-tab-content active" id="balancesTabContent">
-            <!-- Portfolio Summary - PR-1b: Show "—" for nulls -->
-            <div class="wallet-portfolio-summary">
-                <div class="wallet-portfolio-label">${portfolioLabel}</div>
-                <div class="wallet-portfolio-value">${pricedTokens.length > 0 ? totalTHR.toFixed(4) : '—'} THR</div>
-                <div class="wallet-portfolio-usd">≈ ${pricedTokens.length > 0 && totalUSD > 0 ? `$${totalUSD.toFixed(2)}` : '—'} USD</div>
-                <div class="wallet-portfolio-btc">
-                    <span style="font-size: 14px;">₿</span> ${pricedTokens.length > 0 && totalBTC > 0 ? totalBTC.toFixed(8) : '—'} BTC
+
+            <!-- Non-Thronos network view: address context only, no token list -->
+            <div id="popupNetworkView" style="display:${savedNet !== 'thronos' ? 'block' : 'none'};text-align:center;padding:20px 0 12px;">
+                <div style="font-size:36px;margin-bottom:8px;">${_NW.find(n => n.id === savedNet)?.icon || '🌐'}</div>
+                <div style="font-size:12px;color:#888;">Use <b style="color:#8af">📥 Receive</b> for QR code &amp; full address.</div>
+            </div>
+
+            <!-- Thronos view: portfolio + token list + pool positions -->
+            <div id="popupThronosView" style="display:${savedNet === 'thronos' ? 'block' : 'none'};">
+                <!-- Portfolio Summary - PR-1b: Show "—" for nulls -->
+                <div class="wallet-portfolio-summary">
+                    <div class="wallet-portfolio-label">${portfolioLabel}</div>
+                    <div class="wallet-portfolio-value">${pricedTokens.length > 0 ? totalTHR.toFixed(4) : '—'} THR</div>
+                    <div class="wallet-portfolio-usd">≈ ${pricedTokens.length > 0 && totalUSD > 0 ? `$${totalUSD.toFixed(2)}` : '—'} USD</div>
+                    <div class="wallet-portfolio-btc">
+                        <span style="font-size: 14px;">₿</span> ${pricedTokens.length > 0 && totalBTC > 0 ? totalBTC.toFixed(8) : '—'} BTC
+                    </div>
                 </div>
-            </div>
 
-            <!-- Token List -->
-            <div style="font-size: 11px; color: #56ff9a; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px;">${assetsLabel}</div>
-            <div class="wallet-token-list">
-                ${tokenRows || `<div style="text-align: center; opacity: 0.6; padding: 20px;">${noTokensLabel}</div>`}
-            </div>
+                <!-- Token List -->
+                <div style="font-size: 11px; color: #56ff9a; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px;">${assetsLabel}</div>
+                <div class="wallet-token-list">
+                    ${tokenRows || `<div style="text-align: center; opacity: 0.6; padding: 20px;">${noTokensLabel}</div>`}
+                </div>
 
-            <!-- Quick Actions -->
+                <!-- Pool Positions Mini-Card (loaded async) -->
+                <div id="walletPoolPositionsCard" style="display:none; margin-top:10px; padding:10px 12px; background:rgba(0,200,255,0.06); border:1px solid #00c8ff44; border-radius:8px; font-size:11px;">
+                    <div style="color:#00c8ff; font-weight:700; margin-bottom:6px;">⚙️ Pythia AMM Positions</div>
+                    <div id="walletPoolPositionsList"></div>
+                </div>
+            </div><!-- end popupThronosView -->
+
+            <!-- Quick Actions (always visible regardless of network) -->
             <div class="wallet-quick-actions">
                 <a href="javascript:void(0)" class="wallet-quick-btn" onclick="openSendModal()">
                     <span class="wallet-quick-btn-icon">💸</span>
@@ -3265,12 +3293,6 @@ function renderWalletBalances(data) {
                 </a>
             </div>
 
-            <!-- Pool Positions Mini-Card (loaded async) -->
-            <div id="walletPoolPositionsCard" style="display:none; margin-top:10px; padding:10px 12px; background:rgba(0,200,255,0.06); border:1px solid #00c8ff44; border-radius:8px; font-size:11px;">
-                <div style="color:#00c8ff; font-weight:700; margin-bottom:6px;">⚙️ Pythia AMM Positions</div>
-                <div id="walletPoolPositionsList"></div>
-            </div>
-
         </div><!-- end balancesTabContent -->
 
         <!-- Music Tab Content -->
@@ -3298,11 +3320,8 @@ function renderWalletBalances(data) {
     const savedLang = getCurrentLang();
     setLanguage(savedLang);
 
-    // Load BTC address derived from V1 public key (non-blocking)
-    _loadWalletBtcAddressSection(wallet);
-
-    // Load Pythia AMM pool positions (non-blocking)
-    _loadWalletPoolPositions(wallet);
+    // Apply network-specific address display, RPC balance, and show/hide views
+    _applyPopupNetwork(savedNet, wallet);
 }
 
 async function _loadWalletPoolPositions(thrAddress) {
@@ -3361,6 +3380,100 @@ async function _loadWalletBtcAddressSection(thrAddress) {
         `;
         addrSection.insertAdjacentElement('afterend', btcRow);
     } catch (_) {}
+}
+
+function switchPopupNetwork(netId) {
+    const wallet = walletSession.getAddress() || '';
+    if (!wallet) return;
+    localStorage.setItem(`thr_network_${wallet}`, netId);
+    // Update chip active styles without re-rendering the whole popup
+    document.querySelectorAll('.net-chip').forEach(btn => {
+        const active = btn.dataset.net === netId;
+        btn.classList.toggle('active', active);
+        btn.style.background = active ? 'rgba(0,255,102,0.12)' : 'rgba(0,0,0,0.3)';
+        btn.style.borderColor = active ? '#00ff66' : '#1a3a1a';
+        btn.style.color = active ? '#00ff66' : '#666';
+    });
+    // Show/hide Thronos vs network views
+    const thronosView = document.getElementById('popupThronosView');
+    const networkView = document.getElementById('popupNetworkView');
+    if (thronosView) thronosView.style.display = netId === 'thronos' ? 'block' : 'none';
+    if (networkView) networkView.style.display = netId !== 'thronos' ? 'block' : 'none';
+    // Update network icon in non-Thronos view
+    if (networkView && netId !== 'thronos') {
+        const _NW2 = [{id:'thronos',icon:'⬡'},{id:'bitcoin',icon:'₿'},{id:'ethereum',icon:'Ξ'},{id:'bnb',icon:'🔶'},{id:'arbitrum',icon:'🔵'},{id:'base',icon:'⬛'}];
+        const entry = _NW2.find(n => n.id === netId);
+        networkView.innerHTML = `<div style="text-align:center;padding:20px 0 12px;"><div style="font-size:36px;margin-bottom:8px;">${entry ? entry.icon : '🌐'}</div><div style="font-size:12px;color:#888;">Use <b style="color:#8af">📥 Receive</b> for QR code &amp; full address.</div></div>`;
+    }
+    _applyPopupNetwork(netId, wallet);
+}
+
+async function _applyPopupNetwork(netId, wallet) {
+    const addrEl = document.getElementById('popupNetAddrArea');
+    const rpcEl = document.getElementById('popupNetRpcBal');
+    if (!addrEl) return;
+
+    addrEl.textContent = '';
+    if (rpcEl) rpcEl.textContent = '';
+
+    if (netId === 'thronos') {
+        const short = wallet ? `${wallet.slice(0, 8)}…${wallet.slice(-6)}` : '';
+        addrEl.textContent = short ? `⬡ ${short}` : '';
+        _loadWalletPoolPositions(wallet);
+        return;
+    }
+
+    if (netId === 'bitcoin') {
+        addrEl.textContent = '₿ Loading…';
+        try {
+            if (!walletSession || !walletSession.getPublicKey) return;
+            const pubkey = walletSession.getPublicKey();
+            if (!pubkey) { addrEl.textContent = '₿ Unlock wallet to see BTC address'; return; }
+            const res = await fetch(`/api/wallet/v1/btc-address?pubkey=${encodeURIComponent(pubkey)}`);
+            if (!res.ok) throw new Error('fetch failed');
+            const data = await res.json();
+            if (!data.ok || !data.btc_address) throw new Error('no address');
+            const addr = data.btc_address;
+            const short = `${addr.slice(0, 8)}…${addr.slice(-6)}`;
+            addrEl.innerHTML = `₿ <span title="${addr}" style="cursor:pointer;" onclick="copyToClipboard('${addr}');this.textContent='✓';setTimeout(()=>this.textContent='${short}',1500);">${short}</span>`;
+        } catch (_) {
+            addrEl.textContent = '₿ Address unavailable';
+        }
+        return;
+    }
+
+    // EVM networks
+    const evmIcons = {ethereum:'Ξ', bnb:'🔶', arbitrum:'🔵', base:'⬛'};
+    if (evmIcons[netId]) {
+        const icon = evmIcons[netId];
+        addrEl.textContent = `${icon} Loading…`;
+        try {
+            if (!walletSession || !walletSession.getPublicKey) return;
+            const pubkey = walletSession.getPublicKey();
+            if (!pubkey) { addrEl.textContent = `${icon} Unlock wallet to see address`; return; }
+            const res = await fetch(`/api/wallet/v1/evm-address?pubkey=${encodeURIComponent(pubkey)}`);
+            if (!res.ok) throw new Error('fetch failed');
+            const data = await res.json();
+            if (!data.ok || !data.evm_address) throw new Error('no address');
+            const addr = data.evm_address;
+            const short = `${addr.slice(0, 6)}…${addr.slice(-4)}`;
+            addrEl.innerHTML = `${icon} <span title="${addr}" style="cursor:pointer;font-family:monospace;" onclick="copyToClipboard('${addr}');this.textContent='✓';setTimeout(()=>this.textContent='${short}',1500);">${short}</span>`;
+            if (rpcEl) {
+                rpcEl.textContent = '⏳';
+                _wFetchNetworkBalance(addr, netId).then(bal => {
+                    if (!rpcEl) return;
+                    if (!bal) { rpcEl.textContent = ''; return; }
+                    const parts = [];
+                    if (bal.native !== null && bal.native !== undefined) parts.push(`${bal.native.toFixed(4)} ${bal.nativeSym}`);
+                    if (bal.token !== null && bal.token !== undefined) parts.push(`${bal.token.toFixed(4)} ${bal.tokenSym}`);
+                    rpcEl.textContent = parts.join(' · ');
+                }).catch(() => { if (rpcEl) rpcEl.textContent = ''; });
+            }
+        } catch (_) {
+            addrEl.textContent = `${icon} Address unavailable`;
+            if (rpcEl) rpcEl.textContent = '';
+        }
+    }
 }
 
 // PR-5: Wallet Tab Switching

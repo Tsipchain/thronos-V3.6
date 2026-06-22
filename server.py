@@ -2805,6 +2805,91 @@ def get_effective_pledge_state(thr_address: str) -> dict:
     }
 
 
+def is_miner_kit_eligible_address(address: str) -> dict:
+    """
+    Check if a THR address is eligible to download the miner kit.
+
+    Accepts addresses from any wallet generation:
+    - Classic pledge via pledge_chain.json (send_auth_hash present)
+    - Whitelisted wallet via whitelist_wallets.json
+    - Mirage / V1 wallet in wallet_v1_public_key_bindings.json
+    - Migrated wallet in wallet_v1_migrations module
+    - Pythia / HD wallet in pythia_public_address_registry.json
+    - Admin bypass via ADMIN_SECRET
+
+    Returns dict with keys: eligible (bool), source (str), checked_sources (list).
+    """
+    checked: list[str] = []
+    if not address:
+        return {"eligible": False, "source": None, "checked_sources": checked,
+                "reason": "empty_address"}
+
+    # 1. Classic pledge (pledge_chain.json — has a confirmed BTC send_auth_hash)
+    try:
+        checked.append("pledge_chain")
+        if has_btc_pledge(address):
+            return {"eligible": True, "source": "pledge_chain", "checked_sources": checked}
+    except Exception:
+        pass
+
+    # 2. Whitelist wallets (whitelist_wallets.json / env THRONOS_WHITELIST_WALLETS)
+    try:
+        checked.append("whitelist_wallets")
+        entry = get_mining_whitelist_entry(address)
+        if entry and entry.get("active", True) and not entry.get("banned", False):
+            return {"eligible": True, "source": "whitelist_wallets", "checked_sources": checked}
+    except Exception:
+        pass
+
+    # 3. V1 public key bindings (Mirage / V1 wallets that have bound a key)
+    try:
+        checked.append("wallet_v1_public_key_bindings")
+        bindings = load_json(WALLET_V1_PUBLIC_KEY_BINDINGS_FILE, {})
+        if isinstance(bindings, dict):
+            addr_upper = address.upper()
+            for bound_addr in bindings:
+                if bound_addr.strip().upper() == addr_upper:
+                    return {"eligible": True, "source": "wallet_v1_public_key_bindings",
+                            "checked_sources": checked}
+    except Exception:
+        pass
+
+    # 4. V1 migration records (old or new address in a completed migration)
+    try:
+        checked.append("wallet_v1_migration")
+        from wallet_v1_migration import search_all_migration_sources  # type: ignore
+        addr_upper = address.upper()
+        rec = search_all_migration_sources(canonical_v1_address=addr_upper)
+        if not rec:
+            rec = search_all_migration_sources(legacy_address=addr_upper)
+        if rec:
+            return {"eligible": True, "source": "wallet_v1_migration",
+                    "checked_sources": checked}
+    except ImportError:
+        checked[-1] += " (not available)"
+    except Exception:
+        pass
+
+    # 5. Pythia / HD wallets registered in pythia_public_address_registry.json
+    try:
+        checked.append("pythia_public_address_registry")
+        registry = load_json(PYTHIA_PUBLIC_ADDRESS_REGISTRY_FILE, {})
+        addr_upper = address.upper()
+        if isinstance(registry, dict):
+            for entry in registry.get("registration_history", []):
+                if not isinstance(entry, dict):
+                    continue
+                reg_thr = (entry.get("thr_address") or "").strip().upper()
+                if reg_thr == addr_upper:
+                    return {"eligible": True, "source": "pythia_public_address_registry",
+                            "checked_sources": checked}
+    except Exception:
+        pass
+
+    return {"eligible": False, "source": None, "checked_sources": checked,
+            "reason": "no_eligible_record_found"}
+
+
 def validate_effective_auth(thr_address: str, auth_secret: str, passphrase: str) -> tuple[bool, dict, str | None]:
     """
     Validate wallet auth for transactions.
@@ -21946,14 +22031,25 @@ def download_miner_kit_zip():
     try:
         thr_address = (request.args.get("address") or "").strip()
         if not validate_thr_address(thr_address):
-            return jsonify(status="error", error="valid THR address required"), 400
+            return jsonify(ok=False, status="error", error="valid THR address required"), 400
 
-        pledge_entry = get_mining_whitelist_entry(thr_address)
-        if not pledge_entry or not pledge_entry.get("pledge_ok", False):
-            return jsonify(
-                status="error",
-                error="Complete a THR pledge to download miner kit"
-            ), 403
+        # Admin bypass for testing (secret must match ADMIN_SECRET env var)
+        secret_param = (request.args.get("secret") or "").strip()
+        _admin_secret = _strip_env_quotes(os.getenv("ADMIN_SECRET", "")) or ADMIN_SECRET
+        admin_bypass = bool(secret_param and secret_param == _admin_secret)
+
+        if not admin_bypass:
+            eligibility = is_miner_kit_eligible_address(thr_address)
+            if not eligibility["eligible"]:
+                return jsonify(
+                    ok=False,
+                    status="error",
+                    error="miner_kit_not_eligible",
+                    reason=eligibility.get("reason", "no_eligible_record_found"),
+                    hint="Eligible wallets: any THR address with a completed pledge, "
+                         "a V1/Mirage wallet binding, a migration record, or a Pythia registration.",
+                    checked_sources=eligibility.get("checked_sources", []),
+                ), 403
 
         base_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "miner_kit")
 

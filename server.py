@@ -28593,6 +28593,62 @@ def api_wallet_v1_btc_address():
         return jsonify(ok=False, error=str(exc)), 400
 
 
+@app.route("/api/wallet/v1/evm-address", methods=["GET"])
+def api_wallet_v1_evm_address():
+    """Return EVM (Ethereum-compatible) address derived from a secp256k1 compressed public key.
+
+    Accepts the same compressed public key (66 hex chars / 33 bytes) used by
+    _loadWalletBtcAddressSection in base.html.  The derivation mirrors EIP-55 /
+    ERC-55: keccak256 of the 64-byte uncompressed x‖y coordinates, last 20 bytes.
+    No private key is involved.
+    """
+    pubkey_hex = (request.args.get("pubkey") or "").strip().lower()
+    if not pubkey_hex or len(pubkey_hex) not in (66, 130):
+        return jsonify(ok=False, error="Provide compressed (66-char) or uncompressed (130-char) public key"), 400
+    try:
+        _P  = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F
+
+        pub_bytes = bytes.fromhex(pubkey_hex)
+        if len(pub_bytes) == 33:
+            # Decompress: recover y from x using y² = x³ + 7 mod P
+            prefix, x_bytes = pub_bytes[0], pub_bytes[1:]
+            x = int.from_bytes(x_bytes, 'big')
+            y_sq = (pow(x, 3, _P) + 7) % _P
+            y = pow(y_sq, (_P + 1) // 4, _P)
+            if (y % 2) != (prefix % 2):
+                y = _P - y
+            pub64 = x_bytes + y.to_bytes(32, 'big')
+        else:
+            # Uncompressed — strip 04 prefix
+            pub64 = pub_bytes[1:]
+
+        # keccak256 of 64-byte x‖y → last 20 bytes = address
+        keccak_fn = None
+        try:
+            from Cryptodome.Hash import keccak as _kmod
+            def _kk(d):
+                k = _kmod.new(digest_bits=256); k.update(d); return k.digest()
+            keccak_fn = _kk
+        except ImportError:
+            pass
+        if not keccak_fn:
+            try:
+                from Crypto.Hash import keccak as _kmod2
+                def _kk2(d):
+                    k = _kmod2.new(digest_bits=256); k.update(d); return k.digest()
+                keccak_fn = _kk2
+            except ImportError:
+                pass
+        if not keccak_fn:
+            return jsonify(ok=False, error="keccak256 not available on server"), 500
+
+        evm_addr = '0x' + keccak_fn(pub64)[-20:].hex()
+        return jsonify(ok=True, evm_address=evm_addr, pubkey=pubkey_hex,
+                       note="Same address valid for Ethereum, BNB Chain, Arbitrum, Base")
+    except Exception as exc:
+        return jsonify(ok=False, error=str(exc)), 400
+
+
 @app.route("/api/wallet/v1/btc-address-from-key", methods=["POST"])
 def api_wallet_v1_btc_address_from_key():
     """PWA/mobile: derive BTC address directly from private_key_hex (same trust model as /api/wallet/v1/transfer)."""

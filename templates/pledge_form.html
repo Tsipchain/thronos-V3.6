@@ -279,8 +279,11 @@ document.getElementById("pledgeForm").onsubmit = async (e) => {
           </div>
         ` : ''}
         ${data.pdf_url ? `📄 <a class="pdf-link" href="${data.pdf_url}" target="_blank">${msg.pdf}</a><br>` : ''}
-        ${data.recovery_kit ? `🔐 <a class="pdf-link" href="#" onclick="downloadPledgeRecoveryKit();return false;">Download Wallet V1 Recovery Kit</a><br>` : ''}
-        ⛏️ <a class="pdf-link" href="/static/thronos_kit.zip" download>${msg.miner}</a> <small style="color:#888;">(password: <code>thronos2026</code>)</small><br>
+        ${data.recovery_kit ? `🔐 <a class="pdf-link" href="#" onclick="downloadPledgeRecoveryKit();return false;">Download Wallet V1 Recovery Kit</a><br>
+        <div style="margin:10px 0;padding:10px 14px;background:rgba(0,255,102,0.07);border:1px solid #1a4;border-radius:6px;font-size:12px;color:#8cf;">
+          📱 <b>Import on mobile / PWA:</b> Download your V1 Recovery Kit above, then open the Thronos app or PWA and use <em>Import Wallet → Recovery Kit</em> to access your wallet on any device.
+        </div>` : ''}
+        ⛏️ <a class="pdf-link" href="/miner-kit">📦 Download Miner Kit</a> <small style="color:#888;">(personalised for your address)</small><br>
         💼 <a class="pdf-link" href="/">${msg.wallet}</a>
       `;
       // Auto-connect wallet for already_verified
@@ -305,8 +308,11 @@ document.getElementById("pledgeForm").onsubmit = async (e) => {
         </div>
       ` : ''}
       ${data.pdf_url ? `📄 <a class="pdf-link" href="${data.pdf_url}" target="_blank">${msg.pdf}</a><br>` : ''}
-      ${data.recovery_kit ? `🔐 <a class="pdf-link" href="#" onclick="downloadPledgeRecoveryKit();return false;">Download Wallet V1 Recovery Kit</a><br>` : ''}
-      ⛏️ <a class="pdf-link" href="/static/thronos_kit.zip" download>${msg.miner}</a> <small style="color:#888;">(password: <code>thronos2026</code>)</small><br>
+      ${data.recovery_kit ? `🔐 <a class="pdf-link" href="#" onclick="downloadPledgeRecoveryKit();return false;">Download Wallet V1 Recovery Kit</a><br>
+      <div style="margin:10px 0;padding:10px 14px;background:rgba(0,255,102,0.07);border:1px solid #1a4;border-radius:6px;font-size:12px;color:#8cf;">
+        📱 <b>Import on mobile / PWA:</b> Download your V1 Recovery Kit above, then open the Thronos app or PWA and use <em>Import Wallet → Recovery Kit</em> to access your wallet on any device.
+      </div>` : ''}
+      ⛏️ <a class="pdf-link" href="/miner-kit">📦 Download Miner Kit</a> <small style="color:#888;">(personalised for your address)</small><br>
       💼 <a class="pdf-link" href="/">${msg.wallet}</a>
     `;
     // Auto-connect wallet so the canonical (mirage) address is recognized and the

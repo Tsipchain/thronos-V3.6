@@ -22126,7 +22126,9 @@ Mining only uses your public THR address.
 
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-            # Root
+            # Root — click-safe launcher + plain-text readme
+            zf.writestr("start_here.bat",    _sub(_read("start_here.bat")))
+            zf.writestr("README_FIRST.txt",  _sub(_read("README_FIRST.txt")))
             zf.writestr("README.md", readme_root)
             zf.writestr("QUICKSTART_WINDOWS.md", _sub(_read("QUICKSTART_WINDOWS.md")))
             zf.writestr("QUICKSTART_LINUX.md",   _sub(_read("QUICKSTART_LINUX.md")))

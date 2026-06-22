@@ -10,6 +10,8 @@ __pycache__/
 !.env.example
 
 data/
+# Runtime data dir created when DATA_DIR env resolves to a quoted path like "/app/data"
+"/app/data"/
 node_modules/
 *.log
 .DS_Store

@@ -1491,9 +1491,21 @@ INITIAL_TARGET    = 2 ** 236         # 5 hex zeros (20 bits)
 TARGET_BLOCK_TIME = 120              # 2 MINUTES per block (optimized for ecosystem dynamics)
 RETARGET_INTERVAL = 10               # blocks (retarget every ~20 minutes)
 
-# In-memory cache for the compounded retarget target.
-# Keyed by number of complete retarget windows seen; avoids re-walking all history on every call.
+# Hard floor for mining target — prevents integer underflow to 0 when many fast windows compound.
+# Set to 2^56 (~7.2e16): meaningful work floor while staying far below INITIAL_TARGET.
+MIN_TARGET = 2 ** 56
+
+# In-memory cache for the active retarget target.
+# num_complete_windows: how many RETARGET_INTERVAL windows are covered by the cached target.
+# target: the last persisted/computed non-zero target.
 _MINING_TARGET_CACHE = {"num_complete_windows": 0, "target": None}
+
+# File that persists the target across server restarts so cold starts never need
+# a full genesis walk (which causes cumulative underflow with thousands of fast windows).
+_MINING_TARGET_STATE_FILE = os.path.join(
+    os.getenv("MUSIC_VOLUME", os.getenv("DATA_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"))),
+    "mining_target_state.json"
+)
 
 AI_WALLET_ADDRESS = os.getenv("THR_AI_AGENT_WALLET", "THR_AI_AGENT_WALLET_V1")
 
@@ -7809,71 +7821,122 @@ def verify_btc_payment(btc_address, min_amount=MIN_AMOUNT, require_confirmation=
 
     return False, []
 
-def _compute_target_from_genesis(blocks, up_to_window: int) -> int:
-    """Walk all complete retarget windows from genesis to derive the compounded target."""
-    target = INITIAL_TARGET
-    t_fmt  = "%Y-%m-%d %H:%M:%S UTC"
-    for i in range(up_to_window):
-        start_b = blocks[i * RETARGET_INTERVAL]
-        end_b   = blocks[(i + 1) * RETARGET_INTERVAL - 1]
-        try:
-            t_end = datetime.strptime(end_b["timestamp"], t_fmt).timestamp()
-            t_sta = datetime.strptime(start_b["timestamp"], t_fmt).timestamp()
-        except Exception as e:
-            logger.error(f"Retarget genesis walk error (window {i}): {e}")
-            continue
-        actual   = max(1, t_end - t_sta)
-        expected = RETARGET_INTERVAL * TARGET_BLOCK_TIME
-        ratio    = max(0.25, min(4.0, actual / expected))
-        target   = min(INITIAL_TARGET, int(target * ratio))
-    return target
+def _retarget_load_state():
+    """Load persisted retarget state from disk. Returns (num_complete_windows, target) or (0, None)."""
+    try:
+        import json as _json
+        with open(_MINING_TARGET_STATE_FILE, "r") as _f:
+            _s = _json.load(_f)
+        _nw = int(_s.get("num_complete_windows", 0))
+        _th = _s.get("target_hex", "")
+        if _nw > 0 and _th and str(_th).startswith("0x"):
+            _t = int(_th, 16)
+            if MIN_TARGET <= _t <= INITIAL_TARGET:
+                return _nw, _t
+    except FileNotFoundError:
+        pass
+    except Exception as _e:
+        logger.error(f"retarget state load error: {_e}")
+    return 0, None
+
+
+def _retarget_save_state(num_complete_windows: int, target: int) -> None:
+    """Persist retarget state so cold restarts can resume without a genesis walk."""
+    try:
+        import json as _json
+        os.makedirs(os.path.dirname(_MINING_TARGET_STATE_FILE), exist_ok=True)
+        with open(_MINING_TARGET_STATE_FILE, "w") as _f:
+            _json.dump({"num_complete_windows": num_complete_windows, "target_hex": hex(target)}, _f)
+    except Exception as _e:
+        logger.error(f"retarget state save error: {_e}")
+
+
+def _retarget_apply_one_window(base_target: int, start_block: dict, end_block: dict) -> int:
+    """Apply one retarget window to base_target. Returns clamped new target (never < MIN_TARGET)."""
+    try:
+        t_fmt = "%Y-%m-%d %H:%M:%S UTC"
+        t_end = datetime.strptime(end_block["timestamp"], t_fmt).timestamp()
+        t_sta = datetime.strptime(start_block["timestamp"], t_fmt).timestamp()
+    except Exception as e:
+        logger.error(f"Retarget timestamp parse error: {e}")
+        return base_target
+    actual   = max(1, t_end - t_sta)
+    expected = RETARGET_INTERVAL * TARGET_BLOCK_TIME
+    ratio    = max(0.25, min(4.0, actual / expected))
+    raw      = int(base_target * ratio)
+    return max(MIN_TARGET, min(INITIAL_TARGET, raw))
 
 
 def get_mining_target() -> int:
     """
-    Return the current mining target, properly accounting for all completed retarget windows.
+    Return the current mining target, clamped to [MIN_TARGET, INITIAL_TARGET].
 
-    Uses an in-memory cache keyed by number of complete windows so that:
-    - Between retarget boundaries  →  O(1) cache hit
-    - At each new boundary          →  only the new window is computed (incremental update)
-    - Cold start / server restart   →  walks all windows from genesis once, then caches
+    Strategy (safest for long-running chains with thousands of fast windows):
+    1. In-memory cache hit   → O(1) return (most common path).
+    2. Persistence file      → cold-start resume without genesis walk.
+    3. Last-window bootstrap → if no state at all, apply the single most-recent
+                               completed window from INITIAL_TARGET. This avoids
+                               cumulative underflow from compounding thousands of
+                               fast windows that were historically mined at base
+                               difficulty (before retarget was active).
+    4. Incremental update    → each new completed window advances the cached state
+                               by exactly one step.
+    5. Zero guard            → final return is always ≥ MIN_TARGET.
     """
     global _MINING_TARGET_CACHE
-    blocks       = get_reward_blocks()
-    n            = len(blocks)
+    blocks = get_reward_blocks()
+    n      = len(blocks)
     if n < RETARGET_INTERVAL:
         return INITIAL_TARGET
 
-    num_complete = n // RETARGET_INTERVAL          # complete windows present in local chain
+    num_complete = n // RETARGET_INTERVAL
     prev_windows = _MINING_TARGET_CACHE.get("num_complete_windows", 0)
     cached_tgt   = _MINING_TARGET_CACHE.get("target")
 
-    # ── Cache hit: same window count, nothing new to compute ──
+    # ── 1. In-memory cache hit ───────────────────────────────────────────────
     if num_complete == prev_windows and cached_tgt is not None:
-        return cached_tgt
+        return max(MIN_TARGET, cached_tgt)
 
-    # ── Cold start: walk all windows from genesis ──
+    # ── 2. Cold start: try persistence file ──────────────────────────────────
     if prev_windows == 0 or cached_tgt is None:
-        new_target = _compute_target_from_genesis(blocks, num_complete)
+        file_windows, file_target = _retarget_load_state()
+        if file_target is not None and file_windows > 0:
+            prev_windows = file_windows
+            cached_tgt   = file_target
+            _MINING_TARGET_CACHE.update({"num_complete_windows": file_windows, "target": file_target})
+            # File is already current — no new windows to process
+            if num_complete == prev_windows:
+                return cached_tgt
+
+    # ── 3. Last-window bootstrap: no persisted state exists ──────────────────
+    if prev_windows == 0 or cached_tgt is None:
+        # Apply ONLY the most-recent completed window from INITIAL_TARGET.
+        # This prevents cumulative underflow from walking thousands of historical
+        # windows that were all mined at base difficulty.
+        last_w = num_complete - 1
+        start_b = blocks[last_w * RETARGET_INTERVAL]
+        end_b   = blocks[(last_w + 1) * RETARGET_INTERVAL - 1]
+        new_target = _retarget_apply_one_window(INITIAL_TARGET, start_b, end_b)
+        target_source_tag = "last_window_bootstrap"
     else:
-        # ── Incremental update: only compute newly completed windows ──
-        t_fmt  = "%Y-%m-%d %H:%M:%S UTC"
+        # ── 4. Incremental update: advance from cached state ─────────────────
         new_target = cached_tgt
         for i in range(prev_windows, num_complete):
             start_b = blocks[i * RETARGET_INTERVAL]
             end_b   = blocks[(i + 1) * RETARGET_INTERVAL - 1]
-            try:
-                t_end = datetime.strptime(end_b["timestamp"], t_fmt).timestamp()
-                t_sta = datetime.strptime(start_b["timestamp"], t_fmt).timestamp()
-            except Exception as e:
-                logger.error(f"Retarget incremental error (window {i}): {e}")
-                continue
-            actual   = max(1, t_end - t_sta)
-            expected = RETARGET_INTERVAL * TARGET_BLOCK_TIME
-            ratio    = max(0.25, min(4.0, actual / expected))
-            new_target = min(INITIAL_TARGET, int(new_target * ratio))
+            new_target = _retarget_apply_one_window(new_target, start_b, end_b)
+        target_source_tag = "incremental"
+
+    # ── 5. Final zero guard ───────────────────────────────────────────────────
+    if new_target <= 0 or new_target > INITIAL_TARGET:
+        logger.warning(
+            f"get_mining_target: out-of-bounds result {new_target!r} "
+            f"(source={target_source_tag}), falling back to INITIAL_TARGET"
+        )
+        new_target = INITIAL_TARGET
 
     _MINING_TARGET_CACHE.update({"num_complete_windows": num_complete, "target": new_target})
+    _retarget_save_state(num_complete, new_target)
     return new_target
 
 
@@ -11105,13 +11168,19 @@ def mining_info():
     mempool_len = get_mempool_len_cached()
 
     # ── Retarget debug / diagnostic fields ──────────────────────────────────
-    target_source = "computed_from_genesis" if target != INITIAL_TARGET else "initial_target"
+    _cache_windows = _MINING_TARGET_CACHE.get("num_complete_windows", 0)
+    if target == INITIAL_TARGET and _cache_windows == 0:
+        target_source = "initial_target"
+    elif target == INITIAL_TARGET and _cache_windows > 0:
+        target_source = "fallback_zero_guard"   # zero guard fired; reverted to INITIAL_TARGET
+    else:
+        target_source = "computed_incremental"  # safe one-window-at-a-time approach
     # Preview: projected next-retarget target if avg block time stays the same
     if avg_block_time and avg_block_time > 0:
         _next_ratio = max(0.25, min(4.0, avg_block_time / TARGET_BLOCK_TIME))
     else:
         _next_ratio = 1.0
-    calculated_next_target = min(INITIAL_TARGET, int(target * _next_ratio))
+    calculated_next_target = max(MIN_TARGET, min(INITIAL_TARGET, int(target * _next_ratio)))
     calculated_next_difficulty = int(INITIAL_TARGET // calculated_next_target) if calculated_next_target > 0 else 1
     # /api/miner/work and /api/mining/work both delegate to get_mining_target() → same value
     work_target_consistent = True

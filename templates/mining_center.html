@@ -325,12 +325,12 @@
     <div class="stat-card">
       <div class="stat-label">Block Reward</div>
       <div class="stat-value" id="statReward">—</div>
-      <div class="stat-sub">THR / block</div>
+      <div class="stat-sub" id="statRewardSplit">—</div>
     </div>
     <div class="stat-card">
-      <div class="stat-label">Mempool</div>
-      <div class="stat-value" id="statMempool">—</div>
-      <div class="stat-sub">pending txs</div>
+      <div class="stat-label">Avg Block Time</div>
+      <div class="stat-value" id="statAvgTime">—</div>
+      <div class="stat-sub">last 10 blocks</div>
     </div>
     <div class="stat-card">
       <div class="stat-label">Epoch</div>
@@ -338,9 +338,9 @@
       <div class="stat-sub" id="statHalving">next halving</div>
     </div>
     <div class="stat-card">
-      <div class="stat-label">Target</div>
-      <div class="stat-value" id="statNbits">—</div>
-      <div class="stat-sub">compact bits</div>
+      <div class="stat-label">Retarget</div>
+      <div class="stat-value" id="statRetarget">—</div>
+      <div class="stat-sub">blocks until</div>
     </div>
   </div>
 
@@ -718,34 +718,48 @@ function copyUsbCmd() {
 // ---- Load network stats ----
 async function loadMiningStats() {
   try {
-    const res = await fetch('/api/mining/info');
+    const res = await fetch('/api/mining/status');
     const d = await res.json();
-    document.getElementById('statHeight').textContent = d.height ? d.height.toLocaleString() : '—';
-    document.getElementById('statDiff').textContent = d.difficulty_int ? fmtNum(d.difficulty_int) : '—';
-    document.getElementById('statReward').textContent = d.reward ? d.reward.toFixed(4) : '—';
-    document.getElementById('statMempool').textContent = d.mempool !== undefined ? d.mempool : '—';
-    document.getElementById('statNbits').textContent = d.nbits || '—';
 
+    // Display basic stats
+    document.getElementById('statHeight').textContent = d.height ? d.height.toLocaleString() : '—';
+    document.getElementById('statDiff').textContent = d.current_difficulty ? fmtNum(d.current_difficulty) : '—';
+    document.getElementById('statReward').textContent = d.current_reward ? d.current_reward.toFixed(4) : '—';
+
+    // Display reward split breakdown
+    if (d.miner_reward && d.ai_reward && d.node_reward && d.ecosystem_reward) {
+      const split = `m/${d.miner_reward.toFixed(2)} a/${d.ai_reward.toFixed(2)} n/${d.node_reward.toFixed(2)} e/${d.ecosystem_reward.toFixed(2)}`;
+      document.getElementById('statRewardSplit').textContent = split;
+    }
+
+    // Display average block time
+    if (d.avg_block_time_last_window !== undefined) {
+      document.getElementById('statAvgTime').textContent = d.avg_block_time_last_window.toFixed(1) + 's';
+    }
+
+    // Display epoch info
+    if (d.current_epoch !== undefined) {
+      document.getElementById('statEpoch').textContent = d.current_epoch;
+    }
+    if (d.blocks_until_halving !== undefined) {
+      document.getElementById('statHalving').textContent = d.blocks_until_halving.toLocaleString() + ' blocks';
+    }
+
+    // Display retarget info
+    if (d.blocks_until_retarget !== undefined) {
+      document.getElementById('statRetarget').textContent = d.blocks_until_retarget;
+    }
+
+    // Update network status indicator
     const dot = document.getElementById('miningStatusDot');
     const txt = document.getElementById('miningStatusText');
     dot.className = 'live';
-    txt.textContent = 'Network active — block #' + (d.height || '?');
+    txt.textContent = 'Network active — block #' + (d.height || '?') + ' | diff: ' + fmtNum(d.current_difficulty || 0);
     txt.style.color = '#00ff66';
   } catch(e) {
     document.getElementById('miningStatusText').textContent = 'Unable to fetch network status';
+    console.error('Mining stats error:', e);
   }
-
-  // Load epoch info
-  try {
-    const ep = await fetch('/api/mining/current-epoch');
-    const ed = await ep.json();
-    if (ed.epoch !== undefined) {
-      document.getElementById('statEpoch').textContent = ed.epoch;
-    }
-    if (ed.blocks_until_halving !== undefined) {
-      document.getElementById('statHalving').textContent = ed.blocks_until_halving.toLocaleString() + ' blocks';
-    }
-  } catch(e) {}
 }
 
 function fmtNum(n) {

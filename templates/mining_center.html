@@ -722,7 +722,11 @@ async function loadMiningStats() {
     const d = await res.json();
 
     // Display basic stats
-    document.getElementById('statHeight').textContent = d.height ? d.height.toLocaleString() : '—';
+    const networkHeight = d.height || '?';
+    const localHeight = d.blocks_mined_locally || d.local_height || 0;
+    const heightLabel = localHeight > 0 ? `${networkHeight} (${localHeight} local)` : networkHeight;
+    document.getElementById('statHeight').textContent = networkHeight ? networkHeight.toLocaleString() : '—';
+    document.getElementById('statHeight').title = `Network height: ${networkHeight}\nBlocks mined locally: ${localHeight}`;
     document.getElementById('statDiff').textContent = d.current_difficulty ? fmtNum(d.current_difficulty) : '—';
     document.getElementById('statReward').textContent = d.current_reward ? d.current_reward.toFixed(4) : '—';
 

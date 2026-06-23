@@ -11058,7 +11058,7 @@ def mining_info():
     payload = {
         "ok": True,
         "height": global_height,
-        "local_height": local_height,
+        "blocks_mined_locally": local_height,
         "current_hash": last_hash,
         "current_target": hex(target),
         "current_difficulty": current_difficulty,
@@ -11084,6 +11084,7 @@ def mining_info():
         "difficulty_int": current_difficulty,
         "reward": current_reward,
         "last_hash": last_hash,
+        "local_height": local_height,
         "mempool": mempool_len,
     }
     MINING_INFO_CACHE.update({"ts": now, "data": payload})

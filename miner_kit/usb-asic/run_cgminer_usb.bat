@@ -66,7 +66,7 @@ echo  Press Ctrl+C to stop.
 echo ============================================================
 echo.
 
-%CGMINER% --sha256d -c cgminer.conf
+%CGMINER% -c cgminer.conf
 set CGMINER_EXIT=%ERRORLEVEL%
 
 echo.

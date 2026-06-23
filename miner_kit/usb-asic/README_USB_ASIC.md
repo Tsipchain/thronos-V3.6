@@ -90,6 +90,7 @@ The launcher will:
 | Exit code `-1073741701` | Wrong architecture (32-bit on 64-bit) | Download the x64 build |
 | cgminer says "No devices found" | USB driver not installed | Run Zadig → install WinUSB for your ASIC |
 | cgminer connects but no shares | Stratum Proxy not running | Start `start_here.bat` option 2 first |
+| `unrecognized option --sha256d` | Old/incompatible cgminer build | Remove the flag — the Thronos proxy already sends SHA256 work; the launcher no longer passes `--sha256d` |
 | HTTP 202 in proxy window | Normal — means block accepted | Keep mining |
 
 ## Quick start (Linux)
@@ -102,7 +103,7 @@ sudo apt-get install cgminer
 python3 ../proxy/stratum_proxy.py &
 
 # Run cgminer
-cgminer --sha256d -o stratum+tcp://127.0.0.1:3334 -u YOUR_THR_ADDRESS -p x
+cgminer -o stratum+tcp://127.0.0.1:3334 -u YOUR_THR_ADDRESS.worker1 -p x
 ```
 
 ## Connection details

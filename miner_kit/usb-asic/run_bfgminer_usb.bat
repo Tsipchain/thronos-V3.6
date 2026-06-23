@@ -66,7 +66,7 @@ echo  Press Ctrl+C to stop.
 echo ============================================================
 echo.
 
-%BFGMINER% --sha256d -c bfgminer.conf
+%BFGMINER% -c bfgminer.conf
 set BFGMINER_EXIT=%ERRORLEVEL%
 
 echo.

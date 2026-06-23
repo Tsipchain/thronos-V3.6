@@ -21,9 +21,9 @@ if "%PYTHON%"=="" (
 :: ── THR address ─────────────────────────────────────────────────────────────
 set THR_ADDRESS=%~1
 if "%THR_ADDRESS%"=="" set THR_ADDRESS=YOUR_THR_ADDRESS
-if "%THR_ADDRESS%"=="YOUR_THR_ADDRESS" (
-    set /p THR_ADDRESS="Enter THR wallet address: "
-)
+if /I "%THR_ADDRESS:~0,3%"=="THR" goto CPU_ADDR_VALID
+set /p THR_ADDRESS="Enter THR wallet address: "
+:CPU_ADDR_VALID
 if "%THR_ADDRESS%"=="" (
     echo ERROR: THR address required.
     pause

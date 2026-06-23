@@ -175,7 +175,10 @@ if __name__ == "__main__":
     if args.name:
         MINER_NAME = args.name
 
-    if "THR_PUT_YOUR_ADDRESS_HERE" in THR_ADDRESS:
+    # Split so the zip builder's string substitution doesn't replace the sentinel
+    # inside this check and make it always True.
+    _PLACEHOLDER = "THR_PUT_YOUR_" + "ADDRESS_HERE"
+    if _PLACEHOLDER in THR_ADDRESS:
         print("⚠️  Please set your THR wallet address.")
         print("   Usage: python pow_miner_cpu.py --address THR... --api https://api.thronoschain.org")
         print("   Or set env: THR_ADDRESS=THR... THRONOS_API_URL=https://api.thronoschain.org")

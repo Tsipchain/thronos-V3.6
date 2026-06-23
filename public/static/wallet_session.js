@@ -1231,6 +1231,27 @@
     };
   }
 
+  async function signEvmTxHash(txHashHex) {
+    if (isLocked() || !isBound()) throw new Error('wallet_locked');
+    if (!unlockedPrivateKeyHex) throw new Error('wallet_locked');
+    const secp = await _ensureSecpLoaded();
+    if (!secp) throw new Error('secp256k1_library_missing');
+    const hash = txHashHex.replace(/^0x/, '');
+    let sig;
+    if (typeof secp.signAsync === 'function') {
+      sig = await secp.signAsync(hash, unlockedPrivateKeyHex, { lowS: true });
+    } else {
+      const result = await secp.sign(hash, unlockedPrivateKeyHex, { lowS: true, recovered: true });
+      if (Array.isArray(result)) { sig = result[0]; sig.recovery = result[1]; }
+      else sig = result;
+    }
+    return {
+      r: sig.r.toString(16).padStart(64, '0'),
+      s: sig.s.toString(16).padStart(64, '0'),
+      recovery: sig.recovery ?? 0,
+    };
+  }
+
   window.walletSession = {
     version: VERSION,
     ADDRESS_KEY, SEND_SECRET_KEY, SEND_SEED_KEY, PIN_KEY, BOUND_KEY, LOCK_KEY,
@@ -1251,6 +1272,7 @@
     getActiveKeyBinding, importSigningKeyForAddress, getWalletState,
     hasPledgeOrMigrationSource, getModalState,
     generateV1KeyPair, derivePublicKeyAndAddress,
-    resolveCanonicalWalletAddress
+    resolveCanonicalWalletAddress,
+    signEvmTxHash,
   };
 })(window);

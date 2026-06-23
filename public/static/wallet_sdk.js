@@ -199,12 +199,41 @@
     window.removeEventListener(eventName, handler);
   }
 
+  // Opens the EVM send modal for client-side signing (no server-side signing).
+  // { network: 'bnb'|'base'|'arbitrum'|'ethereum', token: 'USDT'|'USDC'|'' }
+  async function sendERC20({ network, token = '' } = {}) {
+    ensureWallet();
+    if (!network) throw new Error('network_required');
+    if (!window.walletSession?.signEvmTxHash) throw new Error('evm_signing_not_available');
+    // Resolve EVM address — requires the popup to have derived it, or call server endpoint
+    let evmAddr = '';
+    if (typeof window._getPopupEvmAddr === 'function') {
+      evmAddr = window._getPopupEvmAddr();
+    }
+    if (!evmAddr && window.walletSession?.getAddress) {
+      // Derive via server address endpoint (pubkey → EVM addr, no private key involved)
+      try {
+        const r = await fetch(`/api/wallet/v1/evm-address?address=${encodeURIComponent(window.walletSession.getAddress())}`);
+        const d = await r.json();
+        evmAddr = d.evm_address || '';
+      } catch { evmAddr = ''; }
+    }
+    if (!evmAddr) throw new Error('evm_address_not_available');
+    if (typeof window.openEvmSendModal === 'function') {
+      window.openEvmSendModal(network, evmAddr, token);
+    } else {
+      throw new Error('evm_ui_not_available');
+    }
+    return { network, evmAddr, token };
+  }
+
   window.ThronosWallet = {
     EVENTS,
     open,
     lock,
     unlock,
     send,
+    sendERC20,
     getHistory,
     on,
     off

@@ -314,6 +314,17 @@ const _USDT_BNB  = '0x55d398326f99059fF775485246999027B3197955'; // 18 dec
 const _USDT_ARB  = '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9'; // 6 dec
 const _USDC_BASE = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'; // 6 dec
 
+// EVM asset action config
+const _EVM_CHAIN_IDS = { ethereum: 1, bnb: 56, arbitrum: 42161, base: 8453 };
+const _EVM_TOKENS = {
+  bnb:      { USDT: { contract: _USDT_BNB, decimals: 18 } },
+  arbitrum: { USDT: { contract: _USDT_ARB, decimals: 6  } },
+  base:     { USDC: { contract: _USDC_BASE, decimals: 6  } },
+};
+const _EVM_POOL_IDS = { bnb: 'bsc-usdt', base: 'base-usdc' };
+// Signing context set when wallet is unlocked in showWallet(); cleared on lock
+let _pwaSigningCtx = null;
+
 async function _fetchAllChainBalances(privHex, btcAddr) {
   const evmAddr = privHex ? await _deriveEvmAddress(privHex) : null;
   const [btc, eth, bnb, arb, op, base, usdtBnb, usdtArb, usdcBase] = await Promise.allSettled([
@@ -1238,22 +1249,28 @@ const HOME_NETWORKS = [
   { id: 'base',     icon: '⬛', label: 'Base' },
 ];
 
-function _renderHomeAssetRow(icon, label, sym, val, color, addr) {
+// evmMeta: { network, sym, addr } — if set the row becomes tappable for EVM actions
+function _renderHomeAssetRow(icon, label, sym, val, color, addr, evmMeta) {
   const fmt = v => {
     if (v == null) return '—';
     const n = Number(v);
     if (n === 0) return '0';
-    // Show enough decimals to be meaningful without trailing zeros
     if (n >= 1000) return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
     if (n >= 1)    return n.toFixed(4);
     if (n >= 0.0001) return n.toFixed(6);
     return n.toFixed(8);
   };
-  return `<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid #ffffff10">
+  const tapClass = evmMeta ? ' class="pwa-evm-row"' : '';
+  const tapData  = evmMeta
+    ? ` data-evm-net="${evmMeta.network}" data-evm-sym="${escHtml(evmMeta.sym)}" data-evm-addr="${escHtml(evmMeta.addr)}"`
+    : '';
+  const tapStyle = evmMeta ? ';cursor:pointer' : '';
+  return `<div${tapClass}${tapData} style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid #ffffff10${tapStyle}">
     <div style="width:28px;height:28px;border-radius:50%;background:${color}33;border:1px solid ${color};display:flex;align-items:center;justify-content:center;font-size:.8rem;flex-shrink:0">${icon}</div>
     <div style="flex:1;min-width:0">
       <div style="font-size:.88rem;font-weight:600;color:#fff">${escHtml(label)} <span style="color:var(--muted);font-size:.75rem">${sym}</span></div>
       ${addr ? `<div style="font-size:.7rem;color:var(--muted);font-family:monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${addr.slice(0,10)}…${addr.slice(-5)}</div>` : ''}
+      ${evmMeta ? `<div style="font-size:.68rem;color:#56ff9a;margin-top:1px">Tap to send / deposit ›</div>` : ''}
     </div>
     <div style="text-align:right;flex-shrink:0">
       <div style="font-size:.88rem;color:${val ? '#fff' : 'var(--muted)'}">${fmt(val)} ${sym}</div>
@@ -1269,6 +1286,7 @@ async function showWallet() {
   const acc = getAccount(address);
   const label = acc?.label || shortAddr(address);
   const { privHex } = unlocked.get(address) || {};
+  _pwaSigningCtx = privHex ? { address, privHex } : null;
   let homeBtcAddr = '';
   let homeEvmAddr = '';
   let homeChainBalances = null;
@@ -1336,6 +1354,7 @@ async function showWallet() {
   document.getElementById('lockBtn').addEventListener('click', () => {
     sessionStorage.removeItem(`thr_sk_${address}`);
     unlocked.delete(address);
+    _pwaSigningCtx = null;
     showUnlock();
   });
 
@@ -1502,15 +1521,26 @@ async function showWallet() {
       rows = _renderHomeAssetRow('Ξ', 'Ethereum', 'ETH', bal.eth, '#627eea', homeEvmAddr);
     } else if (netId === 'bnb') {
       rows = _renderHomeAssetRow('🔶', 'BNB Chain', 'BNB', bal.bnb, '#f3ba2f', homeEvmAddr)
-           + _renderHomeAssetRow('₮', 'USDT on BNB', 'USDT', bal.usdtBnb, '#26a17b', homeEvmAddr);
+           + _renderHomeAssetRow('₮', 'USDT on BNB', 'USDT', bal.usdtBnb, '#26a17b', homeEvmAddr,
+               { network: 'bnb', sym: 'USDT', addr: homeEvmAddr });
     } else if (netId === 'arbitrum') {
       rows = _renderHomeAssetRow('🔵', 'Arbitrum', 'ETH', bal.arb, '#28a0f0', homeEvmAddr)
-           + _renderHomeAssetRow('₮', 'USDT on Arbitrum', 'USDT', bal.usdtArb, '#26a17b', homeEvmAddr);
+           + _renderHomeAssetRow('₮', 'USDT on Arbitrum', 'USDT', bal.usdtArb, '#26a17b', homeEvmAddr,
+               { network: 'arbitrum', sym: 'USDT', addr: homeEvmAddr });
     } else if (netId === 'base') {
       rows = _renderHomeAssetRow('⬛', 'Base', 'ETH', bal.base, '#0052ff', homeEvmAddr)
-           + _renderHomeAssetRow('$', 'USDC on Base', 'USDC', bal.usdcBase, '#2775ca', homeEvmAddr);
+           + _renderHomeAssetRow('$', 'USDC on Base', 'USDC', bal.usdcBase, '#2775ca', homeEvmAddr,
+               { network: 'base', sym: 'USDC', addr: homeEvmAddr });
     }
     el.innerHTML = `<div style="font-size:.7rem;text-transform:uppercase;letter-spacing:1px;color:var(--accent);margin-bottom:4px">Assets</div>${rows}`;
+    el.querySelectorAll('.pwa-evm-row').forEach(row => {
+      row.addEventListener('click', () => {
+        const net = row.dataset.evmNet;
+        const sym = row.dataset.evmSym;
+        const addr = row.dataset.evmAddr;
+        if (net && sym && addr) pwaOpenEvmAssetActions(net, addr, sym);
+      });
+    });
   };
 
   const refreshCurrentNet = () => {
@@ -3361,7 +3391,8 @@ const HISTORY_FILTERS = [
   { key: 'thr_transfer', label: 'THR' },
   { key: 'token_transfer', label: 'Tokens' },
   { key: 'swap', label: 'Swaps' },
-  { key: 'liquidity', label: 'Liquidity' },
+  { key: 'liquidity', label: '💧 Liquidity' },
+  { key: 'evm_sends', label: '📤 EVM Sends' },
   { key: 'mining_reward', label: 'Mining' },
   { key: 'pledge', label: 'Pledges' },
   { key: 'crosschain', label: 'Cross-Chain' },
@@ -3599,6 +3630,11 @@ async function showHistory(address) {
           (_LIQUIDITY_FILTER_TYPES.has(et(tx)) && (tx.chain || '').toLowerCase() !== 'thronos') ||
           (tx.domain === 'rpc-crosschain')
         );
+      } else if (activeFilter === 'evm_sends') {
+        filtered = allTx.filter(tx => {
+          const typ = et(tx).toLowerCase();
+          return typ === 'evm_token_send' || typ === 'evm_token_receive' || typ === 'token_send' || typ === 'token_receive';
+        });
       } else {
         filtered = allTx.filter(tx => et(tx) === activeFilter);
       }
@@ -4685,6 +4721,330 @@ function injectExtraStyles() {
   document.head.appendChild(s);
 }
 
+// ─── EVM Asset Actions (PWA) ──────────────────────────────────────────────────
+
+// Minimal RLP encoder — EIP-155 compatible
+const _pwaRlp = (() => {
+  const h2b = h => { h = h.replace(/^0x/,''); if(h.length%2)h='0'+h; const a=new Uint8Array(h.length/2); for(let i=0;i<a.length;i++)a[i]=parseInt(h.slice(i*2,i*2+2),16); return a; };
+  const cat = (...arrs) => { const r=new Uint8Array(arrs.reduce((s,a)=>s+a.length,0)); let o=0; for(const a of arrs){r.set(a,o);o+=a.length;} return r; };
+  const bn2b = n => { if(n===0n||n===0)return new Uint8Array(0); let h=(typeof n==='bigint'?n:BigInt(n)).toString(16); if(h.length%2)h='0'+h; return h2b(h); };
+  const lenHdr = (len,base) => { if(len<56)return new Uint8Array([base+len]); const lb=bn2b(BigInt(len)); return cat(new Uint8Array([base+55+lb.length]),lb); };
+  const enc = v => {
+    if(Array.isArray(v)){const inner=cat(...v.map(enc));return cat(lenHdr(inner.length,0xc0),inner);}
+    let bytes=v instanceof Uint8Array?v:(typeof v==='string'&&v.startsWith('0x')?h2b(v):bn2b(typeof v==='bigint'?v:BigInt(v)));
+    if(bytes.length===1&&bytes[0]<0x80)return bytes;
+    return cat(lenHdr(bytes.length,0x80),bytes);
+  };
+  return { encode:enc, hexToBytes:h2b, cat, bn2b };
+})();
+
+function _pwaEncodeErc20Transfer(toAddress, amount, decimals) {
+  const sel = 'a9059cbb';
+  const addrPad = toAddress.replace(/^0x/,'').toLowerCase().padStart(64,'0');
+  const amtPad = BigInt(Math.round(amount * 10 ** decimals)).toString(16).padStart(64,'0');
+  return '0x' + sel + addrPad + amtPad;
+}
+
+async function _pwaEvmRpc(network, method, params) {
+  const rpcKey = {ethereum:'eth',bnb:'bnb',arbitrum:'arb',base:'base'}[network];
+  const rpc = rpcKey ? _CC_RPC[rpcKey] : null;
+  if (!rpc) throw new Error('unknown_network');
+  const r = await fetch(rpc, {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({jsonrpc:'2.0', method, params, id: Date.now()}),
+    signal: AbortSignal.timeout(10000),
+  });
+  const d = await r.json();
+  if (d.error) throw new Error(d.error.message || JSON.stringify(d.error));
+  return d.result;
+}
+
+// Sign EVM transaction (EIP-155 legacy) using noble secp256k1 from _loadNobleLibs
+async function _pwaEvmSignAndBroadcast({ network, from, to, value=0n, data='0x', gasLimit, gasPrice, nonce }) {
+  const chainId = _EVM_CHAIN_IDS[network];
+  if (!chainId) throw new Error('unsupported_network');
+  if (!_pwaSigningCtx?.privHex) throw new Error('wallet_locked');
+
+  const unsigned = _pwaRlp.encode([
+    _pwaRlp.bn2b(BigInt(nonce)),
+    _pwaRlp.bn2b(BigInt(gasPrice)),
+    _pwaRlp.bn2b(BigInt(gasLimit)),
+    _pwaRlp.hexToBytes(to),
+    _pwaRlp.bn2b(BigInt(value)),
+    _pwaRlp.hexToBytes(data.replace(/^0x/,'')||''),
+    _pwaRlp.bn2b(BigInt(chainId)),
+    new Uint8Array(0),
+    new Uint8Array(0),
+  ]);
+  const unsignedHex = '0x' + Array.from(unsigned).map(b=>b.toString(16).padStart(2,'0')).join('');
+
+  // Keccak256 via server (hash utility — no keys sent)
+  const hashRes = await fetch('/api/wallet/v1/keccak256', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({hex: unsignedHex}),
+  });
+  const hashData = await hashRes.json();
+  if (!hashData.ok) throw new Error('keccak256_failed');
+  const txHashHex = hashData.hash.replace(/^0x/,'');
+
+  // Sign with secp256k1 — private key stays in JS memory only
+  const { secp256k1 } = await _loadNobleLibs();
+  const privBytes = _pwaRlp.hexToBytes(_pwaSigningCtx.privHex.replace(/^0x/,''));
+  const sig = await secp256k1.signAsync(txHashHex, privBytes, { lowS: true });
+  const recovery = sig.recovery ?? 0;
+  const v = BigInt(chainId) * 2n + 35n + BigInt(recovery);
+  const r32 = sig.r.toString(16).padStart(64,'0');
+  const s32 = sig.s.toString(16).padStart(64,'0');
+
+  const signed = _pwaRlp.encode([
+    _pwaRlp.bn2b(BigInt(nonce)),
+    _pwaRlp.bn2b(BigInt(gasPrice)),
+    _pwaRlp.bn2b(BigInt(gasLimit)),
+    _pwaRlp.hexToBytes(to),
+    _pwaRlp.bn2b(BigInt(value)),
+    _pwaRlp.hexToBytes(data.replace(/^0x/,'')||''),
+    _pwaRlp.bn2b(v),
+    _pwaRlp.hexToBytes(r32),
+    _pwaRlp.hexToBytes(s32),
+  ]);
+  const signedHex = '0x' + Array.from(signed).map(b=>b.toString(16).padStart(2,'0')).join('');
+  return await _pwaEvmRpc(network, 'eth_sendRawTransaction', [signedHex]);
+}
+
+function pwaOpenEvmAssetActions(network, evmAddr, tokenSym) {
+  const existing = document.getElementById('pwaEvmActionSheet');
+  if (existing) existing.remove();
+  const netLabel = {ethereum:'Ethereum',bnb:'BNB Chain',arbitrum:'Arbitrum',base:'Base'}[network] || network;
+  const tokenLabel = tokenSym || 'Assets';
+  const hasPool = !!_EVM_POOL_IDS[network];
+  const overlay = document.createElement('div');
+  overlay.id = 'pwaEvmActionSheet';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.78);z-index:10000;display:flex;align-items:flex-end;justify-content:center;';
+  const sheet = document.createElement('div');
+  sheet.style.cssText = 'background:#13112a;border:1px solid #2a2050;border-radius:14px 14px 0 0;padding:20px 20px 32px;width:100%;max-width:480px;';
+  sheet.innerHTML = `
+    <div style="font-size:14px;font-weight:700;color:#b08cf8;margin-bottom:14px;">${escHtml(tokenLabel)} on ${escHtml(netLabel)}</div>
+    <button id="pwaEvmSendBtn" style="width:100%;margin-bottom:8px;padding:12px;background:rgba(176,140,248,0.08);border:1px solid #2a2050;border-radius:8px;color:#fff;font-size:13px;cursor:pointer;text-align:left;">💸 Send ${escHtml(tokenLabel)}</button>
+    ${hasPool ? `<button id="pwaEvmDepositBtn" style="width:100%;margin-bottom:8px;padding:12px;background:rgba(0,200,255,0.06);border:1px solid #004466;border-radius:8px;color:#fff;font-size:13px;cursor:pointer;text-align:left;">💧 Deposit to Pool</button>` : ''}
+    <button id="pwaEvmCopyBtn" style="width:100%;margin-bottom:8px;padding:12px;background:rgba(0,0,0,0.3);border:1px solid #2a2050;border-radius:8px;color:#aaa;font-size:13px;cursor:pointer;text-align:left;">📋 Copy Address (${evmAddr.slice(0,6)}…${evmAddr.slice(-4)})</button>
+    <button id="pwaEvmCancelBtn" style="width:100%;padding:10px;background:none;border:1px solid #333;border-radius:8px;color:#666;font-size:12px;cursor:pointer;">Cancel</button>
+  `;
+  overlay.appendChild(sheet);
+  overlay.addEventListener('click', e => { if(e.target===overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+
+  sheet.querySelector('#pwaEvmSendBtn').addEventListener('click', () => {
+    overlay.remove();
+    pwaOpenEvmSendModal(network, evmAddr, tokenSym);
+  });
+  if (hasPool) {
+    sheet.querySelector('#pwaEvmDepositBtn').addEventListener('click', () => {
+      overlay.remove();
+      pwaOpenPoolDepositModal(network, evmAddr);
+    });
+  }
+  sheet.querySelector('#pwaEvmCopyBtn').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(evmAddr); } catch {}
+    const btn = sheet.querySelector('#pwaEvmCopyBtn');
+    if (btn) btn.textContent = '✓ Copied';
+  });
+  sheet.querySelector('#pwaEvmCancelBtn').addEventListener('click', () => overlay.remove());
+}
+
+async function pwaOpenEvmSendModal(network, evmAddr, tokenSym) {
+  const existing = document.getElementById('pwaEvmSendModal');
+  if (existing) existing.remove();
+  const netLabel = {ethereum:'Ethereum',bnb:'BNB Chain',arbitrum:'Arbitrum',base:'Base'}[network] || network;
+  const nativeSym = {ethereum:'ETH',bnb:'BNB',arbitrum:'ETH',base:'ETH'}[network] || 'ETH';
+  const sendSym = tokenSym || nativeSym;
+
+  const overlay = document.createElement('div');
+  overlay.id = 'pwaEvmSendModal';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.88);z-index:10001;display:flex;align-items:center;justify-content:center;padding:16px;';
+  overlay.innerHTML = `
+  <div style="background:#13112a;border:1px solid #2a2050;border-radius:12px;padding:20px;width:100%;max-width:420px;font-size:13px;">
+    <div style="font-weight:700;color:#b08cf8;margin-bottom:12px;font-size:15px;">💸 Send ${escHtml(sendSym)} on ${escHtml(netLabel)}</div>
+    <div style="color:#888;font-size:10px;margin-bottom:12px;">From: <span style="font-family:monospace;color:#aaa">${evmAddr}</span></div>
+    <label style="color:#aaa;font-size:11px;">Recipient address</label>
+    <input id="pwaEvmSendTo" placeholder="0x..." style="width:100%;box-sizing:border-box;margin:4px 0 10px;padding:8px;background:#0d0a1a;border:1px solid #2a2050;border-radius:6px;color:#fff;font-family:monospace;font-size:12px;">
+    <label style="color:#aaa;font-size:11px;">Amount (${escHtml(sendSym)})</label>
+    <input id="pwaEvmSendAmt" type="number" min="0" step="any" placeholder="0.00" style="width:100%;box-sizing:border-box;margin:4px 0 10px;padding:8px;background:#0d0a1a;border:1px solid #2a2050;border-radius:6px;color:#fff;font-size:13px;">
+    <div id="pwaEvmGasEst" style="font-size:10px;color:#888;margin-bottom:10px;min-height:14px;"></div>
+    <div style="display:flex;gap:8px;margin-top:4px;">
+      <button id="pwaEvmGasBtn" style="flex:1;padding:9px;background:rgba(0,0,0,0.4);border:1px solid #2a2050;color:#8af;border-radius:6px;cursor:pointer;font-size:12px;">Estimate Gas</button>
+      <button id="pwaEvmSendConfirmBtn" style="flex:1;padding:9px;background:rgba(176,140,248,0.15);border:1px solid #b08cf8;color:#b08cf8;border-radius:6px;cursor:pointer;font-size:12px;font-weight:700;">Send</button>
+    </div>
+    <button id="pwaEvmSendCancelBtn" style="width:100%;margin-top:8px;padding:8px;background:none;border:1px solid #333;border-radius:6px;color:#666;font-size:11px;cursor:pointer;">Cancel</button>
+    <div id="pwaEvmSendResult" style="margin-top:10px;font-size:11px;min-height:14px;"></div>
+    <div style="margin-top:12px;padding:8px;background:rgba(255,200,0,0.04);border:1px solid #332200;border-radius:6px;font-size:10px;color:#887766;">
+      ⚠ Signing uses your Thronos secp256k1 key (EIP-155). Wallet must be unlocked. Private key never leaves your device.
+    </div>
+  </div>`;
+  overlay.addEventListener('click', e => { if(e.target===overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+
+  overlay.querySelector('#pwaEvmSendCancelBtn').addEventListener('click', () => overlay.remove());
+
+  overlay.querySelector('#pwaEvmGasBtn').addEventListener('click', async () => {
+    const gasEl = overlay.querySelector('#pwaEvmGasEst');
+    if (gasEl) gasEl.textContent = 'Estimating…';
+    const toAddr = (overlay.querySelector('#pwaEvmSendTo')?.value || '').trim();
+    const amt = parseFloat(overlay.querySelector('#pwaEvmSendAmt')?.value || '0');
+    if (!toAddr || !amt) { if (gasEl) gasEl.textContent = 'Enter recipient and amount first.'; return; }
+    try {
+      const tokenCfg = (_EVM_TOKENS[network] || {})[tokenSym];
+      const [gasPriceHex, nonceHex] = await Promise.all([
+        _pwaEvmRpc(network, 'eth_gasPrice', []),
+        _pwaEvmRpc(network, 'eth_getTransactionCount', [evmAddr, 'pending']),
+      ]);
+      const gasPrice = BigInt(gasPriceHex);
+      const nonce = parseInt(nonceHex, 16);
+      let gasLimit = 21000n;
+      if (tokenCfg) {
+        const data = _pwaEncodeErc20Transfer(toAddr, amt, tokenCfg.decimals);
+        try {
+          const gasHex = await _pwaEvmRpc(network, 'eth_estimateGas', [{from:evmAddr, to:tokenCfg.contract, data, value:'0x0'}]);
+          gasLimit = BigInt(gasHex) * 12n / 10n;
+        } catch { gasLimit = 80000n; }
+      }
+      const nativeSym2 = {ethereum:'ETH',bnb:'BNB',arbitrum:'ETH',base:'ETH'}[network] || 'ETH';
+      const feeEth = Number(gasPrice * gasLimit) / 1e18;
+      if (gasEl) gasEl.textContent = `Gas fee ≈ ${feeEth.toFixed(6)} ${nativeSym2} · Nonce: ${nonce}`;
+      overlay.dataset.gasPrice = gasPrice.toString();
+      overlay.dataset.gasLimit = gasLimit.toString();
+      overlay.dataset.nonce = nonce;
+    } catch (err) {
+      if (gasEl) gasEl.textContent = `Gas estimate failed: ${err.message}`;
+    }
+  });
+
+  overlay.querySelector('#pwaEvmSendConfirmBtn').addEventListener('click', async () => {
+    const resultEl = overlay.querySelector('#pwaEvmSendResult');
+    const toAddr = (overlay.querySelector('#pwaEvmSendTo')?.value || '').trim();
+    const amt = parseFloat(overlay.querySelector('#pwaEvmSendAmt')?.value || '0');
+    if (!toAddr || !toAddr.match(/^0x[0-9a-fA-F]{40}$/)) {
+      if (resultEl) resultEl.innerHTML = '<span style="color:#f88">Invalid recipient address.</span>'; return;
+    }
+    if (!amt || amt <= 0) {
+      if (resultEl) resultEl.innerHTML = '<span style="color:#f88">Enter a valid amount.</span>'; return;
+    }
+    const gasPrice = overlay.dataset.gasPrice ? BigInt(overlay.dataset.gasPrice) : null;
+    const gasLimit = overlay.dataset.gasLimit ? BigInt(overlay.dataset.gasLimit) : null;
+    const nonce    = overlay.dataset.nonce    ? parseInt(overlay.dataset.nonce)   : null;
+    if (!gasPrice || !gasLimit || nonce === null) {
+      if (resultEl) resultEl.innerHTML = '<span style="color:#f88">Click "Estimate Gas" first.</span>'; return;
+    }
+    if (resultEl) resultEl.innerHTML = '<span style="color:#8af">Signing and broadcasting…</span>';
+    try {
+      const tokenCfg = (_EVM_TOKENS[network] || {})[tokenSym];
+      let txHash;
+      if (tokenCfg) {
+        const data = _pwaEncodeErc20Transfer(toAddr, amt, tokenCfg.decimals);
+        txHash = await _pwaEvmSignAndBroadcast({ network, from:evmAddr, to:tokenCfg.contract, value:0n, data, gasLimit, gasPrice, nonce });
+      } else {
+        const weiAmt = BigInt(Math.round(amt * 1e18));
+        txHash = await _pwaEvmSignAndBroadcast({ network, from:evmAddr, to:toAddr, value:weiAmt, data:'0x', gasLimit, gasPrice, nonce });
+      }
+      if (resultEl) resultEl.innerHTML = `<span style="color:#56ff9a">✓ Broadcast! TX: <span style="font-family:monospace;font-size:9px;">${txHash}</span></span>`;
+      // Record in normalized history (fire-and-forget)
+      const thrAddr = _pwaSigningCtx?.address || '';
+      if (thrAddr) {
+        const chainNorm = {bnb:'bsc',base:'base',arbitrum:'arbitrum',ethereum:'eth'}[network] || network;
+        fetch('/api/wallet/evm-tx/record', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({address:thrAddr, chain:chainNorm, asset:tokenSym||'', to:toAddr, amount:amt, tx_hash:txHash, status:'submitted', direction:'out'}),
+        }).catch(() => {});
+      }
+    } catch (err) {
+      if (resultEl) resultEl.innerHTML = `<span style="color:#f88">Error: ${err.message}</span>`;
+    }
+  });
+}
+
+async function pwaOpenPoolDepositModal(network, evmAddr) {
+  const existing = document.getElementById('pwaPoolDepositModal');
+  if (existing) existing.remove();
+  const poolId = _EVM_POOL_IDS[network];
+  if (!poolId) { alert('No pool configured for this network.'); return; }
+
+  const overlay = document.createElement('div');
+  overlay.id = 'pwaPoolDepositModal';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.88);z-index:10001;display:flex;align-items:center;justify-content:center;padding:16px;';
+  overlay.innerHTML = `
+  <div style="background:#0d1520;border:1px solid #004488;border-radius:12px;padding:20px;width:100%;max-width:420px;font-size:13px;">
+    <div style="font-weight:700;color:#00c8ff;margin-bottom:4px;font-size:15px;">💧 Deposit to Pythia Pool</div>
+    <div style="color:#888;font-size:10px;margin-bottom:14px;">Pool: <b>${escHtml(poolId)}</b></div>
+    <div id="pwaPoolVaultArea" style="margin-bottom:12px;color:#aaa;font-size:11px;">Loading vault address…</div>
+    <label style="color:#aaa;font-size:11px;">Amount to deposit</label>
+    <input id="pwaPoolDepositAmt" type="number" min="0" step="any" placeholder="0.00" style="width:100%;box-sizing:border-box;margin:4px 0 10px;padding:8px;background:#071220;border:1px solid #004488;border-radius:6px;color:#fff;font-size:13px;">
+    <button id="pwaPoolConfirmBtn" style="width:100%;padding:10px;background:rgba(0,200,255,0.12);border:1px solid #0088cc;color:#00c8ff;border-radius:6px;cursor:pointer;font-size:13px;font-weight:700;">Confirm Deposit</button>
+    <button id="pwaPoolCancelBtn" style="width:100%;margin-top:8px;padding:8px;background:none;border:1px solid #333;border-radius:6px;color:#666;font-size:11px;cursor:pointer;">Cancel</button>
+    <div id="pwaPoolDepositResult" style="margin-top:10px;font-size:11px;min-height:14px;"></div>
+    <div style="margin-top:12px;padding:8px;background:rgba(0,200,255,0.04);border:1px solid #002244;border-radius:6px;font-size:10px;color:#557799;">
+      📌 Send the exact amount from your external wallet to the Pythia vault address above, then confirm here. Pythia vault only appears in pool deposit flows — never as your personal receive address.
+    </div>
+  </div>`;
+  overlay.addEventListener('click', e => { if(e.target===overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+
+  overlay.querySelector('#pwaPoolCancelBtn').addEventListener('click', () => overlay.remove());
+
+  // Fetch vault address
+  try {
+    const r = await fetch(`/api/pools/tvl?pool_id=${encodeURIComponent(poolId)}`);
+    const d = await r.json();
+    const vaultEl = overlay.querySelector('#pwaPoolVaultArea');
+    if (vaultEl) {
+      const vault = d.pool_vault || d.evm_bsc_address || d.evm_base_address || '';
+      const asset = {bnb:'USDT', base:'USDC'}[network] || 'tokens';
+      if (vault) {
+        overlay.dataset.vaultAddr = vault;
+        overlay.dataset.asset = asset.toUpperCase();
+        vaultEl.innerHTML = `<div style="color:#aaa;">Send <b style="color:#56ff9a">${escHtml(asset)}</b> to Pythia vault:</div>`
+          + `<div style="font-family:monospace;font-size:10px;background:#071220;padding:6px;border-radius:4px;margin-top:4px;color:#00c8ff;word-break:break-all;">${vault}</div>`
+          + `<button id="pwaPoolCopyVault" style="margin-top:4px;padding:3px 10px;background:none;border:1px solid #004488;color:#8af;border-radius:3px;font-size:10px;cursor:pointer;">Copy address</button>`;
+        overlay.querySelector('#pwaPoolCopyVault')?.addEventListener('click', async () => {
+          try { await navigator.clipboard.writeText(vault); } catch {}
+          const btn = overlay.querySelector('#pwaPoolCopyVault');
+          if (btn) btn.textContent = '✓ Copied';
+        });
+      } else {
+        vaultEl.textContent = 'Vault address not configured yet.';
+      }
+    }
+  } catch {
+    const vaultEl = overlay.querySelector('#pwaPoolVaultArea');
+    if (vaultEl) vaultEl.textContent = 'Could not load vault address.';
+  }
+
+  overlay.querySelector('#pwaPoolConfirmBtn').addEventListener('click', async () => {
+    const resultEl = overlay.querySelector('#pwaPoolDepositResult');
+    const amt = parseFloat(overlay.querySelector('#pwaPoolDepositAmt')?.value || '0');
+    if (!amt || amt <= 0) { if (resultEl) resultEl.innerHTML = '<span style="color:#f88">Enter a valid amount.</span>'; return; }
+    const thrAddr = _pwaSigningCtx?.address || '';
+    if (!thrAddr) { if (resultEl) resultEl.innerHTML = '<span style="color:#f88">Wallet not connected.</span>'; return; }
+    const asset = overlay.dataset.asset || ({bnb:'USDT', base:'USDC'}[network] || 'USDT');
+    const vaultAddr = overlay.dataset.vaultAddr || '';
+    if (resultEl) resultEl.innerHTML = '<span style="color:#8af">Recording deposit intent…</span>';
+    try {
+      // Intent only — no accounting change. Shares are credited only after
+      // pool_deposit_watcher confirms the on-chain transfer.
+      const r = await fetch('/api/wallet/pool-deposit-intent', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({address:thrAddr, pool_id:poolId, asset, amount:amt, vault_address:vaultAddr}),
+      });
+      const d = await r.json();
+      if (d.ok) {
+        if (resultEl) resultEl.innerHTML = `<span style="color:#56ff9a">✓ Deposit intent of ${amt} ${asset} registered (intent: ${d.intent_id}). Shares are credited only after the on-chain transfer is confirmed by the pool watcher.</span>`;
+      } else {
+        if (resultEl) resultEl.innerHTML = `<span style="color:#f88">Error: ${d.error || 'intent_failed'}</span>`;
+      }
+    } catch (err) {
+      if (resultEl) resultEl.innerHTML = `<span style="color:#f88">Error: ${err.message}</span>`;
+    }
+  });
+}
+
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 
 async function boot() {
@@ -4712,5 +5072,8 @@ window.showAddLiquidity = showAddLiquidity;
 window._approveWcRequest = _approveWcRequest;
 window._rejectWcRequest = _rejectWcRequest;
 window.buyNFT = buyNFT;
+window.pwaOpenEvmAssetActions = pwaOpenEvmAssetActions;
+window.pwaOpenEvmSendModal = pwaOpenEvmSendModal;
+window.pwaOpenPoolDepositModal = pwaOpenPoolDepositModal;
 
 boot();

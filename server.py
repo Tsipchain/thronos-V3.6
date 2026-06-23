@@ -28966,6 +28966,110 @@ def api_wallet_v1_evm_address():
         return jsonify(ok=False, error=str(exc)), 400
 
 
+@app.route("/api/wallet/v1/keccak256", methods=["POST", "OPTIONS"])
+def api_wallet_v1_keccak256():
+    """Hash-only utility: keccak256(hex_bytes). No keys involved.
+    Used by client-side EVM transaction signing so the client can sign
+    the transaction hash without implementing keccak256 in JS.
+    Body: {"hex": "0x..."}  Returns: {"ok": true, "hash": "0x..."}
+    """
+    if request.method == "OPTIONS":
+        return "", 200
+    try:
+        body = request.get_json(silent=True) or {}
+        raw_hex = (body.get("hex") or "").strip().lstrip("0x")
+        if not raw_hex:
+            return jsonify(ok=False, error="hex_required"), 400
+        try:
+            raw_bytes = bytes.fromhex(raw_hex)
+        except ValueError:
+            return jsonify(ok=False, error="invalid_hex"), 400
+        try:
+            from Crypto.Hash import keccak as _keccak
+            k = _keccak.new(digest_bits=256)
+        except ImportError:
+            from Cryptodome.Hash import keccak as _keccak
+            k = _keccak.new(digest_bits=256)
+        k.update(raw_bytes)
+        return jsonify(ok=True, hash="0x" + k.hexdigest()), 200
+    except Exception as exc:
+        logger.error("[wallet/v1/keccak256] %s", exc)
+        return jsonify(ok=False, error=str(exc)), 500
+
+
+@app.route("/api/wallet/evm-tx/record", methods=["POST", "OPTIONS"])
+def api_wallet_evm_tx_record():
+    """Record a client-broadcast EVM transaction in normalized wallet history.
+    Server never signs or broadcasts — client does. This endpoint only persists
+    the event so it appears in /api/wallet/history/normalized.
+    Body: {address, chain, asset, to, amount, tx_hash, status, direction}
+    """
+    if request.method == "OPTIONS":
+        return "", 200
+    try:
+        body    = request.get_json(silent=True) or {}
+        address = (body.get("address") or "").strip().upper()
+        chain   = (body.get("chain")   or "").strip().lower()
+        asset   = (body.get("asset")   or "").strip().upper()
+        to_addr = (body.get("to")      or "").strip()
+        amount  = float(body.get("amount") or 0)
+        tx_hash = (body.get("tx_hash") or "").strip()
+        status  = (body.get("status")  or "submitted").strip()
+        direction = (body.get("direction") or "out").strip()
+
+        if not address or not address.startswith("THR"):
+            return jsonify(ok=False, error="valid_thr_address_required"), 400
+        if not chain or not asset:
+            return jsonify(ok=False, error="chain_and_asset_required"), 400
+        if not tx_hash:
+            return jsonify(ok=False, error="tx_hash_required"), 400
+
+        chain_norm = {"bnb": "bsc", "bsc": "bsc", "base": "base",
+                      "arbitrum": "arbitrum", "eth": "eth", "ethereum": "eth"}.get(chain, chain)
+
+        event_id  = "evm_" + tx_hash[:16].lstrip("0x")
+        now_ts    = int(time.time())
+        event_name = f"Sent {asset}" if direction == "out" else f"Received {asset}"
+
+        entry = {
+            "id":                  event_id,
+            "original_event_type": "evm_token_send",
+            "category":            "transaction",
+            "domain":              "token",
+            "chain":               chain_norm,
+            "asset":               asset,
+            "amount":              amount,
+            "direction":           direction,
+            "status":              status,
+            "from_address":        address,
+            "to_address":          to_addr,
+            "tx_hash":             tx_hash,
+            "event_name":          event_name,
+            "icon":                "📤" if direction == "out" else "📥",
+            "timestamp":           now_ts,
+            "timestamp_iso":       time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(now_ts)),
+        }
+
+        # Append to phantom_tx_chain so normalized history picks it up
+        try:
+            chain_file = os.path.join(DATA_DIR, "phantom_tx_chain.json")
+            txs = load_json(chain_file, [])
+            existing_ids = {t.get("id") or t.get("tx_id") for t in txs}
+            if event_id not in existing_ids:
+                entry_for_chain = dict(entry)
+                entry_for_chain["address"] = address
+                entry_for_chain["event_type"] = "evm_token_send"
+                txs.append(entry_for_chain)
+                save_json(chain_file, txs)
+        except Exception as store_err:
+            logger.warning("[evm-tx/record] store failed: %s", store_err)
+
+        return jsonify(ok=True, event_id=event_id, tx_hash=tx_hash, status=status), 200
+    except Exception as exc:
+        logger.error("[wallet/evm-tx/record] %s", exc)
+        return jsonify(ok=False, error=str(exc)), 500
+
+
 @app.route("/api/wallet/v1/btc-address-from-key", methods=["POST"])
 def api_wallet_v1_btc_address_from_key():
     """PWA/mobile: derive BTC address directly from private_key_hex (same trust model as /api/wallet/v1/transfer)."""

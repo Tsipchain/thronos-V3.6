@@ -39,14 +39,14 @@ if errorlevel 1 (
 )
 
 :: ── THR address: use personalised value or prompt ───────────────────────────
+:: YOUR_THR_ADDRESS is replaced at zip build time with the real address.
+:: The /I prefix check avoids the comparison being corrupted when both sides
+:: get substituted with the real address by the zip builder.
 set THR_ADDRESS=YOUR_THR_ADDRESS
-if "%THR_ADDRESS%"=="YOUR_THR_ADDRESS" (
-    if not "%~1"=="" (
-        set THR_ADDRESS=%~1
-    ) else (
-        set /p THR_ADDRESS="Enter your THR wallet address (THR...): "
-    )
-)
+if not "%~1"=="" set THR_ADDRESS=%~1
+if /I "%THR_ADDRESS:~0,3%"=="THR" goto ADDR_VALID
+set /p THR_ADDRESS="Enter your THR wallet address (THR...): "
+:ADDR_VALID
 if "%THR_ADDRESS%"=="" (
     echo ERROR: THR address is required.
     pause

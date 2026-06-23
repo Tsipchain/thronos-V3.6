@@ -20,13 +20,10 @@ if "%PYTHON%"=="" (
 
 :: ── THR address ─────────────────────────────────────────────────────────────
 set STRATUM_PROXY_ADDRESS=YOUR_THR_ADDRESS
-if "%STRATUM_PROXY_ADDRESS%"=="YOUR_THR_ADDRESS" (
-    if not "%~1"=="" (
-        set STRATUM_PROXY_ADDRESS=%~1
-    ) else (
-        set /p STRATUM_PROXY_ADDRESS="Enter THR wallet address: "
-    )
-)
+if not "%~1"=="" set STRATUM_PROXY_ADDRESS=%~1
+if /I "%STRATUM_PROXY_ADDRESS:~0,3%"=="THR" goto PROXY_ADDR_VALID
+set /p STRATUM_PROXY_ADDRESS="Enter THR wallet address: "
+:PROXY_ADDR_VALID
 if "%STRATUM_PROXY_ADDRESS%"=="" (
     echo ERROR: THR address required.
     pause

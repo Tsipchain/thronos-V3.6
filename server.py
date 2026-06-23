@@ -10980,6 +10980,7 @@ def mining_info():
 
     target = get_mining_target()
     nbits = target_to_bits(target)
+    current_difficulty = int(INITIAL_TARGET // target) if target > 0 else 1
 
     last_block = get_last_block_snapshot()
     last_hash = last_block.get("block_hash") or "0" * 64
@@ -10991,16 +10992,97 @@ def mining_info():
         blocks = get_reward_blocks()
         local_height = len(blocks)
         global_height = HEIGHT_OFFSET + local_height
-    reward = calculate_reward(global_height)
+
+    # Import halving constants if available
+    try:
+        from mining_ecosystem_tokenomics import HALVING_INTERVAL, INITIAL_BLOCK_REWARD
+        halving_interval = HALVING_INTERVAL
+        initial_reward = INITIAL_BLOCK_REWARD
+    except (ImportError, Exception):
+        halving_interval = 1_312_500
+        initial_reward = 8.0
+
+    current_epoch = global_height // halving_interval
+    current_reward = calculate_reward(global_height)
+
+    # Calculate reward split for current block reward
+    miner_reward = round(current_reward * 0.80, 6)
+    ai_reward = round(current_reward * 0.10, 6)
+    nodes_reward = round(current_reward * 0.05, 6)
+    ecosystem_reward = round(current_reward * 0.05, 6)
+
+    # Halving calculations
+    next_halving_epoch = current_epoch + 1
+    next_halving_height = next_halving_epoch * halving_interval
+    blocks_until_halving = max(0, next_halving_height - global_height)
+
+    # Retarget status
+    blocks_until_retarget = RETARGET_INTERVAL - (global_height % RETARGET_INTERVAL)
+    if blocks_until_retarget == RETARGET_INTERVAL:
+        blocks_until_retarget = 0
+
+    last_retarget_height = ((global_height // RETARGET_INTERVAL) * RETARGET_INTERVAL) if global_height >= RETARGET_INTERVAL else 0
+
+    # Calculate average block time for recent window
+    blocks = get_reward_blocks()
+    avg_block_time = TARGET_BLOCK_TIME
+    if len(blocks) >= RETARGET_INTERVAL:
+        recent_blocks = blocks[-RETARGET_INTERVAL:]
+        try:
+            t_fmt = "%Y-%m-%d %H:%M:%S UTC"
+            if len(recent_blocks) > 1:
+                t_end = datetime.strptime(recent_blocks[-1].get("timestamp", ""), t_fmt).timestamp()
+                t_start = datetime.strptime(recent_blocks[0].get("timestamp", ""), t_fmt).timestamp()
+                elapsed = max(1, t_end - t_start)
+                avg_block_time = round(elapsed / (len(recent_blocks) - 1), 2)
+        except Exception:
+            pass
+
+    # Count recent stale and accepted blocks
+    stale_blocks_recent = 0
+    accepted_blocks_recent = 0
+    if blocks:
+        recent_blocks = blocks[-max(10, RETARGET_INTERVAL):]
+        for b in recent_blocks:
+            if isinstance(b, dict):
+                b_status = str(b.get("status", "")).lower()
+                if "stale" in b_status:
+                    stale_blocks_recent += 1
+                elif "accepted" in b_status or b.get("reward"):
+                    accepted_blocks_recent += 1
+        if not stale_blocks_recent and not accepted_blocks_recent and recent_blocks:
+            accepted_blocks_recent = len(recent_blocks)
+
     mempool_len = get_mempool_len_cached()
 
     payload = {
-        "target": hex(target),
-        "nbits": hex(nbits),
-        "difficulty_int": int(INITIAL_TARGET // target),
-        "reward": reward,
+        "ok": True,
         "height": global_height,
         "local_height": local_height,
+        "current_hash": last_hash,
+        "current_target": hex(target),
+        "current_difficulty": current_difficulty,
+        "target_block_time": TARGET_BLOCK_TIME,
+        "retarget_interval": RETARGET_INTERVAL,
+        "last_retarget_height": last_retarget_height,
+        "blocks_until_retarget": blocks_until_retarget,
+        "avg_block_time_last_window": avg_block_time,
+        "current_epoch": current_epoch,
+        "current_reward": round(current_reward, 6),
+        "miner_reward": miner_reward,
+        "ai_reward": ai_reward,
+        "node_reward": nodes_reward,
+        "ecosystem_reward": ecosystem_reward,
+        "halving_interval": halving_interval,
+        "next_halving_height": next_halving_height,
+        "blocks_until_halving": blocks_until_halving,
+        "stale_blocks_recent": stale_blocks_recent,
+        "accepted_blocks_recent": accepted_blocks_recent,
+        # Legacy fields for backward compatibility
+        "target": hex(target),
+        "nbits": hex(nbits),
+        "difficulty_int": current_difficulty,
+        "reward": current_reward,
         "last_hash": last_hash,
         "mempool": mempool_len,
     }

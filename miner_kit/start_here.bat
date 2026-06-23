@@ -24,13 +24,18 @@ if "%PYTHON%"=="" (
 :: ── Install requests silently if missing ────────────────────────────────────
 %PYTHON% -c "import requests" >nul 2>&1
 if errorlevel 1 (
-    echo Installing required library (requests)...
+    echo Installing required library ^(requests^)...
     %PYTHON% -m pip install requests --quiet --disable-pip-version-check
     if errorlevel 1 (
-        echo  WARNING: could not auto-install requests.
-        echo  Run manually:  pip install requests
         echo.
+        echo  WARNING: auto-install failed. Run this manually then restart:
+        echo    pip install requests
+        echo.
+        pause
+        exit /b 1
     )
+    echo  Done.
+    echo.
 )
 
 :: ── THR address: use personalised value or prompt ───────────────────────────
@@ -78,61 +83,87 @@ goto MENU
 
 :: ── CPU Miner ───────────────────────────────────────────────────────────────
 :CPU_MINER
-echo.
-echo  Starting CPU Miner...
-echo  Logs: logs\cpu.log
+cls
+echo ============================================================
+echo  CPU Miner — running
+echo  Address : %THR_ADDRESS%
 echo  Press Ctrl+C to stop.
+echo ============================================================
 echo.
 set PYTHONUNBUFFERED=1
-%PYTHON% -u cpu\pow_miner_cpu.py --address %THR_ADDRESS% --api %THRONOS_API_URL% 2>&1 | powershell -NoProfile -NonInteractive -Command "$input | Tee-Object -FilePath 'logs\cpu.log'"
-if errorlevel 1 (
+%PYTHON% -u cpu\pow_miner_cpu.py --address %THR_ADDRESS% --api %THRONOS_API_URL%
+set CPU_EXIT=%ERRORLEVEL%
+echo.
+echo ============================================================
+echo  Miner stopped ^(exit code %CPU_EXIT%^).
+if %CPU_EXIT% NEQ 0 (
     echo.
-    echo  CPU miner exited. See logs\cpu.log for details.
-    echo  Common fix:  %PYTHON% -m pip install requests
+    echo  If you see "ModuleNotFoundError: No module named 'requests'":
+    echo    Run:  %PYTHON% -m pip install requests
+    echo    Then re-run start_here.bat.
+    echo.
 )
-pause
+echo  Press any key to return to the menu.
+echo ============================================================
+pause >nul
 goto MENU
 
 :: ── Stratum Proxy ────────────────────────────────────────────────────────────
 :STRATUM_PROXY
-echo.
-echo  Starting Stratum Proxy on port 3334...
-echo  Point your miner at: stratum+tcp://127.0.0.1:3334
-echo  Logs: logs\proxy.log
+cls
+echo ============================================================
+echo  Stratum Proxy — port 3334
+echo  Address : %THR_ADDRESS%
+echo  Point your miner at:  stratum+tcp://127.0.0.1:3334
+echo  Worker:  %THR_ADDRESS%.worker1    Password: x
 echo  Press Ctrl+C to stop.
+echo ============================================================
 echo.
 set PYTHONUNBUFFERED=1
 set STRATUM_PROXY_ADDRESS=%THR_ADDRESS%
 set THRONOS_SERVER=%THRONOS_API_URL%
-%PYTHON% -u proxy\stratum_proxy.py 2>&1 | powershell -NoProfile -NonInteractive -Command "$input | Tee-Object -FilePath 'logs\proxy.log'"
-if errorlevel 1 (
-    echo.
-    echo  Stratum proxy exited. See logs\proxy.log for details.
-)
-pause
+%PYTHON% -u proxy\stratum_proxy.py
+set PROXY_EXIT=%ERRORLEVEL%
+echo.
+echo ============================================================
+echo  Proxy stopped ^(exit code %PROXY_EXIT%^).
+echo  Press any key to return to the menu.
+echo ============================================================
+pause >nul
 goto MENU
 
 :: ── USB ASIC Info ────────────────────────────────────────────────────────────
 :USB_ASIC_INFO
 cls
 echo ============================================================
-echo  USB ASIC Setup
+echo  USB ASIC Setup Guide
 echo ============================================================
 echo.
-echo  Step 1. Install driver
-echo          Open: usb-asic\drivers\README_DRIVERS.md
-echo          Use Zadig to install CP210x or WinUSB driver.
+echo  STEP 1 — Install USB driver
+echo    Open: usb-asic\drivers\README_DRIVERS.md
+echo    Use Zadig to install CP210x or WinUSB for your device.
 echo.
-echo  Step 2. Add miner binary
-echo          Place cgminer.exe in usb-asic\bin\cgminer.exe
-echo          (binary NOT included — download from the cgminer project)
+echo  STEP 2 — Download cgminer or bfgminer (NOT included)
+echo    cgminer: https://github.com/ckolivas/cgminer/releases
+echo    bfgminer: https://bfgminer.org/
 echo.
-echo  Step 3. Start the Stratum Proxy first (option 2 on main menu).
+echo    Place the .exe here:
+echo      %~dp0usb-asic\bin\cgminer.exe
+echo      %~dp0usb-asic\bin\bfgminer.exe
 echo.
-echo  Step 4. Run: usb-asic\run_cgminer_usb.bat
+echo  STEP 3 — Start the Stratum Proxy (menu option 2)
+echo    Keep that window open.
 echo.
-echo  NOTE: HTTP 202 responses from the server are SUCCESS.
-echo        This means your block is queued for processing.
+echo  STEP 4 — Run the ASIC bat
+echo    Double-click:  usb-asic\run_cgminer_usb.bat
+echo                   usb-asic\run_bfgminer_usb.bat
+echo.
+echo  Connection details:
+echo    Pool URL : stratum+tcp://127.0.0.1:3334
+echo    Worker   : %THR_ADDRESS%.worker1
+echo    Password : x
+echo.
+echo  NOTE: HTTP 202 from the server = SUCCESS (block queued).
 echo.
 pause
 goto MENU

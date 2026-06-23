@@ -28972,6 +28972,7 @@ def api_wallet_v1_keccak256():
     Used by client-side EVM transaction signing so the client can sign
     the transaction hash without implementing keccak256 in JS.
     Body: {"hex": "0x..."}  Returns: {"ok": true, "hash": "0x..."}
+    Max input: 1024 bytes (enough for any valid EIP-155 unsigned transaction).
     """
     if request.method == "OPTIONS":
         return "", 200
@@ -28984,6 +28985,8 @@ def api_wallet_v1_keccak256():
             raw_bytes = bytes.fromhex(raw_hex)
         except ValueError:
             return jsonify(ok=False, error="invalid_hex"), 400
+        if len(raw_bytes) > 1024:
+            return jsonify(ok=False, error="payload_too_large", max_bytes=1024), 400
         try:
             from Crypto.Hash import keccak as _keccak
             k = _keccak.new(digest_bits=256)
@@ -28997,38 +29000,49 @@ def api_wallet_v1_keccak256():
         return jsonify(ok=False, error=str(exc)), 500
 
 
+_EVM_TX_HASH_RE = re.compile(r'^0x[0-9a-fA-F]{64}$')
+
 @app.route("/api/wallet/evm-tx/record", methods=["POST", "OPTIONS"])
 def api_wallet_evm_tx_record():
     """Record a client-broadcast EVM transaction in normalized wallet history.
     Server never signs or broadcasts — client does. This endpoint only persists
-    the event so it appears in /api/wallet/history/normalized.
-    Body: {address, chain, asset, to, amount, tx_hash, status, direction}
+    the event for display in /api/wallet/history/normalized.
+    Status is always forced to 'unverified_local_submission'; affects_balance and
+    affects_pool are explicitly false — on-chain verification is required for any
+    accounting change.
+    Body: {address, chain, asset, to, amount, tx_hash, direction}
     """
     if request.method == "OPTIONS":
         return "", 200
     try:
-        body    = request.get_json(silent=True) or {}
-        address = (body.get("address") or "").strip().upper()
-        chain   = (body.get("chain")   or "").strip().lower()
-        asset   = (body.get("asset")   or "").strip().upper()
-        to_addr = (body.get("to")      or "").strip()
-        amount  = float(body.get("amount") or 0)
-        tx_hash = (body.get("tx_hash") or "").strip()
-        status  = (body.get("status")  or "submitted").strip()
+        body      = request.get_json(silent=True) or {}
+        address   = (body.get("address")   or "").strip().upper()
+        chain     = (body.get("chain")     or "").strip().lower()
+        asset     = (body.get("asset")     or "").strip().upper()
+        to_addr   = (body.get("to")        or "").strip()
+        tx_hash   = (body.get("tx_hash")   or "").strip()
         direction = (body.get("direction") or "out").strip()
+
+        try:
+            amount = float(body.get("amount") or 0)
+        except (TypeError, ValueError):
+            amount = 0.0
 
         if not address or not address.startswith("THR"):
             return jsonify(ok=False, error="valid_thr_address_required"), 400
         if not chain or not asset:
             return jsonify(ok=False, error="chain_and_asset_required"), 400
-        if not tx_hash:
-            return jsonify(ok=False, error="tx_hash_required"), 400
+        if not _EVM_TX_HASH_RE.match(tx_hash):
+            return jsonify(ok=False, error="invalid_tx_hash_format",
+                           expected="0x followed by 64 hex chars"), 400
+        if amount < 0:
+            return jsonify(ok=False, error="amount_must_be_non_negative"), 400
 
         chain_norm = {"bnb": "bsc", "bsc": "bsc", "base": "base",
                       "arbitrum": "arbitrum", "eth": "eth", "ethereum": "eth"}.get(chain, chain)
 
-        event_id  = "evm_" + tx_hash[:16].lstrip("0x")
-        now_ts    = int(time.time())
+        event_id   = "evm_" + tx_hash[2:18]   # skip '0x', take 16 hex chars
+        now_ts     = int(time.time())
         event_name = f"Sent {asset}" if direction == "out" else f"Received {asset}"
 
         entry = {
@@ -29040,7 +29054,11 @@ def api_wallet_evm_tx_record():
             "asset":               asset,
             "amount":              amount,
             "direction":           direction,
-            "status":              status,
+            # Status is always unverified — on-chain watcher must confirm before any accounting
+            "status":              "unverified_local_submission",
+            "source":              "client_reported",
+            "affects_balance":     False,
+            "affects_pool":        False,
             "from_address":        address,
             "to_address":          to_addr,
             "tx_hash":             tx_hash,
@@ -29050,23 +29068,96 @@ def api_wallet_evm_tx_record():
             "timestamp_iso":       time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(now_ts)),
         }
 
-        # Append to phantom_tx_chain so normalized history picks it up
+        # Append to phantom_tx_chain so normalized history picks it up (display only)
         try:
             chain_file = os.path.join(DATA_DIR, "phantom_tx_chain.json")
             txs = load_json(chain_file, [])
             existing_ids = {t.get("id") or t.get("tx_id") for t in txs}
             if event_id not in existing_ids:
                 entry_for_chain = dict(entry)
-                entry_for_chain["address"] = address
+                entry_for_chain["address"]    = address
                 entry_for_chain["event_type"] = "evm_token_send"
                 txs.append(entry_for_chain)
                 save_json(chain_file, txs)
         except Exception as store_err:
             logger.warning("[evm-tx/record] store failed: %s", store_err)
 
-        return jsonify(ok=True, event_id=event_id, tx_hash=tx_hash, status=status), 200
+        return jsonify(ok=True, event_id=event_id, tx_hash=tx_hash,
+                       status="unverified_local_submission",
+                       affects_balance=False, affects_pool=False), 200
     except Exception as exc:
         logger.error("[wallet/evm-tx/record] %s", exc)
+        return jsonify(ok=False, error=str(exc)), 500
+
+
+_POOL_DEPOSIT_INTENTS_FILE = os.path.join(DATA_DIR, "pool_deposit_intents.json")
+
+@app.route("/api/wallet/pool-deposit-intent", methods=["POST", "OPTIONS"])
+def api_wallet_pool_deposit_intent():
+    """Record a user's intent to deposit into a Pythia pool.
+    Does NOT credit external_reserve, lp_position_balance, or any accounting ledger.
+    Shares/reserve are credited only after the pool_deposit_watcher confirms the
+    on-chain transfer via /api/admin/pools/credit-deposit (admin-protected).
+    Body: {address, pool_id, asset, amount, vault_address}
+    Returns: {ok, intent_id, status:"pending_verification", affects_balance:false, affects_pool:false}
+    """
+    if request.method == "OPTIONS":
+        return "", 200
+    try:
+        body         = request.get_json(silent=True) or {}
+        address      = (body.get("address")      or "").strip().upper()
+        pool_id      = (body.get("pool_id")      or "").strip().lower()
+        asset        = (body.get("asset")        or "").strip().upper()
+        vault_addr   = (body.get("vault_address") or "").strip()
+
+        try:
+            amount = float(body.get("amount") or 0)
+        except (TypeError, ValueError):
+            amount = 0.0
+
+        if not address or not address.startswith("THR"):
+            return jsonify(ok=False, error="valid_thr_address_required"), 400
+        if not pool_id:
+            return jsonify(ok=False, error="pool_id_required"), 400
+        if not asset:
+            return jsonify(ok=False, error="asset_required"), 400
+        if amount <= 0:
+            return jsonify(ok=False, error="amount_must_be_positive"), 400
+
+        intent_id = "dpi_" + secrets.token_hex(12)
+        now_ts    = int(time.time())
+
+        intent = {
+            "intent_id":       intent_id,
+            "address":         address,
+            "pool_id":         pool_id,
+            "asset":           asset,
+            "amount":          amount,
+            "vault_address":   vault_addr,
+            "status":          "pending_verification",
+            "affects_balance": False,
+            "affects_pool":    False,
+            "source":          "client_deposit_intent",
+            "timestamp":       now_ts,
+            "timestamp_iso":   time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(now_ts)),
+        }
+
+        try:
+            intents = load_json(_POOL_DEPOSIT_INTENTS_FILE, [])
+            intents.append(intent)
+            save_json(_POOL_DEPOSIT_INTENTS_FILE, intents)
+        except Exception as store_err:
+            logger.warning("[pool-deposit-intent] store failed: %s", store_err)
+
+        logger.info("[pool-deposit-intent] %s pool=%s asset=%s amount=%s intent=%s",
+                    address, pool_id, asset, amount, intent_id)
+
+        return jsonify(ok=True, intent_id=intent_id,
+                       status="pending_verification",
+                       affects_balance=False, affects_pool=False,
+                       message="Intent recorded. Shares are credited only after on-chain transfer is confirmed by the pool watcher."), 200
+    except Exception as exc:
+        logger.error("[pool-deposit-intent] %s", exc)
         return jsonify(ok=False, error=str(exc)), 500
 
 

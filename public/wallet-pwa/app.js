@@ -5024,17 +5024,20 @@ async function pwaOpenPoolDepositModal(network, evmAddr) {
     const thrAddr = _pwaSigningCtx?.address || '';
     if (!thrAddr) { if (resultEl) resultEl.innerHTML = '<span style="color:#f88">Wallet not connected.</span>'; return; }
     const asset = overlay.dataset.asset || ({bnb:'USDT', base:'USDC'}[network] || 'USDT');
-    if (resultEl) resultEl.innerHTML = '<span style="color:#8af">Recording deposit…</span>';
+    const vaultAddr = overlay.dataset.vaultAddr || '';
+    if (resultEl) resultEl.innerHTML = '<span style="color:#8af">Recording deposit intent…</span>';
     try {
-      const r = await fetch('/api/pools/deposit', {
+      // Intent only — no accounting change. Shares are credited only after
+      // pool_deposit_watcher confirms the on-chain transfer.
+      const r = await fetch('/api/wallet/pool-deposit-intent', {
         method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({address:thrAddr, pool_id:poolId, side:'external', asset, amount:amt}),
+        body: JSON.stringify({address:thrAddr, pool_id:poolId, asset, amount:amt, vault_address:vaultAddr}),
       });
       const d = await r.json();
       if (d.ok) {
-        if (resultEl) resultEl.innerHTML = `<span style="color:#56ff9a">✓ Deposit of ${amt} ${asset} recorded for pool <b>${poolId}</b>. Shares appear once transfer is verified on-chain.</span>`;
+        if (resultEl) resultEl.innerHTML = `<span style="color:#56ff9a">✓ Deposit intent of ${amt} ${asset} registered (intent: ${d.intent_id}). Shares are credited only after the on-chain transfer is confirmed by the pool watcher.</span>`;
       } else {
-        if (resultEl) resultEl.innerHTML = `<span style="color:#f88">Error: ${d.error || 'deposit_failed'}</span>`;
+        if (resultEl) resultEl.innerHTML = `<span style="color:#f88">Error: ${d.error || 'intent_failed'}</span>`;
       }
     } catch (err) {
       if (resultEl) resultEl.innerHTML = `<span style="color:#f88">Error: ${err.message}</span>`;

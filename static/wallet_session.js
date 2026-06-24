@@ -1231,6 +1231,19 @@
     };
   }
 
+  // Derive the EVM address for the current wallet from its public key.
+  // Calls the server keccak/address utility — no private key involved.
+  async function deriveEvmAddress() {
+    const pubkey = getPublicKey();
+    if (!pubkey) return null;
+    try {
+      const res = await fetch(`/api/wallet/v1/evm-address?pubkey=${encodeURIComponent(pubkey)}`);
+      if (!res.ok) return null;
+      const data = await res.json();
+      return (data.ok && data.evm_address) ? data.evm_address.toLowerCase() : null;
+    } catch { return null; }
+  }
+
   // Sign a raw 32-byte hash (hex) for EVM transactions.
   // Keeps private key inside closure — caller only gets (r, s, recovery).
   async function signEvmTxHash(txHashHex) {
@@ -1275,6 +1288,6 @@
     hasPledgeOrMigrationSource, getModalState,
     generateV1KeyPair, derivePublicKeyAndAddress,
     resolveCanonicalWalletAddress,
-    signEvmTxHash,
+    signEvmTxHash, deriveEvmAddress,
   };
 })(window);

@@ -1593,8 +1593,21 @@ async function showWallet() {
       return;
     }
 
-    // EVM-based chains share one address
-    if (!homeEvmAddr) homeEvmAddr = await _deriveEvmAddress(privHex).catch(() => '');
+    // EVM-based chains share one address — derive it from the signing context
+    // so the displayed From always matches what _pwaEvmSendGuard will re-derive.
+    if (!_pwaSigningCtx?.privHex) {
+      setAddrBarValue('');
+      el.innerHTML = '<div style="color:#ff6b6b;text-align:center;padding:24px 0;font-size:.85rem">Unlock wallet to view / send EVM assets.</div>';
+      return;
+    }
+    if (!homeEvmAddr) {
+      homeEvmAddr = await _deriveEvmAddress(_pwaSigningCtx.privHex).catch(() => null);
+    }
+    if (!homeEvmAddr) {
+      setAddrBarValue('');
+      el.innerHTML = '<div style="color:#ff6b6b;text-align:center;padding:24px 0;font-size:.85rem">Could not derive EVM address for this wallet.</div>';
+      return;
+    }
     setAddrBarValue(homeEvmAddr);
     if (!homeChainBalances) homeChainBalances = await _fetchAllChainBalances(privHex, homeBtcAddr).catch(() => ({}));
     const bal = homeChainBalances;

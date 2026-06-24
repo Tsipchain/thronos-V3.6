@@ -719,10 +719,10 @@ class PYTHEIAWorker:
                 timeout=30
             )
 
-            if response.status_code == 200:
+            if response.status_code in (200, 201, 202):
                 data = response.json()
                 if data.get("status") == "success":
-                    logger.info(f"✓ PYTHEIA_ADVICE posted successfully: {data.get('post_id')}")
+                    logger.info(f"✓ PYTHEIA_ADVICE posted successfully (HTTP {response.status_code}): {data.get('post_id')}")
                     self.last_post_time = time.time()
                     self.save_state()
                     return True

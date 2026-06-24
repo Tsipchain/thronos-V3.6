@@ -25058,16 +25058,24 @@ def api_admin_pools_watcher_status():
                 "0x76b1926f40c596e10c30ae7a359df8a0b21ac4a2"
             )
             rpc_key = f"{chain_up}_RPC_URL"
+            rpc_configured = bool(os.getenv(rpc_key))
             if cfg["external_asset"] == "USDT":
                 contract_key = f"{chain_up}_USDT_CONTRACT"
             else:
                 contract_key = f"{chain_up}_USDC_CONTRACT"
+            # Determine per-chain enabled status and reason for disabled state
+            chain_enabled = rpc_configured
+            chain_reason: str | None = None
+            if not rpc_configured:
+                chain_reason = f"{rpc_key} not configured"
             watched_vaults[pid] = {
                 "pool_id":            pid,
                 "chain":              cfg["chain"],
                 "asset":              cfg["external_asset"],
                 "vault_address":      vault,
-                "rpc_configured":     bool(os.getenv(rpc_key)),
+                "enabled":            chain_enabled,
+                "reason":             chain_reason,
+                "rpc_configured":     rpc_configured,
                 "rpc_env_var":        rpc_key,
                 "contract_env_var":   contract_key,
                 "last_scanned_block": state.get("last_scanned_block", {}).get(cfg["chain"], 0),

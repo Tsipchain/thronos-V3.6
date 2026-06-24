@@ -4916,7 +4916,8 @@ function pwaOpenEvmAssetActions(network, evmAddr, tokenSym) {
   sheet.style.cssText = 'background:#13112a;border:1px solid #2a2050;border-radius:14px 14px 0 0;padding:20px 20px 32px;width:100%;max-width:480px;';
   sheet.innerHTML = `
     <div style="font-size:14px;font-weight:700;color:#b08cf8;margin-bottom:14px;">${escHtml(tokenLabel)} on ${escHtml(netLabel)}</div>
-    <button id="pwaEvmSendBtn" disabled style="width:100%;margin-bottom:8px;padding:12px;background:rgba(176,140,248,0.04);border:1px solid #1a1535;border-radius:8px;color:#777;font-size:13px;cursor:wait;text-align:left;opacity:0.55;">💸 Send ${escHtml(tokenLabel)}<span id="pwaEvmSendBtnSub" style="display:block;font-size:10px;color:#888;margin-top:2px;">Verifying signer &amp; address…</span></button>
+    <button id="pwaEvmSendBtn" disabled style="width:100%;margin-bottom:4px;padding:12px;background:rgba(176,140,248,0.04);border:1px solid #1a1535;border-radius:8px;color:#777;font-size:13px;cursor:wait;text-align:left;opacity:0.55;">💸 Send ${escHtml(tokenLabel)}<span id="pwaEvmSendBtnSub" style="display:block;font-size:10px;color:#888;margin-top:2px;">Verifying signer &amp; address…</span></button>
+    <div id="pwaEvmGuardDebug" style="margin-bottom:8px;padding:5px 8px;background:rgba(0,0,0,0.3);border-radius:5px;font-size:10px;font-family:monospace;color:#666;min-height:16px;"></div>
     ${hasPool ? `<button id="pwaEvmDepositBtn" style="width:100%;margin-bottom:8px;padding:12px;background:rgba(0,200,255,0.06);border:1px solid #004466;border-radius:8px;color:#fff;font-size:13px;cursor:pointer;text-align:left;">💧 Deposit to Pool</button>` : ''}
     <button id="pwaEvmCopyBtn" style="width:100%;margin-bottom:8px;padding:12px;background:rgba(0,0,0,0.3);border:1px solid #2a2050;border-radius:8px;color:#aaa;font-size:13px;cursor:pointer;text-align:left;">📋 Copy Address (${evmAddr.slice(0,6)}…${evmAddr.slice(-4)})</button>
     <button id="pwaEvmCancelBtn" style="width:100%;padding:10px;background:none;border:1px solid #333;border-radius:8px;color:#666;font-size:12px;cursor:pointer;">Cancel</button>
@@ -4929,6 +4930,16 @@ function pwaOpenEvmAssetActions(network, evmAddr, tokenSym) {
   _pwaEvmSendGuard(network, evmAddr).then(guard => {
     const btn = sheet.querySelector('#pwaEvmSendBtn');
     const sub = sheet.querySelector('#pwaEvmSendBtnSub');
+    const dbg = sheet.querySelector('#pwaEvmGuardDebug');
+    const code = guard.reason || (guard.ok ? 'ok' : 'unknown');
+    // Safe console debug — no privHex, only public address
+    console.info('[pwa-evm-send-guard]', {
+      network,
+      displayed: evmAddr,
+      derived: guard.derivedAddr || '(not derived)',
+      code,
+      ok: guard.ok,
+    });
     if (!btn) return;
     if (guard.ok) {
       btn.disabled = false;
@@ -4938,14 +4949,24 @@ function pwaOpenEvmAssetActions(network, evmAddr, tokenSym) {
       btn.style.cursor = 'pointer';
       btn.style.opacity = '1';
       if (sub) sub.remove();
+      if (dbg) { dbg.style.color = '#3a3'; dbg.textContent = 'guard: ok'; }
     } else {
       btn.style.cursor = 'not-allowed';
       btn.style.opacity = '0.38';
       if (sub) sub.textContent = guard.userMsg.split('\n')[0];
+      if (dbg) {
+        dbg.style.color = '#f88';
+        dbg.textContent = 'guard: ' + code +
+          (guard.derivedAddr ? ' · derived: ' + guard.derivedAddr.slice(0,10) + '…' : '') +
+          ' · displayed: ' + evmAddr.slice(0,10) + '…';
+      }
     }
-  }).catch(() => {
+  }).catch(err => {
     const sub = sheet.querySelector('#pwaEvmSendBtnSub');
+    const dbg = sheet.querySelector('#pwaEvmGuardDebug');
+    console.info('[pwa-evm-send-guard]', { network, displayed: evmAddr, code: 'guard_threw', ok: false, error: String(err) });
     if (sub) sub.textContent = 'Signer check failed.';
+    if (dbg) { dbg.style.color = '#f88'; dbg.textContent = 'guard: guard_threw · ' + String(err).slice(0, 60); }
   });
 
   sheet.querySelector('#pwaEvmSendBtn').addEventListener('click', (e) => {

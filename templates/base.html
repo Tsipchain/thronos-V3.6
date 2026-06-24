@@ -4978,19 +4978,24 @@ async function _webEvmSendGuard(network, evmAddr) {
                      evmAddr + ' is a system or vault address and cannot be used as a personal wallet sender.',
         };
     }
-    // Re-derive EVM address from wallet public key to verify it matches displayed From
-    if (typeof walletSession.deriveEvmAddress === 'function') {
-        let derivedAddr;
-        try { derivedAddr = await walletSession.deriveEvmAddress(); } catch (_) { derivedAddr = null; }
-        if (derivedAddr && derivedAddr.toLowerCase() !== evmAddr.toLowerCase()) {
-            return {
-                ok: false,
-                userMsg: 'Sender address mismatch. Refusing to sign.\n\n' +
-                         'Displayed: ' + evmAddr + '\n' +
-                         'Derived:   ' + derivedAddr + '\n\n' +
-                         'This may indicate a fee collector or vault address was shown instead of your wallet address.',
-            };
-        }
+    // Re-derive EVM address from wallet public key — required, not optional.
+    // Block send if the function is missing, returns null/empty, or mismatches.
+    if (typeof walletSession.deriveEvmAddress !== 'function') {
+        return { ok: false, userMsg: 'Unable to verify wallet EVM address. Refusing to sign.' };
+    }
+    let derivedAddr;
+    try { derivedAddr = await walletSession.deriveEvmAddress(); } catch (_) { derivedAddr = null; }
+    if (!derivedAddr || !/^0x[0-9a-fA-F]{40}$/.test(derivedAddr)) {
+        return { ok: false, userMsg: 'Unable to verify wallet EVM address. Refusing to sign.' };
+    }
+    if (derivedAddr.toLowerCase() !== evmAddr.toLowerCase()) {
+        return {
+            ok: false,
+            userMsg: 'Sender address mismatch. Refusing to sign.\n\n' +
+                     'Displayed: ' + evmAddr + '\n' +
+                     'Derived:   ' + derivedAddr + '\n\n' +
+                     'This may indicate a fee collector or vault address was shown instead of your wallet address.',
+        };
     }
     return { ok: true };
 }

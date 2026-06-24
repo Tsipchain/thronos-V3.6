@@ -3504,7 +3504,8 @@ function _renderEvmActionButtons(network, evmAddr, bal) {
     const btnStyle = 'background:rgba(0,0,0,0.4);border:1px solid #1a3a2a;color:#8af;padding:4px 10px;border-radius:4px;font-size:11px;cursor:pointer;';
     const _EVM_TOKEN = {bnb:'USDT', base:'USDC', arbitrum:'USDT', ethereum:null};
     const token = _EVM_TOKEN[network];
-    let html = `<button style="${btnStyle};opacity:0.38;cursor:not-allowed;" disabled title="EVM Send — temporarily disabled" onclick="alert('EVM Send is temporarily disabled.\\n\\nSigner and address binding verification is pending.\\nPool deposit still works.')">💸 Send</button>`;
+    // Send button starts disabled; async guard will enable it if all checks pass
+    let html = `<button id="popupEvmSendBtn" disabled style="${btnStyle};opacity:0.5;cursor:wait;" title="Verifying…">💸 Send</button>`;
     if (token && (network === 'bnb' || network === 'base')) {
         html += `<button style="${btnStyle}" onclick="openPoolDepositModal('${network}','${evmAddr}')">💧 Deposit to Pool</button>`;
     }
@@ -3512,6 +3513,25 @@ function _renderEvmActionButtons(network, evmAddr, bal) {
     html += `<button style="${btnStyle}" onclick="_applyPopupNetwork('${network}','${evmAddr.slice(0,8)}')">🔄 Refresh</button>`;
     el.innerHTML = html;
     el.style.display = 'flex';
+    // Async guard — enables Send only when signer present, chain supported, address verified
+    _webEvmSendGuard(network, evmAddr).then(guard => {
+        const btn = document.getElementById('popupEvmSendBtn');
+        if (!btn) return;
+        if (guard.ok) {
+            btn.disabled = false;
+            btn.style.opacity = '1';
+            btn.style.cursor = 'pointer';
+            btn.title = '💸 Send ' + (token || 'tokens') + ' on ' + network;
+            btn.addEventListener('click', () => openEvmSendModal(network, evmAddr, token || ''));
+        } else {
+            btn.style.opacity = '0.35';
+            btn.style.cursor = 'not-allowed';
+            btn.title = guard.userMsg.split('\n')[0];
+        }
+    }).catch(() => {
+        const btn = document.getElementById('popupEvmSendBtn');
+        if (btn) { btn.style.opacity = '0.35'; btn.title = 'Send unavailable'; }
+    });
 }
 
 async function _loadPopupChainHistory(thrAddr, network) {
@@ -4938,9 +4958,10 @@ const _W_BLOCKED_SENDERS = new Set([
 
 /**
  * Pre-send guard for web wallet EVM send.
+ * Async — re-derives EVM address from wallet public key to verify binding.
  * Returns {ok:true} or {ok:false, userMsg}.
  */
-function _webEvmSendGuard(network, evmAddr) {
+async function _webEvmSendGuard(network, evmAddr) {
     if (!window.walletSession || typeof window.walletSession.signEvmTxHash !== 'function') {
         return { ok: false, userMsg: 'EVM signer unavailable. Wallet build must be updated before sending.' };
     }
@@ -4955,6 +4976,25 @@ function _webEvmSendGuard(network, evmAddr) {
             ok: false,
             userMsg: 'Sender address mismatch. Refusing to sign.\n\n' +
                      evmAddr + ' is a system or vault address and cannot be used as a personal wallet sender.',
+        };
+    }
+    // Re-derive EVM address from wallet public key — required, not optional.
+    // Block send if the function is missing, returns null/empty, or mismatches.
+    if (typeof walletSession.deriveEvmAddress !== 'function') {
+        return { ok: false, userMsg: 'Unable to verify wallet EVM address. Refusing to sign.' };
+    }
+    let derivedAddr;
+    try { derivedAddr = await walletSession.deriveEvmAddress(); } catch (_) { derivedAddr = null; }
+    if (!derivedAddr || !/^0x[0-9a-fA-F]{40}$/.test(derivedAddr)) {
+        return { ok: false, userMsg: 'Unable to verify wallet EVM address. Refusing to sign.' };
+    }
+    if (derivedAddr.toLowerCase() !== evmAddr.toLowerCase()) {
+        return {
+            ok: false,
+            userMsg: 'Sender address mismatch. Refusing to sign.\n\n' +
+                     'Displayed: ' + evmAddr + '\n' +
+                     'Derived:   ' + derivedAddr + '\n\n' +
+                     'This may indicate a fee collector or vault address was shown instead of your wallet address.',
         };
     }
     return { ok: true };
@@ -5055,7 +5095,6 @@ function _encodeErc20Transfer(toAddress, amount, decimals) {
 
 // ── EVM Send Modal ────────────────────────────────────────────────────────────
 function openEvmAssetActions(network, evmAddr, tokenSym) {
-    // Simple action sheet as overlay
     const existing = document.getElementById('evmActionSheet');
     if (existing) existing.remove();
     const overlay = document.createElement('div');
@@ -5066,9 +5105,10 @@ function openEvmAssetActions(network, evmAddr, tokenSym) {
     const netLabel = {ethereum:'Ethereum',bnb:'BNB Chain',arbitrum:'Arbitrum',base:'Base'}[network] || network;
     const tokenLabel = tokenSym || 'Assets';
     const _EVM_POOL_NETS = ['bnb','base'];
+    // Send button starts disabled; async guard enables it if all checks pass
     sheet.innerHTML = `
         <div style="font-size:14px;font-weight:700;color:#56ff9a;margin-bottom:14px;">${tokenLabel} on ${netLabel}</div>
-        <button disabled style="width:100%;margin-bottom:8px;padding:12px;background:rgba(0,255,102,0.03);border:1px solid #1a2a1a;border-radius:8px;color:#555;font-size:13px;cursor:not-allowed;text-align:left;opacity:0.4;" onclick="document.getElementById('evmActionSheet').remove();alert('EVM Send is temporarily disabled.\n\nSigner and address binding verification is pending.\nPool deposit still works.')">💸 Send ${tokenLabel}<span style="display:block;font-size:10px;color:#664;margin-top:2px;">Temporarily disabled — signer &amp; address verification pending</span></button>
+        <button id="evmSheetSendBtn" disabled style="width:100%;margin-bottom:8px;padding:12px;background:rgba(0,255,102,0.03);border:1px solid #1a2a1a;border-radius:8px;color:#777;font-size:13px;cursor:wait;text-align:left;opacity:0.55;">💸 Send ${tokenLabel}<span id="evmSheetSendBtnSub" style="display:block;font-size:10px;color:#888;margin-top:2px;">Verifying signer &amp; address…</span></button>
         ${_EVM_POOL_NETS.includes(network) ? `<button style="width:100%;margin-bottom:8px;padding:12px;background:rgba(0,200,255,0.06);border:1px solid #004466;border-radius:8px;color:#fff;font-size:13px;cursor:pointer;text-align:left;" onclick="document.getElementById('evmActionSheet').remove();openPoolDepositModal('${network}','${evmAddr}')">💧 Deposit to Pool</button>` : ''}
         <button style="width:100%;margin-bottom:8px;padding:12px;background:rgba(0,0,0,0.3);border:1px solid #1a2a1a;border-radius:8px;color:#aaa;font-size:13px;cursor:pointer;text-align:left;" onclick="copyToClipboard('${evmAddr}');this.textContent='✓ Address Copied'">📋 Copy Address (${evmAddr.slice(0,6)}…${evmAddr.slice(-4)})</button>
         <button style="width:100%;margin-top:6px;padding:10px;background:none;border:1px solid #333;border-radius:8px;color:#666;font-size:12px;cursor:pointer;" onclick="document.getElementById('evmActionSheet').remove()">Cancel</button>
@@ -5076,11 +5116,35 @@ function openEvmAssetActions(network, evmAddr, tokenSym) {
     overlay.appendChild(sheet);
     overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
     document.body.appendChild(overlay);
+
+    // Async guard — enables Send only when signer present, chain supported, address verified
+    _webEvmSendGuard(network, evmAddr).then(guard => {
+        const btn = sheet.querySelector('#evmSheetSendBtn');
+        const sub = sheet.querySelector('#evmSheetSendBtnSub');
+        if (!btn) return;
+        if (guard.ok) {
+            btn.disabled = false;
+            btn.style.background = 'rgba(0,255,102,0.08)';
+            btn.style.border = '1px solid #00cc44';
+            btn.style.color = '#56ff9a';
+            btn.style.cursor = 'pointer';
+            btn.style.opacity = '1';
+            if (sub) sub.remove();
+            btn.addEventListener('click', () => { overlay.remove(); openEvmSendModal(network, evmAddr, tokenSym); });
+        } else {
+            btn.style.cursor = 'not-allowed';
+            btn.style.opacity = '0.38';
+            if (sub) sub.textContent = guard.userMsg.split('\n')[0];
+        }
+    }).catch(() => {
+        const sub = sheet.querySelector('#evmSheetSendBtnSub');
+        if (sub) sub.textContent = 'Signer check failed.';
+    });
 }
 
 async function openEvmSendModal(network, evmAddr, tokenSym) {
-    // ── Pre-send guard ──────────────────────────────────────────────────────
-    const guard = _webEvmSendGuard(network, evmAddr);
+    // ── Pre-send guard (async — re-derives address from wallet key) ─────────
+    const guard = await _webEvmSendGuard(network, evmAddr);
     if (!guard.ok) {
         alert(guard.userMsg);
         return;
@@ -5157,8 +5221,8 @@ async function _doEvmGasEstimate(network, evmAddr, tokenSym) {
 
 async function _doEvmSend(network, evmAddr, tokenSym) {
     const resultEl = document.getElementById('evmSendResult');
-    // Re-run guard at click time — signer state may have changed since modal opened
-    const guard = _webEvmSendGuard(network, evmAddr);
+    // Re-run full guard at click time — re-derives address, checks signer state
+    const guard = await _webEvmSendGuard(network, evmAddr);
     if (!guard.ok) {
         if (resultEl) resultEl.innerHTML = `<span style="color:#f88">${guard.userMsg.replace(/\n/g,'<br>')}</span>`;
         return;

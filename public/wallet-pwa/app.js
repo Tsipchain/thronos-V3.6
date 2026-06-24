@@ -40,12 +40,14 @@ async function encryptBlob(dataHex, pin) {
 let _nobleLibs = null;
 async function _loadNobleLibs() {
   if (_nobleLibs) return _nobleLibs;
-  const [{ secp256k1 }, { sha256 }, { ripemd160 }] = await Promise.all([
+  const [{ secp256k1 }, { sha256 }, { ripemd160 }, sha3Mod] = await Promise.all([
     import('https://esm.sh/@noble/curves@1.4.0/secp256k1'),
     import('https://esm.sh/@noble/hashes@1.4.0/sha256'),
     import('https://esm.sh/@noble/hashes@1.4.0/ripemd160'),
+    import('https://esm.sh/@noble/hashes@1.4.0/sha3'),
   ]);
-  _nobleLibs = { secp256k1, sha256, ripemd160 };
+  const keccak_256 = sha3Mod.keccak_256 || sha3Mod.keccak256;
+  _nobleLibs = { secp256k1, sha256, ripemd160, keccak_256 };
   return _nobleLibs;
 }
 
@@ -230,10 +232,14 @@ async function _loadEthers() {
 
 async function _deriveEvmAddress(privHex) {
   try {
-    const ethers = await _loadEthers();
-    if (!ethers) return null;
-    const wallet = new ethers.Wallet('0x' + privHex.replace(/^0x/, ''));
-    return wallet.address;
+    const { secp256k1, keccak_256 } = await _loadNobleLibs();
+    if (!secp256k1 || !keccak_256) return null;
+    const privBytes = hexToBytes(privHex.replace(/^0x/, ''));
+    // getPublicKey(false) → 65-byte uncompressed point (04 || x || y)
+    const pubUncompressed = secp256k1.getPublicKey(privBytes, false);
+    const pubKeyBytes = pubUncompressed.slice(1); // strip 0x04 prefix → 64 bytes
+    const hash = keccak_256(pubKeyBytes);          // keccak256 of x‖y
+    return '0x' + bytesToHex(hash.slice(12));      // last 20 bytes = EVM address
   } catch { return null; }
 }
 
@@ -4910,7 +4916,7 @@ function pwaOpenEvmAssetActions(network, evmAddr, tokenSym) {
   sheet.style.cssText = 'background:#13112a;border:1px solid #2a2050;border-radius:14px 14px 0 0;padding:20px 20px 32px;width:100%;max-width:480px;';
   sheet.innerHTML = `
     <div style="font-size:14px;font-weight:700;color:#b08cf8;margin-bottom:14px;">${escHtml(tokenLabel)} on ${escHtml(netLabel)}</div>
-    <button id="pwaEvmSendBtn" disabled style="width:100%;margin-bottom:8px;padding:12px;background:rgba(176,140,248,0.04);border:1px solid #1a1535;border-radius:8px;color:#555;font-size:13px;cursor:not-allowed;text-align:left;opacity:0.45;">💸 Send ${escHtml(tokenLabel)}<span style="display:block;font-size:10px;color:#664;margin-top:2px;">Temporarily disabled — signer &amp; address binding verification pending</span></button>
+    <button id="pwaEvmSendBtn" disabled style="width:100%;margin-bottom:8px;padding:12px;background:rgba(176,140,248,0.04);border:1px solid #1a1535;border-radius:8px;color:#777;font-size:13px;cursor:wait;text-align:left;opacity:0.55;">💸 Send ${escHtml(tokenLabel)}<span id="pwaEvmSendBtnSub" style="display:block;font-size:10px;color:#888;margin-top:2px;">Verifying signer &amp; address…</span></button>
     ${hasPool ? `<button id="pwaEvmDepositBtn" style="width:100%;margin-bottom:8px;padding:12px;background:rgba(0,200,255,0.06);border:1px solid #004466;border-radius:8px;color:#fff;font-size:13px;cursor:pointer;text-align:left;">💧 Deposit to Pool</button>` : ''}
     <button id="pwaEvmCopyBtn" style="width:100%;margin-bottom:8px;padding:12px;background:rgba(0,0,0,0.3);border:1px solid #2a2050;border-radius:8px;color:#aaa;font-size:13px;cursor:pointer;text-align:left;">📋 Copy Address (${evmAddr.slice(0,6)}…${evmAddr.slice(-4)})</button>
     <button id="pwaEvmCancelBtn" style="width:100%;padding:10px;background:none;border:1px solid #333;border-radius:8px;color:#666;font-size:12px;cursor:pointer;">Cancel</button>
@@ -4919,8 +4925,31 @@ function pwaOpenEvmAssetActions(network, evmAddr, tokenSym) {
   overlay.addEventListener('click', e => { if(e.target===overlay) overlay.remove(); });
   document.body.appendChild(overlay);
 
+  // Async guard check — enables Send only when all 5 guards pass
+  _pwaEvmSendGuard(network, evmAddr).then(guard => {
+    const btn = sheet.querySelector('#pwaEvmSendBtn');
+    const sub = sheet.querySelector('#pwaEvmSendBtnSub');
+    if (!btn) return;
+    if (guard.ok) {
+      btn.disabled = false;
+      btn.style.background = 'rgba(176,140,248,0.12)';
+      btn.style.border = '1px solid #b08cf8';
+      btn.style.color = '#b08cf8';
+      btn.style.cursor = 'pointer';
+      btn.style.opacity = '1';
+      if (sub) sub.remove();
+    } else {
+      btn.style.cursor = 'not-allowed';
+      btn.style.opacity = '0.38';
+      if (sub) sub.textContent = guard.userMsg.split('\n')[0];
+    }
+  }).catch(() => {
+    const sub = sheet.querySelector('#pwaEvmSendBtnSub');
+    if (sub) sub.textContent = 'Signer check failed.';
+  });
+
   sheet.querySelector('#pwaEvmSendBtn').addEventListener('click', (e) => {
-    if (e.currentTarget.disabled) return; // button is disabled — no-op
+    if (e.currentTarget.disabled) return;
     overlay.remove();
     pwaOpenEvmSendModal(network, evmAddr, tokenSym);
   });

@@ -1231,6 +1231,17 @@
     };
   }
 
+  async function deriveEvmAddress() {
+    const pubkey = getPublicKey();
+    if (!pubkey) return null;
+    try {
+      const res = await fetch(`/api/wallet/v1/evm-address?pubkey=${encodeURIComponent(pubkey)}`);
+      if (!res.ok) return null;
+      const data = await res.json();
+      return (data.ok && data.evm_address) ? data.evm_address.toLowerCase() : null;
+    } catch { return null; }
+  }
+
   async function signEvmTxHash(txHashHex) {
     if (isLocked() || !isBound()) throw new Error('wallet_locked');
     if (!unlockedPrivateKeyHex) throw new Error('wallet_locked');
@@ -1273,6 +1284,6 @@
     hasPledgeOrMigrationSource, getModalState,
     generateV1KeyPair, derivePublicKeyAndAddress,
     resolveCanonicalWalletAddress,
-    signEvmTxHash,
+    signEvmTxHash, deriveEvmAddress,
   };
 })(window);

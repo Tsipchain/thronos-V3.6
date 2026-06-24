@@ -1346,7 +1346,7 @@ async function showWallet() {
         <button class="action-btn" id="createTokenBtn"><span class="action-btn__icon">🪙</span>Create Token</button>
         <button class="action-btn" id="nftBtn"><span class="action-btn__icon">🖼️</span>NFTs</button>
         <button class="action-btn" id="epochBtn"><span class="action-btn__icon">⏳</span>Epoch</button>
-        <button class="action-btn" id="withdrawBtn"><span class="action-btn__icon">💰</span>Withdraw</button>
+        <button class="action-btn" id="withdrawBtn" disabled style="opacity:0.4;cursor:not-allowed;" title="Withdraw upgrading"><span class="action-btn__icon">💰</span>Withdraw</button>
       </div>
     </div>
   `);
@@ -1405,7 +1405,10 @@ async function showWallet() {
   document.getElementById('nftBtn').addEventListener('click', showNFTs);
   document.getElementById('epochBtn').addEventListener('click', showEpoch);
   document.getElementById('historyBtn').addEventListener('click', () => showHistory(address));
-  document.getElementById('withdrawBtn').addEventListener('click', () => showWithdraw(address));
+  document.getElementById('withdrawBtn').addEventListener('click', (e) => {
+    e.preventDefault();
+    alert('Withdraw is being upgraded.\n\nUse Send for personal wallet assets, or the Pool page for pool withdrawals.');
+  });
 
   const setAddrBarValue = (full) => {
     const lineEl = document.getElementById('addrLine');
@@ -4787,10 +4790,19 @@ async function _pwaEvmSignAndBroadcast({ network, from, to, value=0n, data='0x',
   if (!hashData.ok) throw new Error('keccak256_failed');
   const txHashHex = hashData.hash.replace(/^0x/,'');
 
-  // Sign with secp256k1 — private key stays in JS memory only
+  // Sign with secp256k1 — private key stays in JS memory only.
+  // @noble/curves uses .sign() (sync); @noble/secp256k1 uses .signAsync() (async).
+  // Support both to avoid "signAsync is not a function" at runtime.
   const { secp256k1 } = await _loadNobleLibs();
   const privBytes = _pwaRlp.hexToBytes(_pwaSigningCtx.privHex.replace(/^0x/,''));
-  const sig = await secp256k1.signAsync(txHashHex, privBytes, { lowS: true });
+  let sig;
+  if (typeof secp256k1.signAsync === 'function') {
+    sig = await secp256k1.signAsync(txHashHex, privBytes, { lowS: true });
+  } else if (typeof secp256k1.sign === 'function') {
+    sig = secp256k1.sign(txHashHex, privBytes, { lowS: true });
+  } else {
+    throw new Error('EVM signer unavailable. Update wallet build. (secp256k1.sign / signAsync not found)');
+  }
   const recovery = sig.recovery ?? 0;
   const v = BigInt(chainId) * 2n + 35n + BigInt(recovery);
   const r32 = sig.r.toString(16).padStart(64,'0');
@@ -4824,7 +4836,7 @@ function pwaOpenEvmAssetActions(network, evmAddr, tokenSym) {
   sheet.style.cssText = 'background:#13112a;border:1px solid #2a2050;border-radius:14px 14px 0 0;padding:20px 20px 32px;width:100%;max-width:480px;';
   sheet.innerHTML = `
     <div style="font-size:14px;font-weight:700;color:#b08cf8;margin-bottom:14px;">${escHtml(tokenLabel)} on ${escHtml(netLabel)}</div>
-    <button id="pwaEvmSendBtn" style="width:100%;margin-bottom:8px;padding:12px;background:rgba(176,140,248,0.08);border:1px solid #2a2050;border-radius:8px;color:#fff;font-size:13px;cursor:pointer;text-align:left;">💸 Send ${escHtml(tokenLabel)}</button>
+    <button id="pwaEvmSendBtn" disabled style="width:100%;margin-bottom:8px;padding:12px;background:rgba(176,140,248,0.04);border:1px solid #1a1535;border-radius:8px;color:#555;font-size:13px;cursor:not-allowed;text-align:left;opacity:0.5;">💸 Send ${escHtml(tokenLabel)} <span style="font-size:10px;color:#774;">(temporarily disabled — signer verification pending)</span></button>
     ${hasPool ? `<button id="pwaEvmDepositBtn" style="width:100%;margin-bottom:8px;padding:12px;background:rgba(0,200,255,0.06);border:1px solid #004466;border-radius:8px;color:#fff;font-size:13px;cursor:pointer;text-align:left;">💧 Deposit to Pool</button>` : ''}
     <button id="pwaEvmCopyBtn" style="width:100%;margin-bottom:8px;padding:12px;background:rgba(0,0,0,0.3);border:1px solid #2a2050;border-radius:8px;color:#aaa;font-size:13px;cursor:pointer;text-align:left;">📋 Copy Address (${evmAddr.slice(0,6)}…${evmAddr.slice(-4)})</button>
     <button id="pwaEvmCancelBtn" style="width:100%;padding:10px;background:none;border:1px solid #333;border-radius:8px;color:#666;font-size:12px;cursor:pointer;">Cancel</button>
@@ -4833,7 +4845,8 @@ function pwaOpenEvmAssetActions(network, evmAddr, tokenSym) {
   overlay.addEventListener('click', e => { if(e.target===overlay) overlay.remove(); });
   document.body.appendChild(overlay);
 
-  sheet.querySelector('#pwaEvmSendBtn').addEventListener('click', () => {
+  sheet.querySelector('#pwaEvmSendBtn').addEventListener('click', (e) => {
+    if (e.currentTarget.disabled) return;
     overlay.remove();
     pwaOpenEvmSendModal(network, evmAddr, tokenSym);
   });
@@ -4852,6 +4865,49 @@ function pwaOpenEvmAssetActions(network, evmAddr, tokenSym) {
 }
 
 async function pwaOpenEvmSendModal(network, evmAddr, tokenSym) {
+  // ── Safety pre-checks ────────────────────────────────────────────────────
+  // 1. Wallet must be unlocked with privHex present
+  if (!_pwaSigningCtx?.privHex) {
+    alert('Wallet is locked. Unlock your wallet before sending.');
+    return;
+  }
+
+  // 2. Signer library must expose .sign() or .signAsync() on secp256k1
+  try {
+    const libs = await _loadNobleLibs();
+    const _secp = libs?.secp256k1;
+    const _hasSigner = typeof _secp?.signAsync === 'function' || typeof _secp?.sign === 'function';
+    if (!_hasSigner) {
+      alert('EVM signer unavailable. Update wallet build.\n\n(secp256k1.sign / signAsync not found in loaded library)');
+      return;
+    }
+  } catch (signerErr) {
+    alert('EVM signer library failed to load: ' + signerErr.message + '\n\nEVM Send is blocked until this is resolved.');
+    return;
+  }
+
+  // 3. Re-derive EVM address from current session and compare with displayed evmAddr
+  try {
+    const derivedAddr = await _deriveEvmAddress(_pwaSigningCtx.privHex);
+    if (!derivedAddr) {
+      alert('Could not derive EVM address for this wallet. EVM Send blocked.');
+      return;
+    }
+    if (derivedAddr.toLowerCase() !== evmAddr.toLowerCase()) {
+      alert(
+        'Sender address mismatch. Refusing to sign.\n\n' +
+        'Displayed: ' + evmAddr + '\n' +
+        'Derived:   ' + derivedAddr + '\n\n' +
+        'This may indicate a fee collector or vault address was shown instead of your wallet address.'
+      );
+      return;
+    }
+  } catch (addrErr) {
+    alert('EVM address verification failed: ' + addrErr.message + '\n\nEVM Send blocked.');
+    return;
+  }
+  // ── End safety pre-checks ─────────────────────────────────────────────────
+
   const existing = document.getElementById('pwaEvmSendModal');
   if (existing) existing.remove();
   const netLabel = {ethereum:'Ethereum',bnb:'BNB Chain',arbitrum:'Arbitrum',base:'Base'}[network] || network;

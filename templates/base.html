@@ -3504,7 +3504,7 @@ function _renderEvmActionButtons(network, evmAddr, bal) {
     const btnStyle = 'background:rgba(0,0,0,0.4);border:1px solid #1a3a2a;color:#8af;padding:4px 10px;border-radius:4px;font-size:11px;cursor:pointer;';
     const _EVM_TOKEN = {bnb:'USDT', base:'USDC', arbitrum:'USDT', ethereum:null};
     const token = _EVM_TOKEN[network];
-    let html = `<button style="${btnStyle}" onclick="openEvmSendModal('${network}','${evmAddr}','${token || ''}')">💸 Send</button>`;
+    let html = `<button style="${btnStyle};opacity:0.4;cursor:not-allowed;" disabled title="EVM Send temporarily disabled — signer verification pending" onclick="alert('EVM Send is temporarily disabled.\\n\\nPool deposit still works. Send will be re-enabled once signer and address verification are confirmed.');">💸 Send</button>`;
     if (token && (network === 'bnb' || network === 'base')) {
         html += `<button style="${btnStyle}" onclick="openPoolDepositModal('${network}','${evmAddr}')">💧 Deposit to Pool</button>`;
     }
@@ -5038,7 +5038,7 @@ function openEvmAssetActions(network, evmAddr, tokenSym) {
     const _EVM_POOL_NETS = ['bnb','base'];
     sheet.innerHTML = `
         <div style="font-size:14px;font-weight:700;color:#56ff9a;margin-bottom:14px;">${tokenLabel} on ${netLabel}</div>
-        <button style="width:100%;margin-bottom:8px;padding:12px;background:rgba(0,255,102,0.08);border:1px solid #1a4a1a;border-radius:8px;color:#fff;font-size:13px;cursor:pointer;text-align:left;" onclick="document.getElementById('evmActionSheet').remove();openEvmSendModal('${network}','${evmAddr}','${tokenSym}')">💸 Send ${tokenLabel}</button>
+        <button disabled style="width:100%;margin-bottom:8px;padding:12px;background:rgba(0,255,102,0.03);border:1px solid #1a2a1a;border-radius:8px;color:#555;font-size:13px;cursor:not-allowed;text-align:left;opacity:0.45;" onclick="document.getElementById('evmActionSheet').remove();alert('EVM Send is temporarily disabled.\n\nPool deposit still works. Send will be re-enabled once signer and address verification are confirmed.');">💸 Send ${tokenLabel} <span style="font-size:10px;color:#664;">(temporarily disabled)</span></button>
         ${_EVM_POOL_NETS.includes(network) ? `<button style="width:100%;margin-bottom:8px;padding:12px;background:rgba(0,200,255,0.06);border:1px solid #004466;border-radius:8px;color:#fff;font-size:13px;cursor:pointer;text-align:left;" onclick="document.getElementById('evmActionSheet').remove();openPoolDepositModal('${network}','${evmAddr}')">💧 Deposit to Pool</button>` : ''}
         <button style="width:100%;margin-bottom:8px;padding:12px;background:rgba(0,0,0,0.3);border:1px solid #1a2a1a;border-radius:8px;color:#aaa;font-size:13px;cursor:pointer;text-align:left;" onclick="copyToClipboard('${evmAddr}');this.textContent='✓ Address Copied'">📋 Copy Address (${evmAddr.slice(0,6)}…${evmAddr.slice(-4)})</button>
         <button style="width:100%;margin-top:6px;padding:10px;background:none;border:1px solid #333;border-radius:8px;color:#666;font-size:12px;cursor:pointer;" onclick="document.getElementById('evmActionSheet').remove()">Cancel</button>
@@ -5049,6 +5049,19 @@ function openEvmAssetActions(network, evmAddr, tokenSym) {
 }
 
 async function openEvmSendModal(network, evmAddr, tokenSym) {
+    // ── Safety pre-checks ────────────────────────────────────────────────────
+    // 1. Wallet signer must be ready
+    if (!window.walletSession || !window.walletSession.signEvmTxHash) {
+        alert('EVM signer unavailable. Unlock your wallet first.');
+        return;
+    }
+    // 2. evmAddr must look like a real EVM address (0x + 40 hex chars)
+    if (!evmAddr || !/^0x[0-9a-fA-F]{40}$/.test(evmAddr)) {
+        alert('Sender address mismatch. Refusing to sign.\n\nInvalid EVM address: ' + evmAddr);
+        return;
+    }
+    // ── End safety pre-checks ─────────────────────────────────────────────────
+
     const existing = document.getElementById('evmSendModal');
     if (existing) existing.remove();
 

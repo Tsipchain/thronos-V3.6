@@ -3504,7 +3504,7 @@ function _renderEvmActionButtons(network, evmAddr, bal) {
     const btnStyle = 'background:rgba(0,0,0,0.4);border:1px solid #1a3a2a;color:#8af;padding:4px 10px;border-radius:4px;font-size:11px;cursor:pointer;';
     const _EVM_TOKEN = {bnb:'USDT', base:'USDC', arbitrum:'USDT', ethereum:null};
     const token = _EVM_TOKEN[network];
-    let html = `<button style="${btnStyle}" onclick="openEvmSendModal('${network}','${evmAddr}','${token || ''}')">💸 Send</button>`;
+    let html = `<button style="${btnStyle};opacity:0.38;cursor:not-allowed;" disabled title="EVM Send — temporarily disabled" onclick="alert('EVM Send is temporarily disabled.\\n\\nSigner and address binding verification is pending.\\nPool deposit still works.')">💸 Send</button>`;
     if (token && (network === 'bnb' || network === 'base')) {
         html += `<button style="${btnStyle}" onclick="openPoolDepositModal('${network}','${evmAddr}')">💧 Deposit to Pool</button>`;
     }
@@ -4930,6 +4930,36 @@ const _W_EVM_TOKENS = {
 };
 const _W_POOL_IDS = { bnb: 'bsc-usdt', base: 'base-usdc' };
 
+// System addresses that must NEVER be used as a personal wallet sender.
+const _W_BLOCKED_SENDERS = new Set([
+    '0x76b1926f40c596e10c30ae7a359df8a0b21ac4a2', // Pythia pool vault
+    '0x9aa993d1e59e777101443339b934a0605619cc69', // fee collector / treasury
+]);
+
+/**
+ * Pre-send guard for web wallet EVM send.
+ * Returns {ok:true} or {ok:false, userMsg}.
+ */
+function _webEvmSendGuard(network, evmAddr) {
+    if (!window.walletSession || typeof window.walletSession.signEvmTxHash !== 'function') {
+        return { ok: false, userMsg: 'EVM signer unavailable. Wallet build must be updated before sending.' };
+    }
+    if (!_W_CHAIN_IDS[network]) {
+        return { ok: false, userMsg: `Chain "${network}" is not supported for EVM send.` };
+    }
+    if (!evmAddr || !/^0x[0-9a-fA-F]{40}$/.test(evmAddr)) {
+        return { ok: false, userMsg: 'Sender address mismatch. Refusing to sign.\n\nInvalid EVM address: ' + evmAddr };
+    }
+    if (_W_BLOCKED_SENDERS.has(evmAddr.toLowerCase())) {
+        return {
+            ok: false,
+            userMsg: 'Sender address mismatch. Refusing to sign.\n\n' +
+                     evmAddr + ' is a system or vault address and cannot be used as a personal wallet sender.',
+        };
+    }
+    return { ok: true };
+}
+
 // RLP encoder (minimal, EIP-155 compatible)
 const _rlp = (() => {
     const h2b = h => { h = h.replace(/^0x/, ''); if (h.length%2) h='0'+h; const a=new Uint8Array(h.length/2); for(let i=0;i<a.length;i++) a[i]=parseInt(h.slice(i*2,i*2+2),16); return a; };
@@ -5038,7 +5068,7 @@ function openEvmAssetActions(network, evmAddr, tokenSym) {
     const _EVM_POOL_NETS = ['bnb','base'];
     sheet.innerHTML = `
         <div style="font-size:14px;font-weight:700;color:#56ff9a;margin-bottom:14px;">${tokenLabel} on ${netLabel}</div>
-        <button style="width:100%;margin-bottom:8px;padding:12px;background:rgba(0,255,102,0.08);border:1px solid #1a4a1a;border-radius:8px;color:#fff;font-size:13px;cursor:pointer;text-align:left;" onclick="document.getElementById('evmActionSheet').remove();openEvmSendModal('${network}','${evmAddr}','${tokenSym}')">💸 Send ${tokenLabel}</button>
+        <button disabled style="width:100%;margin-bottom:8px;padding:12px;background:rgba(0,255,102,0.03);border:1px solid #1a2a1a;border-radius:8px;color:#555;font-size:13px;cursor:not-allowed;text-align:left;opacity:0.4;" onclick="document.getElementById('evmActionSheet').remove();alert('EVM Send is temporarily disabled.\n\nSigner and address binding verification is pending.\nPool deposit still works.')">💸 Send ${tokenLabel}<span style="display:block;font-size:10px;color:#664;margin-top:2px;">Temporarily disabled — signer &amp; address verification pending</span></button>
         ${_EVM_POOL_NETS.includes(network) ? `<button style="width:100%;margin-bottom:8px;padding:12px;background:rgba(0,200,255,0.06);border:1px solid #004466;border-radius:8px;color:#fff;font-size:13px;cursor:pointer;text-align:left;" onclick="document.getElementById('evmActionSheet').remove();openPoolDepositModal('${network}','${evmAddr}')">💧 Deposit to Pool</button>` : ''}
         <button style="width:100%;margin-bottom:8px;padding:12px;background:rgba(0,0,0,0.3);border:1px solid #1a2a1a;border-radius:8px;color:#aaa;font-size:13px;cursor:pointer;text-align:left;" onclick="copyToClipboard('${evmAddr}');this.textContent='✓ Address Copied'">📋 Copy Address (${evmAddr.slice(0,6)}…${evmAddr.slice(-4)})</button>
         <button style="width:100%;margin-top:6px;padding:10px;background:none;border:1px solid #333;border-radius:8px;color:#666;font-size:12px;cursor:pointer;" onclick="document.getElementById('evmActionSheet').remove()">Cancel</button>
@@ -5049,6 +5079,14 @@ function openEvmAssetActions(network, evmAddr, tokenSym) {
 }
 
 async function openEvmSendModal(network, evmAddr, tokenSym) {
+    // ── Pre-send guard ──────────────────────────────────────────────────────
+    const guard = _webEvmSendGuard(network, evmAddr);
+    if (!guard.ok) {
+        alert(guard.userMsg);
+        return;
+    }
+    // ── Guard passed ─────────────────────────────────────────────────────────
+
     const existing = document.getElementById('evmSendModal');
     if (existing) existing.remove();
 
@@ -5119,6 +5157,12 @@ async function _doEvmGasEstimate(network, evmAddr, tokenSym) {
 
 async function _doEvmSend(network, evmAddr, tokenSym) {
     const resultEl = document.getElementById('evmSendResult');
+    // Re-run guard at click time — signer state may have changed since modal opened
+    const guard = _webEvmSendGuard(network, evmAddr);
+    if (!guard.ok) {
+        if (resultEl) resultEl.innerHTML = `<span style="color:#f88">${guard.userMsg.replace(/\n/g,'<br>')}</span>`;
+        return;
+    }
     const toAddr = (document.getElementById('evmSendTo')?.value || '').trim();
     const amt = parseFloat(document.getElementById('evmSendAmt')?.value || '0');
     if (!toAddr || !toAddr.match(/^0x[0-9a-fA-F]{40}$/)) {

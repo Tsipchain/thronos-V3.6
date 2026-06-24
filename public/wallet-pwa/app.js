@@ -322,6 +322,74 @@ const _EVM_TOKENS = {
   base:     { USDC: { contract: _USDC_BASE, decimals: 6  } },
 };
 const _EVM_POOL_IDS = { bnb: 'bsc-usdt', base: 'base-usdc' };
+
+// System addresses that must NEVER be used as a personal wallet sender.
+// Includes Pythia pool vault and known fee-collector/treasury addresses.
+const _EVM_BLOCKED_SENDERS = new Set([
+  '0x76b1926f40c596e10c30ae7a359df8a0b21ac4a2', // Pythia pool vault
+  '0x9aa993d1e59e777101443339b934a0605619cc69', // fee collector / treasury
+]);
+
+/**
+ * Pre-send guard for EVM send. Returns {ok:true} or {ok:false, reason, userMsg}.
+ * All checks must pass before any signing attempt is made.
+ */
+async function _pwaEvmSendGuard(network, evmAddr) {
+  // 1. Wallet unlocked
+  if (!_pwaSigningCtx?.privHex) {
+    return { ok: false, reason: 'wallet_locked',
+             userMsg: 'Wallet is locked. Unlock your wallet before sending.' };
+  }
+  // 2. Chain supported
+  if (!_EVM_CHAIN_IDS[network]) {
+    return { ok: false, reason: 'unsupported_chain',
+             userMsg: `Chain "${network}" is not supported for EVM send.` };
+  }
+  // 3. Signer library present and has a valid sign method
+  let _secp;
+  try {
+    const libs = await _loadNobleLibs();
+    _secp = libs?.secp256k1;
+  } catch (e) {
+    return { ok: false, reason: 'signer_load_failed',
+             userMsg: 'EVM signer unavailable. Wallet build must be updated before sending.' };
+  }
+  if (typeof _secp?.signAsync !== 'function' && typeof _secp?.sign !== 'function') {
+    return { ok: false, reason: 'signer_missing',
+             userMsg: 'EVM signer unavailable. Wallet build must be updated before sending.' };
+  }
+  // 4. Re-derive EVM address from live session key and verify it matches displayed From
+  let derivedAddr;
+  try {
+    derivedAddr = await _deriveEvmAddress(_pwaSigningCtx.privHex);
+  } catch (e) {
+    return { ok: false, reason: 'derive_failed',
+             userMsg: 'Could not derive EVM address for this wallet. EVM Send blocked.' };
+  }
+  if (!derivedAddr) {
+    return { ok: false, reason: 'derive_empty',
+             userMsg: 'Could not derive EVM address for this wallet. EVM Send blocked.' };
+  }
+  if (derivedAddr.toLowerCase() !== (evmAddr || '').toLowerCase()) {
+    return {
+      ok: false, reason: 'address_mismatch',
+      userMsg: 'Sender address mismatch. Refusing to sign.\n\n' +
+               'Displayed: ' + evmAddr + '\n' +
+               'Derived:   ' + derivedAddr + '\n\n' +
+               'This may indicate a fee collector or vault address was shown instead of your wallet address.',
+    };
+  }
+  // 5. Block known system / vault / fee-collector addresses
+  if (_EVM_BLOCKED_SENDERS.has((evmAddr || '').toLowerCase())) {
+    return {
+      ok: false, reason: 'blocked_sender',
+      userMsg: 'Sender address mismatch. Refusing to sign.\n\n' +
+               evmAddr + ' is a system or vault address and cannot be used as a personal wallet sender.',
+    };
+  }
+  return { ok: true, derivedAddr, secp: _secp };
+}
+
 // Signing context set when wallet is unlocked in showWallet(); cleared on lock
 let _pwaSigningCtx = null;
 
@@ -1346,7 +1414,7 @@ async function showWallet() {
         <button class="action-btn" id="createTokenBtn"><span class="action-btn__icon">🪙</span>Create Token</button>
         <button class="action-btn" id="nftBtn"><span class="action-btn__icon">🖼️</span>NFTs</button>
         <button class="action-btn" id="epochBtn"><span class="action-btn__icon">⏳</span>Epoch</button>
-        <button class="action-btn" id="withdrawBtn"><span class="action-btn__icon">💰</span>Withdraw</button>
+        <button class="action-btn" id="withdrawBtn" disabled style="opacity:0.38;cursor:not-allowed;" title="Withdraw — being upgraded"><span class="action-btn__icon">💰</span>Withdraw</button>
       </div>
     </div>
   `);
@@ -1405,7 +1473,15 @@ async function showWallet() {
   document.getElementById('nftBtn').addEventListener('click', showNFTs);
   document.getElementById('epochBtn').addEventListener('click', showEpoch);
   document.getElementById('historyBtn').addEventListener('click', () => showHistory(address));
-  document.getElementById('withdrawBtn').addEventListener('click', () => showWithdraw(address));
+  document.getElementById('withdrawBtn').addEventListener('click', (e) => {
+    if (e.currentTarget.disabled) {
+      alert(
+        'Withdraw is being upgraded.\n\n' +
+        'Use Send for personal wallet assets, or the Pools screen for pool withdrawals.\n\n' +
+        '(Pool withdrawals require a confirmed pool position.)'
+      );
+    }
+  });
 
   const setAddrBarValue = (full) => {
     const lineEl = document.getElementById('addrLine');
@@ -4787,10 +4863,20 @@ async function _pwaEvmSignAndBroadcast({ network, from, to, value=0n, data='0x',
   if (!hashData.ok) throw new Error('keccak256_failed');
   const txHashHex = hashData.hash.replace(/^0x/,'');
 
-  // Sign with secp256k1 — private key stays in JS memory only
+  // Sign with secp256k1 — private key stays in JS memory only.
+  // @noble/curves  → .sign()      (synchronous, returns Signature with .recovery)
+  // @noble/secp256k1 → .signAsync() (async)
+  // Support both to avoid "signAsync is not a function" at runtime.
   const { secp256k1 } = await _loadNobleLibs();
   const privBytes = _pwaRlp.hexToBytes(_pwaSigningCtx.privHex.replace(/^0x/,''));
-  const sig = await secp256k1.signAsync(txHashHex, privBytes, { lowS: true });
+  let sig;
+  if (typeof secp256k1.signAsync === 'function') {
+    sig = await secp256k1.signAsync(txHashHex, privBytes, { lowS: true });
+  } else if (typeof secp256k1.sign === 'function') {
+    sig = secp256k1.sign(txHashHex, privBytes, { lowS: true });
+  } else {
+    throw new Error('EVM signer unavailable. Wallet build must be updated before sending.');
+  }
   const recovery = sig.recovery ?? 0;
   const v = BigInt(chainId) * 2n + 35n + BigInt(recovery);
   const r32 = sig.r.toString(16).padStart(64,'0');
@@ -4824,7 +4910,7 @@ function pwaOpenEvmAssetActions(network, evmAddr, tokenSym) {
   sheet.style.cssText = 'background:#13112a;border:1px solid #2a2050;border-radius:14px 14px 0 0;padding:20px 20px 32px;width:100%;max-width:480px;';
   sheet.innerHTML = `
     <div style="font-size:14px;font-weight:700;color:#b08cf8;margin-bottom:14px;">${escHtml(tokenLabel)} on ${escHtml(netLabel)}</div>
-    <button id="pwaEvmSendBtn" style="width:100%;margin-bottom:8px;padding:12px;background:rgba(176,140,248,0.08);border:1px solid #2a2050;border-radius:8px;color:#fff;font-size:13px;cursor:pointer;text-align:left;">💸 Send ${escHtml(tokenLabel)}</button>
+    <button id="pwaEvmSendBtn" disabled style="width:100%;margin-bottom:8px;padding:12px;background:rgba(176,140,248,0.04);border:1px solid #1a1535;border-radius:8px;color:#555;font-size:13px;cursor:not-allowed;text-align:left;opacity:0.45;">💸 Send ${escHtml(tokenLabel)}<span style="display:block;font-size:10px;color:#664;margin-top:2px;">Temporarily disabled — signer &amp; address binding verification pending</span></button>
     ${hasPool ? `<button id="pwaEvmDepositBtn" style="width:100%;margin-bottom:8px;padding:12px;background:rgba(0,200,255,0.06);border:1px solid #004466;border-radius:8px;color:#fff;font-size:13px;cursor:pointer;text-align:left;">💧 Deposit to Pool</button>` : ''}
     <button id="pwaEvmCopyBtn" style="width:100%;margin-bottom:8px;padding:12px;background:rgba(0,0,0,0.3);border:1px solid #2a2050;border-radius:8px;color:#aaa;font-size:13px;cursor:pointer;text-align:left;">📋 Copy Address (${evmAddr.slice(0,6)}…${evmAddr.slice(-4)})</button>
     <button id="pwaEvmCancelBtn" style="width:100%;padding:10px;background:none;border:1px solid #333;border-radius:8px;color:#666;font-size:12px;cursor:pointer;">Cancel</button>
@@ -4833,7 +4919,8 @@ function pwaOpenEvmAssetActions(network, evmAddr, tokenSym) {
   overlay.addEventListener('click', e => { if(e.target===overlay) overlay.remove(); });
   document.body.appendChild(overlay);
 
-  sheet.querySelector('#pwaEvmSendBtn').addEventListener('click', () => {
+  sheet.querySelector('#pwaEvmSendBtn').addEventListener('click', (e) => {
+    if (e.currentTarget.disabled) return; // button is disabled — no-op
     overlay.remove();
     pwaOpenEvmSendModal(network, evmAddr, tokenSym);
   });
@@ -4852,6 +4939,14 @@ function pwaOpenEvmAssetActions(network, evmAddr, tokenSym) {
 }
 
 async function pwaOpenEvmSendModal(network, evmAddr, tokenSym) {
+  // ── Run all pre-send guards before rendering any signing UI ─────────────
+  const guard = await _pwaEvmSendGuard(network, evmAddr);
+  if (!guard.ok) {
+    alert(guard.userMsg);
+    return;
+  }
+  // ── Guards passed — safe to open modal ───────────────────────────────────
+
   const existing = document.getElementById('pwaEvmSendModal');
   if (existing) existing.remove();
   const netLabel = {ethereum:'Ethereum',bnb:'BNB Chain',arbitrum:'Arbitrum',base:'Base'}[network] || network;
@@ -4920,6 +5015,12 @@ async function pwaOpenEvmSendModal(network, evmAddr, tokenSym) {
 
   overlay.querySelector('#pwaEvmSendConfirmBtn').addEventListener('click', async () => {
     const resultEl = overlay.querySelector('#pwaEvmSendResult');
+    // Re-run all guards at click time — wallet state may have changed since modal opened
+    const guardCheck = await _pwaEvmSendGuard(network, evmAddr);
+    if (!guardCheck.ok) {
+      if (resultEl) resultEl.innerHTML = `<span style="color:#f88">${guardCheck.userMsg.replace(/\n/g,'<br>')}</span>`;
+      return;
+    }
     const toAddr = (overlay.querySelector('#pwaEvmSendTo')?.value || '').trim();
     const amt = parseFloat(overlay.querySelector('#pwaEvmSendAmt')?.value || '0');
     if (!toAddr || !toAddr.match(/^0x[0-9a-fA-F]{40}$/)) {

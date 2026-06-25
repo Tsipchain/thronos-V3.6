@@ -1578,59 +1578,93 @@ async function showWallet() {
     if (!el) return;
     el.innerHTML = '<div class="balance-amount balance-amount--loading">···</div>';
 
-    if (!privHex) {
+    // ── Wallet-locked guard ───────────────────────────────────────────────────
+    if (!_pwaSigningCtx?.privHex) {
       setAddrBarValue('');
-      el.innerHTML = '<div style="color:#ff6b6b;text-align:center;padding:24px 0">Unlock wallet to view this network</div>';
+      el.innerHTML = '<div style="color:#ff6b6b;text-align:center;padding:24px 0">Unlock wallet to view this network address</div>';
       return;
     }
 
     if (netId === 'bitcoin') {
-      if (!homeBtcAddr) homeBtcAddr = await _fetchBtcAddress(privHex, address).catch(() => '');
+      if (!homeBtcAddr) homeBtcAddr = await _fetchBtcAddress(_pwaSigningCtx.privHex, address).catch(() => '');
       setAddrBarValue(homeBtcAddr);
-      if (!homeChainBalances) homeChainBalances = await _fetchAllChainBalances(privHex, homeBtcAddr).catch(() => ({}));
+      if (!homeChainBalances) homeChainBalances = await _fetchAllChainBalances(_pwaSigningCtx.privHex, homeBtcAddr).catch(() => ({}));
       el.innerHTML = `<div style="font-size:.7rem;text-transform:uppercase;letter-spacing:1px;color:var(--accent);margin-bottom:4px">Assets</div>`
         + _renderHomeAssetRow('₿', 'Bitcoin', 'BTC', homeChainBalances.btc, '#f7931a', homeBtcAddr);
       return;
     }
 
-    // EVM-based chains share one address
-    if (!homeEvmAddr) homeEvmAddr = await _deriveEvmAddress(privHex).catch(() => '');
-    setAddrBarValue(homeEvmAddr);
-    if (!homeChainBalances) homeChainBalances = await _fetchAllChainBalances(privHex, homeBtcAddr).catch(() => ({}));
+    // ── EVM chains — derive address ONLY from signing context, never from fallback ──
+    // Re-derive on each render if not already cached to prevent stale/wrong value.
+    if (!homeEvmAddr) {
+      homeEvmAddr = await _deriveEvmAddress(_pwaSigningCtx.privHex).catch(() => null);
+    }
+
+    // Validate: derivation must succeed and must not be a blocked system address
+    if (!homeEvmAddr) {
+      setAddrBarValue('');
+      el.innerHTML = '<div style="color:#ff6b6b;text-align:center;padding:24px 0">Unable to derive wallet EVM address — check wallet crypto library</div>';
+      return;
+    }
+    if (_EVM_BLOCKED_SENDERS.has(homeEvmAddr.toLowerCase())) {
+      setAddrBarValue('');
+      homeEvmAddr = null; // do not cache the bad value
+      el.innerHTML = '<div style="color:#ff6b6b;text-align:center;padding:24px 0">Address error: system address detected. Do not use this address for personal sends.</div>';
+      return;
+    }
+
+    const derivedUserEvmAddr = homeEvmAddr; // confirmed valid, non-system address
+
+    setAddrBarValue(derivedUserEvmAddr);
+    if (!homeChainBalances) homeChainBalances = await _fetchAllChainBalances(_pwaSigningCtx.privHex, homeBtcAddr).catch(() => ({}));
     const bal = homeChainBalances;
     let rows = '';
     if (netId === 'ethereum') {
-      rows = _renderHomeAssetRow('Ξ', 'Ethereum', 'ETH', bal.eth, '#627eea', homeEvmAddr);
+      rows = _renderHomeAssetRow('Ξ', 'Ethereum', 'ETH', bal.eth, '#627eea', derivedUserEvmAddr);
     } else if (netId === 'bnb') {
-      rows = _renderHomeAssetRow('🔶', 'BNB Chain', 'BNB', bal.bnb, '#f3ba2f', homeEvmAddr)
-           + _renderHomeAssetRow('₮', 'USDT on BNB', 'USDT', bal.usdtBnb, '#26a17b', homeEvmAddr,
-               { network: 'bnb', sym: 'USDT', addr: homeEvmAddr });
+      rows = _renderHomeAssetRow('🔶', 'BNB Chain', 'BNB', bal.bnb, '#f3ba2f', derivedUserEvmAddr)
+           + _renderHomeAssetRow('₮', 'USDT on BNB', 'USDT', bal.usdtBnb, '#26a17b', derivedUserEvmAddr,
+               { network: 'bnb', sym: 'USDT', addr: derivedUserEvmAddr });
     } else if (netId === 'arbitrum') {
-      rows = _renderHomeAssetRow('🔵', 'Arbitrum', 'ETH', bal.arb, '#28a0f0', homeEvmAddr)
-           + _renderHomeAssetRow('₮', 'USDT on Arbitrum', 'USDT', bal.usdtArb, '#26a17b', homeEvmAddr,
-               { network: 'arbitrum', sym: 'USDT', addr: homeEvmAddr });
+      rows = _renderHomeAssetRow('🔵', 'Arbitrum', 'ETH', bal.arb, '#28a0f0', derivedUserEvmAddr)
+           + _renderHomeAssetRow('₮', 'USDT on Arbitrum', 'USDT', bal.usdtArb, '#26a17b', derivedUserEvmAddr,
+               { network: 'arbitrum', sym: 'USDT', addr: derivedUserEvmAddr });
     } else if (netId === 'base') {
-      rows = _renderHomeAssetRow('⬛', 'Base', 'ETH', bal.base, '#0052ff', homeEvmAddr)
-           + _renderHomeAssetRow('$', 'USDC on Base', 'USDC', bal.usdcBase, '#2775ca', homeEvmAddr,
-               { network: 'base', sym: 'USDC', addr: homeEvmAddr });
+      rows = _renderHomeAssetRow('⬛', 'Base', 'ETH', bal.base, '#0052ff', derivedUserEvmAddr)
+           + _renderHomeAssetRow('$', 'USDC on Base', 'USDC', bal.usdcBase, '#2775ca', derivedUserEvmAddr,
+               { network: 'base', sym: 'USDC', addr: derivedUserEvmAddr });
     }
-    el.innerHTML = `<div style="font-size:.7rem;text-transform:uppercase;letter-spacing:1px;color:var(--accent);margin-bottom:4px">Assets</div>${rows}`;
+
+    // Debug row (temporary) — removed once address display is confirmed correct
+    const debugHtml = `<div style="margin-top:6px;padding:6px 8px;background:#0d0a1a;border:1px solid #2a2050;border-radius:6px;font-size:.65rem;color:#888;font-family:monospace;word-break:break-all">
+      <div>networkDisplayedAddr: ${escHtml(derivedUserEvmAddr)}</div>
+      <div>rowEvmAddr: ${escHtml(derivedUserEvmAddr)}</div>
+      <div>guardDerivedAddr: (guard runs at send time)</div>
+      <div>guardCode: ok when derivedAddr matches rowEvmAddr</div>
+    </div>`;
+
+    el.innerHTML = `<div style="font-size:.7rem;text-transform:uppercase;letter-spacing:1px;color:var(--accent);margin-bottom:4px">Assets</div>${rows}${debugHtml}`;
     el.querySelectorAll('.pwa-evm-row').forEach(row => {
       row.addEventListener('click', () => {
-        const net = row.dataset.evmNet;
-        const sym = row.dataset.evmSym;
+        const net  = row.dataset.evmNet;
+        const sym  = row.dataset.evmSym;
         const addr = row.dataset.evmAddr;
-        if (net && sym && addr) pwaOpenEvmAssetActions(net, addr, sym);
+        // Safety: only open action modal if address is the derived user address, never a system address
+        if (net && sym && addr && !_EVM_BLOCKED_SENDERS.has(addr.toLowerCase())) {
+          pwaOpenEvmAssetActions(net, addr, sym);
+        }
       });
     });
   };
 
   const refreshCurrentNet = () => {
     homeChainBalances = null; // force re-fetch
+    homeEvmAddr = '';         // force re-derive on refresh (clears any stale value)
     const netId = document.getElementById('homeNetSel')?.value || 'thronos';
     if (netId === 'thronos') { loadThronosAssets(); return; }
     loadOtherNetworkAssets(netId);
   };
+
 
   document.getElementById('refreshBalBtn').addEventListener('click', () => {
     const btn = document.getElementById('refreshBalBtn');
@@ -3166,9 +3200,11 @@ function showSend(preselectedToken = null, prefillAddr = null) {
   let cachedEvmAddr = null;
   const { privHex } = unlocked.get(address) || {};
 
-  // Pre-derive EVM address in background
-  if (privHex) {
-    _deriveEvmAddress(privHex).then(a => { cachedEvmAddr = a; }).catch(() => {});
+  // Pre-derive EVM address from signing context only — never from fallback source
+  if (_pwaSigningCtx?.privHex) {
+    _deriveEvmAddress(_pwaSigningCtx.privHex).then(a => {
+      if (a && !_EVM_BLOCKED_SENDERS.has(a.toLowerCase())) cachedEvmAddr = a;
+    }).catch(() => {});
   }
 
   let btcAddr = '';
@@ -3184,7 +3220,10 @@ function showSend(preselectedToken = null, prefillAddr = null) {
 
   const getDepositAddr = (netId) => {
     if (netId === 'bitcoin') return btcAddr || '(unlock wallet to see)';
-    if (['ethereum','bnb','arbitrum','base'].includes(netId)) return cachedEvmAddr || '(unlock wallet to see)';
+    if (['ethereum','bnb','arbitrum','base'].includes(netId)) {
+      if (cachedEvmAddr && _EVM_BLOCKED_SENDERS.has(cachedEvmAddr.toLowerCase())) return '(address error — contact support)';
+      return cachedEvmAddr || '(unlock wallet to see)';
+    }
     return address;
   };
 

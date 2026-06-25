@@ -808,6 +808,31 @@
     }
   }
 
+  function _canonicalInternalTransferIntentMsg(intent) {
+    const fields = ['amount','asset','asset_origin_chain','created_at','fee_asset','from_thr','nonce','recipient','type','version'];
+    const parts = fields.map(k => JSON.stringify(k) + ':' + JSON.stringify(String(intent[k] !== undefined ? intent[k] : '')));
+    return '{' + parts.join(',') + '}';
+  }
+
+  async function signInternalTransferIntent(intent) {
+    if (isLocked() || !isBound()) throw new Error('wallet_locked');
+    const secp = await _ensureSecpLoaded();
+    if (!secp || !secp.sign) throw new Error('secp256k1_library_missing');
+    if (!unlockedPrivateKeyHex) throw new Error('wallet_locked');
+    try {
+      const canonical = _canonicalInternalTransferIntentMsg(intent);
+      const digestHex = await sha256Hex(canonical);
+      const sig = await signDigestDerHex(secp, digestHex, unlockedPrivateKeyHex);
+      const pubKey = getPublicKey();
+      return { signature: sig, public_key: pubKey };
+    } catch (err) {
+      if (isSecpCryptoHelperError(err) || String((err && (err.message || err)) || '').includes('Cannot read properties of undefined')) {
+        throw new Error('wallet_crypto_not_ready');
+      }
+      throw err;
+    }
+  }
+
   async function enrollSigningMaterial({address, credentialLookupAddress, pin, authSecret} = {}){
     const activeAddress = normalizeAddress(address || getActiveAddress());
     const lookupAddress = normalizeAddress(credentialLookupAddress || getCredentialLookupAddress(activeAddress));
@@ -1274,7 +1299,7 @@
     getAddress, getActiveAddress, setAddress,
     getMigrationInfo, isMigrated, isVerifiedMigrationInfo, getCanonicalMigrationAddress, getLegacySourceAddress,
     getWalletOrigin, getWalletIdentityStatus, isWalletV1,
-    createWalletV1, getPublicKey, canonicalTxMessage, signTransaction,
+    createWalletV1, getPublicKey, canonicalTxMessage, signTransaction, signInternalTransferIntent,
     migrateLegacyWallet, restoreMigratedWallet, encryptPrivateKeyHex, decryptPrivateKeyHex,
     getCredentialLookupAddress, getSendSeed, setSendSeed, getSendSecret, setSendSecret,
     hasSigningMaterial, hasRuntimeSigningMaterial, getWalletAuthDiagnostics, logWalletAuthDiagnostics,

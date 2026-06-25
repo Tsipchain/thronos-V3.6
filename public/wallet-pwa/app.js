@@ -4989,8 +4989,19 @@ async function pwaOpenEvmSendModal(network, evmAddr, tokenSym) {
   <div style="background:#13112a;border:1px solid #2a2050;border-radius:12px;padding:20px;width:100%;max-width:420px;font-size:13px;">
     <div style="font-weight:700;color:#b08cf8;margin-bottom:12px;font-size:15px;">💸 Send ${escHtml(sendSym)} on ${escHtml(netLabel)}</div>
     <div style="color:#888;font-size:10px;margin-bottom:12px;">From: <span style="font-family:monospace;color:#aaa">${evmAddr}</span></div>
-    <label style="color:#aaa;font-size:11px;">Recipient address</label>
-    <input id="pwaEvmSendTo" placeholder="0x..." style="width:100%;box-sizing:border-box;margin:4px 0 10px;padding:8px;background:#0d0a1a;border:1px solid #2a2050;border-radius:6px;color:#fff;font-family:monospace;font-size:12px;">
+    <label style="color:#aaa;font-size:11px;">Recipient address (Thronos THR… or external 0x…)</label>
+    <input id="pwaEvmSendTo" placeholder="THR… or 0x…" style="width:100%;box-sizing:border-box;margin:4px 0 6px;padding:8px;background:#0d0a1a;border:1px solid #2a2050;border-radius:6px;color:#fff;font-family:monospace;font-size:12px;">
+    <div id="pwaRecipientBadge" style="font-size:10px;min-height:14px;margin-bottom:8px;"></div>
+    <div id="pwaIntAuthRow" style="display:none;">
+      <div id="pwaIntSignerStatus" style="font-size:11px;color:#aaa;margin-bottom:6px;"></div>
+      <div id="pwaIntLegacyToggleRow" style="margin-top:2px;">
+        <a href="#" id="pwaIntLegacyToggle" style="font-size:10px;color:#555;text-decoration:underline;">Use legacy authorization instead</a>
+      </div>
+      <div id="pwaIntLegacyRow" style="display:none;margin-top:6px;">
+        <label style="color:#888;font-size:10px;">Legacy authorization fallback</label>
+        <input id="pwaIntAuthSecret" type="password" placeholder="Your send / pledge secret" autocomplete="off" style="width:100%;box-sizing:border-box;margin:4px 0 10px;padding:8px;background:#0d0a1a;border:1px solid #2a2050;border-radius:6px;color:#fff;font-size:12px;">
+      </div>
+    </div>
     <label style="color:#aaa;font-size:11px;">Amount (${escHtml(sendSym)})</label>
     <input id="pwaEvmSendAmt" type="number" min="0" step="any" placeholder="0.00" style="width:100%;box-sizing:border-box;margin:4px 0 10px;padding:8px;background:#0d0a1a;border:1px solid #2a2050;border-radius:6px;color:#fff;font-size:13px;">
     <div id="pwaEvmGasEst" style="font-size:10px;color:#888;margin-bottom:10px;min-height:14px;"></div>
@@ -5001,13 +5012,91 @@ async function pwaOpenEvmSendModal(network, evmAddr, tokenSym) {
     <button id="pwaEvmSendCancelBtn" style="width:100%;margin-top:8px;padding:8px;background:none;border:1px solid #333;border-radius:6px;color:#666;font-size:11px;cursor:pointer;">Cancel</button>
     <div id="pwaEvmSendResult" style="margin-top:10px;font-size:11px;min-height:14px;"></div>
     <div style="margin-top:12px;padding:8px;background:rgba(255,200,0,0.04);border:1px solid #332200;border-radius:6px;font-size:10px;color:#887766;">
-      ⚠ Signing uses your Thronos secp256k1 key (EIP-155). Wallet must be unlocked. Private key never leaves your device.
+      ⚠ External sends use your Thronos secp256k1 key (EIP-155). Internal transfers use server-side ledger — no chain fee needed. Private key never leaves your device.
     </div>
   </div>`;
   overlay.addEventListener('click', e => { if(e.target===overlay) overlay.remove(); });
   document.body.appendChild(overlay);
 
   overlay.querySelector('#pwaEvmSendCancelBtn').addEventListener('click', () => overlay.remove());
+
+  // ── Recipient resolver ───────────────────────────────────────────────────
+  let _recipientResolved = null;  // cached resolve-recipient result
+  async function _resolveRecipient(addr) {
+    const badge   = overlay.querySelector('#pwaRecipientBadge');
+    const authRow = overlay.querySelector('#pwaIntAuthRow');
+    const gasBtn  = overlay.querySelector('#pwaEvmGasBtn');
+    if (!addr) { _recipientResolved = null; if (badge) badge.textContent = ''; if (authRow) authRow.style.display='none'; return; }
+    if (badge) badge.textContent = '…';
+    try {
+      const resp = await fetch('/api/wallet/resolve-recipient', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ recipient: addr, asset: tokenSym || sendSym, chain: network }),
+      });
+      const r = await resp.json();
+      _recipientResolved = r;
+      if (r.settlement_mode === 'internal') {
+        // Show internal balance so user knows what's available before entering amount
+        const fromThr = window.walletSession?.getAddress?.() || '';
+        let balNote = '';
+        if (fromThr) {
+          try {
+            const chainNorm = { bnb: 'bsc', ethereum: 'eth' }[network] || network;
+            const assetStr  = (tokenSym || sendSym).toUpperCase();
+            const bResp = await fetch(`/api/wallet/internal-balance?thr_address=${encodeURIComponent(fromThr)}&asset=${encodeURIComponent(assetStr)}&chain=${encodeURIComponent(chainNorm)}`);
+            const bData = await bResp.json();
+            if (bData.ok) balNote = ` | Available: ${bData.balance} ${assetStr} (${bData.balance_source === 'bootstrap_existing_wallet_balance' ? 'from history' : 'ledger'})`;
+          } catch (_) {}
+        }
+        if (badge) { badge.style.color='#6f8'; badge.textContent=`🏠 Internal Thronos transfer — THR fee, no chain gas needed.${balNote}`; }
+        if (authRow) authRow.style.display='block';
+        if (gasBtn)  gasBtn.style.display='none';
+        // Update signer status text based on wallet state
+        const signerStatus = overlay.querySelector('#pwaIntSignerStatus');
+        if (signerStatus) {
+          const ws = window.walletSession;
+          if (ws && !ws.isLocked() && ws.hasRuntimeSigningMaterial()) {
+            signerStatus.style.color = '#6f8';
+            signerStatus.textContent = '🔐 Confirm with wallet signer (biometric / passkey)';
+          } else if (ws && ws.isBound()) {
+            signerStatus.style.color = '#fa8';
+            signerStatus.textContent = '🔒 Wallet locked — unlock with PIN to sign internal transfer';
+          } else {
+            signerStatus.style.color = '#888';
+            signerStatus.textContent = 'No signing key bound — use legacy authorization below';
+            const legacyRow = overlay.querySelector('#pwaIntLegacyRow');
+            if (legacyRow) legacyRow.style.display = 'block';
+          }
+        }
+        // Wire legacy toggle once
+        const legacyToggle = overlay.querySelector('#pwaIntLegacyToggle');
+        if (legacyToggle && !legacyToggle.dataset.wired) {
+          legacyToggle.dataset.wired = '1';
+          legacyToggle.addEventListener('click', e => {
+            e.preventDefault();
+            const legacyRow = overlay.querySelector('#pwaIntLegacyRow');
+            if (legacyRow) legacyRow.style.display = legacyRow.style.display === 'none' ? 'block' : 'none';
+          });
+        }
+      } else if (r.settlement_mode === 'external_chain') {
+        if (badge) { badge.style.color='#8af'; badge.textContent=`🌐 External chain send on ${netLabel} — requires native gas.`; }
+        if (authRow) authRow.style.display='none';
+        if (gasBtn)  gasBtn.style.display='';
+      } else {
+        if (badge) { badge.style.color='#f88'; badge.textContent='⚠ Recipient not recognized.'; }
+        if (authRow) authRow.style.display='none';
+        _recipientResolved = null;
+      }
+    } catch (e) {
+      if (badge) { badge.style.color='#f88'; badge.textContent='Recipient lookup failed — proceeding as external.'; }
+      _recipientResolved = null;
+    }
+  }
+  const toInput = overlay.querySelector('#pwaEvmSendTo');
+  if (toInput) {
+    toInput.addEventListener('blur', () => _resolveRecipient(toInput.value.trim()));
+    toInput.addEventListener('change', () => _resolveRecipient(toInput.value.trim()));
+  }
 
   overlay.querySelector('#pwaEvmGasBtn').addEventListener('click', async () => {
     const gasEl = overlay.querySelector('#pwaEvmGasEst');
@@ -5044,19 +5133,95 @@ async function pwaOpenEvmSendModal(network, evmAddr, tokenSym) {
 
   overlay.querySelector('#pwaEvmSendConfirmBtn').addEventListener('click', async () => {
     const resultEl = overlay.querySelector('#pwaEvmSendResult');
+    const toAddr = (overlay.querySelector('#pwaEvmSendTo')?.value || '').trim();
+    const amt = parseFloat(overlay.querySelector('#pwaEvmSendAmt')?.value || '0');
+    if (!toAddr) { if (resultEl) resultEl.innerHTML = '<span style="color:#f88">Enter a recipient address.</span>'; return; }
+    if (!amt || amt <= 0) { if (resultEl) resultEl.innerHTML = '<span style="color:#f88">Enter a valid amount.</span>'; return; }
+
+    // Resolve recipient if not yet resolved
+    if (!_recipientResolved) await _resolveRecipient(toAddr);
+
+    // ── Internal Thronos transfer ─────────────────────────────────────────
+    if (_recipientResolved?.settlement_mode === 'internal') {
+      const fromThr = window.walletSession?.getAddress?.() || '';
+      if (!fromThr) { if (resultEl) resultEl.innerHTML = '<span style="color:#f88">Cannot resolve your Thronos address — unlock wallet first.</span>'; return; }
+
+      const ws = window.walletSession;
+      const legacySecret = (overlay.querySelector('#pwaIntAuthSecret')?.value || '').trim();
+      const legacyVisible = (overlay.querySelector('#pwaIntLegacyRow')?.style.display !== 'none') && legacySecret;
+      const canSign = ws && !ws.isLocked() && ws.hasRuntimeSigningMaterial();
+
+      if (!canSign && !legacyVisible) {
+        if (ws && ws.isBound() && ws.isLocked()) {
+          if (resultEl) resultEl.innerHTML = '<span style="color:#fa8">Wallet is locked. Unlock with PIN or use legacy authorization.</span>'; return;
+        }
+        if (resultEl) resultEl.innerHTML = '<span style="color:#f88">Provide authorization to proceed.</span>'; return;
+      }
+
+      if (resultEl) resultEl.innerHTML = '<span style="color:#8af">Processing internal transfer…</span>';
+
+      const assetStr  = (tokenSym || sendSym).toUpperCase();
+      const chainNorm = { bnb: 'bsc', ethereum: 'eth' }[network] || network;
+
+      let postBody;
+      if (canSign) {
+        // Signed intent path (primary)
+        const nonce = crypto.randomUUID ? crypto.randomUUID() : (Math.random().toString(36).slice(2) + Date.now());
+        const intent = {
+          type: 'thronos_internal_transfer',
+          version: '1',
+          from_thr: fromThr,
+          recipient: toAddr,
+          asset: assetStr,
+          asset_origin_chain: chainNorm,
+          amount: String(amt),
+          fee_asset: 'THR',
+          nonce: String(nonce),
+          created_at: new Date().toISOString(),
+        };
+        try {
+          const { signature, public_key } = await ws.signInternalTransferIntent(intent);
+          postBody = { intent, signature, public_key };
+        } catch (signErr) {
+          if (resultEl) resultEl.innerHTML = `<span style="color:#f88">Signing failed: ${signErr.message}. Use legacy authorization below.</span>`;
+          return;
+        }
+      } else {
+        // Legacy fallback
+        postBody = {
+          from_thr: fromThr, recipient: toAddr,
+          asset: assetStr, asset_origin_chain: chainNorm, amount: amt,
+          auth_secret: legacySecret,
+        };
+      }
+
+      try {
+        const r = await fetch('/api/wallet/internal-transfer', {
+          method: 'POST', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify(postBody),
+        });
+        const res = await r.json();
+        if (res.ok) {
+          if (resultEl) resultEl.innerHTML = `<span style="color:#6f8">✓ Internal transfer confirmed — ID: ${res.transfer_id}</span>`;
+          setTimeout(() => overlay.remove(), 2500);
+        } else {
+          if (resultEl) resultEl.innerHTML = `<span style="color:#f88">Transfer failed: ${res.error || 'unknown error'}</span>`;
+        }
+      } catch (e) {
+        if (resultEl) resultEl.innerHTML = `<span style="color:#f88">Transfer error: ${e.message}</span>`;
+      }
+      return;
+    }
+
+    // ── External chain send — original EVM signing flow ───────────────────
     // Re-run all guards at click time — wallet state may have changed since modal opened
     const guardCheck = await _pwaEvmSendGuard(network, evmAddr);
     if (!guardCheck.ok) {
       if (resultEl) resultEl.innerHTML = `<span style="color:#f88">${guardCheck.userMsg.replace(/\n/g,'<br>')}</span>`;
       return;
     }
-    const toAddr = (overlay.querySelector('#pwaEvmSendTo')?.value || '').trim();
-    const amt = parseFloat(overlay.querySelector('#pwaEvmSendAmt')?.value || '0');
-    if (!toAddr || !toAddr.match(/^0x[0-9a-fA-F]{40}$/)) {
-      if (resultEl) resultEl.innerHTML = '<span style="color:#f88">Invalid recipient address.</span>'; return;
-    }
-    if (!amt || amt <= 0) {
-      if (resultEl) resultEl.innerHTML = '<span style="color:#f88">Enter a valid amount.</span>'; return;
+    if (!toAddr.match(/^0x[0-9a-fA-F]{40}$/)) {
+      if (resultEl) resultEl.innerHTML = '<span style="color:#f88">External sends require a 0x EVM address.</span>'; return;
     }
     const gasPrice = overlay.dataset.gasPrice ? BigInt(overlay.dataset.gasPrice) : null;
     const gasLimit = overlay.dataset.gasLimit ? BigInt(overlay.dataset.gasLimit) : null;

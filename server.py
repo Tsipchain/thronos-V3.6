@@ -1040,6 +1040,9 @@ AI_CREDS_FILE       = os.path.join(DATA_DIR, "ai_agent_credentials.json")
 AI_BLOCK_LOG_FILE   = os.path.join(DATA_DIR, "ai_block_log.json")
 AI_INTERACTIONS_FILE = os.path.join(DATA_DIR, "ai_interactions.jsonl")
 WATCHER_LEDGER_FILE = os.path.join(DATA_DIR, "watcher_ledger.json")
+INTERNAL_ASSET_BALANCES_FILE    = os.path.join(DATA_DIR, "internal_asset_balances.json")
+INTERNAL_TRANSFER_NONCES_FILE   = os.path.join(DATA_DIR, "internal_transfer_nonces.json")
+USER_EVM_REGISTRY_FILE          = os.path.join(DATA_DIR, "user_evm_address_registry.json")
 IOT_DATA_FILE       = os.path.join(DATA_DIR, "iot_data.json")
 IOT_PARKING_FILE    = os.path.join(DATA_DIR, "iot_parking.json")
 IOT_API_REQUIRE_REGISTER = _strip_env_quotes(os.getenv("IOT_API_REQUIRE_REGISTER", "true")).lower() in ("1", "true", "yes", "on")
@@ -26759,6 +26762,697 @@ def api_wallet_send():
     else:
         # Custom token transfer (fee paid in THR)
         return transfer_custom_token(token, from_addr, to_addr, amount, secret, passphrase, speed)
+
+
+# ── Unified Transfer Router ────────────────────────────────────────────────────
+# Supported chains for internal asset settlement
+_INTERNAL_TRANSFER_CHAINS = {"bsc", "base", "arbitrum", "thronos"}
+_INTERNAL_TRANSFER_FEE_RATE = 0.0009   # 0.09 %
+_INTERNAL_TRANSFER_MIN_FEE  = 0.001    # minimum THR fee
+
+# Blocked system addresses — must never appear as personal sender/recipient
+_INTERNAL_BLOCKED_ADDRESSES = {
+    "0x76b1926f40c596e10c30ae7a359df8a0b21ac4a2",   # Pythia pool vault
+    "0x9aa993d1e59e777101443339b934a0605619cc69",   # fee collector / treasury
+}
+
+
+def _internal_balance_key(asset: str, chain: str) -> str:
+    return f"{asset.upper()}_{chain.lower()}"
+
+
+# Pool event types that must never count as personal wallet balance
+_POOL_EVENT_TYPES = frozenset({
+    "pool_seed", "pool_add_liquidity", "pool_add_liquidity_lp_minted",
+    "pool_withdraw", "pool_remove_liquidity", "pool_topup_from_service_fee",
+    "pool_seeded_from_pledge_vault", "treasury_to_pool_seed",
+    "pool_liquidity_credit", "pool_share_credit", "pool_fee_credit",
+    "external_service_fee_collected", "gas_reserve_accounted",
+})
+# Personal in-events that increase wallet's internal asset balance
+_PERSONAL_IN_EVENTS = frozenset({
+    "token_receive", "bridge", "gateway_payment_received",
+    "internal_asset_transfer", "crosschain_deposit_confirmed",
+})
+# Personal out-events that decrease wallet's internal asset balance
+_PERSONAL_OUT_EVENTS = frozenset({
+    "internal_asset_transfer",
+})
+_CHAIN_ALIASES = {"bnb": "bsc", "binance": "bsc", "ethereum": "eth"}
+
+
+def _bootstrap_from_wallet_history(thr_address: str, asset: str, chain: str) -> tuple[float, str]:
+    """
+    Compute a wallet's personal asset balance from wallet_history.json when
+    internal_asset_balances.json has no entry yet.
+
+    Safety rules:
+    - Only counts events owned by thr_address (direction in/out).
+    - Excludes all pool events (by event_type or pool_id presence).
+    - Deduplicates by internal_txid.
+    - Pool liquidity and shares are never counted as personal balance.
+    - Returns (balance, source_label).
+    """
+    chain_norm  = _CHAIN_ALIASES.get(chain.lower(), chain.lower())
+    asset_upper = asset.upper()
+    balance     = 0.0
+    seen_ids: set = set()
+
+    try:
+        events = get_wallet_history(thr_address, limit=50000)
+        for evt in events:
+            if not isinstance(evt, dict):
+                continue
+            # Skip pool events by type
+            evt_type = evt.get("event_type", "")
+            if evt_type in _POOL_EVENT_TYPES:
+                continue
+            # Skip any event associated with a pool (pool_id set)
+            if evt.get("pool_id"):
+                continue
+            # Only personal in/out directions
+            direction = evt.get("direction", "")
+            if direction not in ("in", "out"):
+                continue
+            # Asset match
+            if (evt.get("asset") or "").upper() != asset_upper:
+                continue
+            # Chain match
+            evt_chain = _CHAIN_ALIASES.get(
+                (evt.get("chain") or "thronos").lower(),
+                (evt.get("chain") or "thronos").lower()
+            )
+            if evt_chain != chain_norm:
+                continue
+            # Dedup
+            txid = (evt.get("internal_txid") or "").strip()
+            if txid:
+                if txid in seen_ids:
+                    continue
+                seen_ids.add(txid)
+
+            amt = float(evt.get("amount") or 0)
+            if direction == "in" and evt_type in _PERSONAL_IN_EVENTS:
+                balance += amt
+            elif direction == "out" and evt_type in _PERSONAL_OUT_EVENTS:
+                balance -= amt
+    except Exception as exc:
+        logger.warning("[internal-transfer bootstrap] wallet_history scan error for %s: %s",
+                       thr_address, exc)
+
+    balance = max(0.0, round(balance, 6))
+    source  = "bootstrap_existing_wallet_balance" if balance > 0 else "internal_asset_balances"
+    return balance, source
+
+
+def _get_internal_asset_balance(thr_address: str, asset: str, chain: str) -> float:
+    """Raw read from internal_asset_balances.json — does not bootstrap."""
+    data = load_json(INTERNAL_ASSET_BALANCES_FILE, {})
+    return float((data.get(thr_address) or {}).get(_internal_balance_key(asset, chain), 0.0))
+
+
+def _get_or_bootstrap_internal_asset_balance(
+    thr_address: str, asset: str, chain: str
+) -> tuple[float, str]:
+    """
+    Return the internal asset balance for a wallet, bootstrapping from wallet_history
+    the first time the wallet has no entry for this asset+chain.
+
+    Once bootstrapped, internal_asset_balances.json is authoritative to prevent
+    double-counting on future reads.
+
+    Returns (balance, source) where source is one of:
+      "internal_asset_balances"          — explicit entry already existed
+      "bootstrap_existing_wallet_balance" — initialised from wallet history
+    """
+    data = load_json(INTERNAL_ASSET_BALANCES_FILE, {})
+    key  = _internal_balance_key(asset, chain)
+    wallet_entry = data.get(thr_address)
+
+    # Explicit entry exists (even if zero) → authoritative, no bootstrap needed
+    if wallet_entry is not None and key in wallet_entry:
+        return float(wallet_entry[key]), "internal_asset_balances"
+
+    # No entry yet — compute from wallet history (safe, pool-excluded)
+    bootstrapped, source = _bootstrap_from_wallet_history(thr_address, asset, chain)
+
+    # Persist bootstrapped value so future ops use internal_asset_balances.json
+    if thr_address not in data:
+        data[thr_address] = {}
+    data[thr_address][key] = round(max(0.0, bootstrapped), 6)
+    save_json(INTERNAL_ASSET_BALANCES_FILE, data)
+
+    logger.info("[internal-transfer] bootstrapped %s %s_%s balance=%.6f from %s",
+                thr_address[:20], asset, chain, data[thr_address][key], source)
+    return float(data[thr_address][key]), source
+
+
+def _set_internal_asset_balance(thr_address: str, asset: str, chain: str, new_val: float) -> None:
+    data = load_json(INTERNAL_ASSET_BALANCES_FILE, {})
+    key  = _internal_balance_key(asset, chain)
+    wallet_entry = data.get(thr_address) or {}
+    wallet_entry[key] = round(max(0.0, new_val), 6)
+    data[thr_address] = wallet_entry
+    save_json(INTERNAL_ASSET_BALANCES_FILE, data)
+
+
+def _lookup_thronos_wallet(candidate: str) -> dict | None:
+    """
+    Resolve a candidate address to a Thronos wallet.
+    Checks: ledger, wallet_v1_public_key_bindings, pythia_public_address_registry, user_evm_registry.
+    Returns {thr_address, wallet_id, source} or None.
+    """
+    if not candidate:
+        return None
+    rec   = candidate.strip()
+    upper = rec.upper()
+    lower = rec.lower()
+
+    # 1. THR address in main ledger
+    try:
+        ledger = load_json(LEDGER_FILE, {})
+        for addr in ledger:
+            if addr.strip().upper() == upper:
+                return {"thr_address": addr, "wallet_id": addr, "source": "ledger"}
+    except Exception:
+        pass
+
+    # 2. wallet_v1_public_key_bindings — keys are THR addresses
+    try:
+        bindings = load_json(WALLET_V1_PUBLIC_KEY_BINDINGS_FILE, {})
+        for addr in bindings:
+            if addr.strip().upper() == upper:
+                return {"thr_address": addr, "wallet_id": addr, "source": "wallet_v1_public_key_bindings"}
+    except Exception:
+        pass
+
+    # 3. pythia_public_address_registry — registration_history entries
+    try:
+        registry = load_json(PYTHIA_PUBLIC_ADDRESS_REGISTRY_FILE, {})
+        for entry in (registry.get("registration_history") or []):
+            if not isinstance(entry, dict):
+                continue
+            reg_thr = (entry.get("thr_address") or "").strip()
+            if reg_thr.upper() == upper:
+                return {"thr_address": reg_thr, "wallet_id": reg_thr,
+                        "source": "pythia_public_address_registry"}
+    except Exception:
+        pass
+
+    # 4. User EVM address registry — maps 0x addresses to THR wallet IDs
+    try:
+        evm_reg = load_json(USER_EVM_REGISTRY_FILE, {})
+        hit = evm_reg.get(lower)
+        if hit and isinstance(hit, dict):
+            thr = (hit.get("thr_address") or "").strip()
+            if thr:
+                return {"thr_address": thr, "wallet_id": thr,
+                        "source": "user_evm_registry", "evm_address": lower}
+    except Exception:
+        pass
+
+    return None
+
+
+def _classify_recipient(recipient: str) -> tuple[str, str | None]:
+    """
+    Returns (recipient_type, normalized).
+    recipient_type: "thronos_wallet" | "external_evm" | "external_btc" | "invalid"
+    """
+    import re
+    if not recipient:
+        return "invalid", None
+    rec = recipient.strip()
+
+    # Blocked system addresses — never routable as personal destinations
+    if rec.lower() in _INTERNAL_BLOCKED_ADDRESSES:
+        return "invalid", None
+
+    # 1. Try Thronos wallet lookup (works for THR addresses AND registered EVM addresses)
+    wallet = _lookup_thronos_wallet(rec)
+    if wallet:
+        return "thronos_wallet", rec
+
+    # 2. Unknown 0x EVM address → external
+    if re.match(r'^0x[0-9a-fA-F]{40}$', rec):
+        return "external_evm", rec.lower()
+
+    # 3. BTC address → external_btc
+    if re.match(r'^(bc1|[13])[a-zA-HJ-NP-Z0-9]{25,61}$', rec):
+        return "external_btc", rec
+
+    # 4. THR address format that's not in any registry → still treat as thronos_wallet
+    #    (credit will sit in ledger; the recipient can claim it once they register)
+    try:
+        from wallet_v1_address_derivation import validate_thronos_address  # type: ignore
+        if validate_thronos_address(rec):
+            return "thronos_wallet", rec
+    except Exception:
+        pass
+
+    # Fallback: if it looks like a THR address heuristically
+    if re.match(r'^THR[A-Z0-9]{20,}$', rec, re.IGNORECASE):
+        return "thronos_wallet", rec
+
+    return "invalid", None
+
+
+@app.route("/api/wallet/resolve-recipient", methods=["POST", "OPTIONS"])
+def api_wallet_resolve_recipient():
+    """
+    Resolve a payment recipient to determine if this is an internal Thronos wallet
+    transfer or a real on-chain send.
+
+    POST body:
+      recipient  – THR address, 0x EVM address, or BTC address
+      asset      – USDT | USDC | THR | BTC
+      chain      – bsc | base | arbitrum | thronos | btc
+
+    Response:
+      {
+        ok: true,
+        recipient_type: "thronos_wallet" | "external_evm" | "external_btc" | "invalid",
+        wallet_id: str | null,
+        thr_address: str | null,
+        bound_evm_address: str | null,
+        settlement_mode: "internal" | "external_chain",
+        fee_asset: "THR" | "BNB" | "ETH",
+        requires_pool: false
+      }
+    """
+    if request.method == "OPTIONS":
+        resp = jsonify({"ok": True})
+        resp.headers["Access-Control-Allow-Origin"]  = "*"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        resp.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+        return resp, 200
+
+    data      = request.get_json() or {}
+    recipient = (data.get("recipient") or "").strip()
+    asset     = (data.get("asset") or "THR").upper()
+    chain     = (data.get("chain") or "thronos").lower()
+
+    if not recipient:
+        return jsonify(ok=False, error="recipient required"), 400
+
+    rtype, normalized = _classify_recipient(recipient)
+
+    # Determine fee_asset for external sends by chain
+    if rtype in ("external_evm",):
+        fee_asset = "BNB" if chain in ("bsc",) else "ETH"
+        settlement_mode = "external_chain"
+    elif rtype == "external_btc":
+        fee_asset = "BTC"
+        settlement_mode = "external_chain"
+    elif rtype == "thronos_wallet":
+        fee_asset = "THR"
+        settlement_mode = "internal"
+    else:
+        return jsonify(
+            ok=True,
+            recipient_type="invalid",
+            wallet_id=None,
+            thr_address=None,
+            bound_evm_address=None,
+            settlement_mode=None,
+            fee_asset=None,
+            requires_pool=False,
+        ), 200
+
+    wallet_info = _lookup_thronos_wallet(recipient) if rtype == "thronos_wallet" else None
+    thr_addr    = (wallet_info or {}).get("thr_address")
+    evm_addr    = (wallet_info or {}).get("evm_address")
+
+    return jsonify(
+        ok=True,
+        recipient_type=rtype,
+        wallet_id=thr_addr,
+        thr_address=thr_addr,
+        bound_evm_address=evm_addr,
+        settlement_mode=settlement_mode,
+        fee_asset=fee_asset,
+        requires_pool=False,
+    ), 200
+
+
+def _canonical_internal_transfer_intent(intent: dict) -> str:
+    """Return deterministic JSON for intent signing.
+
+    Keys are alphabetically sorted and all values are coerced to strings.
+    Client and server must use identical serialisation.
+    """
+    fields = ("amount", "asset", "asset_origin_chain", "created_at",
+              "fee_asset", "from_thr", "nonce", "recipient", "type", "version")
+    parts = []
+    for k in fields:
+        v = str(intent.get(k, ""))
+        parts.append(f'"{k}":{json.dumps(v)}')
+    return "{" + ",".join(parts) + "}"
+
+
+def _verify_internal_transfer_intent(intent: dict, signature_hex: str, public_key_hex: str) -> tuple:
+    """Verify a signed internal-transfer intent.
+
+    Returns (ok: bool, error_code: str, error_detail: str).
+
+    Checks (in order):
+      1. Intent structure — required fields present and non-empty.
+      2. Type field is 'thronos_internal_transfer'.
+      3. created_at within last 5 minutes.
+      4. Nonce not previously seen.
+      5. Signature valid over canonical intent JSON (SHA-256 + ECDSA secp256k1).
+      6. Public key binds to from_thr address.
+    """
+    import time as _time
+
+    required = ("amount", "asset", "asset_origin_chain", "created_at",
+                "fee_asset", "from_thr", "nonce", "recipient", "type", "version")
+    for field in required:
+        if not intent.get(field):
+            return False, "invalid_intent", f"missing field: {field}"
+
+    if intent.get("type") != "thronos_internal_transfer":
+        return False, "invalid_intent", "type must be thronos_internal_transfer"
+
+    # ── Age check ─────────────────────────────────────────────────────────────
+    try:
+        created_at_str = str(intent["created_at"])
+        # Accept ISO 8601 with or without timezone
+        from datetime import datetime, timezone
+        if created_at_str.endswith("Z"):
+            created_at_str = created_at_str[:-1] + "+00:00"
+        created_dt = datetime.fromisoformat(created_at_str)
+        if created_dt.tzinfo is None:
+            created_dt = created_dt.replace(tzinfo=timezone.utc)
+        now_dt = datetime.now(timezone.utc)
+        age_seconds = (now_dt - created_dt).total_seconds()
+        if age_seconds < 0 or age_seconds > 300:
+            return False, "intent_expired", f"intent age {int(age_seconds)}s exceeds 5-minute window"
+    except Exception as exc:
+        return False, "invalid_intent", f"cannot parse created_at: {exc}"
+
+    # ── Nonce replay check ────────────────────────────────────────────────────
+    nonce = str(intent["nonce"])
+    from_thr = str(intent["from_thr"])
+    nonces_store = load_json(INTERNAL_TRANSFER_NONCES_FILE, {})
+    wallet_nonces = nonces_store.get(from_thr, [])
+    if nonce in wallet_nonces:
+        return False, "nonce_reused", "intent nonce has already been consumed"
+
+    # ── Signature verification ────────────────────────────────────────────────
+    canonical_msg = _canonical_internal_transfer_intent(intent).encode("utf-8")
+    try:
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.exceptions import InvalidSignature
+        pub_bytes = bytes.fromhex(public_key_hex)
+        sig_bytes = bytes.fromhex(signature_hex)
+        pub_obj = ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256K1(), pub_bytes)
+        pub_obj.verify(sig_bytes, canonical_msg, ec.ECDSA(hashes.SHA256()))
+    except InvalidSignature:
+        return False, "invalid_signature", "signature does not match intent"
+    except Exception as exc:
+        return False, "invalid_signature", f"signature verification failed: {exc}"
+
+    # ── Key-address binding ───────────────────────────────────────────────────
+    try:
+        import wallet_v1_production_final as wallet_v1_prod
+        binding_ok, binding_error = wallet_v1_prod.verify_publickey_matches_address(
+            {"from": from_thr, "publicKey": public_key_hex}
+        )
+        if not binding_ok:
+            return False, "key_address_mismatch", binding_error
+    except Exception as exc:
+        return False, "key_address_mismatch", f"address binding failed: {exc}"
+
+    # ── Consume nonce (write only after all checks pass) ──────────────────────
+    wallet_nonces.append(nonce)
+    # Prune old nonces: keep at most last 500 per wallet
+    if len(wallet_nonces) > 500:
+        wallet_nonces = wallet_nonces[-500:]
+    nonces_store[from_thr] = wallet_nonces
+    save_json(INTERNAL_TRANSFER_NONCES_FILE, nonces_store)
+
+    return True, "", ""
+
+
+@app.route("/api/wallet/internal-transfer", methods=["POST", "OPTIONS"])
+def api_wallet_internal_transfer():
+    """
+    Internal ledger transfer between two Thronos wallets.
+
+    Transfers USDT/USDC/THR without touching any external chain.
+    Fee is paid in THR by the sender.
+
+    POST body — signed intent path (preferred):
+      intent            – {amount, asset, asset_origin_chain, created_at, fee_asset,
+                           from_thr, nonce, recipient, type, version}
+      signature         – DER hex secp256k1 signature over SHA-256(canonical_intent)
+      public_key        – compressed secp256k1 public key hex (33 bytes)
+
+    POST body — legacy fallback:
+      from_thr          – sender THR address
+      recipient         – recipient THR address (or registered EVM address)
+      asset             – USDT | USDC | THR
+      asset_origin_chain – bsc | base | arbitrum | thronos
+      amount            – positive number
+      auth_secret       – sender's pledge/send secret (legacy authorization)
+      passphrase        – optional wallet passphrase
+
+    Safety:
+    - No private keys, seeds, or mnemonics sent to server.
+    - No external RPC calls.
+    - No eth_sendRawTransaction.
+    - Pool liquidity is not touched.
+    - Both sender and receiver histories are written.
+    - Signed intent nonces are consumed server-side; replay is rejected.
+    """
+    if request.method == "OPTIONS":
+        resp = jsonify({"ok": True})
+        resp.headers["Access-Control-Allow-Origin"]  = "*"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        resp.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+        return resp, 200
+
+    data = request.get_json() or {}
+
+    # ── Determine auth path: signed intent vs legacy ──────────────────────────
+    intent_raw  = data.get("intent")
+    signature   = (data.get("signature") or "").strip()
+    public_key  = (data.get("public_key") or "").strip()
+    use_signed_intent = bool(intent_raw and signature and public_key)
+
+    if use_signed_intent:
+        if not isinstance(intent_raw, dict):
+            return jsonify(ok=False, error="intent must be a JSON object"), 400
+        ok_intent, intent_err_code, intent_err_detail = _verify_internal_transfer_intent(
+            intent_raw, signature, public_key
+        )
+        if not ok_intent:
+            return jsonify(ok=False, error=intent_err_code, detail=intent_err_detail), 403
+
+        # Unpack fields from verified intent
+        from_thr   = str(intent_raw.get("from_thr", "")).strip()
+        recipient  = str(intent_raw.get("recipient", "")).strip()
+        asset      = str(intent_raw.get("asset", "")).upper()
+        chain      = str(intent_raw.get("asset_origin_chain", "thronos")).lower()
+        amount_raw = intent_raw.get("amount", 0)
+        auth_mode  = "signed_intent"
+    else:
+        from_thr   = (data.get("from_thr") or "").strip()
+        recipient  = (data.get("recipient") or "").strip()
+        asset      = (data.get("asset") or "").upper()
+        chain      = (data.get("asset_origin_chain") or "thronos").lower()
+        amount_raw = data.get("amount", 0)
+        auth_sec   = (data.get("auth_secret") or "").strip()
+        passphrase = (data.get("passphrase") or "").strip()
+        auth_mode  = "legacy"
+
+    # ── Validate inputs ───────────────────────────────────────────────────────
+    if not from_thr:
+        return jsonify(ok=False, error="from_thr required"), 400
+    if not recipient:
+        return jsonify(ok=False, error="recipient required"), 400
+    if asset not in ("USDT", "USDC", "THR"):
+        return jsonify(ok=False, error="asset must be USDT, USDC, or THR"), 400
+    if chain not in _INTERNAL_TRANSFER_CHAINS:
+        return jsonify(ok=False, error=f"unsupported chain '{chain}' for internal transfer"), 400
+
+    try:
+        amount = float(amount_raw)
+    except (TypeError, ValueError):
+        return jsonify(ok=False, error="invalid amount"), 400
+    if amount <= 0:
+        return jsonify(ok=False, error="amount must be positive"), 400
+
+    # ── Resolve recipient ─────────────────────────────────────────────────────
+    rtype, _ = _classify_recipient(recipient)
+    if rtype != "thronos_wallet":
+        return jsonify(ok=False, error="recipient is not a recognized Thronos wallet",
+                       recipient_type=rtype), 400
+
+    wallet_info = _lookup_thronos_wallet(recipient)
+    to_thr = (wallet_info or {}).get("thr_address") or recipient
+
+    if from_thr.upper() == to_thr.upper():
+        return jsonify(ok=False, error="cannot transfer to self"), 400
+
+    # ── Authenticate sender (legacy path only) ────────────────────────────────
+    if auth_mode == "legacy":
+        ok_auth, _, error_key = validate_effective_auth(from_thr, auth_sec, passphrase)
+        if not ok_auth:
+            return jsonify(ok=False, error=error_key or "invalid_auth"), 403
+
+    # ── THR fee calculation ───────────────────────────────────────────────────
+    thr_fee = round(max(_INTERNAL_TRANSFER_MIN_FEE, amount * _INTERNAL_TRANSFER_FEE_RATE), 6)
+
+    # ── Check THR balance for fee ─────────────────────────────────────────────
+    thr_ledger = load_json(LEDGER_FILE, {})
+    sender_thr = float(thr_ledger.get(from_thr, 0.0))
+    if sender_thr < thr_fee:
+        return jsonify(ok=False, error="insufficient_thr_for_fee",
+                       thr_balance=round(sender_thr, 6),
+                       fee_required=thr_fee), 400
+
+    # ── Check and move asset balance ──────────────────────────────────────────
+    transfer_id   = f"INT-{asset}-{int(time.time())}-{secrets.token_hex(6)}"
+    balance_source = "internal_asset_balances"   # overridden below for non-THR
+
+    if asset == "THR":
+        # THR is in ledger.json — total cost = amount + fee
+        total_thr_cost = amount + thr_fee
+        sender_balance = float(thr_ledger.get(from_thr, 0.0))
+        if sender_balance < total_thr_cost:
+            return jsonify(ok=False, error="insufficient_balance",
+                           balance=round(sender_balance, 6),
+                           required=round(total_thr_cost, 6),
+                           balance_source="internal_asset_balances"), 400
+        thr_ledger[from_thr] = round(sender_balance - total_thr_cost, 6)
+        thr_ledger[to_thr]   = round(float(thr_ledger.get(to_thr, 0.0)) + amount, 6)
+        save_json(LEDGER_FILE, thr_ledger)
+    else:
+        # Non-THR asset: balance from internal_asset_balances.json, bootstrapped from
+        # wallet_history on first access so existing receives (token_receive, bridge,
+        # gateway_payment_received) are automatically honoured.
+        # Pool liquidity is explicitly excluded from bootstrap — see _bootstrap_from_wallet_history.
+        sender_asset_bal, balance_source = _get_or_bootstrap_internal_asset_balance(
+            from_thr, asset, chain
+        )
+        if sender_asset_bal < amount:
+            return jsonify(ok=False, error="insufficient_balance",
+                           balance=round(sender_asset_bal, 6),
+                           required=round(amount, 6),
+                           asset=asset, chain=chain,
+                           balance_source=balance_source), 400
+        # Deduct asset from sender; bootstrap receiver to avoid credit on clean ledger
+        _set_internal_asset_balance(from_thr, asset, chain, sender_asset_bal - amount)
+        recv_asset_bal, _ = _get_or_bootstrap_internal_asset_balance(to_thr, asset, chain)
+        _set_internal_asset_balance(to_thr, asset, chain, recv_asset_bal + amount)
+        # Deduct THR fee from sender's THR balance
+        thr_ledger[from_thr] = round(sender_thr - thr_fee, 6)
+        save_json(LEDGER_FILE, thr_ledger)
+
+    # Burn fee (split: 50% burned, 50% to AI agent)
+    split_and_credit_fee(thr_fee, source="internal_asset_transfer")
+
+    # ── Write history for sender and receiver ─────────────────────────────────
+    ts_now = time.time()
+    chain_label = {"bsc": "BNB Chain", "base": "Base", "arbitrum": "Arbitrum",
+                   "thronos": "Thronos"}.get(chain, chain.title())
+
+    add_wallet_history_event(
+        thr_address=from_thr,
+        event_type="internal_asset_transfer",
+        chain=chain,
+        asset=asset,
+        amount=amount,
+        status="confirmed",
+        direction="out",
+        internal_txid=transfer_id,
+        network_label=chain_label,
+        external_from=from_thr,
+        external_to=to_thr,
+        note=f"Internal transfer to {to_thr[:20]}… | fee {thr_fee} THR | id {transfer_id}",
+        timestamp=ts_now,
+    )
+    add_wallet_history_event(
+        thr_address=to_thr,
+        event_type="internal_asset_transfer",
+        chain=chain,
+        asset=asset,
+        amount=amount,
+        status="confirmed",
+        direction="in",
+        internal_txid=transfer_id,
+        network_label=chain_label,
+        external_from=from_thr,
+        external_to=to_thr,
+        note=f"Internal transfer from {from_thr[:20]}… | id {transfer_id}",
+        timestamp=ts_now,
+    )
+
+    return jsonify(
+        ok=True,
+        transfer_id=transfer_id,
+        asset=asset,
+        asset_origin_chain=chain,
+        amount=amount,
+        fee_thr=thr_fee,
+        from_wallet=from_thr,
+        to_wallet=to_thr,
+        settlement_chain="thronos",
+        transfer_scope="internal",
+        balance_source=balance_source if asset != "THR" else "internal_asset_balances",
+        auth_mode=auth_mode,
+        status="confirmed",
+    ), 200
+
+
+@app.route("/api/wallet/internal-balance", methods=["GET"])
+def api_wallet_internal_balance():
+    """
+    Return a wallet's internal asset balance for a given asset+chain.
+    Bootstraps from wallet_history if internal_asset_balances.json has no entry yet.
+
+    Query params:
+      thr_address – sender THR address
+      asset       – USDT | USDC | THR
+      chain       – bsc | base | arbitrum | thronos
+
+    Response:
+      { ok, thr_address, asset, chain, balance, balance_source }
+
+    This endpoint requires no auth — it is read-only and returns no private data.
+    """
+    thr_address = (request.args.get("thr_address") or "").strip()
+    asset       = (request.args.get("asset") or "").upper()
+    chain       = (request.args.get("chain") or "thronos").lower()
+
+    if not thr_address:
+        return jsonify(ok=False, error="thr_address required"), 400
+    if asset not in ("USDT", "USDC", "THR"):
+        return jsonify(ok=False, error="asset must be USDT, USDC, or THR"), 400
+    if chain not in _INTERNAL_TRANSFER_CHAINS:
+        return jsonify(ok=False, error=f"unsupported chain '{chain}'"), 400
+
+    if asset == "THR":
+        ledger  = load_json(LEDGER_FILE, {})
+        balance = float(ledger.get(thr_address, 0.0))
+        source  = "internal_asset_balances"
+    else:
+        balance, source = _get_or_bootstrap_internal_asset_balance(thr_address, asset, chain)
+
+    return jsonify(
+        ok=True,
+        thr_address=thr_address,
+        asset=asset,
+        chain=chain,
+        balance=round(balance, 6),
+        balance_source=source,
+    ), 200
+
+
+# ── End Unified Transfer Router ────────────────────────────────────────────────
 
 
 def _reject_tx(tx_id: str | None, reason: str, status_code: int = 400, payload: dict | None = None):

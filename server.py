@@ -1040,8 +1040,9 @@ AI_CREDS_FILE       = os.path.join(DATA_DIR, "ai_agent_credentials.json")
 AI_BLOCK_LOG_FILE   = os.path.join(DATA_DIR, "ai_block_log.json")
 AI_INTERACTIONS_FILE = os.path.join(DATA_DIR, "ai_interactions.jsonl")
 WATCHER_LEDGER_FILE = os.path.join(DATA_DIR, "watcher_ledger.json")
-INTERNAL_ASSET_BALANCES_FILE = os.path.join(DATA_DIR, "internal_asset_balances.json")
-USER_EVM_REGISTRY_FILE       = os.path.join(DATA_DIR, "user_evm_address_registry.json")
+INTERNAL_ASSET_BALANCES_FILE    = os.path.join(DATA_DIR, "internal_asset_balances.json")
+INTERNAL_TRANSFER_NONCES_FILE   = os.path.join(DATA_DIR, "internal_transfer_nonces.json")
+USER_EVM_REGISTRY_FILE          = os.path.join(DATA_DIR, "user_evm_address_registry.json")
 IOT_DATA_FILE       = os.path.join(DATA_DIR, "iot_data.json")
 IOT_PARKING_FILE    = os.path.join(DATA_DIR, "iot_parking.json")
 IOT_API_REQUIRE_REGISTER = _strip_env_quotes(os.getenv("IOT_API_REQUIRE_REGISTER", "true")).lower() in ("1", "true", "yes", "on")
@@ -27094,6 +27095,107 @@ def api_wallet_resolve_recipient():
     ), 200
 
 
+def _canonical_internal_transfer_intent(intent: dict) -> str:
+    """Return deterministic JSON for intent signing.
+
+    Keys are alphabetically sorted and all values are coerced to strings.
+    Client and server must use identical serialisation.
+    """
+    fields = ("amount", "asset", "asset_origin_chain", "created_at",
+              "fee_asset", "from_thr", "nonce", "recipient", "type", "version")
+    parts = []
+    for k in fields:
+        v = str(intent.get(k, ""))
+        parts.append(f'"{k}":{json.dumps(v)}')
+    return "{" + ",".join(parts) + "}"
+
+
+def _verify_internal_transfer_intent(intent: dict, signature_hex: str, public_key_hex: str) -> tuple:
+    """Verify a signed internal-transfer intent.
+
+    Returns (ok: bool, error_code: str, error_detail: str).
+
+    Checks (in order):
+      1. Intent structure — required fields present and non-empty.
+      2. Type field is 'thronos_internal_transfer'.
+      3. created_at within last 5 minutes.
+      4. Nonce not previously seen.
+      5. Signature valid over canonical intent JSON (SHA-256 + ECDSA secp256k1).
+      6. Public key binds to from_thr address.
+    """
+    import time as _time
+
+    required = ("amount", "asset", "asset_origin_chain", "created_at",
+                "fee_asset", "from_thr", "nonce", "recipient", "type", "version")
+    for field in required:
+        if not intent.get(field):
+            return False, "invalid_intent", f"missing field: {field}"
+
+    if intent.get("type") != "thronos_internal_transfer":
+        return False, "invalid_intent", "type must be thronos_internal_transfer"
+
+    # ── Age check ─────────────────────────────────────────────────────────────
+    try:
+        created_at_str = str(intent["created_at"])
+        # Accept ISO 8601 with or without timezone
+        from datetime import datetime, timezone
+        if created_at_str.endswith("Z"):
+            created_at_str = created_at_str[:-1] + "+00:00"
+        created_dt = datetime.fromisoformat(created_at_str)
+        if created_dt.tzinfo is None:
+            created_dt = created_dt.replace(tzinfo=timezone.utc)
+        now_dt = datetime.now(timezone.utc)
+        age_seconds = (now_dt - created_dt).total_seconds()
+        if age_seconds < 0 or age_seconds > 300:
+            return False, "intent_expired", f"intent age {int(age_seconds)}s exceeds 5-minute window"
+    except Exception as exc:
+        return False, "invalid_intent", f"cannot parse created_at: {exc}"
+
+    # ── Nonce replay check ────────────────────────────────────────────────────
+    nonce = str(intent["nonce"])
+    from_thr = str(intent["from_thr"])
+    nonces_store = load_json(INTERNAL_TRANSFER_NONCES_FILE, {})
+    wallet_nonces = nonces_store.get(from_thr, [])
+    if nonce in wallet_nonces:
+        return False, "nonce_reused", "intent nonce has already been consumed"
+
+    # ── Signature verification ────────────────────────────────────────────────
+    canonical_msg = _canonical_internal_transfer_intent(intent).encode("utf-8")
+    try:
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.exceptions import InvalidSignature
+        pub_bytes = bytes.fromhex(public_key_hex)
+        sig_bytes = bytes.fromhex(signature_hex)
+        pub_obj = ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256K1(), pub_bytes)
+        pub_obj.verify(sig_bytes, canonical_msg, ec.ECDSA(hashes.SHA256()))
+    except InvalidSignature:
+        return False, "invalid_signature", "signature does not match intent"
+    except Exception as exc:
+        return False, "invalid_signature", f"signature verification failed: {exc}"
+
+    # ── Key-address binding ───────────────────────────────────────────────────
+    try:
+        import wallet_v1_production_final as wallet_v1_prod
+        binding_ok, binding_error = wallet_v1_prod.verify_publickey_matches_address(
+            {"from": from_thr, "publicKey": public_key_hex}
+        )
+        if not binding_ok:
+            return False, "key_address_mismatch", binding_error
+    except Exception as exc:
+        return False, "key_address_mismatch", f"address binding failed: {exc}"
+
+    # ── Consume nonce (write only after all checks pass) ──────────────────────
+    wallet_nonces.append(nonce)
+    # Prune old nonces: keep at most last 500 per wallet
+    if len(wallet_nonces) > 500:
+        wallet_nonces = wallet_nonces[-500:]
+    nonces_store[from_thr] = wallet_nonces
+    save_json(INTERNAL_TRANSFER_NONCES_FILE, nonces_store)
+
+    return True, "", ""
+
+
 @app.route("/api/wallet/internal-transfer", methods=["POST", "OPTIONS"])
 def api_wallet_internal_transfer():
     """
@@ -27102,21 +27204,28 @@ def api_wallet_internal_transfer():
     Transfers USDT/USDC/THR without touching any external chain.
     Fee is paid in THR by the sender.
 
-    POST body:
+    POST body — signed intent path (preferred):
+      intent            – {amount, asset, asset_origin_chain, created_at, fee_asset,
+                           from_thr, nonce, recipient, type, version}
+      signature         – DER hex secp256k1 signature over SHA-256(canonical_intent)
+      public_key        – compressed secp256k1 public key hex (33 bytes)
+
+    POST body — legacy fallback:
       from_thr          – sender THR address
       recipient         – recipient THR address (or registered EVM address)
       asset             – USDT | USDC | THR
       asset_origin_chain – bsc | base | arbitrum | thronos
       amount            – positive number
-      auth_secret       – sender's pledge/send secret
+      auth_secret       – sender's pledge/send secret (legacy authorization)
       passphrase        – optional wallet passphrase
 
     Safety:
-    - No private keys, seeds, or mnemonics.
+    - No private keys, seeds, or mnemonics sent to server.
     - No external RPC calls.
     - No eth_sendRawTransaction.
     - Pool liquidity is not touched.
     - Both sender and receiver histories are written.
+    - Signed intent nonces are consumed server-side; replay is rejected.
     """
     if request.method == "OPTIONS":
         resp = jsonify({"ok": True})
@@ -27125,14 +27234,39 @@ def api_wallet_internal_transfer():
         resp.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
         return resp, 200
 
-    data       = request.get_json() or {}
-    from_thr   = (data.get("from_thr") or "").strip()
-    recipient  = (data.get("recipient") or "").strip()
-    asset      = (data.get("asset") or "").upper()
-    chain      = (data.get("asset_origin_chain") or "thronos").lower()
-    amount_raw = data.get("amount", 0)
-    auth_sec   = (data.get("auth_secret") or "").strip()
-    passphrase = (data.get("passphrase") or "").strip()
+    data = request.get_json() or {}
+
+    # ── Determine auth path: signed intent vs legacy ──────────────────────────
+    intent_raw  = data.get("intent")
+    signature   = (data.get("signature") or "").strip()
+    public_key  = (data.get("public_key") or "").strip()
+    use_signed_intent = bool(intent_raw and signature and public_key)
+
+    if use_signed_intent:
+        if not isinstance(intent_raw, dict):
+            return jsonify(ok=False, error="intent must be a JSON object"), 400
+        ok_intent, intent_err_code, intent_err_detail = _verify_internal_transfer_intent(
+            intent_raw, signature, public_key
+        )
+        if not ok_intent:
+            return jsonify(ok=False, error=intent_err_code, detail=intent_err_detail), 403
+
+        # Unpack fields from verified intent
+        from_thr   = str(intent_raw.get("from_thr", "")).strip()
+        recipient  = str(intent_raw.get("recipient", "")).strip()
+        asset      = str(intent_raw.get("asset", "")).upper()
+        chain      = str(intent_raw.get("asset_origin_chain", "thronos")).lower()
+        amount_raw = intent_raw.get("amount", 0)
+        auth_mode  = "signed_intent"
+    else:
+        from_thr   = (data.get("from_thr") or "").strip()
+        recipient  = (data.get("recipient") or "").strip()
+        asset      = (data.get("asset") or "").upper()
+        chain      = (data.get("asset_origin_chain") or "thronos").lower()
+        amount_raw = data.get("amount", 0)
+        auth_sec   = (data.get("auth_secret") or "").strip()
+        passphrase = (data.get("passphrase") or "").strip()
+        auth_mode  = "legacy"
 
     # ── Validate inputs ───────────────────────────────────────────────────────
     if not from_thr:
@@ -27163,10 +27297,11 @@ def api_wallet_internal_transfer():
     if from_thr.upper() == to_thr.upper():
         return jsonify(ok=False, error="cannot transfer to self"), 400
 
-    # ── Authenticate sender ───────────────────────────────────────────────────
-    ok_auth, _, error_key = validate_effective_auth(from_thr, auth_sec, passphrase)
-    if not ok_auth:
-        return jsonify(ok=False, error=error_key or "invalid_auth"), 403
+    # ── Authenticate sender (legacy path only) ────────────────────────────────
+    if auth_mode == "legacy":
+        ok_auth, _, error_key = validate_effective_auth(from_thr, auth_sec, passphrase)
+        if not ok_auth:
+            return jsonify(ok=False, error=error_key or "invalid_auth"), 403
 
     # ── THR fee calculation ───────────────────────────────────────────────────
     thr_fee = round(max(_INTERNAL_TRANSFER_MIN_FEE, amount * _INTERNAL_TRANSFER_FEE_RATE), 6)
@@ -27268,6 +27403,7 @@ def api_wallet_internal_transfer():
         settlement_chain="thronos",
         transfer_scope="internal",
         balance_source=balance_source if asset != "THR" else "internal_asset_balances",
+        auth_mode=auth_mode,
         status="confirmed",
     ), 200
 

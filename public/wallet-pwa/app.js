@@ -4993,8 +4993,14 @@ async function pwaOpenEvmSendModal(network, evmAddr, tokenSym) {
     <input id="pwaEvmSendTo" placeholder="THR… or 0x…" style="width:100%;box-sizing:border-box;margin:4px 0 6px;padding:8px;background:#0d0a1a;border:1px solid #2a2050;border-radius:6px;color:#fff;font-family:monospace;font-size:12px;">
     <div id="pwaRecipientBadge" style="font-size:10px;min-height:14px;margin-bottom:8px;"></div>
     <div id="pwaIntAuthRow" style="display:none;">
-      <label style="color:#aaa;font-size:11px;">Your auth secret (for internal transfer)</label>
-      <input id="pwaIntAuthSecret" type="password" placeholder="Your send / pledge secret" autocomplete="off" style="width:100%;box-sizing:border-box;margin:4px 0 10px;padding:8px;background:#0d0a1a;border:1px solid #2a2050;border-radius:6px;color:#fff;font-size:12px;">
+      <div id="pwaIntSignerStatus" style="font-size:11px;color:#aaa;margin-bottom:6px;"></div>
+      <div id="pwaIntLegacyToggleRow" style="margin-top:2px;">
+        <a href="#" id="pwaIntLegacyToggle" style="font-size:10px;color:#555;text-decoration:underline;">Use legacy authorization instead</a>
+      </div>
+      <div id="pwaIntLegacyRow" style="display:none;margin-top:6px;">
+        <label style="color:#888;font-size:10px;">Legacy authorization fallback</label>
+        <input id="pwaIntAuthSecret" type="password" placeholder="Your send / pledge secret" autocomplete="off" style="width:100%;box-sizing:border-box;margin:4px 0 10px;padding:8px;background:#0d0a1a;border:1px solid #2a2050;border-radius:6px;color:#fff;font-size:12px;">
+      </div>
     </div>
     <label style="color:#aaa;font-size:11px;">Amount (${escHtml(sendSym)})</label>
     <input id="pwaEvmSendAmt" type="number" min="0" step="any" placeholder="0.00" style="width:100%;box-sizing:border-box;margin:4px 0 10px;padding:8px;background:#0d0a1a;border:1px solid #2a2050;border-radius:6px;color:#fff;font-size:13px;">
@@ -5045,6 +5051,33 @@ async function pwaOpenEvmSendModal(network, evmAddr, tokenSym) {
         if (badge) { badge.style.color='#6f8'; badge.textContent=`🏠 Internal Thronos transfer — THR fee, no chain gas needed.${balNote}`; }
         if (authRow) authRow.style.display='block';
         if (gasBtn)  gasBtn.style.display='none';
+        // Update signer status text based on wallet state
+        const signerStatus = overlay.querySelector('#pwaIntSignerStatus');
+        if (signerStatus) {
+          const ws = window.walletSession;
+          if (ws && !ws.isLocked() && ws.hasRuntimeSigningMaterial()) {
+            signerStatus.style.color = '#6f8';
+            signerStatus.textContent = '🔐 Confirm with wallet signer (biometric / passkey)';
+          } else if (ws && ws.isBound()) {
+            signerStatus.style.color = '#fa8';
+            signerStatus.textContent = '🔒 Wallet locked — unlock with PIN to sign internal transfer';
+          } else {
+            signerStatus.style.color = '#888';
+            signerStatus.textContent = 'No signing key bound — use legacy authorization below';
+            const legacyRow = overlay.querySelector('#pwaIntLegacyRow');
+            if (legacyRow) legacyRow.style.display = 'block';
+          }
+        }
+        // Wire legacy toggle once
+        const legacyToggle = overlay.querySelector('#pwaIntLegacyToggle');
+        if (legacyToggle && !legacyToggle.dataset.wired) {
+          legacyToggle.dataset.wired = '1';
+          legacyToggle.addEventListener('click', e => {
+            e.preventDefault();
+            const legacyRow = overlay.querySelector('#pwaIntLegacyRow');
+            if (legacyRow) legacyRow.style.display = legacyRow.style.display === 'none' ? 'block' : 'none';
+          });
+        }
       } else if (r.settlement_mode === 'external_chain') {
         if (badge) { badge.style.color='#8af'; badge.textContent=`🌐 External chain send on ${netLabel} — requires native gas.`; }
         if (authRow) authRow.style.display='none';
@@ -5110,21 +5143,62 @@ async function pwaOpenEvmSendModal(network, evmAddr, tokenSym) {
 
     // ── Internal Thronos transfer ─────────────────────────────────────────
     if (_recipientResolved?.settlement_mode === 'internal') {
-      const authSecret = (overlay.querySelector('#pwaIntAuthSecret')?.value || '').trim();
-      if (!authSecret) {
-        if (resultEl) resultEl.innerHTML = '<span style="color:#f88">Enter your auth secret for internal transfer.</span>'; return;
-      }
-      if (resultEl) resultEl.innerHTML = '<span style="color:#8af">Processing internal transfer…</span>';
       const fromThr = window.walletSession?.getAddress?.() || '';
       if (!fromThr) { if (resultEl) resultEl.innerHTML = '<span style="color:#f88">Cannot resolve your Thronos address — unlock wallet first.</span>'; return; }
+
+      const ws = window.walletSession;
+      const legacySecret = (overlay.querySelector('#pwaIntAuthSecret')?.value || '').trim();
+      const legacyVisible = (overlay.querySelector('#pwaIntLegacyRow')?.style.display !== 'none') && legacySecret;
+      const canSign = ws && !ws.isLocked() && ws.hasRuntimeSigningMaterial();
+
+      if (!canSign && !legacyVisible) {
+        if (ws && ws.isBound() && ws.isLocked()) {
+          if (resultEl) resultEl.innerHTML = '<span style="color:#fa8">Wallet is locked. Unlock with PIN or use legacy authorization.</span>'; return;
+        }
+        if (resultEl) resultEl.innerHTML = '<span style="color:#f88">Provide authorization to proceed.</span>'; return;
+      }
+
+      if (resultEl) resultEl.innerHTML = '<span style="color:#8af">Processing internal transfer…</span>';
+
+      const assetStr  = (tokenSym || sendSym).toUpperCase();
+      const chainNorm = { bnb: 'bsc', ethereum: 'eth' }[network] || network;
+
+      let postBody;
+      if (canSign) {
+        // Signed intent path (primary)
+        const nonce = crypto.randomUUID ? crypto.randomUUID() : (Math.random().toString(36).slice(2) + Date.now());
+        const intent = {
+          type: 'thronos_internal_transfer',
+          version: '1',
+          from_thr: fromThr,
+          recipient: toAddr,
+          asset: assetStr,
+          asset_origin_chain: chainNorm,
+          amount: String(amt),
+          fee_asset: 'THR',
+          nonce: String(nonce),
+          created_at: new Date().toISOString(),
+        };
+        try {
+          const { signature, public_key } = await ws.signInternalTransferIntent(intent);
+          postBody = { intent, signature, public_key };
+        } catch (signErr) {
+          if (resultEl) resultEl.innerHTML = `<span style="color:#f88">Signing failed: ${signErr.message}. Use legacy authorization below.</span>`;
+          return;
+        }
+      } else {
+        // Legacy fallback
+        postBody = {
+          from_thr: fromThr, recipient: toAddr,
+          asset: assetStr, asset_origin_chain: chainNorm, amount: amt,
+          auth_secret: legacySecret,
+        };
+      }
+
       try {
         const r = await fetch('/api/wallet/internal-transfer', {
           method: 'POST', headers: {'Content-Type':'application/json'},
-          body: JSON.stringify({
-            from_thr: fromThr, recipient: toAddr,
-            asset: (tokenSym || sendSym).toUpperCase(),
-            asset_origin_chain: network, amount: amt, auth_secret: authSecret,
-          }),
+          body: JSON.stringify(postBody),
         });
         const res = await r.json();
         if (res.ok) {

@@ -833,6 +833,60 @@
     }
   }
 
+  // ── Universal wallet action intent ────────────────────────────────────────────
+
+  function _canonicalWalletActionIntentMsg(intent) {
+    const fields = ['action','amount','asset','chain','created_at','from_thr',
+                    'nonce','payload_hash','recipient','type','version','wallet_id'];
+    const parts = fields.map(k => JSON.stringify(k) + ':' + JSON.stringify(String(intent[k] !== undefined ? intent[k] : '')));
+    return '{' + parts.join(',') + '}';
+  }
+
+  async function buildWalletActionIntent(action, params, payload) {
+    const { from_thr, wallet_id, chain = 'thronos', asset = '', amount = '', recipient = '' } = (params || {});
+    const pl = payload || {};
+    const nonce = (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : (Math.random().toString(36).slice(2) + Date.now().toString(36));
+    const created_at = String(Math.floor(Date.now() / 1000));
+    const sortedPl = Object.keys(pl).sort().reduce((acc, k) => { acc[k] = pl[k]; return acc; }, {});
+    const payloadJson = JSON.stringify(sortedPl);
+    const payload_hash = await sha256Hex(payloadJson);
+    return {
+      type: 'thronos_wallet_action',
+      version: '1',
+      action,
+      wallet_id: String(wallet_id || from_thr || ''),
+      from_thr: String(from_thr || ''),
+      chain: String(chain || 'thronos'),
+      asset: String(asset || ''),
+      amount: String(amount || ''),
+      recipient: String(recipient || ''),
+      payload_hash,
+      nonce,
+      created_at,
+    };
+  }
+
+  async function signWalletActionIntent(intent) {
+    if (isLocked() || !isBound()) throw new Error('wallet_locked');
+    const secp = await _ensureSecpLoaded();
+    if (!secp || !secp.sign) throw new Error('secp256k1_library_missing');
+    if (!unlockedPrivateKeyHex) throw new Error('wallet_locked');
+    try {
+      const canonical = _canonicalWalletActionIntentMsg(intent);
+      const digestHex = await sha256Hex(canonical);
+      const sig = await signDigestDerHex(secp, digestHex, unlockedPrivateKeyHex);
+      const pubKey = getPublicKey();
+      return { signature: sig, public_key: pubKey };
+    } catch (err) {
+      if (isSecpCryptoHelperError(err) || String((err && (err.message || err)) || '').includes('Cannot read properties of undefined')) {
+        throw new Error('wallet_crypto_not_ready');
+      }
+      throw err;
+    }
+  }
+
   async function enrollSigningMaterial({address, credentialLookupAddress, pin, authSecret} = {}){
     const activeAddress = normalizeAddress(address || getActiveAddress());
     const lookupAddress = normalizeAddress(credentialLookupAddress || getCredentialLookupAddress(activeAddress));
@@ -1296,6 +1350,7 @@
     getMigrationInfo, isMigrated, isVerifiedMigrationInfo, getCanonicalMigrationAddress, getLegacySourceAddress,
     getWalletOrigin, getWalletIdentityStatus, isWalletV1,
     createWalletV1, getPublicKey, canonicalTxMessage, signTransaction, signInternalTransferIntent,
+    buildWalletActionIntent, signWalletActionIntent,
     migrateLegacyWallet, restoreMigratedWallet, encryptPrivateKeyHex, decryptPrivateKeyHex,
     getCredentialLookupAddress, getSendSeed, setSendSeed, getSendSecret, setSendSecret,
     hasSigningMaterial, hasRuntimeSigningMaterial, getWalletAuthDiagnostics, logWalletAuthDiagnostics,

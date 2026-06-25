@@ -678,56 +678,35 @@ def wc_get_result(request_id):
 @app.route('/api/wallet/v1/transfer', methods=['POST'])
 def wallet_v1_transfer():
     """
-    PWA send — primary path requires signed action intent; legacy private_key_hex is fallback.
+    PWA send — requires signed action intent.  Unsigned requests are rejected.
 
-    Signed path (preferred):
-      intent      – signed action intent object
+    Required fields:
+      intent      – signed action intent object (type=thronos_wallet_action, action=internal_transfer)
       signature   – DER hex secp256k1 signature over SHA-256(canonical_intent)
       public_key  – compressed secp256k1 public key hex (33 bytes)
       payload     – { to, token, amount } (hash committed in intent.payload_hash)
-
-    Legacy path (deprecated — logs warning):
-      from, to, amount, token, private_key_hex
     """
     data = _request.get_json() or {}
     intent_raw = data.get('intent')
     signature  = (data.get('signature')  or '').strip()
     public_key = (data.get('public_key') or '').strip()
-    use_signed = bool(intent_raw and signature and public_key)
 
-    if use_signed:
-        intent = intent_raw if isinstance(intent_raw, dict) else {}
-        ok, err_code, err_detail = _verify_wallet_action_intent(intent, signature, public_key)
-        if not ok:
-            return _jsonify(ok=False, error=err_code, detail=err_detail), 400
-        payload = data.get('payload') or {}
-        if not _verify_action_payload_hash(intent.get('payload_hash', ''), payload):
-            return _jsonify(ok=False, error='payload_hash_mismatch',
-                            detail='payload does not match signed intent'), 400
-        from_addr  = str(intent.get('from_thr', '')).strip().upper()
-        to_addr    = str(payload.get('to') or intent.get('recipient') or '').strip()
-        amount_raw = payload.get('amount') or intent.get('amount') or 0
-        token      = str(payload.get('token') or intent.get('asset') or 'THR').upper()
-    else:
-        priv_hex   = (data.get('private_key_hex') or '').strip()
-        from_addr  = (data.get('from')            or '').strip().upper()
-        to_addr    = (data.get('to')              or '').strip()
-        amount_raw = data.get('amount', 0)
-        token      = (data.get('token')           or 'THR').upper()
-        if not from_addr or not to_addr or not priv_hex:
-            return _jsonify(ok=False, error='missing_required_fields'), 400
-        try:
-            from cryptography.hazmat.primitives.asymmetric import ec as _ec
-            from cryptography.hazmat.primitives.serialization import Encoding as _Enc, PublicFormat as _PF
-            from cryptography.hazmat.backends import default_backend as _backend
-            from wallet_v1_address_derivation import derive_thronos_address as _derive
-            _priv_key = _ec.derive_private_key(int(priv_hex, 16), _ec.SECP256K1(), _backend())
-            _pub_bytes = _priv_key.public_key().public_bytes(_Enc.X962, _PF.CompressedPoint)
-            if _derive(_pub_bytes.hex()).upper() != from_addr.upper():
-                return _jsonify(ok=False, error='address_mismatch'), 403
-        except Exception as _e:
-            return _jsonify(ok=False, error='invalid_private_key', detail=str(_e)), 400
-        app.logger.warning('[V1Transfer] private_key_hex auth deprecated — upgrade to signed intent')
+    if not (intent_raw and signature and public_key):
+        return _jsonify(ok=False, error='signed_wallet_action_required',
+                        detail='intent, signature, and public_key are required'), 401
+
+    intent = intent_raw if isinstance(intent_raw, dict) else {}
+    ok, err_code, err_detail = _verify_wallet_action_intent(intent, signature, public_key)
+    if not ok:
+        return _jsonify(ok=False, error=err_code, detail=err_detail), 400
+    payload = data.get('payload') or {}
+    if not _verify_action_payload_hash(intent.get('payload_hash', ''), payload):
+        return _jsonify(ok=False, error='payload_hash_mismatch',
+                        detail='payload does not match signed intent'), 400
+    from_addr  = str(intent.get('from_thr', '')).strip().upper()
+    to_addr    = str(payload.get('to') or intent.get('recipient') or '').strip()
+    amount_raw = payload.get('amount') or intent.get('amount') or 0
+    token      = str(payload.get('token') or intent.get('asset') or 'THR').upper()
 
     if not from_addr or not to_addr:
         return _jsonify(ok=False, error='missing_required_fields'), 400
@@ -749,15 +728,12 @@ def wallet_v1_transfer():
 @app.route('/api/wallet/v1/swap', methods=['POST'])
 def wallet_v1_swap():
     """
-    PWA swap — primary path requires signed action intent; legacy private_key_hex is fallback.
+    PWA swap — requires signed action intent.  Unsigned requests are rejected.
 
-    Signed path (preferred):
+    Required fields:
       intent      – action='swap', asset=token_in, amount=amount_in, recipient=token_out
       signature, public_key
       payload     – { token_in, token_out, amount_in, min_amount_out }
-
-    Legacy path (deprecated):
-      from, token_in, token_out, amount_in, min_amount_out, private_key_hex
     """
     import server as _srv
     import secrets as _secrets_mod
@@ -767,43 +743,24 @@ def wallet_v1_swap():
     intent_raw = data.get('intent')
     signature  = (data.get('signature')  or '').strip()
     public_key = (data.get('public_key') or '').strip()
-    use_signed = bool(intent_raw and signature and public_key)
 
-    if use_signed:
-        intent = intent_raw if isinstance(intent_raw, dict) else {}
-        ok, err_code, err_detail = _verify_wallet_action_intent(intent, signature, public_key)
-        if not ok:
-            return _jsonify(ok=False, error=err_code, detail=err_detail), 400
-        payload = data.get('payload') or {}
-        if not _verify_action_payload_hash(intent.get('payload_hash', ''), payload):
-            return _jsonify(ok=False, error='payload_hash_mismatch',
-                            detail='payload does not match signed intent'), 400
-        from_addr      = str(intent.get('from_thr', '')).strip().upper()
-        token_in_raw   = str(payload.get('token_in') or intent.get('asset') or '').strip()
-        token_out_raw  = str(payload.get('token_out') or intent.get('recipient') or '').strip()
-        amount_in_raw  = payload.get('amount_in') or intent.get('amount') or 0
-        min_amount_out = float(payload.get('min_amount_out', 0) or 0)
-    else:
-        priv_hex       = (data.get('private_key_hex') or '').strip()
-        from_addr      = (data.get('from')            or '').strip().upper()
-        token_in_raw   = (data.get('token_in')        or '').strip()
-        token_out_raw  = (data.get('token_out')       or '').strip()
-        amount_in_raw  = data.get('amount_in', 0)
-        min_amount_out = float(data.get('min_amount_out', 0) or 0)
-        if not from_addr or not token_in_raw or not token_out_raw or not priv_hex:
-            return _jsonify(ok=False, error='missing_required_fields'), 400
-        try:
-            from cryptography.hazmat.primitives.asymmetric import ec as _ec
-            from cryptography.hazmat.primitives.serialization import Encoding as _Enc, PublicFormat as _PF
-            from cryptography.hazmat.backends import default_backend as _backend
-            from wallet_v1_address_derivation import derive_thronos_address as _derive
-            _priv_key = _ec.derive_private_key(int(priv_hex, 16), _ec.SECP256K1(), _backend())
-            _pub_bytes = _priv_key.public_key().public_bytes(_Enc.X962, _PF.CompressedPoint)
-            if _derive(_pub_bytes.hex()).upper() != from_addr.upper():
-                return _jsonify(ok=False, error='address_mismatch'), 403
-        except Exception as _e:
-            return _jsonify(ok=False, error='invalid_private_key', detail=str(_e)), 400
-        app.logger.warning('[V1Swap] private_key_hex auth deprecated — upgrade to signed intent')
+    if not (intent_raw and signature and public_key):
+        return _jsonify(ok=False, error='signed_wallet_action_required',
+                        detail='intent, signature, and public_key are required'), 401
+
+    intent = intent_raw if isinstance(intent_raw, dict) else {}
+    ok, err_code, err_detail = _verify_wallet_action_intent(intent, signature, public_key)
+    if not ok:
+        return _jsonify(ok=False, error=err_code, detail=err_detail), 400
+    payload = data.get('payload') or {}
+    if not _verify_action_payload_hash(intent.get('payload_hash', ''), payload):
+        return _jsonify(ok=False, error='payload_hash_mismatch',
+                        detail='payload does not match signed intent'), 400
+    from_addr      = str(intent.get('from_thr', '')).strip().upper()
+    token_in_raw   = str(payload.get('token_in') or intent.get('asset') or '').strip()
+    token_out_raw  = str(payload.get('token_out') or intent.get('recipient') or '').strip()
+    amount_in_raw  = payload.get('amount_in') or intent.get('amount') or 0
+    min_amount_out = float(payload.get('min_amount_out', 0) or 0)
 
     if not from_addr or not token_in_raw or not token_out_raw:
         return _jsonify(ok=False, error='missing_required_fields'), 400
@@ -1002,15 +959,12 @@ def wallet_v1_swap():
 @app.route('/api/wallet/v1/add_liquidity', methods=['POST'])
 def wallet_v1_add_liquidity():
     """
-    PWA add liquidity — primary path requires signed action intent; legacy private_key_hex is fallback.
+    PWA add liquidity — requires signed action intent.  Unsigned requests are rejected.
 
-    Signed path (preferred):
+    Required fields:
       intent      – action='pool_deposit_intent', asset=pool_id, amount=amount_a
       signature, public_key
       payload     – { pool_id, amount_a, amount_b }
-
-    Legacy path (deprecated):
-      from, pool_id, amount_a, amount_b, private_key_hex
     """
     import server as _srv2
     import secrets as _sec2
@@ -1020,41 +974,23 @@ def wallet_v1_add_liquidity():
     intent_raw = data.get('intent')
     signature  = (data.get('signature')  or '').strip()
     public_key = (data.get('public_key') or '').strip()
-    use_signed = bool(intent_raw and signature and public_key)
 
-    if use_signed:
-        intent = intent_raw if isinstance(intent_raw, dict) else {}
-        ok, err_code, err_detail = _verify_wallet_action_intent(intent, signature, public_key)
-        if not ok:
-            return _jsonify(ok=False, error=err_code, detail=err_detail), 400
-        payload = data.get('payload') or {}
-        if not _verify_action_payload_hash(intent.get('payload_hash', ''), payload):
-            return _jsonify(ok=False, error='payload_hash_mismatch',
-                            detail='payload does not match signed intent'), 400
-        from_addr = str(intent.get('from_thr', '')).strip().upper()
-        pool_id   = str(payload.get('pool_id') or intent.get('asset') or '').strip()
-        amt_a_raw = payload.get('amount_a') or intent.get('amount') or 0
-        amt_b_raw = payload.get('amount_b', 0)
-    else:
-        priv_hex  = (data.get('private_key_hex') or '').strip()
-        from_addr = (data.get('from')            or '').strip().upper()
-        pool_id   = (data.get('pool_id')         or '').strip()
-        amt_a_raw = data.get('amount_a', 0)
-        amt_b_raw = data.get('amount_b', 0)
-        if not from_addr or not pool_id or not priv_hex:
-            return _jsonify(ok=False, error='missing_required_fields'), 400
-        try:
-            from cryptography.hazmat.primitives.asymmetric import ec as _ec2
-            from cryptography.hazmat.primitives.serialization import Encoding as _Enc2, PublicFormat as _PF2
-            from cryptography.hazmat.backends import default_backend as _backend2
-            from wallet_v1_address_derivation import derive_thronos_address as _derive2
-            _priv_key2 = _ec2.derive_private_key(int(priv_hex, 16), _ec2.SECP256K1(), _backend2())
-            _pub_bytes2 = _priv_key2.public_key().public_bytes(_Enc2.X962, _PF2.CompressedPoint)
-            if _derive2(_pub_bytes2.hex()).upper() != from_addr:
-                return _jsonify(ok=False, error='address_mismatch'), 403
-        except Exception as _e2:
-            return _jsonify(ok=False, error='invalid_private_key', detail=str(_e2)), 400
-        app.logger.warning('[V1AddLiquidity] private_key_hex auth deprecated — upgrade to signed intent')
+    if not (intent_raw and signature and public_key):
+        return _jsonify(ok=False, error='signed_wallet_action_required',
+                        detail='intent, signature, and public_key are required'), 401
+
+    intent = intent_raw if isinstance(intent_raw, dict) else {}
+    ok, err_code, err_detail = _verify_wallet_action_intent(intent, signature, public_key)
+    if not ok:
+        return _jsonify(ok=False, error=err_code, detail=err_detail), 400
+    payload = data.get('payload') or {}
+    if not _verify_action_payload_hash(intent.get('payload_hash', ''), payload):
+        return _jsonify(ok=False, error='payload_hash_mismatch',
+                        detail='payload does not match signed intent'), 400
+    from_addr = str(intent.get('from_thr', '')).strip().upper()
+    pool_id   = str(payload.get('pool_id') or intent.get('asset') or '').strip()
+    amt_a_raw = payload.get('amount_a') or intent.get('amount') or 0
+    amt_b_raw = payload.get('amount_b', 0)
 
     if not from_addr or not pool_id:
         return _jsonify(ok=False, error='missing_required_fields'), 400
@@ -1176,15 +1112,12 @@ def _wallet_v1_verify_owner(from_addr, priv_hex):
 @app.route('/api/wallet/v1/create_token', methods=['POST'])
 def wallet_v1_create_token():
     """
-    PWA/mobile create-token — primary path requires signed action intent; legacy private_key_hex is fallback.
+    PWA/mobile create-token — requires signed action intent.  Unsigned requests are rejected.
 
-    Signed path (preferred):
+    Required fields:
       intent      – action='token_create', asset=symbol, amount=total_supply
       signature, public_key
       payload     – { name, symbol, total_supply, decimals }
-
-    Legacy path (deprecated):
-      from, name, symbol, total_supply, decimals, private_key_hex
     """
     import server as _srv3
     import time as _t3
@@ -1194,35 +1127,24 @@ def wallet_v1_create_token():
     intent_raw = data.get('intent')
     signature  = (data.get('signature')  or '').strip()
     public_key = (data.get('public_key') or '').strip()
-    use_signed = bool(intent_raw and signature and public_key)
 
-    if use_signed:
-        intent = intent_raw if isinstance(intent_raw, dict) else {}
-        ok, err_code, err_detail = _verify_wallet_action_intent(intent, signature, public_key)
-        if not ok:
-            return _jsonify(ok=False, error=err_code, detail=err_detail), 400
-        payload = data.get('payload') or {}
-        if not _verify_action_payload_hash(intent.get('payload_hash', ''), payload):
-            return _jsonify(ok=False, error='payload_hash_mismatch',
-                            detail='payload does not match signed intent'), 400
-        from_addr    = str(intent.get('from_thr', '')).strip().upper()
-        name         = str(payload.get('name') or '').strip()
-        symbol       = str(payload.get('symbol') or intent.get('asset') or '').strip().upper()
-        total_raw    = payload.get('total_supply') or intent.get('amount') or 0
-        decimals_raw = payload.get('decimals', 0)
-    else:
-        priv_hex     = (data.get('private_key_hex') or '').strip()
-        from_addr    = (data.get('from')            or '').strip().upper()
-        name         = (data.get('name')            or '').strip()
-        symbol       = (data.get('symbol')          or '').strip().upper()
-        total_raw    = data.get('total_supply', 0)
-        decimals_raw = data.get('decimals', 0)
-        if not from_addr or not name or not symbol or not priv_hex:
-            return _jsonify(ok=False, error='missing_required_fields'), 400
-        owner_ok, _ = _wallet_v1_verify_owner(from_addr, priv_hex)
-        if not owner_ok:
-            return _jsonify(ok=False, error='invalid_private_key_or_address_mismatch'), 403
-        app.logger.warning('[V1CreateToken] private_key_hex auth deprecated — upgrade to signed intent')
+    if not (intent_raw and signature and public_key):
+        return _jsonify(ok=False, error='signed_wallet_action_required',
+                        detail='intent, signature, and public_key are required'), 401
+
+    intent = intent_raw if isinstance(intent_raw, dict) else {}
+    ok, err_code, err_detail = _verify_wallet_action_intent(intent, signature, public_key)
+    if not ok:
+        return _jsonify(ok=False, error=err_code, detail=err_detail), 400
+    payload = data.get('payload') or {}
+    if not _verify_action_payload_hash(intent.get('payload_hash', ''), payload):
+        return _jsonify(ok=False, error='payload_hash_mismatch',
+                        detail='payload does not match signed intent'), 400
+    from_addr    = str(intent.get('from_thr', '')).strip().upper()
+    name         = str(payload.get('name') or '').strip()
+    symbol       = str(payload.get('symbol') or intent.get('asset') or '').strip().upper()
+    total_raw    = payload.get('total_supply') or intent.get('amount') or 0
+    decimals_raw = payload.get('decimals', 0)
 
     if not from_addr or not name or not symbol:
         return _jsonify(ok=False, error='missing_required_fields'), 400
@@ -1284,16 +1206,13 @@ def wallet_v1_create_token():
 @app.route('/api/wallet/v1/nfts/mint', methods=['POST'])
 def wallet_v1_nfts_mint():
     """
-    PWA/mobile NFT mint — primary path requires signed action intent; legacy private_key_hex is fallback.
+    PWA/mobile NFT mint — requires signed action intent.  Unsigned requests are rejected.
 
-    Signed path (preferred):
+    Required fields:
       intent      – action='nft_mint', asset='NFT', amount=price_thr
       signature, public_key
       payload     – { name, description, category, price, royalties }
       image_data_url may be sent alongside (not hashed — too large for canonical)
-
-    Legacy path (deprecated):
-      from, name, description, category, price, royalties, image_data_url, private_key_hex
     """
     import server as _srv4
     import time as _t4
@@ -1304,39 +1223,26 @@ def wallet_v1_nfts_mint():
     intent_raw = data.get('intent')
     signature  = (data.get('signature')  or '').strip()
     public_key = (data.get('public_key') or '').strip()
-    use_signed = bool(intent_raw and signature and public_key)
 
-    if use_signed:
-        intent = intent_raw if isinstance(intent_raw, dict) else {}
-        ok, err_code, err_detail = _verify_wallet_action_intent(intent, signature, public_key)
-        if not ok:
-            return _jsonify(ok=False, error=err_code, detail=err_detail), 400
-        payload = data.get('payload') or {}
-        if not _verify_action_payload_hash(intent.get('payload_hash', ''), payload):
-            return _jsonify(ok=False, error='payload_hash_mismatch',
-                            detail='payload does not match signed intent'), 400
-        from_addr      = str(intent.get('from_thr', '')).strip().upper()
-        name           = str(payload.get('name') or '').strip()
-        description    = str(payload.get('description') or '').strip()
-        category       = str(payload.get('category') or 'art').strip()
-        price_raw      = payload.get('price', 0)
-        royalties_raw  = payload.get('royalties', 10)
-        image_data_url = (data.get('image_data_url') or '').strip()  # not hashed — too large
-    else:
-        priv_hex       = (data.get('private_key_hex') or '').strip()
-        from_addr      = (data.get('from')            or '').strip().upper()
-        name           = (data.get('name')            or '').strip()
-        description    = (data.get('description')     or '').strip()
-        category       = (data.get('category')        or 'art').strip()
-        price_raw      = data.get('price', 0)
-        royalties_raw  = data.get('royalties', 10)
-        image_data_url = (data.get('image_data_url')  or '').strip()
-        if not from_addr or not name or not priv_hex:
-            return _jsonify(ok=False, error='missing_required_fields'), 400
-        owner_ok, _ = _wallet_v1_verify_owner(from_addr, priv_hex)
-        if not owner_ok:
-            return _jsonify(ok=False, error='invalid_private_key_or_address_mismatch'), 403
-        app.logger.warning('[V1NFTMint] private_key_hex auth deprecated — upgrade to signed intent')
+    if not (intent_raw and signature and public_key):
+        return _jsonify(ok=False, error='signed_wallet_action_required',
+                        detail='intent, signature, and public_key are required'), 401
+
+    intent = intent_raw if isinstance(intent_raw, dict) else {}
+    ok, err_code, err_detail = _verify_wallet_action_intent(intent, signature, public_key)
+    if not ok:
+        return _jsonify(ok=False, error=err_code, detail=err_detail), 400
+    payload = data.get('payload') or {}
+    if not _verify_action_payload_hash(intent.get('payload_hash', ''), payload):
+        return _jsonify(ok=False, error='payload_hash_mismatch',
+                        detail='payload does not match signed intent'), 400
+    from_addr      = str(intent.get('from_thr', '')).strip().upper()
+    name           = str(payload.get('name') or '').strip()
+    description    = str(payload.get('description') or '').strip()
+    category       = str(payload.get('category') or 'art').strip()
+    price_raw      = payload.get('price', 0)
+    royalties_raw  = payload.get('royalties', 10)
+    image_data_url = (data.get('image_data_url') or '').strip()  # not hashed — too large
 
     if not from_addr or not name:
         return _jsonify(ok=False, error='missing_required_fields'), 400
@@ -1408,15 +1314,12 @@ def wallet_v1_nfts_mint():
 @app.route('/api/wallet/v1/nfts/buy', methods=['POST'])
 def wallet_v1_nfts_buy():
     """
-    PWA/mobile NFT buy — primary path requires signed action intent; legacy private_key_hex is fallback.
+    PWA/mobile NFT buy — requires signed action intent.  Unsigned requests are rejected.
 
-    Signed path (preferred):
+    Required fields:
       intent     – action='nft_buy', asset=nft_id, amount=price_thr
       signature, public_key
       payload    – { nft_id }
-
-    Legacy path (deprecated):
-      from, nft_id, private_key_hex
     """
     import server as _srv5
     import time as _t5
@@ -1425,29 +1328,21 @@ def wallet_v1_nfts_buy():
     intent_raw = data.get('intent')
     signature  = (data.get('signature')  or '').strip()
     public_key = (data.get('public_key') or '').strip()
-    use_signed = bool(intent_raw and signature and public_key)
 
-    if use_signed:
-        intent = intent_raw if isinstance(intent_raw, dict) else {}
-        ok, err_code, err_detail = _verify_wallet_action_intent(intent, signature, public_key)
-        if not ok:
-            return _jsonify(ok=False, error=err_code, detail=err_detail), 400
-        payload = data.get('payload') or {}
-        if not _verify_action_payload_hash(intent.get('payload_hash', ''), payload):
-            return _jsonify(ok=False, error='payload_hash_mismatch',
-                            detail='payload does not match signed intent'), 400
-        from_addr = str(intent.get('from_thr', '')).strip().upper()
-        nft_id    = str(payload.get('nft_id') or intent.get('asset') or '').strip()
-    else:
-        priv_hex  = (data.get('private_key_hex') or '').strip()
-        from_addr = (data.get('from')   or '').strip().upper()
-        nft_id    = (data.get('nft_id') or '').strip()
-        if not from_addr or not nft_id or not priv_hex:
-            return _jsonify(ok=False, error='missing_required_fields'), 400
-        owner_ok, _ = _wallet_v1_verify_owner(from_addr, priv_hex)
-        if not owner_ok:
-            return _jsonify(ok=False, error='invalid_private_key_or_address_mismatch'), 403
-        app.logger.warning('[V1NFTBuy] private_key_hex auth deprecated — upgrade to signed intent')
+    if not (intent_raw and signature and public_key):
+        return _jsonify(ok=False, error='signed_wallet_action_required',
+                        detail='intent, signature, and public_key are required'), 401
+
+    intent = intent_raw if isinstance(intent_raw, dict) else {}
+    ok, err_code, err_detail = _verify_wallet_action_intent(intent, signature, public_key)
+    if not ok:
+        return _jsonify(ok=False, error=err_code, detail=err_detail), 400
+    payload = data.get('payload') or {}
+    if not _verify_action_payload_hash(intent.get('payload_hash', ''), payload):
+        return _jsonify(ok=False, error='payload_hash_mismatch',
+                        detail='payload does not match signed intent'), 400
+    from_addr = str(intent.get('from_thr', '')).strip().upper()
+    nft_id    = str(payload.get('nft_id') or intent.get('asset') or '').strip()
 
     if not from_addr or not nft_id:
         return _jsonify(ok=False, error='missing_required_fields'), 400

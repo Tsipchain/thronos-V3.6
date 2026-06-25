@@ -425,62 +425,33 @@ async function fetchHistory(address) {
   } catch { return []; }
 }
 
-// V1-compatible send: signed intent (primary) → private_key_hex fallback → legacy send_seed
-async function sendToken(from, to, amount, token, privHex) {
+// V1-compatible send: signed intent required — no private key sent to server
+async function sendToken(from, to, amount, token) {
   const ws = window.walletSession;
   const tok = (token || 'THR').toUpperCase();
 
-  // Primary: signed action intent (no private key sent to server)
-  if (ws && !ws.isLocked() && ws.buildWalletActionIntent && ws.signWalletActionIntent) {
-    try {
-      const payload = { to: to.trim(), token: tok, amount: String(amount) };
-      const intent = await ws.buildWalletActionIntent(
-        'internal_transfer',
-        { from_thr: from, wallet_id: from, chain: 'thronos', asset: tok, amount: String(amount), recipient: to.trim() },
-        payload
-      );
-      const { signature, public_key } = await ws.signWalletActionIntent(intent);
-      const r = await fetch(`${API_WRITE}/api/wallet/v1/transfer`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ intent, signature, public_key, payload }),
-      });
-      const d = await r.json().catch(() => ({}));
-      if (r.ok && !d.error) return d;
-      if (d.error && d.error !== 'missing_field') throw new Error(d.error || d.message || 'send_failed');
-    } catch (err) {
-      if (err.message === 'wallet_locked') {
-        throw new Error('Unlock wallet with biometric/passkey to approve this action.');
-      }
-      if (err.message !== 'wallet_crypto_not_ready') throw err;
-      // crypto not ready — fall through to legacy
-    }
-  } else if (ws && ws.isLocked && ws.isLocked()) {
+  if (!ws || !ws.buildWalletActionIntent || !ws.signWalletActionIntent) {
+    throw new Error('Unlock wallet with biometric/passkey to approve this action.');
+  }
+  if (ws.isLocked && ws.isLocked()) {
     throw new Error('Unlock wallet with biometric/passkey to approve this action.');
   }
 
-  // Legacy fallback (deprecated — private_key_hex path)
-  if (privHex) {
-    try {
-      const r = await fetch(`${API_WRITE}/api/wallet/v1/transfer`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ from, to: to.trim(), amount: String(amount), token: tok, private_key_hex: privHex }),
-      });
-      const d = await r.json().catch(() => ({}));
-      if (r.ok && !d.error) return d;
-    } catch {}
-  }
-
-  // Last resort: pre-V1 HMAC endpoint (legacy addresses only)
-  const r = await fetch(`${API_WRITE}/wallet/send`, {
+  const payload = { to: to.trim(), token: tok, amount: String(amount) };
+  const intent = await ws.buildWalletActionIntent(
+    'internal_transfer',
+    { from_thr: from, wallet_id: from, chain: 'thronos', asset: tok, amount: String(amount), recipient: to.trim() },
+    payload
+  );
+  const { signature, public_key } = await ws.signWalletActionIntent(intent);
+  const r = await fetch(`${API_WRITE}/api/wallet/v1/transfer`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ token: tok, from, to: to.trim(), amount: String(amount), secret: privHex, speed: 'fast', passphrase: '' }),
+    body: JSON.stringify({ intent, signature, public_key, payload }),
   });
   const d = await r.json().catch(() => ({}));
-  if (!r.ok || d.error) throw new Error(d.error || d.message || 'send_failed');
-  return d;
+  if (r.ok && !d.error) return d;
+  throw new Error(d.error || d.message || 'send_failed');
 }
 
 // ─── DOM helpers ──────────────────────────────────────────────────────────────
@@ -3522,25 +3493,19 @@ async function showSwap(preselectedIn = null) {
     setSwapErr(null); setSwapOk(null);
 
     try {
-      let body;
-      if (ws && !ws.isLocked() && ws.buildWalletActionIntent) {
-        // Signed intent path (primary — no private key sent to server)
-        const payload = { token_in: tokenIn, token_out: tokenOut, amount_in: amtIn, min_amount_out: minOut };
-        const intent = await ws.buildWalletActionIntent(
-          'swap',
-          { from_thr: address, wallet_id: address, chain: 'thronos', asset: tokenIn, amount: String(amtIn), recipient: tokenOut },
-          payload
-        );
-        const { signature, public_key } = await ws.signWalletActionIntent(intent);
-        body = { intent, signature, public_key, payload };
-        btn.textContent = 'Swapping…';
-      } else {
-        // Legacy fallback
-        const { privHex } = unlocked.get(address) || {};
-        if (!privHex) { setSwapErr('Wallet locked — unlock with biometric/passkey.'); btn.disabled = false; btn.textContent = 'Swap Now'; return; }
-        body = { from: address, token_in: tokenIn, token_out: tokenOut, amount_in: amtIn, min_amount_out: minOut, private_key_hex: privHex };
-        btn.textContent = 'Swapping…';
+      if (!ws || !ws.buildWalletActionIntent) {
+        setSwapErr('Unlock wallet with biometric/passkey to approve this action.'); btn.disabled = false; btn.textContent = 'Swap Now'; return;
       }
+      // Signed intent — no private key sent to server
+      const payload = { token_in: tokenIn, token_out: tokenOut, amount_in: amtIn, min_amount_out: minOut };
+      const intent = await ws.buildWalletActionIntent(
+        'swap',
+        { from_thr: address, wallet_id: address, chain: 'thronos', asset: tokenIn, amount: String(amtIn), recipient: tokenOut },
+        payload
+      );
+      const { signature, public_key } = await ws.signWalletActionIntent(intent);
+      const body = { intent, signature, public_key, payload };
+      btn.textContent = 'Swapping…';
       const r = await fetch(`${API_WRITE}/api/wallet/v1/swap`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
       });
@@ -4532,24 +4497,18 @@ async function showAddLiquidity(poolId, tokenA, tokenB, poolMeta) {
           throw new Error(d.message || d.error || 'Create intent failed');
         }
       } else {
-        // Internal pool path (WBTC/L2E pairs) — signed intent (primary) with private_key_hex fallback
+        // Internal pool path (WBTC/L2E pairs) — signed intent required
         const ws = window.walletSession;
-        if (ws && ws.isLocked && ws.isLocked()) throw new Error('Unlock wallet with biometric/passkey to approve this action.');
-        let liqBody;
-        if (ws && !ws.isLocked() && ws.buildWalletActionIntent) {
-          const liqPayload = { pool_id: poolId, amount_a: amtA, amount_b: amtB };
-          const liqIntent = await ws.buildWalletActionIntent(
-            'pool_deposit_intent',
-            { from_thr: address, wallet_id: address, chain: 'thronos', asset: poolId, amount: String(amtA) },
-            liqPayload
-          );
-          const { signature, public_key } = await ws.signWalletActionIntent(liqIntent);
-          liqBody = { intent: liqIntent, signature, public_key, payload: liqPayload };
-        } else {
-          const { privHex } = unlocked.get(address) || {};
-          if (!privHex) throw new Error('Unlock wallet with biometric/passkey to approve this action.');
-          liqBody = { from: address, pool_id: poolId, amount_a: amtA, amount_b: amtB, private_key_hex: privHex };
-        }
+        if (!ws || !ws.buildWalletActionIntent) throw new Error('Unlock wallet with biometric/passkey to approve this action.');
+        if (ws.isLocked && ws.isLocked()) throw new Error('Unlock wallet with biometric/passkey to approve this action.');
+        const liqPayload = { pool_id: poolId, amount_a: amtA, amount_b: amtB };
+        const liqIntent = await ws.buildWalletActionIntent(
+          'pool_deposit_intent',
+          { from_thr: address, wallet_id: address, chain: 'thronos', asset: poolId, amount: String(amtA) },
+          liqPayload
+        );
+        const { signature, public_key } = await ws.signWalletActionIntent(liqIntent);
+        const liqBody = { intent: liqIntent, signature, public_key, payload: liqPayload };
         const r = await fetch(`${API_WRITE}/api/wallet/v1/add_liquidity`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(liqBody),
         });
@@ -4700,21 +4659,17 @@ async function showCreateToken() {
     btn.disabled = true; btn.textContent = 'Approving…';
     try {
       const effDecimals = isNaN(decimals) ? 8 : decimals;
-      let tokBody;
-      if (ws && !ws.isLocked() && ws.buildWalletActionIntent) {
-        const tokPayload = { name, symbol, total_supply: supply, decimals: effDecimals };
-        const tokIntent = await ws.buildWalletActionIntent(
-          'token_create',
-          { from_thr: address, wallet_id: address, chain: 'thronos', asset: symbol, amount: String(supply) },
-          tokPayload
-        );
-        const { signature, public_key } = await ws.signWalletActionIntent(tokIntent);
-        tokBody = { intent: tokIntent, signature, public_key, payload: tokPayload };
-      } else {
-        const { privHex } = unlocked.get(address) || {};
-        if (!privHex) { errEl.textContent = 'Unlock wallet with biometric/passkey to approve this action.'; errEl.style.display = ''; btn.disabled = false; btn.textContent = 'Create Token'; return; }
-        tokBody = { from: address, name, symbol, total_supply: supply, decimals: effDecimals, private_key_hex: privHex };
+      if (!ws || !ws.buildWalletActionIntent) {
+        errEl.textContent = 'Unlock wallet with biometric/passkey to approve this action.'; errEl.style.display = ''; btn.disabled = false; btn.textContent = 'Create Token'; return;
       }
+      const tokPayload = { name, symbol, total_supply: supply, decimals: effDecimals };
+      const tokIntent = await ws.buildWalletActionIntent(
+        'token_create',
+        { from_thr: address, wallet_id: address, chain: 'thronos', asset: symbol, amount: String(supply) },
+        tokPayload
+      );
+      const { signature, public_key } = await ws.signWalletActionIntent(tokIntent);
+      const tokBody = { intent: tokIntent, signature, public_key, payload: tokPayload };
       btn.textContent = 'Creating…';
       const r = await fetch(`${API_WRITE}/api/wallet/v1/create_token`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(tokBody),
@@ -4801,21 +4756,15 @@ async function buyNFT(nftId) {
   }
   if (!confirm('Buy this NFT?')) return;
   try {
-    let buyBody;
-    if (ws && !ws.isLocked() && ws.buildWalletActionIntent) {
-      const buyPayload = { nft_id: nftId };
-      const buyIntent = await ws.buildWalletActionIntent(
-        'nft_buy',
-        { from_thr: address, wallet_id: address, chain: 'thronos', asset: nftId },
-        buyPayload
-      );
-      const { signature, public_key } = await ws.signWalletActionIntent(buyIntent);
-      buyBody = { intent: buyIntent, signature, public_key, payload: buyPayload };
-    } else {
-      const { privHex } = unlocked.get(address) || {};
-      if (!privHex) { alert('Unlock wallet with biometric/passkey to approve this action.'); return; }
-      buyBody = { from: address, nft_id: nftId, private_key_hex: privHex };
-    }
+    if (!ws || !ws.buildWalletActionIntent) { alert('Unlock wallet with biometric/passkey to approve this action.'); return; }
+    const buyPayload = { nft_id: nftId };
+    const buyIntent = await ws.buildWalletActionIntent(
+      'nft_buy',
+      { from_thr: address, wallet_id: address, chain: 'thronos', asset: nftId },
+      buyPayload
+    );
+    const { signature, public_key } = await ws.signWalletActionIntent(buyIntent);
+    const buyBody = { intent: buyIntent, signature, public_key, payload: buyPayload };
     const r = await fetch(`${API_WRITE}/api/wallet/v1/nfts/buy`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(buyBody),
     });
@@ -4887,21 +4836,17 @@ function showMintNFT() {
     try {
       let image_data_url = '';
       if (file) image_data_url = await readFileAsDataUrl(file);
-      let mintBody;
-      if (ws && !ws.isLocked() && ws.buildWalletActionIntent) {
-        const mintPayload = { name, description, category: 'art', price, royalties };
-        const mintIntent = await ws.buildWalletActionIntent(
-          'nft_mint',
-          { from_thr: address, wallet_id: address, chain: 'thronos', asset: 'NFT', amount: String(price) },
-          mintPayload
-        );
-        const { signature, public_key } = await ws.signWalletActionIntent(mintIntent);
-        mintBody = { intent: mintIntent, signature, public_key, payload: mintPayload, image_data_url };
-      } else {
-        const { privHex } = unlocked.get(address) || {};
-        if (!privHex) { errEl.textContent = 'Unlock wallet with biometric/passkey to approve this action.'; errEl.style.display = ''; btn.disabled = false; btn.textContent = 'Mint'; return; }
-        mintBody = { from: address, name, description, price, royalties, image_data_url, private_key_hex: privHex };
+      if (!ws || !ws.buildWalletActionIntent) {
+        errEl.textContent = 'Unlock wallet with biometric/passkey to approve this action.'; errEl.style.display = ''; btn.disabled = false; btn.textContent = 'Mint'; return;
       }
+      const mintPayload = { name, description, category: 'art', price, royalties };
+      const mintIntent = await ws.buildWalletActionIntent(
+        'nft_mint',
+        { from_thr: address, wallet_id: address, chain: 'thronos', asset: 'NFT', amount: String(price) },
+        mintPayload
+      );
+      const { signature, public_key } = await ws.signWalletActionIntent(mintIntent);
+      const mintBody = { intent: mintIntent, signature, public_key, payload: mintPayload, image_data_url };
       btn.textContent = 'Minting…';
       const r = await fetch(`${API_WRITE}/api/wallet/v1/nfts/mint`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(mintBody),

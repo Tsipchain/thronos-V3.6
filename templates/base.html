@@ -5166,23 +5166,68 @@ async function openEvmSendModal(network, evmAddr, tokenSym) {
     <div style="background:#0d1f0d;border:1px solid #1a4a1a;border-radius:12px;padding:20px;width:100%;max-width:420px;font-size:13px;">
         <div style="font-weight:700;color:#56ff9a;margin-bottom:14px;font-size:15px;">💸 Send ${tokenSym || nativeSym} on ${netLabel}</div>
         <div style="color:#888;font-size:10px;margin-bottom:12px;">From: <span style="font-family:monospace;color:#aaa;">${evmAddr}</span></div>
-        <label style="color:#aaa;font-size:11px;">Recipient address</label>
-        <input id="evmSendTo" placeholder="0x..." style="width:100%;box-sizing:border-box;margin:4px 0 10px;padding:8px;background:#071207;border:1px solid #1a4a1a;border-radius:6px;color:#fff;font-family:monospace;font-size:12px;">
+        <label style="color:#aaa;font-size:11px;">Recipient address (Thronos THR… or external 0x…)</label>
+        <input id="evmSendTo" placeholder="THR… or 0x…" style="width:100%;box-sizing:border-box;margin:4px 0 6px;padding:8px;background:#071207;border:1px solid #1a4a1a;border-radius:6px;color:#fff;font-family:monospace;font-size:12px;">
+        <div id="evmRecipientBadge" style="font-size:10px;min-height:14px;margin-bottom:8px;"></div>
+        <div id="evmIntAuthRow" style="display:none;">
+            <label style="color:#aaa;font-size:11px;">Your auth secret (for internal transfer)</label>
+            <input id="evmIntAuthSecret" type="password" placeholder="Your send / pledge secret" autocomplete="off" style="width:100%;box-sizing:border-box;margin:4px 0 10px;padding:8px;background:#071207;border:1px solid #1a4a1a;border-radius:6px;color:#fff;font-size:12px;">
+        </div>
         <label style="color:#aaa;font-size:11px;">Amount (${tokenSym || nativeSym})</label>
         <input id="evmSendAmt" type="number" min="0" step="any" placeholder="0.00" style="width:100%;box-sizing:border-box;margin:4px 0 10px;padding:8px;background:#071207;border:1px solid #1a4a1a;border-radius:6px;color:#fff;font-size:13px;">
         <div id="evmGasEstimate" style="font-size:10px;color:#888;margin-bottom:10px;min-height:14px;"></div>
         <div style="display:flex;gap:8px;margin-top:4px;">
-            <button onclick="_doEvmGasEstimate('${network}','${evmAddr}','${tokenSym}')" style="flex:1;padding:9px;background:rgba(0,0,0,0.4);border:1px solid #1a3;color:#8af;border-radius:6px;cursor:pointer;font-size:12px;">Estimate Gas</button>
+            <button id="evmGasBtn" onclick="_doEvmGasEstimate('${network}','${evmAddr}','${tokenSym}')" style="flex:1;padding:9px;background:rgba(0,0,0,0.4);border:1px solid #1a3;color:#8af;border-radius:6px;cursor:pointer;font-size:12px;">Estimate Gas</button>
             <button onclick="_doEvmSend('${network}','${evmAddr}','${tokenSym}')" style="flex:1;padding:9px;background:rgba(0,255,102,0.12);border:1px solid #00cc44;color:#56ff9a;border-radius:6px;cursor:pointer;font-size:12px;font-weight:700;">Send</button>
         </div>
         <button onclick="document.getElementById('evmSendModal').remove()" style="width:100%;margin-top:8px;padding:8px;background:none;border:1px solid #333;border-radius:6px;color:#666;font-size:11px;cursor:pointer;">Cancel</button>
         <div id="evmSendResult" style="margin-top:10px;font-size:11px;min-height:14px;"></div>
         <div style="margin-top:12px;padding:8px;background:rgba(255,200,0,0.05);border:1px solid #332200;border-radius:6px;font-size:10px;color:#887766;">
-            ⚠ Signing uses your Thronos wallet key (same secp256k1 key, EIP-155 format). Wallet must be unlocked. Transactions broadcast directly to ${netLabel} RPC — server never sees your private key.
+            ⚠ External sends use your Thronos secp256k1 key (EIP-155). Internal transfers settle on the Thronos ledger — no chain gas required. Private key never leaves your device.
         </div>
     </div>`;
     document.body.appendChild(overlay);
     overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+
+    // Resolve recipient on input blur/change
+    const _evmToInput = overlay.querySelector('#evmSendTo');
+    async function _webResolveRecipient(addr) {
+        const badge   = document.getElementById('evmRecipientBadge');
+        const authRow = document.getElementById('evmIntAuthRow');
+        const gasBtn  = document.getElementById('evmGasBtn');
+        if (!addr) { if (badge) badge.textContent = ''; if (authRow) authRow.style.display='none'; return; }
+        if (badge) badge.textContent = '…';
+        try {
+            const resp = await fetch('/api/wallet/resolve-recipient', {
+                method: 'POST', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({ recipient: addr, asset: tokenSym || nativeSym, chain: network }),
+            });
+            const r = await resp.json();
+            overlay.dataset.recipientResolution = JSON.stringify(r);
+            if (r.settlement_mode === 'internal') {
+                if (badge) { badge.style.color='#6f8'; badge.textContent='🏠 Internal Thronos transfer — THR fee, no chain gas.'; }
+                if (authRow) authRow.style.display='block';
+                if (gasBtn)  gasBtn.style.display='none';
+            } else if (r.settlement_mode === 'external_chain') {
+                if (badge) { badge.style.color='#8af'; badge.textContent=`🌐 External chain send on ${netLabel}.`; }
+                if (authRow) authRow.style.display='none';
+                if (gasBtn)  gasBtn.style.display='';
+            } else {
+                if (badge) { badge.style.color='#f88'; badge.textContent='⚠ Recipient not recognized.'; }
+                if (authRow) authRow.style.display='none';
+                overlay.dataset.recipientResolution = '';
+            }
+        } catch (_) {
+            if (badge) { badge.style.color='#f88'; badge.textContent='Recipient lookup failed.'; }
+            overlay.dataset.recipientResolution = '';
+        }
+    }
+    if (_evmToInput) {
+        _evmToInput.addEventListener('blur',   () => _webResolveRecipient(_evmToInput.value.trim()));
+        _evmToInput.addEventListener('change', () => _webResolveRecipient(_evmToInput.value.trim()));
+    }
+    // Store resolver for _doEvmSend
+    overlay._webResolveRecipient = _webResolveRecipient;
 }
 
 async function _doEvmGasEstimate(network, evmAddr, tokenSym) {
@@ -5221,19 +5266,62 @@ async function _doEvmGasEstimate(network, evmAddr, tokenSym) {
 
 async function _doEvmSend(network, evmAddr, tokenSym) {
     const resultEl = document.getElementById('evmSendResult');
-    // Re-run full guard at click time — re-derives address, checks signer state
+    const toAddr = (document.getElementById('evmSendTo')?.value || '').trim();
+    const amt    = parseFloat(document.getElementById('evmSendAmt')?.value || '0');
+    if (!toAddr) { if (resultEl) resultEl.innerHTML = '<span style="color:#f88">Enter a recipient address.</span>'; return; }
+    if (!amt || amt <= 0) { if (resultEl) resultEl.innerHTML = '<span style="color:#f88">Enter a valid amount.</span>'; return; }
+
+    // Check recipient resolution (resolve if not yet done)
+    const overlay = document.getElementById('evmSendModal');
+    let resolution = null;
+    try { resolution = overlay?.dataset.recipientResolution ? JSON.parse(overlay.dataset.recipientResolution) : null; } catch (_) {}
+    if (!resolution) {
+        if (overlay?._webResolveRecipient) await overlay._webResolveRecipient(toAddr);
+        try { resolution = overlay?.dataset.recipientResolution ? JSON.parse(overlay.dataset.recipientResolution) : null; } catch (_) {}
+    }
+
+    // ── Internal Thronos transfer ─────────────────────────────────────────
+    if (resolution?.settlement_mode === 'internal') {
+        const authSecret = (document.getElementById('evmIntAuthSecret')?.value || '').trim();
+        if (!authSecret) {
+            if (resultEl) resultEl.innerHTML = '<span style="color:#f88">Enter your auth secret for internal transfer.</span>'; return;
+        }
+        if (resultEl) resultEl.innerHTML = '<span style="color:#8af">Processing internal transfer…</span>';
+        const fromThr = walletSession?.getAddress?.() || '';
+        if (!fromThr) {
+            if (resultEl) resultEl.innerHTML = '<span style="color:#f88">Cannot resolve your Thronos address — unlock wallet first.</span>'; return;
+        }
+        const nativeSym = {ethereum:'ETH',bnb:'BNB',arbitrum:'ETH',base:'ETH'}[network] || 'ETH';
+        try {
+            const r = await fetch('/api/wallet/internal-transfer', {
+                method: 'POST', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({
+                    from_thr: fromThr, recipient: toAddr,
+                    asset: (tokenSym || nativeSym).toUpperCase(),
+                    asset_origin_chain: network, amount: amt, auth_secret: authSecret,
+                }),
+            });
+            const res = await r.json();
+            if (res.ok) {
+                if (resultEl) resultEl.innerHTML = `<span style="color:#56ff9a">✓ Internal transfer confirmed — ID: ${res.transfer_id}</span>`;
+                setTimeout(() => overlay?.remove(), 2500);
+            } else {
+                if (resultEl) resultEl.innerHTML = `<span style="color:#f88">Transfer failed: ${res.error || 'unknown error'}</span>`;
+            }
+        } catch (e) {
+            if (resultEl) resultEl.innerHTML = `<span style="color:#f88">Transfer error: ${e.message}</span>`;
+        }
+        return;
+    }
+
+    // ── External chain send — re-run guard and proceed with EVM signing ──
     const guard = await _webEvmSendGuard(network, evmAddr);
     if (!guard.ok) {
         if (resultEl) resultEl.innerHTML = `<span style="color:#f88">${guard.userMsg.replace(/\n/g,'<br>')}</span>`;
         return;
     }
-    const toAddr = (document.getElementById('evmSendTo')?.value || '').trim();
-    const amt = parseFloat(document.getElementById('evmSendAmt')?.value || '0');
-    if (!toAddr || !toAddr.match(/^0x[0-9a-fA-F]{40}$/)) {
-        if (resultEl) resultEl.innerHTML = '<span style="color:#f88">Invalid recipient address.</span>'; return;
-    }
-    if (!amt || amt <= 0) {
-        if (resultEl) resultEl.innerHTML = '<span style="color:#f88">Enter a valid amount.</span>'; return;
+    if (!toAddr.match(/^0x[0-9a-fA-F]{40}$/)) {
+        if (resultEl) resultEl.innerHTML = '<span style="color:#f88">External sends require a 0x EVM address.</span>'; return;
     }
     const modal = document.getElementById('evmSendModal');
     let gasPrice = modal?.dataset.gasPrice ? BigInt(modal.dataset.gasPrice) : null;

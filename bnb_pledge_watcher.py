@@ -48,6 +48,7 @@ ADMIN_SECRET = os.getenv("ADMIN_SECRET", "CHANGE_ME_NOW")
 DATA_DIR = os.getenv("DATA_DIR", "./data")
 BSC_CONFIRMATIONS = int(os.getenv("BSC_CONFIRMATIONS", "15"))  # only scan confirmed blocks
 BSC_BACKFILL_BLOCKS = int(os.getenv("BSC_BACKFILL_BLOCKS", "5000"))  # max backfill on startup
+BSC_LOGS_CHUNK_SIZE = int(os.getenv("BSC_LOGS_CHUNK_SIZE", "500"))   # max blocks per eth_getLogs call
 
 # State file to track processed transactions
 PROCESSED_TXS_FILE = os.path.join(DATA_DIR, "bnb_pledge_processed.json")
@@ -153,6 +154,29 @@ def bsc_rpc_call(method: str, params: List = None) -> Optional[Dict]:
         return None
 
 
+def _get_bsc_logs_chunked(filter_params: dict, from_block: int, to_block: int) -> Optional[list]:
+    """
+    Call eth_getLogs in ≤BSC_LOGS_CHUNK_SIZE block chunks to avoid -32005 limit errors.
+    Returns accumulated list of logs, or None on unrecoverable error.
+    """
+    all_logs: list = []
+    chunk_start = from_block
+    while chunk_start <= to_block:
+        chunk_end = min(chunk_start + BSC_LOGS_CHUNK_SIZE - 1, to_block)
+        params = {**filter_params, "fromBlock": hex(chunk_start), "toBlock": hex(chunk_end)}
+        result = bsc_rpc_call("eth_getLogs", [params])
+        if result is None:
+            logger.error("eth_getLogs failed for chunk %d-%d", chunk_start, chunk_end)
+            return None
+        if not isinstance(result, list):
+            logger.error("eth_getLogs unexpected result for chunk %d-%d: %s", chunk_start, chunk_end, result)
+            return None
+        all_logs.extend(result)
+        logger.debug("BSC chunk %d-%d: %d log(s)", chunk_start, chunk_end, len(result))
+        chunk_start = chunk_end + 1
+    return all_logs
+
+
 def get_vault_transfers(from_block: int = None) -> List[Dict]:
     """
     Get USDT Transfer events to the pledge vault address via eth_getLogs.
@@ -193,26 +217,25 @@ def get_vault_transfers(from_block: int = None) -> List[Dict]:
 
         logger.info(f"Querying blocks {from_block} to {safe_block}")
 
-        # eth_getLogs: filter for Transfer events to vault address
+        # eth_getLogs: filter for Transfer events to vault address — chunked to avoid -32005
         # topic0 = Transfer event signature
         # topic2 = 'to' address (vault)
-        logs = bsc_rpc_call("eth_getLogs", [{
+        filter_base = {
             "address": USDT_BNB_CONTRACT,
             "topics": [
                 TRANSFER_EVENT_SIGNATURE,  # topic0: Transfer(address,address,uint256)
                 None,                       # topic1: 'from' (any sender)
                 "0x" + BNB_PLEDGE_VAULT[2:].zfill(64)  # topic2: 'to' (vault)
             ],
-            "fromBlock": hex(from_block),
-            "toBlock": hex(safe_block),
-        }])
+        }
+        logs = _get_bsc_logs_chunked(filter_base, from_block, safe_block)
+
+        if logs is None:
+            logger.error("eth_getLogs chunked scan failed — not advancing checkpoint")
+            return [], 0
 
         if not logs:
             logger.info("No USDT transfers to vault found")
-            return [], safe_block
-
-        if not isinstance(logs, list):
-            logger.error(f"Unexpected logs format: {logs}")
             return [], safe_block
 
         result = []

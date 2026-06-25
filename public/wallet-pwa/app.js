@@ -5030,7 +5030,19 @@ async function pwaOpenEvmSendModal(network, evmAddr, tokenSym) {
       const r = await resp.json();
       _recipientResolved = r;
       if (r.settlement_mode === 'internal') {
-        if (badge) { badge.style.color='#6f8'; badge.textContent='🏠 Internal Thronos transfer — fee paid in THR, no chain gas needed.'; }
+        // Show internal balance so user knows what's available before entering amount
+        const fromThr = window.walletSession?.getAddress?.() || '';
+        let balNote = '';
+        if (fromThr) {
+          try {
+            const chainNorm = { bnb: 'bsc', ethereum: 'eth' }[network] || network;
+            const assetStr  = (tokenSym || sendSym).toUpperCase();
+            const bResp = await fetch(`/api/wallet/internal-balance?thr_address=${encodeURIComponent(fromThr)}&asset=${encodeURIComponent(assetStr)}&chain=${encodeURIComponent(chainNorm)}`);
+            const bData = await bResp.json();
+            if (bData.ok) balNote = ` | Available: ${bData.balance} ${assetStr} (${bData.balance_source === 'bootstrap_existing_wallet_balance' ? 'from history' : 'ledger'})`;
+          } catch (_) {}
+        }
+        if (badge) { badge.style.color='#6f8'; badge.textContent=`🏠 Internal Thronos transfer — THR fee, no chain gas needed.${balNote}`; }
         if (authRow) authRow.style.display='block';
         if (gasBtn)  gasBtn.style.display='none';
       } else if (r.settlement_mode === 'external_chain') {

@@ -26780,9 +26780,130 @@ def _internal_balance_key(asset: str, chain: str) -> str:
     return f"{asset.upper()}_{chain.lower()}"
 
 
+# Pool event types that must never count as personal wallet balance
+_POOL_EVENT_TYPES = frozenset({
+    "pool_seed", "pool_add_liquidity", "pool_add_liquidity_lp_minted",
+    "pool_withdraw", "pool_remove_liquidity", "pool_topup_from_service_fee",
+    "pool_seeded_from_pledge_vault", "treasury_to_pool_seed",
+    "pool_liquidity_credit", "pool_share_credit", "pool_fee_credit",
+    "external_service_fee_collected", "gas_reserve_accounted",
+})
+# Personal in-events that increase wallet's internal asset balance
+_PERSONAL_IN_EVENTS = frozenset({
+    "token_receive", "bridge", "gateway_payment_received",
+    "internal_asset_transfer", "crosschain_deposit_confirmed",
+})
+# Personal out-events that decrease wallet's internal asset balance
+_PERSONAL_OUT_EVENTS = frozenset({
+    "internal_asset_transfer",
+})
+_CHAIN_ALIASES = {"bnb": "bsc", "binance": "bsc", "ethereum": "eth"}
+
+
+def _bootstrap_from_wallet_history(thr_address: str, asset: str, chain: str) -> tuple[float, str]:
+    """
+    Compute a wallet's personal asset balance from wallet_history.json when
+    internal_asset_balances.json has no entry yet.
+
+    Safety rules:
+    - Only counts events owned by thr_address (direction in/out).
+    - Excludes all pool events (by event_type or pool_id presence).
+    - Deduplicates by internal_txid.
+    - Pool liquidity and shares are never counted as personal balance.
+    - Returns (balance, source_label).
+    """
+    chain_norm  = _CHAIN_ALIASES.get(chain.lower(), chain.lower())
+    asset_upper = asset.upper()
+    balance     = 0.0
+    seen_ids: set = set()
+
+    try:
+        events = get_wallet_history(thr_address, limit=50000)
+        for evt in events:
+            if not isinstance(evt, dict):
+                continue
+            # Skip pool events by type
+            evt_type = evt.get("event_type", "")
+            if evt_type in _POOL_EVENT_TYPES:
+                continue
+            # Skip any event associated with a pool (pool_id set)
+            if evt.get("pool_id"):
+                continue
+            # Only personal in/out directions
+            direction = evt.get("direction", "")
+            if direction not in ("in", "out"):
+                continue
+            # Asset match
+            if (evt.get("asset") or "").upper() != asset_upper:
+                continue
+            # Chain match
+            evt_chain = _CHAIN_ALIASES.get(
+                (evt.get("chain") or "thronos").lower(),
+                (evt.get("chain") or "thronos").lower()
+            )
+            if evt_chain != chain_norm:
+                continue
+            # Dedup
+            txid = (evt.get("internal_txid") or "").strip()
+            if txid:
+                if txid in seen_ids:
+                    continue
+                seen_ids.add(txid)
+
+            amt = float(evt.get("amount") or 0)
+            if direction == "in" and evt_type in _PERSONAL_IN_EVENTS:
+                balance += amt
+            elif direction == "out" and evt_type in _PERSONAL_OUT_EVENTS:
+                balance -= amt
+    except Exception as exc:
+        logger.warning("[internal-transfer bootstrap] wallet_history scan error for %s: %s",
+                       thr_address, exc)
+
+    balance = max(0.0, round(balance, 6))
+    source  = "bootstrap_existing_wallet_balance" if balance > 0 else "internal_asset_balances"
+    return balance, source
+
+
 def _get_internal_asset_balance(thr_address: str, asset: str, chain: str) -> float:
+    """Raw read from internal_asset_balances.json — does not bootstrap."""
     data = load_json(INTERNAL_ASSET_BALANCES_FILE, {})
     return float((data.get(thr_address) or {}).get(_internal_balance_key(asset, chain), 0.0))
+
+
+def _get_or_bootstrap_internal_asset_balance(
+    thr_address: str, asset: str, chain: str
+) -> tuple[float, str]:
+    """
+    Return the internal asset balance for a wallet, bootstrapping from wallet_history
+    the first time the wallet has no entry for this asset+chain.
+
+    Once bootstrapped, internal_asset_balances.json is authoritative to prevent
+    double-counting on future reads.
+
+    Returns (balance, source) where source is one of:
+      "internal_asset_balances"          — explicit entry already existed
+      "bootstrap_existing_wallet_balance" — initialised from wallet history
+    """
+    data = load_json(INTERNAL_ASSET_BALANCES_FILE, {})
+    key  = _internal_balance_key(asset, chain)
+    wallet_entry = data.get(thr_address)
+
+    # Explicit entry exists (even if zero) → authoritative, no bootstrap needed
+    if wallet_entry is not None and key in wallet_entry:
+        return float(wallet_entry[key]), "internal_asset_balances"
+
+    # No entry yet — compute from wallet history (safe, pool-excluded)
+    bootstrapped, source = _bootstrap_from_wallet_history(thr_address, asset, chain)
+
+    # Persist bootstrapped value so future ops use internal_asset_balances.json
+    if thr_address not in data:
+        data[thr_address] = {}
+    data[thr_address][key] = round(max(0.0, bootstrapped), 6)
+    save_json(INTERNAL_ASSET_BALANCES_FILE, data)
+
+    logger.info("[internal-transfer] bootstrapped %s %s_%s balance=%.6f from %s",
+                thr_address[:20], asset, chain, data[thr_address][key], source)
+    return float(data[thr_address][key]), source
 
 
 def _set_internal_asset_balance(thr_address: str, asset: str, chain: str, new_val: float) -> None:
@@ -27059,7 +27180,8 @@ def api_wallet_internal_transfer():
                        fee_required=thr_fee), 400
 
     # ── Check and move asset balance ──────────────────────────────────────────
-    transfer_id = f"INT-{asset}-{int(time.time())}-{secrets.token_hex(6)}"
+    transfer_id   = f"INT-{asset}-{int(time.time())}-{secrets.token_hex(6)}"
+    balance_source = "internal_asset_balances"   # overridden below for non-THR
 
     if asset == "THR":
         # THR is in ledger.json — total cost = amount + fee
@@ -27068,21 +27190,28 @@ def api_wallet_internal_transfer():
         if sender_balance < total_thr_cost:
             return jsonify(ok=False, error="insufficient_balance",
                            balance=round(sender_balance, 6),
-                           required=round(total_thr_cost, 6)), 400
+                           required=round(total_thr_cost, 6),
+                           balance_source="internal_asset_balances"), 400
         thr_ledger[from_thr] = round(sender_balance - total_thr_cost, 6)
         thr_ledger[to_thr]   = round(float(thr_ledger.get(to_thr, 0.0)) + amount, 6)
         save_json(LEDGER_FILE, thr_ledger)
     else:
-        # Non-THR asset in internal_asset_balances.json; fee taken from separate THR balance
-        sender_asset_bal = _get_internal_asset_balance(from_thr, asset, chain)
+        # Non-THR asset: balance from internal_asset_balances.json, bootstrapped from
+        # wallet_history on first access so existing receives (token_receive, bridge,
+        # gateway_payment_received) are automatically honoured.
+        # Pool liquidity is explicitly excluded from bootstrap — see _bootstrap_from_wallet_history.
+        sender_asset_bal, balance_source = _get_or_bootstrap_internal_asset_balance(
+            from_thr, asset, chain
+        )
         if sender_asset_bal < amount:
             return jsonify(ok=False, error="insufficient_balance",
                            balance=round(sender_asset_bal, 6),
                            required=round(amount, 6),
-                           asset=asset, chain=chain), 400
-        # Deduct asset from sender, credit receiver
+                           asset=asset, chain=chain,
+                           balance_source=balance_source), 400
+        # Deduct asset from sender; bootstrap receiver to avoid credit on clean ledger
         _set_internal_asset_balance(from_thr, asset, chain, sender_asset_bal - amount)
-        recv_asset_bal = _get_internal_asset_balance(to_thr, asset, chain)
+        recv_asset_bal, _ = _get_or_bootstrap_internal_asset_balance(to_thr, asset, chain)
         _set_internal_asset_balance(to_thr, asset, chain, recv_asset_bal + amount)
         # Deduct THR fee from sender's THR balance
         thr_ledger[from_thr] = round(sender_thr - thr_fee, 6)
@@ -27138,7 +27267,52 @@ def api_wallet_internal_transfer():
         to_wallet=to_thr,
         settlement_chain="thronos",
         transfer_scope="internal",
+        balance_source=balance_source if asset != "THR" else "internal_asset_balances",
         status="confirmed",
+    ), 200
+
+
+@app.route("/api/wallet/internal-balance", methods=["GET"])
+def api_wallet_internal_balance():
+    """
+    Return a wallet's internal asset balance for a given asset+chain.
+    Bootstraps from wallet_history if internal_asset_balances.json has no entry yet.
+
+    Query params:
+      thr_address – sender THR address
+      asset       – USDT | USDC | THR
+      chain       – bsc | base | arbitrum | thronos
+
+    Response:
+      { ok, thr_address, asset, chain, balance, balance_source }
+
+    This endpoint requires no auth — it is read-only and returns no private data.
+    """
+    thr_address = (request.args.get("thr_address") or "").strip()
+    asset       = (request.args.get("asset") or "").upper()
+    chain       = (request.args.get("chain") or "thronos").lower()
+
+    if not thr_address:
+        return jsonify(ok=False, error="thr_address required"), 400
+    if asset not in ("USDT", "USDC", "THR"):
+        return jsonify(ok=False, error="asset must be USDT, USDC, or THR"), 400
+    if chain not in _INTERNAL_TRANSFER_CHAINS:
+        return jsonify(ok=False, error=f"unsupported chain '{chain}'"), 400
+
+    if asset == "THR":
+        ledger  = load_json(LEDGER_FILE, {})
+        balance = float(ledger.get(thr_address, 0.0))
+        source  = "internal_asset_balances"
+    else:
+        balance, source = _get_or_bootstrap_internal_asset_balance(thr_address, asset, chain)
+
+    return jsonify(
+        ok=True,
+        thr_address=thr_address,
+        asset=asset,
+        chain=chain,
+        balance=round(balance, 6),
+        balance_source=source,
     ), 200
 
 

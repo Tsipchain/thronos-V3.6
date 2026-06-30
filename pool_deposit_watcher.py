@@ -51,6 +51,7 @@ logger = logging.getLogger(__name__)
 POOL_WATCHER_ENABLED       = os.getenv("POOL_WATCHER_ENABLED", "0") == "1"
 POOL_WATCHER_CONFIRMATIONS = int(os.getenv("POOL_WATCHER_CONFIRMATIONS", "15"))
 POOL_WATCHER_BACKFILL      = int(os.getenv("POOL_WATCHER_BACKFILL_BLOCKS", "5000"))
+POOL_LOGS_CHUNK_SIZE       = int(os.getenv("POOL_LOGS_CHUNK_SIZE", "500"))   # max blocks per eth_getLogs call
 
 BSC_RPC_URL  = os.getenv("BSC_RPC_URL", "")
 BASE_RPC_URL = os.getenv("BASE_RPC_URL", "")
@@ -192,6 +193,36 @@ def evm_rpc_call(rpc_url: str, method: str, params: list = None) -> Optional[obj
         return None
 
 
+def _get_evm_logs_chunked(
+    rpc_url: str,
+    chain: str,
+    filter_params: dict,
+    from_block: int,
+    to_block: int,
+) -> Optional[list]:
+    """
+    Call eth_getLogs in ≤POOL_LOGS_CHUNK_SIZE block chunks to avoid -32005 limit errors.
+    Returns accumulated list of logs, or None on unrecoverable error.
+    """
+    all_logs: list = []
+    chunk_start = from_block
+    while chunk_start <= to_block:
+        chunk_end = min(chunk_start + POOL_LOGS_CHUNK_SIZE - 1, to_block)
+        params = {**filter_params, "fromBlock": hex(chunk_start), "toBlock": hex(chunk_end)}
+        result = evm_rpc_call(rpc_url, "eth_getLogs", [params])
+        if result is None:
+            logger.error("[%s] eth_getLogs failed for chunk %d-%d", chain, chunk_start, chunk_end)
+            return None
+        if not isinstance(result, list):
+            logger.error("[%s] eth_getLogs unexpected result for chunk %d-%d: %s",
+                         chain, chunk_start, chunk_end, result)
+            return None
+        all_logs.extend(result)
+        logger.debug("[%s] chunk %d-%d: %d log(s)", chain, chunk_start, chunk_end, len(result))
+        chunk_start = chunk_end + 1
+    return all_logs
+
+
 def get_evm_vault_transfers(
     rpc_url: str,
     vault_address: str,
@@ -224,18 +255,18 @@ def get_evm_vault_transfers(
 
     # topic2 = vault address padded to 32 bytes (the "to" field of Transfer)
     vault_padded = "0x" + vault_address.lstrip("0x").zfill(64)
-    logs = evm_rpc_call(rpc_url, "eth_getLogs", [{
-        "address":   token_contract,
-        "topics":    [TRANSFER_EVENT_SIG, None, vault_padded],
-        "fromBlock": hex(from_block),
-        "toBlock":   hex(safe_block),
-    }])
+    filter_base = {
+        "address": token_contract,
+        "topics":  [TRANSFER_EVENT_SIG, None, vault_padded],
+    }
+    logs = _get_evm_logs_chunked(rpc_url, chain, filter_base, from_block, safe_block)
+
+    if logs is None:
+        logger.error("[%s] eth_getLogs chunked scan failed — not advancing checkpoint", chain)
+        return [], 0
 
     if not logs:
         logger.info("[%s] No transfers found in block range", chain)
-        return [], safe_block
-    if not isinstance(logs, list):
-        logger.error("[%s] Unexpected eth_getLogs result: %s", chain, logs)
         return [], safe_block
 
     transfers: List[Dict] = []
@@ -285,12 +316,13 @@ def credit_pool_external_deposit(deposit: dict) -> bool:
         url  = f"{MASTER_NODE_URL}/api/admin/pools/watcher/credit-external-deposit"
         data = {**deposit, "secret": ADMIN_SECRET}
         resp = requests.post(url, json=data, timeout=30)
-        if resp.status_code == 200:
+        if resp.status_code in (200, 201, 202):
             result = resp.json()
             if result.get("ok"):
-                logger.info("[%s] Credited %.6f %s pool=%s tx=%s log=%d",
+                logger.info("[%s] Credited %.6f %s pool=%s tx=%s log=%d (HTTP %d)",
                             deposit["chain"], deposit["amount"], deposit["asset"],
-                            deposit["pool_id"], deposit["tx_hash"][:20], deposit["log_index"])
+                            deposit["pool_id"], deposit["tx_hash"][:20], deposit["log_index"],
+                            resp.status_code)
                 return True
             if result.get("error") == "duplicate":
                 logger.info("[%s] Already credited (duplicate): %s",

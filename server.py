@@ -16426,6 +16426,81 @@ def api_admin_bnb_watcher_reprocess():
         return jsonify(ok=False, bnb_txid=bnb_txid, error="internal_server_error", detail=str(e)), 500
 
 
+@app.route("/api/admin/usdt-pledge/manual-reconcile", methods=["POST"])
+def api_admin_usdt_pledge_manual_reconcile():
+    """
+    Admin endpoint for manual USDT pledge reconciliation when on-chain data is
+    missing or incomplete (e.g. watcher missed the tx, txid unknown, sender unknown).
+
+    POST body (all optional except thr_address + usdt_amount):
+    {
+        "thr_address":   "THR...",               // required — wallet to credit
+        "usdt_amount":   5.0,                    // required — USDT amount (bypasses MIN_USDT_PLEDGE)
+        "tx_hash":       "0x...",                // optional — BSC txid; generated if omitted
+        "from_address":  "0x...",                // optional — sender; zero-address if omitted
+        "vault_address": "0x...",                // optional — for audit; uses BNB_PLEDGE_VAULT default
+        "chain":         "bsc",                  // optional — default "bsc"
+        "asset":         "USDT",                 // optional — default "USDT"
+        "reason":        "pledge_usdt_manual_reconciliation"  // required — reconciliation reason
+    }
+    """
+    denied = require_admin()
+    if denied:
+        return denied
+
+    data = request.get_json() or {}
+
+    thr_address = (data.get("thr_address") or "").strip()
+    reason      = (data.get("reason") or "manual_reconciliation").strip()
+
+    if not thr_address or not thr_address.startswith("THR"):
+        return jsonify(ok=False, error="missing_or_invalid_thr_address"), 400
+
+    try:
+        usdt_amount = float(data.get("usdt_amount", 0))
+    except (TypeError, ValueError):
+        return jsonify(ok=False, error="invalid_usdt_amount"), 400
+
+    if usdt_amount <= 0:
+        return jsonify(ok=False, error="usdt_amount_must_be_positive"), 400
+
+    # Fill in synthetic values for missing chain data
+    tx_hash     = (data.get("tx_hash") or "").strip()
+    from_address = (data.get("from_address") or "").strip().lower()
+
+    if not tx_hash:
+        tx_hash = f"MANUAL-RECON-{reason}-{int(time.time())}-{secrets.token_hex(4)}"
+
+    if not from_address or not from_address.startswith("0x"):
+        from_address = "0x0000000000000000000000000000000000000000"
+
+    try:
+        success, result, error = process_usdt_pledge_credit(
+            thr_address, from_address, usdt_amount, tx_hash,
+            source="manual_reconciliation",
+            bypass_minimum=True,
+            reconciliation_reason=reason,
+        )
+        if success:
+            logger.info(
+                "[usdt_pledge] manual reconciliation: %s USDT -> THR %s (reason: %s, synthetic_tx: %s)",
+                usdt_amount, thr_address, reason, tx_hash,
+            )
+            return jsonify(
+                ok=True,
+                thr_address=thr_address,
+                usdt_amount=usdt_amount,
+                synthetic_tx=tx_hash,
+                reason=reason,
+                **result,
+            ), 200
+        else:
+            return jsonify(ok=False, error=error, reason=reason), 400
+    except Exception as e:
+        logger.error("[usdt_pledge] manual reconciliation failed: %s", str(e), exc_info=True)
+        return jsonify(ok=False, error="internal_server_error", detail=str(e)), 500
+
+
 # ─── ISSUE #695: PYTHIA ADDRESS RESOLVER + POOL/WITHDRAWAL ARCHITECTURE ───────
 
 def _pythia_address_source(addr: str, env_key: str) -> str:
@@ -33150,7 +33225,8 @@ def api_pledge_bnb_register():
     return jsonify(ok=True, thr_address=thr_address, bnb_address=bnb_address, vault_address=BNB_PLEDGE_VAULT), 200
 
 
-def process_usdt_pledge_credit(thr_address, bnb_address, usdt_amount, bnb_txid, source="watcher"):
+def process_usdt_pledge_credit(thr_address, bnb_address, usdt_amount, bnb_txid, source="watcher",
+                               bypass_minimum=False, reconciliation_reason=None):
     """
     Shared logic for crediting a USDT pledge to a THR wallet.
 
@@ -33168,7 +33244,7 @@ def process_usdt_pledge_credit(thr_address, bnb_address, usdt_amount, bnb_txid, 
         # Validation
         if not all([thr_address, bnb_address, bnb_txid]):
             return False, {}, "Missing required fields"
-        if usdt_amount < MIN_USDT_PLEDGE:
+        if not bypass_minimum and usdt_amount < MIN_USDT_PLEDGE:
             return False, {}, f"below_minimum_pledge (minimum {MIN_USDT_PLEDGE} USDT)"
 
         # Check for duplicate tx in wallet history
@@ -33223,6 +33299,9 @@ def process_usdt_pledge_credit(thr_address, bnb_address, usdt_amount, bnb_txid, 
                 "pending_confirmation": False,
                 "pdf_filename":         pdf_name,
             }
+            if reconciliation_reason:
+                pledge_entry["reconciliation_reason"] = reconciliation_reason
+                pledge_entry["source"] = source
             pledges.append(pledge_entry)
             save_json(PLEDGE_CHAIN, pledges)
         else:
@@ -33290,6 +33369,7 @@ def process_usdt_pledge_credit(thr_address, bnb_address, usdt_amount, bnb_txid, 
             external_from=bnb_address,
             external_to=BNB_PLEDGE_VAULT,
             timestamp=current_ts,
+            note=reconciliation_reason or "",
         )
 
         # 2. Record THR credit (internal Thronos transaction)

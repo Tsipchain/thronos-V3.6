@@ -1599,27 +1599,13 @@ async function showWallet() {
       return;
     }
 
-<<<<<<< fix/evm-signer-verified-send
-    // EVM-based chains share one address — derive it from the signing context
-    // so the displayed From always matches what _pwaEvmSendGuard will re-derive.
+    // ── EVM chains — derive address ONLY from signing context, never from fallback ──
+    // Re-derive on each render if not already cached to prevent stale/wrong value.
     if (!_pwaSigningCtx?.privHex) {
       setAddrBarValue('');
       el.innerHTML = '<div style="color:#ff6b6b;text-align:center;padding:24px 0;font-size:.85rem">Unlock wallet to view / send EVM assets.</div>';
       return;
     }
-    if (!homeEvmAddr) {
-      homeEvmAddr = await _deriveEvmAddress(_pwaSigningCtx.privHex).catch(() => null);
-    }
-    if (!homeEvmAddr) {
-      setAddrBarValue('');
-      el.innerHTML = '<div style="color:#ff6b6b;text-align:center;padding:24px 0;font-size:.85rem">Could not derive EVM address for this wallet.</div>';
-      return;
-    }
-    setAddrBarValue(homeEvmAddr);
-    if (!homeChainBalances) homeChainBalances = await _fetchAllChainBalances(privHex, homeBtcAddr).catch(() => ({}));
-=======
-    // ── EVM chains — derive address ONLY from signing context, never from fallback ──
-    // Re-derive on each render if not already cached to prevent stale/wrong value.
     if (!homeEvmAddr) {
       homeEvmAddr = await _deriveEvmAddress(_pwaSigningCtx.privHex).catch(() => null);
     }
@@ -1641,7 +1627,6 @@ async function showWallet() {
 
     setAddrBarValue(derivedUserEvmAddr);
     if (!homeChainBalances) homeChainBalances = await _fetchAllChainBalances(_pwaSigningCtx.privHex, homeBtcAddr).catch(() => ({}));
->>>>>>> main
     const bal = homeChainBalances;
     let rows = '';
     if (netId === 'ethereum') {
@@ -5369,6 +5354,35 @@ async function pwaOpenEvmSendModal(network, evmAddr, tokenSym) {
     if (!gasPrice || !gasLimit || nonce === null) {
       if (resultEl) resultEl.innerHTML = '<span style="color:#f88">Click "Estimate Gas" first.</span>'; return;
     }
+
+    // ── Final biometric/passkey confirmation before broadcast ───────────────
+    // User-presence check right at send time — required even if wallet is unlocked.
+    // Uses the platform authenticator (Face ID / Touch ID / Windows Hello / passkey).
+    // If no WebAuthn credential is registered, requires PIN re-entry via the
+    // legacy unlock prompt. Broadcast is blocked until confirmation succeeds.
+    const thrForAuth = _pwaSigningCtx?.address || '';
+    const fid = thrForAuth ? LS.getObj(`thr_fid_${thrForAuth}`) : null;
+    if (fid?.credId) {
+      if (resultEl) resultEl.innerHTML = '<span style="color:#8af">Confirm with biometric / passkey…</span>';
+      try {
+        await assertWebAuthn(fid.credId);
+      } catch (biomErr) {
+        if (resultEl) resultEl.innerHTML = `<span style="color:#f88">Biometric confirmation cancelled or failed — send aborted.</span>`;
+        return;
+      }
+    } else {
+      const confirmed = confirm(
+        `Confirm external send:\n\n` +
+        `Amount: ${amt} ${tokenSym || sendSym}\n` +
+        `To: ${toAddr}\n\n` +
+        `No biometric registered on this device — proceeding uses your unlocked wallet key. Continue?`
+      );
+      if (!confirmed) {
+        if (resultEl) resultEl.innerHTML = '<span style="color:#f88">Send cancelled by user.</span>';
+        return;
+      }
+    }
+
     if (resultEl) resultEl.innerHTML = '<span style="color:#8af">Signing and broadcasting…</span>';
     try {
       const tokenCfg = (_EVM_TOKENS[network] || {})[tokenSym];

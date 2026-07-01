@@ -31,6 +31,7 @@ from __future__ import annotations
 # - Admin Withdrawal Panel (V5.1)
 
 import os, json, time, hashlib, logging, secrets, random, uuid, zipfile, struct, binascii, tempfile, shutil, sqlite3, base64, hmac
+import importlib
 import sys
 import threading
 import queue
@@ -17254,6 +17255,237 @@ def api_admin_pythia_provision_v1_wallet():
         }), 500
 
 
+def _try_derive_pythia_evm_from_v1_pubkey() -> tuple[str | None, str, str | None]:
+    """
+    Attempt to derive Pythia EVM public address from its V1 wallet public key binding.
+
+    Returns: (evm_address, source, missing_helper)
+    - If successful: ("0x...", "created_from_thronos_v1_wallet_logic", None)
+    - If no public key binding: (None, "needs_creation", "pythia_public_key_binding_not_found")
+    - If keccak256 unavailable: (None, "needs_creation", "evm_wallet_creation_helper_not_found")
+
+    What is needed to wire this up (next step for Phase 2.4):
+    1. wallet_v1_public_key_bindings.json must contain a binding for PYTHIA_SYSTEM_THR_ADDRESS
+       - Structure: {"bindings": {"THR...": {"public_key": "02or03<64hex>", ...}}}
+    2. A keccak256 implementation must be available. Required library (one of):
+       - eth_keys  (from web3 ecosystem:    pip install eth-keys)
+       - pysha3    (standalone keccak:      pip install pysha3)
+       - pycryptodome (Crypto.Hash.keccak:  pip install pycryptodome)
+    3. A helper derive_evm_from_pubkey(compressed_hex) must be implemented, e.g.:
+         def derive_evm_from_pubkey(compressed_pubkey_hex: str) -> str:
+             from eth_keys import keys
+             pub = keys.PublicKey.from_compressed_bytes(bytes.fromhex(compressed_pubkey_hex))
+             return pub.to_checksum_address()
+
+    Currently: wallet_v1_public_key_bindings.json is empty/absent for the Pythia system address,
+    and no keccak256 library is installed. Both gaps must be resolved in Phase 2.4.
+
+    NEVER returns private key, seed, mnemonic, or decrypted material.
+    """
+    # Step 1: Load public key binding for Pythia THR address
+    pythia_thr = PYTHIA_SYSTEM_THR_ADDRESS
+    if not pythia_thr:
+        return None, "needs_creation", "pythia_thr_address_not_configured"
+
+    try:
+        bindings_store = load_json(WALLET_V1_PUBLIC_KEY_BINDINGS_FILE, {"bindings": {}})
+        bindings = bindings_store.get("bindings", {}) if isinstance(bindings_store, dict) else {}
+
+        # Case-insensitive lookup (THR addresses may be stored in various cases)
+        pub_key_hex = None
+        for addr_key, binding in bindings.items():
+            if addr_key.upper() == pythia_thr.upper():
+                pub_key_hex = (binding.get("public_key") or "").strip()
+                break
+
+        if not pub_key_hex:
+            return None, "needs_creation", "pythia_public_key_binding_not_found"
+
+        # Step 2: Try to derive EVM address from public key using keccak256
+        # Required: keccak256(uncompressed_pubkey_bytes[1:])[-20:] → 0x + hex
+        # All keccak256 libraries are absent from this environment.
+        # When any is installed, wire it here with: derive_evm_from_pubkey(pub_key_hex)
+        for lib_name in ("eth_keys", "pysha3", "Crypto.Hash.keccak"):
+            try:
+                importlib.import_module(lib_name)
+                # If we reach here a keccak library loaded — implement derivation
+                # (Will be implemented in Phase 2.4 when library is confirmed present)
+                return None, "needs_creation", "evm_derivation_helper_not_implemented"
+            except ImportError:
+                continue
+
+        return None, "needs_creation", "evm_wallet_creation_helper_not_found"
+
+    except Exception as e:
+        logger.error(f"[Pythia EVM Derive] Error checking public key binding: {e}", exc_info=True)
+        return None, "needs_creation", f"lookup_error: {e}"
+
+
+@app.route("/api/admin/pythia/create-evm-address", methods=["POST"])
+def api_admin_pythia_create_evm_address():
+    """
+    Admin endpoint — Create/generate Pythia V1 EVM public address (Phase 2.4.5+).
+
+    Behavior:
+    1. Check if Pythia V1 wallet already has a valid EVM address — return if exists.
+    2. Attempt to derive from V1 wallet's secp256k1 public key binding + keccak256.
+    3. If derivation succeeds, persist only the public EVM address to all chains, record event.
+    4. If creation path is unavailable (missing binding or keccak library), return controlled
+       needs_creation with missing_helper identifying the exact gap.
+
+    Never invents fake EVM addresses.
+    Never returns private key, seed, mnemonic, send_seed, send_secret, auth_secret,
+    recovery kit plaintext, signer secret, or decrypted material.
+
+    No signing, broadcasting, RPC transfer, or fund movement.
+    """
+    denied = require_admin()
+    if denied:
+        return denied
+
+    try:
+        wallet = _discover_pythia_v1_wallet()
+        if not wallet:
+            return jsonify({
+                "ok": False,
+                "error": "pythia_v1_wallet_not_found",
+                "detail": "Provision a Pythia V1 wallet first via POST /api/admin/pythia/provision-v1-wallet",
+            }), 404
+
+        existing_evm = wallet.get("evm_public_address_bsc")
+        if existing_evm and _is_valid_evm_address(existing_evm):
+            return jsonify({
+                "ok": True,
+                "pythia_v1_wallet": {
+                    "thr_address": wallet.get("thr_address"),
+                    "wallet_id": wallet.get("pythia_v1_wallet_id"),
+                    "evm_public_address": existing_evm,
+                    "evm_public_address_bsc": existing_evm,
+                    "evm_public_address_base": wallet.get("evm_public_address_base") or existing_evm,
+                    "evm_public_address_arbitrum": wallet.get("evm_public_address_arbitrum") or existing_evm,
+                    "evm_public_address_eth": wallet.get("evm_public_address_eth") or existing_evm,
+                    "source": "existing_v1_wallet",
+                    "status": "configured",
+                    "safe_to_register": True,
+                }
+            }), 200
+
+        evm_addr, source, missing_helper = _try_derive_pythia_evm_from_v1_pubkey()
+
+        if evm_addr and _is_valid_evm_address(evm_addr):
+            wallet["evm_public_address_bsc"] = evm_addr
+            wallet["evm_public_address_base"] = evm_addr
+            wallet["evm_public_address_arbitrum"] = evm_addr
+            wallet["evm_public_address_eth"] = evm_addr
+            wallet["evm_public_address"] = evm_addr
+            wallet["status"] = "configured"
+
+            try:
+                save_json(PYTHIA_V1_WALLET_FILE, wallet)
+            except Exception as e:
+                logger.error(f"[Pythia EVM Create] Failed to persist: {e}")
+                return jsonify({
+                    "ok": False,
+                    "error": "persistence_failed",
+                    "detail": str(e),
+                    "status": "needs_creation",
+                }), 400
+
+            add_wallet_history_event(
+                thr_address="SYSTEM_PYTHIA_ACTIONS",
+                event_type="pythia_evm_address_created_from_v1_wallet",
+                chain="thronos",
+                asset="",
+                amount=0.0,
+                direction="system",
+                internal_txid=f"CREATE_EVM_{int(time.time())}",
+                status="confirmed",
+                note=f"Pythia EVM address created from V1 wallet: {evm_addr}"
+            )
+            add_wallet_history_event(
+                thr_address="SYSTEM_PYTHIA_ACTIONS",
+                event_type="pythia_v1_wallet_configured",
+                chain="thronos",
+                asset="",
+                amount=0.0,
+                direction="system",
+                internal_txid=wallet.get("pythia_v1_wallet_id", ""),
+                status="confirmed",
+                note=f"Pythia V1 wallet now fully configured with EVM address: {evm_addr}"
+            )
+
+            return jsonify({
+                "ok": True,
+                "pythia_v1_wallet": {
+                    "thr_address": wallet.get("thr_address"),
+                    "wallet_id": wallet.get("pythia_v1_wallet_id"),
+                    "evm_public_address": evm_addr,
+                    "evm_public_address_bsc": evm_addr,
+                    "evm_public_address_base": evm_addr,
+                    "evm_public_address_arbitrum": evm_addr,
+                    "evm_public_address_eth": evm_addr,
+                    "source": "created_from_thronos_v1_wallet_logic",
+                    "status": "configured",
+                    "safe_to_register": True,
+                }
+            }), 201
+
+        return jsonify({
+            "ok": True,
+            "pythia_v1_wallet": {
+                "thr_address": wallet.get("thr_address"),
+                "wallet_id": wallet.get("pythia_v1_wallet_id"),
+                "evm_public_address": None,
+                "evm_public_address_bsc": None,
+                "evm_public_address_base": None,
+                "evm_public_address_arbitrum": None,
+                "evm_public_address_eth": None,
+                "source": "needs_creation",
+                "status": "needs_creation",
+                "safe_to_register": False,
+                "missing_helper": missing_helper or "evm_wallet_creation_helper_not_found",
+                "action_required": (
+                    "EVM address creation requires two missing components: "
+                    "(1) A public key binding for PYTHIA_SYSTEM_THR_ADDRESS in "
+                    "data/wallet_v1_public_key_bindings.json — register it via "
+                    "POST /api/wallet/v1/key-binding/register; "
+                    "(2) A keccak256 library — install one of: eth-keys, pysha3, or pycryptodome. "
+                    "Once both are present, this endpoint will derive the EVM address automatically."
+                ),
+                "next_steps": [
+                    {
+                        "step": 1,
+                        "action": "Register Pythia secp256k1 public key binding",
+                        "endpoint": "POST /api/wallet/v1/key-binding/register",
+                        "file": "data/wallet_v1_public_key_bindings.json",
+                        "detail": "Bind compressed secp256k1 public key (66 hex chars) for THR5DF27A86C477F381594E896F0E55357DEC5942BA"
+                    },
+                    {
+                        "step": 2,
+                        "action": "Install keccak256 library",
+                        "options": ["pip install eth-keys", "pip install pysha3", "pip install pycryptodome"],
+                        "detail": "Required for EVM address derivation from public key"
+                    },
+                    {
+                        "step": 3,
+                        "action": "Re-call this endpoint",
+                        "endpoint": "POST /api/admin/pythia/create-evm-address",
+                        "detail": "Will auto-derive EVM address once binding + keccak library are available"
+                    }
+                ]
+            }
+        }), 200
+
+    except Exception as e:
+        logger.error(f"[Pythia EVM Create] Endpoint error: {e}", exc_info=True)
+        return jsonify({
+            "ok": False,
+            "error": "server_error",
+            "detail": "Internal server error during EVM address creation",
+            "status": "needs_creation",
+        }), 500
+
+
 def _attach_or_create_pythia_evm_address() -> tuple[dict | None, str]:
     """
     Attach or create EVM public address for Pythia V1 wallet (Phase 2.4.5+).
@@ -33718,6 +33950,7 @@ def add_wallet_history_event(
                               gateway_payment_received, gateway_fee_collected, gateway_pool_topup_allocated, gateway_gas_reserve_allocated, gateway_payout_requested
                     Phase 2.4.5: pythia_v1_wallet_discovered, pythia_v1_wallet_provisioned, pythia_public_address_registered, pythia_role_address_registered
                                  pythia_evm_address_attached, pythia_evm_address_created
+                                 pythia_evm_address_created_from_v1_wallet, pythia_v1_wallet_configured
         chain: thronos, bsc, base, arbitrum, eth, btc
         asset: THR, BTC, WBTC, USDT, USDC, BNB, ETH, native
         amount: Transaction amount

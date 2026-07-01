@@ -24916,7 +24916,19 @@ def api_pools_withdraw_intent():
 
 
 def _admin_credit_test_liquidity(pool_id: str):
-    """Shared handler for admin test-liquidity credit endpoints."""
+    """Shared handler for admin test-liquidity credit endpoints.
+
+    Disabled by default. Requires POOL_TEST_MODE=1 to activate — never
+    enable in production. Real liquidity must flow through
+    /api/admin/pools/watcher/credit-external-deposit after on-chain
+    confirmation by pool_deposit_watcher.
+    """
+    if _strip_env_quotes(os.getenv("POOL_TEST_MODE", "0")) != "1":
+        return jsonify(
+            ok=False,
+            error="pool_test_mode_disabled",
+            detail="Mock liquidity credit is disabled. Set POOL_TEST_MODE=1 to enable in dev/staging. In production, real liquidity is credited only by pool_deposit_watcher after on-chain confirmation.",
+        ), 403
     denied = require_admin()
     if denied:
         return denied
@@ -25211,6 +25223,87 @@ def api_admin_pools_watcher_credit_external():
         })
         _save_pool_ledger(ledger)
 
+        # ── Match watcher event to a client deposit intent and credit LP shares ──
+        # If a pool_deposit_intent recorded either the tx_hash directly or the
+        # sender_address+amount, credit LP shares to that user's position.
+        # This closes the loop between "client broadcast" and "user gets shares".
+        matched_intent   = None
+        credited_address = ""
+        try:
+            intents_all = load_json(_POOL_DEPOSIT_INTENTS_FILE, [])
+            if isinstance(intents_all, list):
+                # Prefer explicit tx_hash match (in-app broadcast path)
+                for it in intents_all:
+                    if (
+                        it.get("status") == "pending_verification"
+                        and it.get("pool_id") == pool_id
+                        and (it.get("tx_hash") or "").lower() == tx_hash.lower()
+                        and tx_hash
+                    ):
+                        matched_intent = it
+                        break
+                # Fallback: sender + amount + pool_id (external wallet path)
+                if matched_intent is None and from_addr:
+                    for it in intents_all:
+                        if (
+                            it.get("status") == "pending_verification"
+                            and it.get("pool_id") == pool_id
+                            and (it.get("sender_address") or "").lower() == from_addr.lower()
+                            and abs(float(it.get("amount") or 0) - amount) < 1e-6
+                        ):
+                            matched_intent = it
+                            break
+                if matched_intent is not None:
+                    matched_intent["status"]         = "credited"
+                    matched_intent["credited_tx"]    = tx_hash
+                    matched_intent["credited_at"]    = int(time.time())
+                    matched_intent["pool_event_id"]  = event_id
+                    save_json(_POOL_DEPOSIT_INTENTS_FILE, intents_all)
+                    credited_address = (matched_intent.get("address") or "").strip().upper()
+        except Exception as intent_err:
+            logger.warning("[pool_watcher] intent match failed: %s", intent_err)
+
+        # If matched, credit LP shares to the depositor's position and emit history
+        if credited_address and credited_address.startswith("THR"):
+            try:
+                positions = _load_pool_positions()
+                user_pos  = positions.setdefault(credited_address, {})
+                pos       = user_pos.setdefault(pool_id, {
+                    "address":               credited_address,
+                    "pool_id":               pool_id,
+                    "lp_position_balance":   0.0,
+                    "external_side_balance": 0.0,
+                    "thr_side_balance":      0.0,
+                })
+                # For external deposits, LP shares == external amount (simple 1:1 model,
+                # consistent with the internal /api/pools/deposit handler above).
+                pos["lp_position_balance"]   = round(float(pos.get("lp_position_balance", 0)) + amount, 8)
+                pos["external_side_balance"] = round(float(pos.get("external_side_balance", 0)) + amount, 8)
+                pos["last_updated"] = now_iso
+                _save_pool_positions(positions)
+
+                add_wallet_history_event(
+                    thr_address=credited_address,
+                    event_type="pool_add_liquidity_lp_minted",
+                    chain=chain,
+                    asset=asset,
+                    amount=amount,
+                    status="confirmed",
+                    direction="allocate",
+                    internal_txid=event_id,
+                    external_txid=tx_hash,
+                    external_from=from_addr,
+                    external_to=to_addr,
+                    pool_id=pool_id,
+                    lp_shares=amount,
+                    pair=cfg.get("pair", ""),
+                    note=f"External deposit credited via pool_deposit_watcher (intent={matched_intent.get('intent_id') if matched_intent else ''})",
+                )
+                logger.info("[pool_watcher] credited %s LP shares to %s in pool %s (tx=%s)",
+                            amount, credited_address, pool_id, tx_hash[:20])
+            except Exception as pos_err:
+                logger.warning("[pool_watcher] LP share credit failed: %s", pos_err)
+
         logger.info("[pool_watcher] credited %.6f %s → %s external_reserve | tx=%s log=%d",
                     amount, asset, pool_id, tx_hash[:20], log_index)
 
@@ -25227,6 +25320,8 @@ def api_admin_pools_watcher_credit_external():
             asset_origin_chain=chain,
             worker=_AMM_WORKER_NAME,
             external_reserve=float(pool.get("external_reserve", 0)),
+            credited_lp_to=credited_address or None,
+            intent_matched=bool(matched_intent),
         ), 200
 
     except Exception as exc:
@@ -29824,17 +29919,22 @@ def api_wallet_pool_deposit_intent():
     Does NOT credit external_reserve, lp_position_balance, or any accounting ledger.
     Shares/reserve are credited only after the pool_deposit_watcher confirms the
     on-chain transfer via /api/admin/pools/credit-deposit (admin-protected).
-    Body: {address, pool_id, asset, amount, vault_address}
+    Body: {address, pool_id, asset, amount, vault_address, tx_hash?, sender_address?}
+    If tx_hash + sender_address are provided (in-app broadcast path), the watcher
+    can match this intent by tx_hash and credit LP shares to `address` after
+    on-chain confirmation.
     Returns: {ok, intent_id, status:"pending_verification", affects_balance:false, affects_pool:false}
     """
     if request.method == "OPTIONS":
         return "", 200
     try:
         body         = request.get_json(silent=True) or {}
-        address      = (body.get("address")      or "").strip().upper()
-        pool_id      = (body.get("pool_id")      or "").strip().lower()
-        asset        = (body.get("asset")        or "").strip().upper()
-        vault_addr   = (body.get("vault_address") or "").strip()
+        address      = (body.get("address")        or "").strip().upper()
+        pool_id      = (body.get("pool_id")        or "").strip().lower()
+        asset        = (body.get("asset")          or "").strip().upper()
+        vault_addr   = (body.get("vault_address")  or "").strip()
+        tx_hash      = (body.get("tx_hash")        or "").strip().lower()
+        sender_addr  = (body.get("sender_address") or "").strip().lower()
 
         try:
             amount = float(body.get("amount") or 0)
@@ -29849,6 +29949,8 @@ def api_wallet_pool_deposit_intent():
             return jsonify(ok=False, error="asset_required"), 400
         if amount <= 0:
             return jsonify(ok=False, error="amount_must_be_positive"), 400
+        if tx_hash and not tx_hash.startswith("0x"):
+            return jsonify(ok=False, error="invalid_tx_hash"), 400
 
         intent_id = "dpi_" + secrets.token_hex(12)
         now_ts    = int(time.time())
@@ -29860,6 +29962,8 @@ def api_wallet_pool_deposit_intent():
             "asset":           asset,
             "amount":          amount,
             "vault_address":   vault_addr,
+            "tx_hash":         tx_hash,
+            "sender_address":  sender_addr,
             "status":          "pending_verification",
             "affects_balance": False,
             "affects_pool":    False,

@@ -5426,11 +5426,12 @@ async function pwaOpenPoolDepositModal(network, evmAddr) {
     <div id="pwaPoolVaultArea" style="margin-bottom:12px;color:#aaa;font-size:11px;">Loading vault address…</div>
     <label style="color:#aaa;font-size:11px;">Amount to deposit</label>
     <input id="pwaPoolDepositAmt" type="number" min="0" step="any" placeholder="0.00" style="width:100%;box-sizing:border-box;margin:4px 0 10px;padding:8px;background:#071220;border:1px solid #004488;border-radius:6px;color:#fff;font-size:13px;">
-    <button id="pwaPoolConfirmBtn" style="width:100%;padding:10px;background:rgba(0,200,255,0.12);border:1px solid #0088cc;color:#00c8ff;border-radius:6px;cursor:pointer;font-size:13px;font-weight:700;">Confirm Deposit</button>
+    <button id="pwaPoolBroadcastBtn" style="width:100%;padding:10px;background:rgba(0,200,255,0.16);border:1px solid #00c8ff;color:#00c8ff;border-radius:6px;cursor:pointer;font-size:13px;font-weight:700;">🔐 Deposit from this wallet (biometric)</button>
+    <button id="pwaPoolConfirmBtn" style="width:100%;margin-top:6px;padding:8px;background:none;border:1px solid #234;color:#78a;border-radius:6px;cursor:pointer;font-size:11px;">I sent externally — record intent only</button>
     <button id="pwaPoolCancelBtn" style="width:100%;margin-top:8px;padding:8px;background:none;border:1px solid #333;border-radius:6px;color:#666;font-size:11px;cursor:pointer;">Cancel</button>
     <div id="pwaPoolDepositResult" style="margin-top:10px;font-size:11px;min-height:14px;"></div>
     <div style="margin-top:12px;padding:8px;background:rgba(0,200,255,0.04);border:1px solid #002244;border-radius:6px;font-size:10px;color:#557799;">
-      📌 Send the exact amount from your external wallet to the Pythia vault address above, then confirm here. Pythia vault only appears in pool deposit flows — never as your personal receive address.
+      📌 Recommended: use the biometric deposit button — this wallet signs and broadcasts the transfer to the Pythia vault directly. LP shares are credited to your THR address once the on-chain watcher confirms the transfer.
     </div>
   </div>`;
   overlay.addEventListener('click', e => { if(e.target===overlay) overlay.remove(); });
@@ -5488,6 +5489,100 @@ async function pwaOpenPoolDepositModal(network, evmAddr) {
       } else {
         if (resultEl) resultEl.innerHTML = `<span style="color:#f88">Error: ${d.error || 'intent_failed'}</span>`;
       }
+    } catch (err) {
+      if (resultEl) resultEl.innerHTML = `<span style="color:#f88">Error: ${err.message}</span>`;
+    }
+  });
+
+  // ── In-app broadcast path — sign & send from this wallet, biometric-gated ──
+  overlay.querySelector('#pwaPoolBroadcastBtn').addEventListener('click', async () => {
+    const resultEl = overlay.querySelector('#pwaPoolDepositResult');
+    const amt = parseFloat(overlay.querySelector('#pwaPoolDepositAmt')?.value || '0');
+    if (!amt || amt <= 0) { if (resultEl) resultEl.innerHTML = '<span style="color:#f88">Enter a valid amount.</span>'; return; }
+    const thrAddr = _pwaSigningCtx?.address || '';
+    if (!thrAddr) { if (resultEl) resultEl.innerHTML = '<span style="color:#f88">Wallet not connected.</span>'; return; }
+    const asset = overlay.dataset.asset || ({bnb:'USDT', base:'USDC'}[network] || 'USDT');
+    const vaultAddr = overlay.dataset.vaultAddr || '';
+    if (!vaultAddr) { if (resultEl) resultEl.innerHTML = '<span style="color:#f88">Vault address not loaded — cannot broadcast.</span>'; return; }
+
+    // Re-run send guard: ensure signer key matches displayed EVM address
+    const guardCheck = await _pwaEvmSendGuard(network, evmAddr);
+    if (!guardCheck.ok) {
+      if (resultEl) resultEl.innerHTML = `<span style="color:#f88">${guardCheck.userMsg.replace(/\n/g,'<br>')}</span>`;
+      return;
+    }
+
+    // ── Biometric / passkey confirmation — same pattern as external EVM send ──
+    const fid = LS.getObj(`thr_fid_${thrAddr}`);
+    if (fid?.credId) {
+      if (resultEl) resultEl.innerHTML = '<span style="color:#8af">Confirm deposit with biometric / passkey…</span>';
+      try {
+        await assertWebAuthn(fid.credId);
+      } catch (biomErr) {
+        if (resultEl) resultEl.innerHTML = '<span style="color:#f88">Biometric confirmation cancelled — deposit aborted.</span>';
+        return;
+      }
+    } else {
+      const confirmed = confirm(
+        `Confirm pool deposit:\n\n` +
+        `Amount: ${amt} ${asset}\n` +
+        `Pool: ${poolId}\n` +
+        `Vault: ${vaultAddr}\n\n` +
+        `No biometric registered on this device — proceeding uses your unlocked wallet key. Continue?`
+      );
+      if (!confirmed) {
+        if (resultEl) resultEl.innerHTML = '<span style="color:#f88">Deposit cancelled by user.</span>';
+        return;
+      }
+    }
+
+    if (resultEl) resultEl.innerHTML = '<span style="color:#8af">Estimating gas…</span>';
+    try {
+      const tokenCfg = (_EVM_TOKENS[network] || {})[asset];
+      if (!tokenCfg) { if (resultEl) resultEl.innerHTML = `<span style="color:#f88">No token config for ${asset} on ${network}.</span>`; return; }
+
+      const [gasPriceHex, nonceHex] = await Promise.all([
+        _pwaEvmRpc(network, 'eth_gasPrice', []),
+        _pwaEvmRpc(network, 'eth_getTransactionCount', [evmAddr, 'pending']),
+      ]);
+      const gasPrice = BigInt(gasPriceHex);
+      const nonceVal = parseInt(nonceHex, 16);
+      const data = _pwaEncodeErc20Transfer(vaultAddr, amt, tokenCfg.decimals);
+      let gasLimit = 80000n;
+      try {
+        const gasHex = await _pwaEvmRpc(network, 'eth_estimateGas', [{from:evmAddr, to:tokenCfg.contract, data, value:'0x0'}]);
+        gasLimit = BigInt(gasHex) * 12n / 10n;
+      } catch {}
+
+      if (resultEl) resultEl.innerHTML = '<span style="color:#8af">Signing and broadcasting to vault…</span>';
+      const txHash = await _pwaEvmSignAndBroadcast({ network, from:evmAddr, to:tokenCfg.contract, value:0n, data, gasLimit, gasPrice, nonce:nonceVal });
+      if (resultEl) resultEl.innerHTML = `<span style="color:#56ff9a">✓ Broadcast! TX: <span style="font-family:monospace;font-size:9px;">${txHash}</span><br>Recording intent…</span>`;
+
+      // Record intent with tx_hash so the pool_deposit_watcher can match this
+      // event and credit LP shares to `thrAddr` once confirmed on-chain.
+      try {
+        const chainNorm = {bnb:'bsc',base:'base',arbitrum:'arbitrum',ethereum:'eth'}[network] || network;
+        const r = await fetch('/api/wallet/pool-deposit-intent', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({
+            address: thrAddr, pool_id: poolId, asset, amount: amt,
+            vault_address: vaultAddr, tx_hash: txHash, sender_address: evmAddr,
+          }),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (d.ok) {
+          if (resultEl) resultEl.innerHTML = `<span style="color:#56ff9a">✓ Deposit broadcast + intent recorded (${d.intent_id}). LP shares will appear once the on-chain watcher confirms.</span>`;
+        }
+      } catch {}
+
+      // Also register in normalized wallet history (fire-and-forget)
+      try {
+        const chainNorm = {bnb:'bsc',base:'base',arbitrum:'arbitrum',ethereum:'eth'}[network] || network;
+        fetch('/api/wallet/evm-tx/record', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({address:thrAddr, chain:chainNorm, asset, to:vaultAddr, amount:amt, tx_hash:txHash, status:'submitted', direction:'out'}),
+        }).catch(() => {});
+      } catch {}
     } catch (err) {
       if (resultEl) resultEl.innerHTML = `<span style="color:#f88">Error: ${err.message}</span>`;
     }

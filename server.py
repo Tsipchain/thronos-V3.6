@@ -29784,6 +29784,30 @@ def api_wallet_evm_tx_record():
         except Exception as store_err:
             logger.warning("[evm-tx/record] store failed: %s", store_err)
 
+        # Also write to WALLET_HISTORY_FILE so /api/wallet/history/<addr> returns it
+        # (PWA/Mobile/Web read from that endpoint). Display-only — status stays
+        # unverified until the on-chain watcher confirms.
+        try:
+            add_wallet_history_event(
+                thr_address=address,
+                event_type="evm_token_send",
+                chain=chain_norm,
+                asset=asset,
+                amount=amount,
+                status="unverified_local_submission",
+                direction=direction,
+                external_txid=tx_hash,
+                external_from=address,
+                external_to=to_addr,
+                token_standard="ERC20" if chain_norm in ("eth", "arbitrum", "base") else "BEP20",
+                network_label={"bsc": "BNB Chain", "base": "Base",
+                               "arbitrum": "Arbitrum One", "eth": "Ethereum"}.get(chain_norm, chain_norm.upper()),
+                timestamp=now_ts,
+                note="client_reported_external_send",
+            )
+        except Exception as history_err:
+            logger.warning("[evm-tx/record] wallet history append failed: %s", history_err)
+
         return jsonify(ok=True, event_id=event_id, tx_hash=tx_hash,
                        status="unverified_local_submission",
                        affects_balance=False, affects_pool=False), 200

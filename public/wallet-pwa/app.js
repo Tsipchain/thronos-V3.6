@@ -1425,7 +1425,7 @@ async function showWallet() {
         <button class="action-btn" id="createTokenBtn"><span class="action-btn__icon">🪙</span>Create Token</button>
         <button class="action-btn" id="nftBtn"><span class="action-btn__icon">🖼️</span>NFTs</button>
         <button class="action-btn" id="epochBtn"><span class="action-btn__icon">⏳</span>Epoch</button>
-        <button class="action-btn" id="withdrawBtn" disabled style="opacity:0.38;cursor:not-allowed;" title="Withdraw — being upgraded"><span class="action-btn__icon">💰</span>Withdraw</button>
+        <button class="action-btn" id="withdrawBtn"><span class="action-btn__icon">💰</span>Withdraw</button>
       </div>
     </div>
   `);
@@ -1484,15 +1484,7 @@ async function showWallet() {
   document.getElementById('nftBtn').addEventListener('click', showNFTs);
   document.getElementById('epochBtn').addEventListener('click', showEpoch);
   document.getElementById('historyBtn').addEventListener('click', () => showHistory(address));
-  document.getElementById('withdrawBtn').addEventListener('click', (e) => {
-    if (e.currentTarget.disabled) {
-      alert(
-        'Withdraw is being upgraded.\n\n' +
-        'Use Send for personal wallet assets, or the Pools screen for pool withdrawals.\n\n' +
-        '(Pool withdrawals require a confirmed pool position.)'
-      );
-    }
-  });
+  document.getElementById('withdrawBtn').addEventListener('click', () => showWithdraw(address));
 
   const setAddrBarValue = (full) => {
     const lineEl = document.getElementById('addrLine');
@@ -4214,6 +4206,36 @@ async function showWithdraw(address) {
       if (!amount || amount <= 0) return renderPage('Enter a valid amount.', { token, chain: destChain });
       if (amount > maxWd) return renderPage(`Max withdrawal is $${max_wd}.`, { token, chain: destChain });
       if (!/^0x[0-9a-f]{40}$/i.test(destAddr)) return renderPage('Enter a valid EVM wallet address (0x…).', { token, chain: destChain });
+
+      // ── Biometric / passkey confirmation — same user-presence pattern as
+      // PR #745 (external EVM send) and PR #747 (pool deposit). Required
+      // right before the final withdrawal submission, even if the wallet is
+      // already unlocked. Server-side signing still needs the pledge secret,
+      // but the biometric proves the human is physically present at submit.
+      const fid = LS.getObj(`thr_fid_${address}`);
+      if (fid?.credId) {
+        document.getElementById('wdSubmitBtn').textContent = 'Confirm with biometric…';
+        try {
+          await assertWebAuthn(fid.credId);
+        } catch (biomErr) {
+          document.getElementById('wdSubmitBtn').textContent = 'Withdraw';
+          document.getElementById('wdSubmitBtn').disabled = false;
+          return renderPage('Biometric confirmation cancelled — withdrawal aborted.', { token, chain: destChain });
+        }
+      } else {
+        const confirmed = confirm(
+          `Confirm withdrawal:\n\n` +
+          `Amount: ${amount} ${token}\n` +
+          `To: ${destAddr}\n` +
+          `Chain: ${destChain.toUpperCase()}\n\n` +
+          `No biometric registered on this device — proceeding uses your pledge secret. Continue?`
+        );
+        if (!confirmed) {
+          document.getElementById('wdSubmitBtn').textContent = 'Withdraw';
+          document.getElementById('wdSubmitBtn').disabled = false;
+          return renderPage('Withdrawal cancelled by user.', { token, chain: destChain });
+        }
+      }
 
       submitting = true;
       document.getElementById('wdSubmitBtn').textContent = 'Processing…';

@@ -24406,6 +24406,75 @@ def _new_pool_event_id() -> str:
     return f"POOL-{int(time.time())}-{_sec.token_hex(4).upper()}"
 
 
+# Standard Pythia AMM fee (0.3% — matches Uniswap V2 and existing JAM/THR display)
+POOL_FEE_BPS = int(_strip_env_quotes(os.getenv("POOL_FEE_BPS", "30")))
+
+
+def _pool_stats(pool: dict, cfg: dict) -> dict:
+    """Compute display stats for a Pythia AMM pool card:
+    - last_swap_price  — most recent swap ratio (external per 1 THR); falls back
+                         to current reserve ratio if no swaps have happened yet
+    - volume_24h_usd   — sum of external-side amounts in the last 24h (USDT/USDC ~ 1 USD)
+    - apy_pct          — 24h fees × 365 / TVL, expressed as %
+    - fee_bps          — pool fee (bps, default 30 = 0.3%)
+    Cheap computation over the events list — no separate index/table needed.
+    """
+    ext_res = float(pool.get("external_reserve") or 0)
+    thr_res = float(pool.get("thr_reserve") or 0)
+    events  = pool.get("events") or []
+    fee_bps = int(pool.get("fee_bps") or POOL_FEE_BPS)
+
+    # Reserve-ratio price as baseline (external per 1 THR)
+    ratio_price = (ext_res / thr_res) if (ext_res > 0 and thr_res > 0) else 0.0
+
+    # Look for the most recent swap in the events list
+    last_swap_price = ratio_price
+    now_ts = int(time.time())
+    cutoff = now_ts - 86400
+    volume_24h_ext = 0.0
+    for ev in reversed(events):
+        etype = (ev.get("event_type") or "").lower()
+        if etype != "swap":
+            continue
+        # We record swaps with amount_in/amount_out on the pool events; if only
+        # side/amount is recorded, we skip price extraction and keep the ratio.
+        ai = ev.get("amount_in")
+        ao = ev.get("amount_out")
+        try:
+            if ai is not None and ao is not None and float(ai) > 0 and float(ao) > 0:
+                side_in = (ev.get("side_in") or "").lower()
+                if side_in == "internal":
+                    price = float(ai) and (float(ao) / float(ai))  # ext per THR
+                else:
+                    price = float(ao) and (float(ai) / float(ao))
+                if price and last_swap_price == ratio_price:
+                    last_swap_price = price
+        except Exception:
+            pass
+        # Volume: sum external-side amounts in the last 24h
+        ts = int(ev.get("timestamp") or 0)
+        if ts >= cutoff:
+            try:
+                if (ev.get("side_in") or "").lower() == "external":
+                    volume_24h_ext += float(ev.get("amount_in") or 0)
+                elif (ev.get("side_out") or "").lower() == "external":
+                    volume_24h_ext += float(ev.get("amount_out") or 0)
+            except Exception:
+                pass
+
+    # APY: 24h fees × 365 / TVL. Stablecoin external assets valued at ~$1.
+    tvl_usd  = _pool_tvl_usd(pool)
+    fees_24h = volume_24h_ext * (fee_bps / 10000.0)
+    apy_pct  = ((fees_24h * 365.0) / tvl_usd * 100.0) if tvl_usd > 0 else 0.0
+
+    return {
+        "last_swap_price": round(last_swap_price, 8) if last_swap_price else 0.0,
+        "volume_24h_usd":  round(volume_24h_ext, 6),
+        "apy_pct":         round(apy_pct, 3),
+        "fee_bps":         fee_bps,
+    }
+
+
 # ─── Pool Accounting v1 routes ────────────────────────────────────────────────
 
 @app.route("/api/pools/status", methods=["GET"])
@@ -24418,6 +24487,7 @@ def api_pools_status():
         for pid, cfg in _POOL_CONFIGS.items():
             pool = ledger.get(pid, {})
             addrs = _pool_vault_addresses(pid)
+            stats = _pool_stats(pool, cfg)
             pools.append({
                 "pool_id":          pid,
                 "pair":             cfg["pair"],
@@ -24428,6 +24498,8 @@ def api_pools_status():
                 "thr_reserve":      float(pool.get("thr_reserve") or 0),
                 "tvl_usd":          _pool_tvl_usd(pool),
                 "last_updated":     pool.get("last_updated", ""),
+                "safety_mode":      _pool_safety_mode(),
+                **stats,
                 **addrs,
             })
         return jsonify(
@@ -24481,6 +24553,7 @@ def api_pools_tvl():
 
         ext_res = float(pool.get("external_reserve") or 0)
         thr_res = float(pool.get("thr_reserve") or 0)
+        stats   = _pool_stats(pool, cfg)
         return jsonify(
             ok=True,
             worker=_AMM_WORKER_NAME,
@@ -24494,6 +24567,8 @@ def api_pools_tvl():
             usdt_reserve=ext_res,          # convenience alias
             tvl_usd=_pool_tvl_usd(pool),
             last_snapshot=last_snap,
+            safety_mode=_pool_safety_mode(),
+            **stats,
             **addrs,
         ), 200
     except Exception as e:

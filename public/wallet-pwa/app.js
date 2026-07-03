@@ -3904,15 +3904,29 @@ async function showPools() {
           const mode   = p.safety_mode || 'accounting_only';
           const modeColor = mode === 'live' ? '#00ff88' : '#ffa500';
           const modeLabel = mode === 'live' ? 'LIVE' : mode;
+          // Real-pool stats (APY, last swap, 24h vol, fee) — parity with JAM/THR display
+          const apyPct    = Number(p.apy_pct || 0).toFixed(1);
+          const apyColor  = Number(p.apy_pct || 0) > 0 ? '#00ff66' : '#666';
+          const lastPrice = Number(p.last_swap_price || 0);
+          const lastPriceStr = lastPrice > 0 ? `1 THR ≈ ${lastPrice.toFixed(4)} ${p.external_asset}` : '—';
+          const vol24    = Number(p.volume_24h_usd || 0);
+          const vol24Str = vol24 > 0 ? `$${vol24.toFixed(2)}` : '—';
+          const feePct   = ((Number(p.fee_bps || 30)) / 100).toFixed(1);
           return `<div class="card" style="padding:12px;margin-bottom:8px;border:1px solid #00c8ff33">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
               <div style="font-size:.95rem;font-weight:700;color:#00c8ff">${p.pair}</div>
-              <div style="font-size:.72rem;color:${modeColor};font-weight:600">${modeLabel}</div>
+              <div style="display:flex;align-items:center;gap:8px">
+                <div style="font-size:.85rem;color:${apyColor};font-weight:700">APY ${apyPct}%</div>
+                <div style="font-size:.65rem;color:${modeColor};font-weight:600">${modeLabel}</div>
+              </div>
             </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;font-size:.75rem;color:var(--muted);margin-bottom:8px">
-              <div>${p.external_asset} reserve: <span style="color:#fff">${extRes}</span></div>
-              <div>THR reserve: <span style="color:#fff">${thrRes}</span></div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;font-size:.75rem;color:var(--muted);margin-bottom:6px">
+              <div>Reserves ${p.external_asset}: <span style="color:#fff">${extRes}</span></div>
+              <div>Reserves THR: <span style="color:#fff">${thrRes}</span></div>
               <div>TVL: <span style="color:#fff">${tvl}</span></div>
+              <div>Fee: <span style="color:#fff">${feePct}%</span></div>
+              <div>24h Volume: <span style="color:#fff">${vol24Str}</span></div>
+              <div>Last swap: <span style="color:#fff">${lastPriceStr}</span></div>
               <div>Chain: <span style="color:#fff">${p.chain}</span></div>
               <div>Worker: <span style="color:#fff">${p.worker || 'pythia_amm_worker'}</span></div>
             </div>
@@ -3921,8 +3935,8 @@ async function showPools() {
             </div>` : ''}
             <div style="display:flex;gap:6px">
               <button class="btn btn--ghost" style="flex:1;padding:7px;font-size:.75rem" onclick="showPythiaDeposit('${p.pool_id}','${p.pair}','${p.external_asset}')">💧 Add</button>
+              <button class="btn btn--ghost" style="flex:1;padding:7px;font-size:.75rem" onclick="showPythiaQuote('${p.chain}','${p.external_asset}')">🔁 Swap</button>
               <button class="btn btn--ghost" style="flex:1;padding:7px;font-size:.75rem" onclick="showPythiaWithdrawIntent('${p.pool_id}','${p.pair}','${p.external_asset}')">📋 Intent</button>
-              <button class="btn btn--ghost" style="flex:1;padding:7px;font-size:.75rem" onclick="showPythiaQuote('${p.chain}','${p.external_asset}')">📊 Quote</button>
             </div>
           </div>`;
         }).join('')}

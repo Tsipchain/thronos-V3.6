@@ -1,3 +1,6 @@
+// AUTO-GENERATED MIRROR — do not edit directly.
+// Canonical source: static/wallet_session.js
+// Re-sync with: scripts/sync-wallet-session.sh
 (function(window){
   const VERSION = 'wallet-v1-state-sync-2026-05-30';
   const ADDRESS_KEY = 'thr_address';
@@ -836,12 +839,23 @@
   // ── Universal wallet action intent ────────────────────────────────────────────
 
   function _canonicalWalletActionIntentMsg(intent) {
+    // Must match server _canonical_wallet_action_intent() exactly.
     const fields = ['action','amount','asset','chain','created_at','from_thr',
                     'nonce','payload_hash','recipient','type','version','wallet_id'];
     const parts = fields.map(k => JSON.stringify(k) + ':' + JSON.stringify(String(intent[k] !== undefined ? intent[k] : '')));
     return '{' + parts.join(',') + '}';
   }
 
+  /**
+   * Build a signed wallet action intent object.
+   *
+   * @param {string} action  — one of: internal_transfer, swap, pool_deposit_intent,
+   *                           pool_withdraw_intent, token_create, nft_mint, nft_buy, bridge, pledge
+   * @param {object} params  — { from_thr, wallet_id?, chain?, asset?, amount?, recipient? }
+   * @param {object} payload — action-specific parameters hashed into payload_hash
+   *                           (send this alongside the intent to the server)
+   * @returns {object} intent object with payload_hash set
+   */
   async function buildWalletActionIntent(action, params, payload) {
     const { from_thr, wallet_id, chain = 'thronos', asset = '', amount = '', recipient = '' } = (params || {});
     const pl = payload || {};
@@ -849,6 +863,7 @@
       ? crypto.randomUUID()
       : (Math.random().toString(36).slice(2) + Date.now().toString(36));
     const created_at = String(Math.floor(Date.now() / 1000));
+    // Deterministic payload JSON (sorted keys, no extra whitespace) — must match Python's sort_keys=True
     const sortedPl = Object.keys(pl).sort().reduce((acc, k) => { acc[k] = pl[k]; return acc; }, {});
     const payloadJson = JSON.stringify(sortedPl);
     const payload_hash = await sha256Hex(payloadJson);
@@ -868,6 +883,15 @@
     };
   }
 
+  /**
+   * Sign a wallet action intent with the wallet's secp256k1 signing key.
+   *
+   * PWA/Mobile: wallet must be unlocked (biometric/passkey).
+   * Web/Extension: wallet must be unlocked (PIN).
+   *
+   * @param {object} intent — output of buildWalletActionIntent
+   * @returns {{ signature: string, public_key: string }}
+   */
   async function signWalletActionIntent(intent) {
     if (isLocked() || !isBound()) throw new Error('wallet_locked');
     const secp = await _ensureSecpLoaded();
@@ -1212,11 +1236,15 @@
   // Returns Promise<boolean>. Resolves false on cancel or on any failure.
   async function confirmUserPresence(actionLabel = 'confirm this action', options = {}){
     const activeAddr = getAddress();
+    // Try WebAuthn first if available AND a credential was registered for this wallet.
+    // The credential lookup mirrors the PWA `thr_fid_<addr>` scheme so a single
+    // wallet unlocked on both PWA and web reuses the same credential.
     try {
       const fidRaw = activeAddr ? localStorage.getItem(`thr_fid_${activeAddr}`) : null;
       const fid = fidRaw ? JSON.parse(fidRaw) : null;
       if (fid?.credId && window.PublicKeyCredential
           && await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable().catch(() => false)) {
+        // Convert hex credId to bytes
         const hexToBytes = h => new Uint8Array(h.match(/.{1,2}/g).map(b => parseInt(b, 16)));
         await navigator.credentials.get({
           publicKey: {
@@ -1229,10 +1257,14 @@
         return true;
       }
     } catch (webauthnErr) {
+      // WebAuthn cancelled/failed — user cancelled the biometric prompt.
+      // Do NOT silently fall back to PIN — respect the cancellation.
       if (options.strict) return false;
+      // Non-strict: if credential existed but assertion failed, treat as cancelled
       const fidRaw = activeAddr ? localStorage.getItem(`thr_fid_${activeAddr}`) : null;
       if (fidRaw) return false;
     }
+    // No biometric registered → PIN prompt fallback
     return requirePin(actionLabel);
   }
 
@@ -1342,6 +1374,8 @@
     };
   }
 
+  // Derive the EVM address for the current wallet from its public key.
+  // Calls the server keccak/address utility — no private key involved.
   async function deriveEvmAddress() {
     const pubkey = getPublicKey();
     if (!pubkey) return null;
@@ -1353,6 +1387,8 @@
     } catch { return null; }
   }
 
+  // Sign a raw 32-byte hash (hex) for EVM transactions.
+  // Keeps private key inside closure — caller only gets (r, s, recovery).
   async function signEvmTxHash(txHashHex) {
     if (isLocked() || !isBound()) throw new Error('wallet_locked');
     if (!unlockedPrivateKeyHex) throw new Error('wallet_locked');

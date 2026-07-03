@@ -4671,10 +4671,25 @@ def save_token_balances(balances):
     save_json(TOKEN_BALANCES_FILE, balances)
 
 def load_pools():
-    """Load all liquidity pools from ``POOLS_FILE``."""
+    """Load all Thronos-native AMM pools from ``POOLS_FILE`` (pools.json).
+
+    NOTE — the codebase has **two** distinct pool ledgers, by design:
+
+    * ``POOLS_FILE`` (``pools.json``) — legacy Thronos-native AMM. Pairs live
+      on-chain via ledger accounting: THR ↔ JAM, THR ↔ WBTC, THR ↔ USDT native.
+      Used by the legacy pool UI (JAM/THR card, WBTC/THR card).
+    * ``POOL_LIQUIDITY_LEDGER_FILE`` (``pool_liquidity_ledger.json``) — new
+      Pythia cross-chain AMM. Pairs sit half on Thronos (THR side) and half
+      on an external chain (USDT-on-BSC, USDC-on-Base), matched by the
+      pool deposit watcher. Used by the Pythia AMM section of the pool UI.
+
+    These serve different domains and are NOT interchangeable. When adding
+    a feature, pick the ledger that matches the pool's chain topology.
+    """
     return load_json(POOLS_FILE, [])
 
 def save_pools(pools):
+    """Persist to ``POOLS_FILE`` — legacy Thronos-native AMM. See ``load_pools``."""
     save_json(POOLS_FILE, pools)
 
 
@@ -9727,6 +9742,32 @@ def _build_wallet_history_fallback(address: str, limit: int, cursor: int) -> dic
 def api_wallet_history():
     """
     Get wallet transaction history with category grouping and summaries (Phase 4).
+
+    ── Wallet history endpoint map ──────────────────────────────────────
+    The codebase currently exposes FOUR history endpoints, each serving a
+    distinct consumer. When wiring a new client, pick by intent:
+
+      GET  /api/wallet/history?address=…      (this handler)
+          Phase 4 category-grouped format with summaries. Used by the
+          legacy web wallet viewer. Query-param address.
+
+      GET  /api/wallet/history/<thr_addr>     (api_v1_wallet_history)
+          Path-param canonical format used by the PWA / mobile clients.
+          Reads WALLET_HISTORY_FILE.
+
+      GET  /api/wallet/history/normalized     (api_wallet_history_normalized)
+          Full aggregation across all domains (music, AI, IoT, pledges,
+          swaps, liquidity, NFT, gateway, Pythia, migration) for
+          PWA / mobile / extensions that render the unified feed.
+
+      GET  /api/v2/wallet/history             (api_v2_wallet_history)
+          Optimised microservice endpoint intended to be offloaded to
+          Node 3. Lightweight, cacheable.
+
+    Prefer /api/wallet/history/normalized for new PWA/mobile UIs and
+    /api/wallet/history/<addr> when a caller only needs the raw event list.
+    ─────────────────────────────────────────────────────────────────────
+
 
     Query params:
     - address: THR address
@@ -33377,6 +33418,10 @@ def _seed_usdt_thr_pool(usdt_amount: float, thr_amount: float) -> dict | None:
     liquidity pool (auto-created if missing). Mirrors the existing
     BTC-bridge behavior of seeding pool liquidity from external deposits —
     no user balance is debited since this capital is new to the chain.
+
+    Writes to the legacy ``pools.json`` (Thronos-native THR/USDT pair).
+    The Pythia cross-chain bsc-usdt pool is credited separately via the
+    autolock threshold in ``_autolock_pledge_to_pythia_pool``.
     """
     try:
         pools = load_pools()

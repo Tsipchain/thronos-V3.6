@@ -2067,6 +2067,9 @@ function buildPythiaCard(p) {
     const safety = p.safety_mode   || 'accounting_only';
     const vault  = p.pool_vault    || '—';
     const payout = p.payout_wallet || '—';
+    // Dynamic label + style based on live/test/accounting mode
+    const safetyLabel = safety === 'live' ? 'LIVE' : safety.toUpperCase();
+    const safetyColor = safety === 'live' ? '#00ff88' : '#ffa500';
 
     const div = document.createElement('div');
     div.className = 'pythia-pool-card';
@@ -2074,7 +2077,7 @@ function buildPythiaCard(p) {
         <div class="pythia-pool-header">
             <span class="pythia-pool-pair">${p.pair || p.pool_id}</span>
             <span class="pythia-badge">Pythia AMM</span>
-            <span class="safety-badge">${safety}</span>
+            <span class="safety-badge" style="color:${safetyColor};border-color:${safetyColor}">${safetyLabel}</span>
         </div>
         <div class="pythia-pool-stats">
             <div class="pythia-stat"><div class="pythia-stat-label">Pool ID</div><div class="pythia-stat-value">${p.pool_id}</div></div>

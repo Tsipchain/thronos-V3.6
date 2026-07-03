@@ -1204,6 +1204,38 @@
   function saveSession({address, sendSeed, pin, bound} = {}){ setAddress(address || ''); setSendSeed(sendSeed || ''); setPin(pin || ''); setBound(bound !== undefined ? !!bound : !!(address && sendSeed)); if (address || sendSeed) localStorage.setItem(LOCK_KEY, '0'); }
   function requirePin(actionLabel = 'continue'){ const stored = getPin(); if(!stored) return true; const entered = prompt(`Enter wallet PIN to ${actionLabel}`); if(entered === null) return false; if(entered !== stored){ alert('Wrong PIN.'); return false; } return true; }
 
+  // ── Unified user-presence check ─────────────────────────────────────────────
+  // Same conceptual gate as PWA biometric prompt (assertWebAuthn) but works on
+  // any surface. Preference order:
+  //   1. Registered WebAuthn/passkey on this device (Face ID / Touch ID / Windows Hello)
+  //   2. PIN prompt fallback (web wallet, or devices with no biometric registered)
+  // Returns Promise<boolean>. Resolves false on cancel or on any failure.
+  async function confirmUserPresence(actionLabel = 'confirm this action', options = {}){
+    const activeAddr = getAddress();
+    try {
+      const fidRaw = activeAddr ? localStorage.getItem(`thr_fid_${activeAddr}`) : null;
+      const fid = fidRaw ? JSON.parse(fidRaw) : null;
+      if (fid?.credId && window.PublicKeyCredential
+          && await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable().catch(() => false)) {
+        const hexToBytes = h => new Uint8Array(h.match(/.{1,2}/g).map(b => parseInt(b, 16)));
+        await navigator.credentials.get({
+          publicKey: {
+            challenge: crypto.getRandomValues(new Uint8Array(32)),
+            allowCredentials: [{ type: 'public-key', id: hexToBytes(fid.credId) }],
+            userVerification: 'required',
+            timeout: 60000,
+          }
+        });
+        return true;
+      }
+    } catch (webauthnErr) {
+      if (options.strict) return false;
+      const fidRaw = activeAddr ? localStorage.getItem(`thr_fid_${activeAddr}`) : null;
+      if (fidRaw) return false;
+    }
+    return requirePin(actionLabel);
+  }
+
   async function resolveCanonicalWalletAddress(options = {}) {
     const maxAttempts = options.maxAttempts || 10;
     const retryIntervalMs = options.retryIntervalMs || 250;
@@ -1355,7 +1387,7 @@
     getCredentialLookupAddress, getSendSeed, setSendSeed, getSendSecret, setSendSecret,
     hasSigningMaterial, hasRuntimeSigningMaterial, getWalletAuthDiagnostics, logWalletAuthDiagnostics,
     getPin, setPin, isLocked, lockWallet, lock: lockWallet, unlockWallet, unlock: unlockWallet, unlock,
-    setCustomUnlockHandler, isBound, setBound, disconnect, forgetDevice, clearSession, saveSession, requirePin,
+    setCustomUnlockHandler, isBound, setBound, disconnect, forgetDevice, clearSession, saveSession, requirePin, confirmUserPresence,
     isUnlockedFor,
     getDebugState, restoreToMigratedWallet, resetActiveWalletPointers, clearAllWalletData, isValidThrAddress,
     persistActiveUserAddress, isSystemWalletAddress,

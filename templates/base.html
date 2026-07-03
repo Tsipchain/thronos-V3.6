@@ -5344,6 +5344,18 @@ async function _doEvmSend(network, evmAddr, tokenSym) {
             if (resultEl) resultEl.innerHTML = '<span style="color:#f88">Provide authorization to proceed.</span>'; return;
         }
 
+        // ── User-presence check (biometric/passkey → PIN fallback) ─────────
+        // Same conceptual gate as PWA biometric prompt: prove user is present
+        // right before signing/submitting, regardless of whether the wallet
+        // was unlocked earlier in the session.
+        if (canSign && walletSession.confirmUserPresence) {
+            const ok = await walletSession.confirmUserPresence(`send ${amt} ${assetStr} to ${toAddr.slice(0,10)}…`);
+            if (!ok) {
+                if (resultEl) resultEl.innerHTML = '<span style="color:#f88">Transfer cancelled — user presence not confirmed.</span>';
+                return;
+            }
+        }
+
         if (resultEl) resultEl.innerHTML = '<span style="color:#8af">Processing internal transfer…</span>';
 
         let postBody;

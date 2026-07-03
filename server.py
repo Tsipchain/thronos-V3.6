@@ -5067,6 +5067,7 @@ def _base_token_catalog():
             "logo_url": url_for("static", filename="img/thronos-token.png", _external=False),
             "total_supply": supply_of(ledger),
             "type": "native",
+            "transferable": True,
         },
         {
             "symbol": "WBTC",
@@ -5075,6 +5076,7 @@ def _base_token_catalog():
             "logo_url": url_for("static", filename="img/wbtc-logo.png", _external=False),
             "total_supply": supply_of(wbtc_ledger),
             "type": "wrapped",
+            "transferable": True,
         },
         {
             "symbol": "L2E",
@@ -5083,6 +5085,31 @@ def _base_token_catalog():
             "logo_url": url_for("static", filename="img/l2e-logo.png", _external=False),
             "total_supply": supply_of(l2e_ledger),
             "type": "reward",
+            "transferable": True,
+        },
+        # Cross-chain shadow tokens: transferable via token_balances internal ledger.
+        # Balances are credited from on-chain deposits (pool_deposit_watcher) or from
+        # pledge_vault sweeps. Artists can accept these as tips and later withdraw
+        # to their own EVM address via the withdrawal flow.
+        {
+            "symbol": "USDT",
+            "name": "Tether USD (cross-chain shadow)",
+            "decimals": 6,
+            "logo_url": url_for("static", filename="img/usdt-logo.png", _external=False),
+            "total_supply": 0.0,
+            "type": "crosschain_shadow",
+            "transferable": True,
+            "origin_chain": "bsc",
+        },
+        {
+            "symbol": "USDC",
+            "name": "USD Coin (cross-chain shadow)",
+            "decimals": 6,
+            "logo_url": url_for("static", filename="img/usdc-logo.png", _external=False),
+            "total_supply": 0.0,
+            "type": "crosschain_shadow",
+            "transferable": True,
+            "origin_chain": "base",
         },
     ]
 
@@ -24347,13 +24374,29 @@ def _pool_vault_addresses(pool_id: str) -> dict:
     }
 
 
+def _pool_safety_mode() -> str:
+    """Determine live pool safety mode.
+    - 'live'             — watcher enabled, mock disabled → real on-chain flow
+    - 'accounting_only'  — legacy / dev default: no on-chain fund movement
+    - 'test_mode'        — mock endpoints re-enabled (POOL_TEST_MODE=1)
+    """
+    watcher_enabled = _strip_env_quotes(os.getenv("POOL_WATCHER_ENABLED", "0")) == "1"
+    test_mode       = _strip_env_quotes(os.getenv("POOL_TEST_MODE", "0")) == "1"
+    if test_mode:
+        return "test_mode"
+    if watcher_enabled:
+        return "live"
+    return "accounting_only"
+
+
 def _amm_worker_state() -> dict:
     state = load_json(PYTHIA_AMM_WORKER_STATE_FILE, {})
     state.setdefault("ok", True)
     state.setdefault("worker", _AMM_WORKER_NAME)
     state.setdefault("status", "active")
     state.setdefault("managed_pools", list(_POOL_CONFIGS.keys()))
-    state.setdefault("safety_mode", "accounting_only")
+    # Compute safety_mode dynamically from env — reflects real config, not stale state
+    state["safety_mode"] = _pool_safety_mode()
     state.setdefault("last_snapshot_ts", 0)
     return state
 
@@ -24390,7 +24433,7 @@ def api_pools_status():
         return jsonify(
             ok=True,
             worker=_AMM_WORKER_NAME,
-            safety_mode="accounting_only",
+            safety_mode=_pool_safety_mode(),
             pools=pools,
             last_snapshot_ts=worker.get("last_snapshot_ts", 0),
         ), 200
@@ -24541,6 +24584,23 @@ def api_pools_deposit():
 
         peid    = _new_pool_event_id()
         now_iso = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+
+        # ── Debit user's THR balance for the internal side ──────────────────
+        # In accounting_only mode this is a no-op; in live mode we debit the
+        # user's THR balance and credit it to the pool reserve. External
+        # (USDT/USDC) side is not debited here — it must arrive on-chain to
+        # the vault and get credited via credit-external-deposit.
+        if side == "internal" and asset == "THR" and _pool_safety_mode() == "live":
+            main_ledger = load_json(LEDGER_FILE, {})
+            current = float(main_ledger.get(address, 0) or 0)
+            if current < amount:
+                return jsonify(
+                    ok=False,
+                    error="insufficient_thr_balance",
+                    balance=current, required=amount,
+                ), 400
+            main_ledger[address] = round(current - amount, 6)
+            save_json(LEDGER_FILE, main_ledger)
 
         ledger = _load_pool_ledger()
         pool   = ledger[pool_id]
@@ -33192,10 +33252,106 @@ def _seed_usdt_thr_pool(usdt_amount: float, thr_amount: float) -> dict | None:
         pool["reserves_a"] = round(float(pool.get("reserves_a", 0.0) or 0.0) + thr_amount, 6)
         pool["reserves_b"] = round(float(pool.get("reserves_b", 0.0) or 0.0) + usdt_amount, 6)
         save_pools(pools)
+
+        # ── Pledge → Pythia pool auto-lock ────────────────────────────────────
+        # Accumulate pledge inflows into a running counter. When it crosses the
+        # PLEDGE_POOL_AUTOLOCK_THRESHOLD_USDT threshold, atomically lock the
+        # threshold amount into the Pythia bsc-usdt pool's external_reserve
+        # (accounting only — on-chain USDT still lives in BSC_USDT_PLEDGE_VAULT
+        # until an admin sweep moves it to the pool vault). The event is
+        # recorded in wallet history under SYSTEM_PYTHIA_ACTIONS for audit.
+        try:
+            _autolock_pledge_to_pythia_pool(usdt_amount)
+        except Exception as autolock_err:
+            app.logger.warning("[pledge_autolock] failed: %s", autolock_err)
+
         return pool
     except Exception:
         app.logger.exception("Failed to seed THR/USDT pool from pledge")
         return None
+
+
+PLEDGE_POOL_AUTOLOCK_THRESHOLD_USDT = float(_strip_env_quotes(
+    os.getenv("PLEDGE_POOL_AUTOLOCK_THRESHOLD_USDT", "1000000")
+))
+_PLEDGE_POOL_ACCUMULATOR_FILE = os.path.join(DATA_DIR, "pledge_pool_accumulator.json")
+
+
+def _autolock_pledge_to_pythia_pool(usdt_amount: float) -> None:
+    """Accumulate pledge inflows and auto-lock to Pythia bsc-usdt pool when
+    threshold is reached. Threshold-based (default 1M USDT). Reuses the same
+    pool_liquidity_ledger + pool_add_liquidity_lp_minted event as the watcher
+    path — no new accounting model."""
+    if usdt_amount <= 0 or PLEDGE_POOL_AUTOLOCK_THRESHOLD_USDT <= 0:
+        return
+    acc_state = load_json(_PLEDGE_POOL_ACCUMULATOR_FILE, {"accumulated_usdt": 0.0, "lock_count": 0})
+    if not isinstance(acc_state, dict):
+        acc_state = {"accumulated_usdt": 0.0, "lock_count": 0}
+    accumulated = float(acc_state.get("accumulated_usdt") or 0) + usdt_amount
+
+    # Process each threshold crossing (in case of a large single pledge)
+    while accumulated >= PLEDGE_POOL_AUTOLOCK_THRESHOLD_USDT:
+        locked = PLEDGE_POOL_AUTOLOCK_THRESHOLD_USDT
+        accumulated -= locked
+        acc_state["lock_count"] = int(acc_state.get("lock_count", 0)) + 1
+
+        lock_event_id = f"PLEDGE-LOCK-{int(time.time())}-{secrets.token_hex(4).upper()}"
+        now_iso = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+
+        # Credit Pythia bsc-usdt pool external_reserve (same helpers as watcher path)
+        try:
+            ledger = _load_pool_ledger()
+            pool   = ledger.setdefault("bsc-usdt", {
+                "pool_id": "bsc-usdt", "external_reserve": 0.0, "thr_reserve": 0.0, "events": [],
+            })
+            pool["external_reserve"] = round(float(pool.get("external_reserve") or 0) + locked, 8)
+            pool["last_updated"]     = now_iso
+            pool.setdefault("events", []).append({
+                "pool_event_id":  lock_event_id,
+                "event_type":     "pledge_vault_pool_autolock",
+                "address":        PYTHIA_SYSTEM_THR_ADDRESS,
+                "pool_id":        "bsc-usdt",
+                "side":           "external",
+                "asset":          "USDT",
+                "amount":         locked,
+                "direction":      "allocate",
+                "status":         "confirmed",
+                "source":         "pledge_vault_autolock",
+                "chain":          "bsc",
+                "worker":         _AMM_WORKER_NAME,
+                "timestamp":      int(time.time()),
+                "timestamp_iso":  now_iso,
+                "threshold_usdt": PLEDGE_POOL_AUTOLOCK_THRESHOLD_USDT,
+                "lock_count":     acc_state["lock_count"],
+            })
+            _save_pool_ledger(ledger)
+        except Exception as ledger_err:
+            app.logger.warning("[pledge_autolock] ledger credit failed: %s", ledger_err)
+
+        # System audit event
+        try:
+            add_wallet_history_event(
+                thr_address="SYSTEM_PYTHIA_ACTIONS",
+                event_type="pledge_vault_pool_autolock",
+                chain="bsc",
+                asset="USDT",
+                amount=locked,
+                status="confirmed",
+                direction="system",
+                internal_txid=lock_event_id,
+                network_label="BNB Chain",
+                note=f"Pledge accumulator reached {PLEDGE_POOL_AUTOLOCK_THRESHOLD_USDT} USDT → locked into bsc-usdt pool (lock #{acc_state['lock_count']})",
+            )
+        except Exception as hist_err:
+            app.logger.warning("[pledge_autolock] history append failed: %s", hist_err)
+
+        app.logger.info("[pledge_autolock] locked %.2f USDT into bsc-usdt pool (lock #%d, event=%s)",
+                        locked, acc_state["lock_count"], lock_event_id)
+
+    acc_state["accumulated_usdt"]      = round(accumulated, 6)
+    acc_state["last_updated"]          = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    acc_state["threshold_usdt"]        = PLEDGE_POOL_AUTOLOCK_THRESHOLD_USDT
+    save_json(_PLEDGE_POOL_ACCUMULATOR_FILE, acc_state)
 
 
 @app.route("/api/pledge/bnb/quote")

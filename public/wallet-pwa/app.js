@@ -3883,20 +3883,31 @@ async function showPools() {
     // ── Pythia AMM Pools section ────────────────────────────────────────────
     let pythiaHtml = '';
     if (pythiaPools.length) {
+      // Determine effective safety mode from server response — reflects real env config
+      const modeAll = (pythiaPools.find(p => p.safety_mode)?.safety_mode) || 'accounting_only';
+      const modeBanner = {
+        live:              { color: '#00ff88', bg: 'rgba(0,255,136,0.08)', border: '#00ff8844', icon: '🟢', text: 'Live pools — on-chain deposits are watched and credited to LP shares.' },
+        test_mode:         { color: '#ffa500', bg: 'rgba(255,165,0,0.08)', border: '#ffa50044', icon: '⚠️', text: 'Test mode — admin mock credit enabled (POOL_TEST_MODE=1). Not for production.' },
+        accounting_only:   { color: '#ffa500', bg: 'rgba(255,165,0,0.08)', border: '#ffa50044', icon: '⚠️', text: 'Accounting pools — no on-chain fund movement. Safety mode: accounting_only.' },
+      }[modeAll] || { color: '#888', bg: 'rgba(255,255,255,0.05)', border: '#33333344', icon: 'ℹ️', text: `Safety mode: ${modeAll}` };
+
       pythiaHtml = `
         <div style="font-size:.75rem;text-transform:uppercase;letter-spacing:1px;color:#00c8ff;margin:10px 0 6px">⚙️ Pythia AMM Pools</div>
-        <div style="background:rgba(255,165,0,0.08);border:1px solid #ffa50044;border-radius:6px;padding:8px 10px;font-size:.72rem;color:#ffa500;margin-bottom:8px">
-          ⚠️ Accounting pools — no on-chain fund movement. Safety mode: accounting_only.
+        <div style="background:${modeBanner.bg};border:1px solid ${modeBanner.border};border-radius:6px;padding:8px 10px;font-size:.72rem;color:${modeBanner.color};margin-bottom:8px">
+          ${modeBanner.icon} ${modeBanner.text}
         </div>
         ${pythiaPools.map(p => {
           const extRes = Number(p.external_reserve || 0).toFixed(4);
           const thrRes = Number(p.thr_reserve || 0).toFixed(4);
           const tvl    = `$${Number(p.tvl_usd || 0).toFixed(2)}`;
           const myPos  = pythiaPositions.find(pp => pp.pool_id === p.pool_id);
+          const mode   = p.safety_mode || 'accounting_only';
+          const modeColor = mode === 'live' ? '#00ff88' : '#ffa500';
+          const modeLabel = mode === 'live' ? 'LIVE' : mode;
           return `<div class="card" style="padding:12px;margin-bottom:8px;border:1px solid #00c8ff33">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
               <div style="font-size:.95rem;font-weight:700;color:#00c8ff">${p.pair}</div>
-              <div style="font-size:.72rem;color:#ffa500;font-weight:600">${p.safety_mode || 'accounting_only'}</div>
+              <div style="font-size:.72rem;color:${modeColor};font-weight:600">${modeLabel}</div>
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;font-size:.75rem;color:var(--muted);margin-bottom:8px">
               <div>${p.external_asset} reserve: <span style="color:#fff">${extRes}</span></div>
@@ -5444,16 +5455,19 @@ async function pwaOpenPoolDepositModal(network, evmAddr) {
   overlay.innerHTML = `
   <div style="background:#0d1520;border:1px solid #004488;border-radius:12px;padding:20px;width:100%;max-width:420px;font-size:13px;">
     <div style="font-weight:700;color:#00c8ff;margin-bottom:4px;font-size:15px;">💧 Deposit to Pythia Pool</div>
-    <div style="color:#888;font-size:10px;margin-bottom:14px;">Pool: <b>${escHtml(poolId)}</b></div>
+    <div style="color:#888;font-size:10px;margin-bottom:8px;">Pool: <b>${escHtml(poolId)}</b> · Both sides required (AMM)</div>
+    <div id="pwaPoolRatioArea" style="margin-bottom:10px;color:#8af;font-size:10px;">Loading pool ratio…</div>
     <div id="pwaPoolVaultArea" style="margin-bottom:12px;color:#aaa;font-size:11px;">Loading vault address…</div>
-    <label style="color:#aaa;font-size:11px;">Amount to deposit</label>
+    <label style="color:#aaa;font-size:11px;" id="pwaPoolExtLabel">External amount (USDT)</label>
     <input id="pwaPoolDepositAmt" type="number" min="0" step="any" placeholder="0.00" style="width:100%;box-sizing:border-box;margin:4px 0 10px;padding:8px;background:#071220;border:1px solid #004488;border-radius:6px;color:#fff;font-size:13px;">
-    <button id="pwaPoolBroadcastBtn" style="width:100%;padding:10px;background:rgba(0,200,255,0.16);border:1px solid #00c8ff;color:#00c8ff;border-radius:6px;cursor:pointer;font-size:13px;font-weight:700;">🔐 Deposit from this wallet (biometric)</button>
+    <label style="color:#aaa;font-size:11px;">THR amount (auto-calculated from pool ratio)</label>
+    <input id="pwaPoolDepositThrAmt" type="number" min="0" step="any" placeholder="0.00" readonly style="width:100%;box-sizing:border-box;margin:4px 0 10px;padding:8px;background:#0a0f18;border:1px solid #234;color:#aaa;font-size:13px;">
+    <button id="pwaPoolBroadcastBtn" style="width:100%;padding:10px;background:rgba(0,200,255,0.16);border:1px solid #00c8ff;color:#00c8ff;border-radius:6px;cursor:pointer;font-size:13px;font-weight:700;">🔐 Add liquidity — biometric confirm</button>
     <button id="pwaPoolConfirmBtn" style="width:100%;margin-top:6px;padding:8px;background:none;border:1px solid #234;color:#78a;border-radius:6px;cursor:pointer;font-size:11px;">I sent externally — record intent only</button>
     <button id="pwaPoolCancelBtn" style="width:100%;margin-top:8px;padding:8px;background:none;border:1px solid #333;border-radius:6px;color:#666;font-size:11px;cursor:pointer;">Cancel</button>
     <div id="pwaPoolDepositResult" style="margin-top:10px;font-size:11px;min-height:14px;"></div>
     <div style="margin-top:12px;padding:8px;background:rgba(0,200,255,0.04);border:1px solid #002244;border-radius:6px;font-size:10px;color:#557799;">
-      📌 Recommended: use the biometric deposit button — this wallet signs and broadcasts the transfer to the Pythia vault directly. LP shares are credited to your THR address once the on-chain watcher confirms the transfer.
+      📌 Adding liquidity requires <b>both sides</b>: your external (USDT/USDC) plus proportional THR at the current pool ratio. The USDT/USDC is broadcast to the Pythia vault on-chain; the THR is debited internally on Thronos. LP shares appear after the on-chain watcher confirms.
     </div>
   </div>`;
   overlay.addEventListener('click', e => { if(e.target===overlay) overlay.remove(); });
@@ -5461,14 +5475,33 @@ async function pwaOpenPoolDepositModal(network, evmAddr) {
 
   overlay.querySelector('#pwaPoolCancelBtn').addEventListener('click', () => overlay.remove());
 
-  // Fetch vault address
+  // Fetch vault address + pool ratio (both sides required for AMM add-liq)
+  let poolRatio = null;
   try {
     const r = await fetch(`/api/pools/tvl?pool_id=${encodeURIComponent(poolId)}`);
     const d = await r.json();
     const vaultEl = overlay.querySelector('#pwaPoolVaultArea');
+    const ratioEl = overlay.querySelector('#pwaPoolRatioArea');
+    const extLabelEl = overlay.querySelector('#pwaPoolExtLabel');
+    const asset = {bnb:'USDT', base:'USDC'}[network] || 'tokens';
+    if (extLabelEl) extLabelEl.textContent = `External amount (${asset})`;
+
+    // Pool ratio for auto-calculating THR side
+    const extRes = Number(d.external_reserve || 0);
+    const thrRes = Number(d.thr_reserve || 0);
+    if (extRes > 0 && thrRes > 0) {
+      poolRatio = thrRes / extRes; // THR per 1 external
+      overlay.dataset.poolRatio = String(poolRatio);
+      if (ratioEl) ratioEl.textContent = `Current pool ratio: 1 ${asset} ↔ ${poolRatio.toFixed(4)} THR`;
+    } else if (ratioEl) {
+      // Empty pool → first depositor sets the ratio
+      ratioEl.textContent = 'Pool is empty — first liquidity sets the ratio. Enter both amounts manually.';
+      const thrInput = overlay.querySelector('#pwaPoolDepositThrAmt');
+      if (thrInput) { thrInput.readOnly = false; thrInput.style.background = '#071220'; thrInput.style.color = '#fff'; thrInput.style.borderColor = '#004488'; }
+    }
+
     if (vaultEl) {
       const vault = d.pool_vault || d.evm_bsc_address || d.evm_base_address || '';
-      const asset = {bnb:'USDT', base:'USDC'}[network] || 'tokens';
       if (vault) {
         overlay.dataset.vaultAddr = vault;
         overlay.dataset.asset = asset.toUpperCase();
@@ -5488,6 +5521,16 @@ async function pwaOpenPoolDepositModal(network, evmAddr) {
     const vaultEl = overlay.querySelector('#pwaPoolVaultArea');
     if (vaultEl) vaultEl.textContent = 'Could not load vault address.';
   }
+
+  // Auto-calculate THR amount as user types external amount
+  overlay.querySelector('#pwaPoolDepositAmt')?.addEventListener('input', (e) => {
+    const extAmt = parseFloat(e.target.value || '0');
+    const ratio = parseFloat(overlay.dataset.poolRatio || '0');
+    const thrInput = overlay.querySelector('#pwaPoolDepositThrAmt');
+    if (ratio > 0 && extAmt > 0 && thrInput) {
+      thrInput.value = (extAmt * ratio).toFixed(6);
+    }
+  });
 
   overlay.querySelector('#pwaPoolConfirmBtn').addEventListener('click', async () => {
     const resultEl = overlay.querySelector('#pwaPoolDepositResult');
@@ -5520,7 +5563,9 @@ async function pwaOpenPoolDepositModal(network, evmAddr) {
   overlay.querySelector('#pwaPoolBroadcastBtn').addEventListener('click', async () => {
     const resultEl = overlay.querySelector('#pwaPoolDepositResult');
     const amt = parseFloat(overlay.querySelector('#pwaPoolDepositAmt')?.value || '0');
-    if (!amt || amt <= 0) { if (resultEl) resultEl.innerHTML = '<span style="color:#f88">Enter a valid amount.</span>'; return; }
+    const thrAmt = parseFloat(overlay.querySelector('#pwaPoolDepositThrAmt')?.value || '0');
+    if (!amt || amt <= 0) { if (resultEl) resultEl.innerHTML = '<span style="color:#f88">Enter a valid external amount.</span>'; return; }
+    if (!thrAmt || thrAmt <= 0) { if (resultEl) resultEl.innerHTML = '<span style="color:#f88">THR amount is required — AMM add-liquidity needs both sides.</span>'; return; }
     const thrAddr = _pwaSigningCtx?.address || '';
     if (!thrAddr) { if (resultEl) resultEl.innerHTML = '<span style="color:#f88">Wallet not connected.</span>'; return; }
     const asset = overlay.dataset.asset || ({bnb:'USDT', base:'USDC'}[network] || 'USDT');
@@ -5546,8 +5591,9 @@ async function pwaOpenPoolDepositModal(network, evmAddr) {
       }
     } else {
       const confirmed = confirm(
-        `Confirm pool deposit:\n\n` +
-        `Amount: ${amt} ${asset}\n` +
+        `Confirm pool deposit (both sides):\n\n` +
+        `External: ${amt} ${asset}\n` +
+        `THR:      ${thrAmt}\n` +
         `Pool: ${poolId}\n` +
         `Vault: ${vaultAddr}\n\n` +
         `No biometric registered on this device — proceeding uses your unlocked wallet key. Continue?`
@@ -5605,6 +5651,27 @@ async function pwaOpenPoolDepositModal(network, evmAddr) {
           body: JSON.stringify({address:thrAddr, chain:chainNorm, asset, to:vaultAddr, amount:amt, tx_hash:txHash, status:'submitted', direction:'out'}),
         }).catch(() => {});
       } catch {}
+
+      // ── THR side (internal debit) — submit proportional THR deposit ──
+      // Real AMM: LP requires BOTH sides. USDT/USDC broadcast to vault above,
+      // THR debited from user's Thronos balance and credited to pool thr_reserve.
+      try {
+        if (resultEl) resultEl.innerHTML = `<span style="color:#8af">Debiting proportional THR (${thrAmt})…</span>`;
+        const r = await fetch('/api/pools/deposit', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ address: thrAddr, pool_id: poolId, side: 'internal', asset: 'THR', amount: thrAmt }),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (r.ok && d.ok) {
+          if (resultEl) resultEl.innerHTML = `<span style="color:#56ff9a">✓ Both sides submitted!<br>External: ${amt} ${asset} (tx ${txHash.slice(0,10)}…)<br>THR: ${thrAmt} debited internally.<br>LP shares appear once watcher confirms USDT on-chain.</span>`;
+        } else if (d.error === 'insufficient_thr_balance') {
+          if (resultEl) resultEl.innerHTML = `<span style="color:#fa8">USDT sent on-chain ✓ but THR debit failed: insufficient balance (${d.balance} < ${d.required}). Please deposit the missing THR side manually via internal transfer once your balance is topped up.</span>`;
+        } else {
+          if (resultEl) resultEl.innerHTML = `<span style="color:#fa8">USDT sent on-chain ✓ but THR side failed: ${d.error || d.message || 'unknown'}. Retry the THR deposit manually.</span>`;
+        }
+      } catch (err) {
+        if (resultEl) resultEl.innerHTML = `<span style="color:#fa8">USDT sent on-chain ✓ but THR side error: ${err.message}</span>`;
+      }
     } catch (err) {
       if (resultEl) resultEl.innerHTML = `<span style="color:#f88">Error: ${err.message}</span>`;
     }

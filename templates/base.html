@@ -11197,6 +11197,10 @@ async function submitGlobalTip() {
             alert('Wrong PIN.');
             return;
         }
+    } else {
+        // If no PIN is set, require wallet confirmation at minimum
+        const confirm = prompt(`⚠️ Confirm sending ${amount} ${asset} tip to ${track.artist_name || track.artist || 'artist'}?\n\nType "YES" to confirm:`);
+        if (confirm?.toUpperCase() !== 'YES') return;
     }
 
     const hint = document.getElementById('globalTipHint');

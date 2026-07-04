@@ -1254,12 +1254,12 @@ async function renderMyPools() {
                             ${logoB ? `<img src="${logoB}" style="width: 24px; height: 24px; border-radius: 50%; margin-left: -8px;">` : ''}
                             ${pos.token_a}/${pos.token_b}
                         </div>
-                        <div class="position-share-badge">${pos.share_percent.toFixed(2)}% ${isEl ? 'του pool' : 'of pool'}</div>
+                        <div class="position-share-badge">${pos.share_pct.toFixed(2)}% ${isEl ? 'του pool' : 'of pool'}</div>
                     </div>
                     <div class="position-details">
                         <div class="position-detail">
                             <div class="position-detail-label">${isEl ? 'Τα shares σου' : 'Your Shares'}</div>
-                            <div class="position-detail-value">${pos.user_shares.toFixed(4)}</div>
+                            <div class="position-detail-value">${pos.liquidity_share.toFixed(4)}</div>
                         </div>
                         <div class="position-detail">
                             <div class="position-detail-label">${isEl ? 'Συνολικά shares' : 'Total Shares'}</div>

@@ -11106,7 +11106,23 @@ async function openGlobalTipModal(trackOverride) {
     if (!track) { alert('No active track'); return; }
     _globalTipTrack = track;
     try {
-        const auth = _globalTipAuth || await window.WalletAuth.requireUnlockedWallet();
+        // Check if wallet is already unlocked - only require unlock if necessary
+        let auth = _globalTipAuth;
+        if (!auth) {
+            // Try to use Wallet V1 if available and already unlocked
+            const v1Addr = walletSession ? walletSession.getAddress() : null;
+            const v1Unlocked = walletSession && walletSession.isUnlockedFor ? walletSession.isUnlockedFor(v1Addr) : false;
+            if (v1Addr && v1Unlocked) {
+                auth = { address: v1Addr, credentialLookupAddress: v1Addr };
+            } else if (window.WalletAuth) {
+                // Only prompt for unlock if WalletAuth is available and wallet not already unlocked
+                auth = await window.WalletAuth.requireUnlockedWallet();
+            }
+        }
+        if (!auth) {
+            alert('Wallet not connected');
+            return;
+        }
         _globalTipAuth = auth;
         const address = auth.address;
         const credentialLookupAddress = auth.credentialLookupAddress || address;

@@ -190,7 +190,32 @@ Governance:
   ├─ Research grants
   ├─ Infrastructure upgrades
   ├─ Bounties (security, development, art)
+  ├─ SigBalBot milestone airdrops (Sentinel subscribers)
   └─ Whatever community votes for
+```
+
+### **SigBalBot Milestone Airdrop Program**
+
+```
+Source: AI Pool (Community Treasury allocation)
+Trigger: Every 100 qualifying SigBalBot signal wins
+Distribution: 1 THR × rewards_multiplier per active Sentinel subscriber
+
+Tier multipliers:
+  Starter  (1.0x) → 1.0 THR per milestone
+  Pro      (1.5x) → 1.5 THR per milestone
+  Elite    (2.5x) → 2.5 THR per milestone
+  Whale    (5.0x) → 5.0 THR per milestone
+
+Eligibility:
+  - Active Sentinel subscription (expires_at > current time)
+  - Valid THR address registered at subscription time
+  - Automatic distribution via Pytheia governance bridge
+
+On-chain record:
+  - Transaction type: sigbalbot_milestone_airdrop
+  - Recorded in phantom_tx_chain.json with milestone details
+  - Ledger credited atomically for all eligible subscribers
 ```
 
 ### **Example Allocations**

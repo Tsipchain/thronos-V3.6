@@ -15466,6 +15466,24 @@ def api_admin_pytheia_control():
 
 # ─── END PYTHEIA CONTROL PLANE (ADMIN) ─────────────────────────────────────
 
+
+# ─── SigBalBot Context Bridge Status ───────────────────────────────────────
+
+@app.route("/api/admin/sigbalbot/status", methods=["GET"])
+def api_admin_sigbalbot_status():
+    denied = require_admin()
+    if denied:
+        return denied
+    try:
+        from sigbalbot_context_bridge import SigBalBotContextBridge
+        bridge = SigBalBotContextBridge()
+        return jsonify({"ok": True, "bridge": bridge.get_status()}), 200
+    except ImportError:
+        return jsonify({"ok": False, "error": "sigbalbot_context_bridge module not available"}), 404
+
+# ─── END SigBalBot Context Bridge ──────────────────────────────────────────
+
+
 @app.route("/api/admin/ai/chat", methods=["POST"])
 def api_admin_ai_chat():
     if NODE_ROLE != "ai_core":
@@ -33132,6 +33150,24 @@ if NODE_ROLE == "master" and SCHEDULER_ENABLED and ENABLE_CHAIN:
                          minutes=5, coalesce=True, max_instances=1,
                          id="pythia_amm_monitor")
         print("[SCHEDULER] Pythia AMM monitoring scheduled (every 5 min)")
+
+    # SigBalBot Context Bridge – polls SigBalBot for Sentinel-confirmed signals
+    try:
+        from sigbalbot_context_bridge import SigBalBotContextBridge, SIGBALBOT_POLL_INTERVAL
+        _sigbalbot_bridge = SigBalBotContextBridge()
+        if _sigbalbot_bridge.is_configured():
+            scheduler.add_job(_with_app_context(_sigbalbot_bridge.run_cycle), "interval",
+                             seconds=SIGBALBOT_POLL_INTERVAL,
+                             coalesce=True, max_instances=1, id="sigbalbot_context_bridge")
+            print(f"[SCHEDULER] SigBalBot context bridge scheduled (every {SIGBALBOT_POLL_INTERVAL}s)")
+        else:
+            print("[SCHEDULER] SigBalBot context bridge not configured (missing SIGBALBOT_WEBHOOK_URL or SIGBALBOT_API_KEY)")
+    except ImportError as e:
+        _sigbalbot_bridge = None
+        print(f"[SCHEDULER] SigBalBot context bridge unavailable: {e}")
+    except Exception as e:
+        _sigbalbot_bridge = None
+        print(f"[SCHEDULER] SigBalBot context bridge init error: {e}")
 
     scheduler.start()
     _active_schedulers.append(scheduler)

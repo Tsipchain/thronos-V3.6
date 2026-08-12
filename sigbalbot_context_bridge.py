@@ -52,12 +52,20 @@ def _derive_context_url(webhook_url: str) -> str:
     return f"{root}/context/trader-sentinel"
 
 
+def _derive_status_url(webhook_url: str) -> str:
+    if not webhook_url:
+        return ""
+    return webhook_url.rstrip("/") + "/status"
+
+
 class SigBalBotContextBridge:
     """Polls SigBalBot context endpoint and bridges signals into ThronosChain."""
 
     def __init__(self):
         self.context_url = _derive_context_url(SIGBALBOT_BASE_URL) if SIGBALBOT_BASE_URL else ""
+        self.status_url = _derive_status_url(SIGBALBOT_BASE_URL) if SIGBALBOT_BASE_URL else ""
         self.api_key = SIGBALBOT_API_KEY
+        self.context_capability_confirmed = False
         self.state = self._load_state()
         self.last_cursor: Optional[str] = self.state.get("last_cursor")
         self.processed_ids: List[str] = self.state.get("processed_signal_ids", [])
@@ -65,9 +73,36 @@ class SigBalBotContextBridge:
         self.cycle_count = 0
         self.total_signals_routed = self.state.get("total_signals_routed", 0)
         self._autonomous_trader = None
+        self._milestone_airdrop = None
 
     def is_configured(self) -> bool:
         return bool(self.context_url and self.api_key)
+
+    def check_context_capability(self) -> bool:
+        """Verify SigBalBot exposes the context_feed capability via status endpoint."""
+        if not self.status_url or not self.api_key:
+            return False
+        try:
+            resp = requests.get(
+                self.status_url,
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                logger.warning("[sigbalbot-bridge] status endpoint HTTP %d — context feed not yet available", resp.status_code)
+                return False
+            body = resp.json()
+            capabilities = body.get("capabilities", {})
+            context_feed = capabilities.get("context_feed", "")
+            if "/context/trader-sentinel" in context_feed:
+                self.context_capability_confirmed = True
+                logger.info("[sigbalbot-bridge] context_feed capability confirmed: %s", context_feed)
+                return True
+            logger.info("[sigbalbot-bridge] context_feed capability not present yet (capabilities=%s)", capabilities)
+            return False
+        except Exception as exc:
+            logger.warning("[sigbalbot-bridge] could not check status endpoint: %s", str(exc)[:120])
+            return False
 
     def _load_state(self) -> Dict[str, Any]:
         if not _STATE_FILE.exists():
@@ -95,6 +130,16 @@ class SigBalBotContextBridge:
                 }, f)
         except Exception as exc:
             logger.warning("[sigbalbot-bridge] could not save state: %s", exc)
+
+    def _get_milestone_airdrop(self):
+        if self._milestone_airdrop is None:
+            try:
+                from sigbalbot_milestone_airdrop import SigBalBotMilestoneAirdrop
+                self._milestone_airdrop = SigBalBotMilestoneAirdrop()
+                logger.info("[sigbalbot-bridge] milestone airdrop module loaded")
+            except Exception as exc:
+                logger.debug("[sigbalbot-bridge] milestone airdrop not available: %s", exc)
+        return self._milestone_airdrop
 
     def _get_autonomous_trader(self):
         if self._autonomous_trader is None:
@@ -274,6 +319,13 @@ class SigBalBotContextBridge:
             logger.debug("[sigbalbot-bridge] not configured, skipping cycle")
             return summary
 
+        if not self.context_capability_confirmed:
+            available = self.check_context_capability()
+            if not available:
+                summary["error"] = "capability_not_available"
+                logger.info("[sigbalbot-bridge] context_feed not available yet, skipping cycle")
+                return summary
+
         context = self.fetch_context()
         if context is None:
             summary["error"] = "fetch_failed"
@@ -339,6 +391,23 @@ class SigBalBotContextBridge:
                 summary["signals_routed"] += 1
                 self.total_signals_routed += 1
 
+        # Record qualifying wins for milestone airdrop tracking
+        milestone_airdrop = self._get_milestone_airdrop()
+        if milestone_airdrop and actionable_signals:
+            for signal in actionable_signals:
+                airdrop_result = milestone_airdrop.record_win(
+                    signal_id=str(signal.get("id", "")),
+                    symbol=signal.get("symbol", ""),
+                )
+                if airdrop_result:
+                    summary["milestone_airdrop"] = airdrop_result
+                    logger.info(
+                        "[sigbalbot-bridge] MILESTONE AIRDROP triggered: #%d — %.6f THR to %d subscribers",
+                        airdrop_result["milestone_number"],
+                        airdrop_result["total_distributed"],
+                        airdrop_result["active_subscribers"],
+                    )
+
         advisory = self._build_governance_advisory(actionable_signals)
         if advisory:
             summary["governance_advisory"] = advisory
@@ -365,8 +434,12 @@ class SigBalBotContextBridge:
 
     def get_status(self) -> Dict[str, Any]:
         """Return bridge status for health/status endpoints."""
+        milestone_airdrop = self._get_milestone_airdrop()
+        milestone_status = milestone_airdrop.get_status() if milestone_airdrop else None
+
         return {
             "configured": self.is_configured(),
+            "context_capability_confirmed": self.context_capability_confirmed,
             "context_url": self.context_url if self.is_configured() else None,
             "poll_interval_s": SIGBALBOT_POLL_INTERVAL,
             "last_cursor": self.last_cursor,
@@ -375,4 +448,5 @@ class SigBalBotContextBridge:
             "total_signals_routed": self.total_signals_routed,
             "processed_ids_count": len(self.processed_ids),
             "last_summary": getattr(self, "_last_summary", None),
+            "milestone_airdrop": milestone_status,
         }

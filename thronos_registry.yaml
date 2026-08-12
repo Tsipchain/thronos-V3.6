@@ -152,6 +152,7 @@ nodes:
     integration:
       - context-bridge-in-node1 (sigbalbot_context_bridge.py)
       - context-poller-in-sentinel (sigbalbot_context_poller.py)
+      - milestone-airdrop (sigbalbot_milestone_airdrop.py)
 
   - id: node8-payment-gateway
     name: "Thronos Payment Gateway"

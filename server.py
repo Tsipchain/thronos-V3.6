@@ -15481,6 +15481,28 @@ def api_admin_sigbalbot_status():
     except ImportError:
         return jsonify({"ok": False, "error": "sigbalbot_context_bridge module not available"}), 404
 
+@app.route("/api/admin/sigbalbot/milestone", methods=["GET"])
+def api_admin_sigbalbot_milestone():
+    denied = require_admin()
+    if denied:
+        return denied
+    try:
+        from sigbalbot_milestone_airdrop import SigBalBotMilestoneAirdrop
+        airdrop = SigBalBotMilestoneAirdrop()
+        return jsonify({"ok": True, "milestone": airdrop.get_status()}), 200
+    except ImportError:
+        return jsonify({"ok": False, "error": "sigbalbot_milestone_airdrop module not available"}), 404
+
+
+@app.route("/api/sigbalbot/milestone/progress", methods=["GET"])
+def api_sigbalbot_milestone_progress():
+    try:
+        from sigbalbot_milestone_airdrop import SigBalBotMilestoneAirdrop
+        airdrop = SigBalBotMilestoneAirdrop()
+        return jsonify({"ok": True, "progress": airdrop.get_progress()}), 200
+    except ImportError:
+        return jsonify({"ok": False, "error": "milestone tracking not available"}), 404
+
 # ─── END SigBalBot Context Bridge ──────────────────────────────────────────
 
 

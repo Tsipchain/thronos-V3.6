@@ -212,6 +212,10 @@
 - [ ] Advanced DeFi derivatives
 - [ ] Institutional on-boarding
 - [ ] Governance framework
+- [x] SigBalBot bidirectional context bridge (Pytheia integration)
+- [x] SigBalBot milestone THR airdrop system for Sentinel subscribers
+- [ ] SigBalBot context polling codex protocol compliance
+- [ ] Sentinel real wallet connectivity (Bybit API)
 
 ### **Epoch 3 (Block 630,000)**
 - Halving: 0.125 THR/block → 0.0625 THR/block

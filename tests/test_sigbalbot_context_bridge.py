@@ -113,7 +113,20 @@ def test_not_configured_without_key():
     assert bridge.is_configured() is False
 
 
-# ── 2. Context URL derivation ─────────────────────────────────────────────
+# ── 2. Status URL derivation ─────────────────────────────────────────────
+
+def test_status_url_derived():
+    from sigbalbot_context_bridge import _derive_status_url
+    url = _derive_status_url("https://sigbalbot.up.railway.app/api/v1/signals/trader-sentinel")
+    assert url == "https://sigbalbot.up.railway.app/api/v1/signals/trader-sentinel/status"
+
+
+def test_status_url_empty_input():
+    from sigbalbot_context_bridge import _derive_status_url
+    assert _derive_status_url("") == ""
+
+
+# ── 3. Context URL derivation ─────────────────────────────────────────────
 
 def test_context_url_derivation():
     url = _derive_context_url("https://sigbalbot.up.railway.app/api/v1/signals/trader-sentinel")
@@ -130,7 +143,84 @@ def test_context_url_derivation_trailing_slash():
     assert url == "https://sigbalbot.up.railway.app/api/v1/context/trader-sentinel"
 
 
-# ── 3. Authentication ─────────────────────────────────────────────────────
+# ── 4. Capability check ──────────────────────────────────────────────────
+
+def test_capability_check_success():
+    bridge = SigBalBotContextBridge()
+    with patch("sigbalbot_context_bridge.requests.get") as mock_get:
+        mock_get.return_value = _mock_response(200, {
+            "status": "ok",
+            "capabilities": {"context_feed": "/api/v1/context/trader-sentinel"},
+        })
+        result = bridge.check_context_capability()
+
+    assert result is True
+    assert bridge.context_capability_confirmed is True
+
+
+def test_capability_check_not_present():
+    bridge = SigBalBotContextBridge()
+    with patch("sigbalbot_context_bridge.requests.get") as mock_get:
+        mock_get.return_value = _mock_response(200, {
+            "status": "ok",
+            "capabilities": {},
+        })
+        result = bridge.check_context_capability()
+
+    assert result is False
+    assert bridge.context_capability_confirmed is False
+
+
+def test_capability_check_non_200():
+    bridge = SigBalBotContextBridge()
+    with patch("sigbalbot_context_bridge.requests.get") as mock_get:
+        mock_get.return_value = _mock_response(404, {})
+        result = bridge.check_context_capability()
+
+    assert result is False
+
+
+def test_capability_check_network_error():
+    bridge = SigBalBotContextBridge()
+    with patch("sigbalbot_context_bridge.requests.get") as mock_get:
+        mock_get.side_effect = Exception("connection refused")
+        result = bridge.check_context_capability()
+
+    assert result is False
+
+
+def test_run_cycle_skips_when_capability_not_confirmed():
+    bridge = SigBalBotContextBridge()
+    bridge.context_capability_confirmed = False
+
+    with patch("sigbalbot_context_bridge.requests.get") as mock_get:
+        mock_get.return_value = _mock_response(200, {"status": "ok", "capabilities": {}})
+        summary = bridge.run_cycle()
+
+    assert summary["error"] == "capability_not_available"
+
+
+def test_run_cycle_proceeds_when_capability_confirmed(tmp_path):
+    bridge = SigBalBotContextBridge()
+    bridge.context_capability_confirmed = True
+    bridge.processed_ids = []
+
+    with (
+        patch("sigbalbot_context_bridge.requests.get") as mock_get,
+        patch("sigbalbot_context_bridge._STATE_FILE", tmp_path / "state.json"),
+        patch("sigbalbot_context_bridge._STATE_DIR", tmp_path),
+    ):
+        mock_get.return_value = _mock_response(200, {
+            "ok": True, "contract_version": "1.0",
+            "generated_at": "2025-01-15T12:00:00Z",
+            "watchlist": [], "native_signals": [],
+        })
+        summary = bridge.run_cycle()
+
+    assert "error" not in summary
+
+
+# ── 5. Authentication ─────────────────────────────────────────────────────
 
 def test_fetch_sends_bearer_auth():
     bridge = SigBalBotContextBridge()
@@ -167,6 +257,7 @@ def test_fetch_403_returns_none():
 def test_cursor_persisted_after_cycle(tmp_path):
     state_file = tmp_path / "bridge_state.json"
     bridge = SigBalBotContextBridge()
+    bridge.context_capability_confirmed = True
     bridge.processed_ids = []
 
     with (
@@ -226,6 +317,7 @@ def test_classify_short_signals():
 
 def test_duplicate_watchlist_skipped(tmp_path):
     bridge = SigBalBotContextBridge()
+    bridge.context_capability_confirmed = True
     wl_key = "wl:BSB/USDT:2025-01-15T11:55:00Z"
     bridge.processed_ids = [wl_key]
 
@@ -243,6 +335,7 @@ def test_duplicate_watchlist_skipped(tmp_path):
 
 def test_duplicate_native_signal_skipped(tmp_path):
     bridge = SigBalBotContextBridge()
+    bridge.context_capability_confirmed = True
     bridge.processed_ids = ["sentinel-ctx-BTC-USDT-LONG-1700000000"]
 
     with (
@@ -261,6 +354,7 @@ def test_duplicate_native_signal_skipped(tmp_path):
 
 def test_governance_advisory_generated(tmp_path):
     bridge = SigBalBotContextBridge()
+    bridge.context_capability_confirmed = True
     bridge.processed_ids = []
 
     with (
@@ -317,6 +411,7 @@ def test_get_status():
     assert "last_cursor" in status
     assert "processed_ids_count" in status
     assert "cycle_count" in status
+    assert "context_capability_confirmed" in status
 
 
 # ── 9. Retry on 5xx ───────────────────────────────────────────────────────
@@ -339,6 +434,7 @@ def test_503_retries(tmp_path):
 
 def test_processed_ids_bounded(tmp_path):
     bridge = SigBalBotContextBridge()
+    bridge.context_capability_confirmed = True
     bridge.processed_ids = [str(i) for i in range(600)]
 
     with (
@@ -360,6 +456,7 @@ def test_processed_ids_bounded(tmp_path):
 
 def test_full_cycle_counts(tmp_path):
     bridge = SigBalBotContextBridge()
+    bridge.context_capability_confirmed = True
     bridge.processed_ids = []
 
     with (
@@ -381,6 +478,7 @@ def test_full_cycle_counts(tmp_path):
 
 def test_fetch_failure_returns_error(tmp_path):
     bridge = SigBalBotContextBridge()
+    bridge.context_capability_confirmed = True
 
     with (
         patch("sigbalbot_context_bridge.requests.get") as mock_get,

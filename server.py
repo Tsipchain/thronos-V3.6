@@ -47205,6 +47205,28 @@ def api_wallet_v1_music_capability():
         return jsonify(ok=False, error="internal_error"), 500
 
 
+# ─── CONTRACT_ANCHOR_V1: Contract Proof Anchoring ────────────────────────────
+# Anchors OPS agreement proofs to the canonical chain as real transactions.
+# Uses existing chain write path (load_json/save_json on CHAIN_FILE).
+CONTRACT_PROOF_LEDGER_FILE = os.path.join(DATA_DIR, "contract_proof_ledger.json")
+_CONTRACT_PROOF_API_KEY = os.getenv("THRONOS_CONTRACT_PROOF_API_KEY", "").strip()
+
+from contract_proof import register_contract_proof_routes as _register_cp_routes
+
+_register_cp_routes(
+    app=app,
+    data_dir=DATA_DIR,
+    chain_file=CHAIN_FILE,
+    is_master_fn=is_master,
+    load_json_fn=load_json,
+    save_json_fn=save_json,
+    persist_normalized_tx_fn=persist_normalized_tx,
+    update_last_block_fn=update_last_block,
+    contract_proof_api_key=_CONTRACT_PROOF_API_KEY,
+)
+print("✓ CONTRACT_ANCHOR_V1 contract proof routes loaded")
+
+
 # ─── Startup hooks ────────────────────────────────────────────────────────────
 # PR-XXX: Role-based initialization with clear logging
 print(f"\n[STARTUP] Initializing {NODE_ROLE.upper()} node...")

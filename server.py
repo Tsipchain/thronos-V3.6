@@ -15503,6 +15503,58 @@ def api_sigbalbot_milestone_progress():
     except ImportError:
         return jsonify({"ok": False, "error": "milestone tracking not available"}), 404
 
+
+@app.route("/api/admin/sigbalbot/milestone/allocations", methods=["GET"])
+def api_admin_sigbalbot_allocations():
+    denied = require_admin()
+    if denied:
+        return denied
+    try:
+        from sigbalbot_milestone_airdrop import SigBalBotMilestoneAirdrop
+        airdrop = SigBalBotMilestoneAirdrop()
+        status_filter = request.args.get("status")
+        return jsonify({
+            "ok": True,
+            "allocations": airdrop.list_allocations(status_filter=status_filter),
+        }), 200
+    except ImportError:
+        return jsonify({"ok": False, "error": "sigbalbot_milestone_airdrop module not available"}), 404
+
+
+@app.route("/api/admin/sigbalbot/milestone/approve/<batch_id>", methods=["POST"])
+def api_admin_sigbalbot_approve(batch_id):
+    denied = require_admin()
+    if denied:
+        return denied
+    try:
+        from sigbalbot_milestone_airdrop import SigBalBotMilestoneAirdrop
+        airdrop = SigBalBotMilestoneAirdrop()
+        result = airdrop.approve_allocation(batch_id)
+        if "error" in result:
+            return jsonify({"ok": False, **result}), 400
+        return jsonify({"ok": True, **result}), 200
+    except ImportError:
+        return jsonify({"ok": False, "error": "sigbalbot_milestone_airdrop module not available"}), 404
+
+
+@app.route("/api/admin/sigbalbot/milestone/execute/<batch_id>", methods=["POST"])
+def api_admin_sigbalbot_execute(batch_id):
+    denied = require_admin()
+    if denied:
+        return denied
+    try:
+        from sigbalbot_milestone_airdrop import SigBalBotMilestoneAirdrop
+        data = request.get_json(silent=True) or {}
+        dry_run = bool(data.get("dry_run", False))
+        airdrop = SigBalBotMilestoneAirdrop(dry_run=dry_run)
+        result = airdrop.execute_approved_allocation(batch_id)
+        if "error" in result:
+            return jsonify({"ok": False, **result}), 400
+        return jsonify({"ok": True, **result}), 200
+    except ImportError:
+        return jsonify({"ok": False, "error": "sigbalbot_milestone_airdrop module not available"}), 404
+
+
 # ─── END SigBalBot Context Bridge ──────────────────────────────────────────
 
 

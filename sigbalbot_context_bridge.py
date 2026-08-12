@@ -402,10 +402,12 @@ class SigBalBotContextBridge:
                 if airdrop_result:
                     summary["milestone_airdrop"] = airdrop_result
                     logger.info(
-                        "[sigbalbot-bridge] MILESTONE AIRDROP triggered: #%d — %.6f THR to %d subscribers",
+                        "[sigbalbot-bridge] MILESTONE %d reached — pending allocation %s "
+                        "created for %d subscribers (%.6f THR, requires admin approval)",
                         airdrop_result["milestone_number"],
-                        airdrop_result["total_distributed"],
+                        airdrop_result.get("batch_id", "?"),
                         airdrop_result["active_subscribers"],
+                        airdrop_result.get("total_required_thr", 0.0),
                     )
 
         advisory = self._build_governance_advisory(actionable_signals)

@@ -15080,11 +15080,16 @@ def _is_admin_authenticated() -> bool:
 
 def _admin_token_from_request(payload: dict | None = None) -> str:
     payload = payload if isinstance(payload, dict) else {}
-    return (
+    token = (
         (request.headers.get("X-Admin-Secret") or "").strip()
         or (request.args.get("secret") or "").strip()
         or str(payload.get("secret") or "").strip()
     )
+    if not token:
+        auth = (request.headers.get("Authorization") or "").strip()
+        if auth.startswith("Bearer "):
+            token = auth[7:].strip()
+    return token
 
 
 def require_admin(payload: dict | None = None):

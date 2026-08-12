@@ -16022,6 +16022,54 @@ def api_mobile_wallet_link():
     }), 200
 
 
+# ─── Wallet Snapshot API (for SigBalBot relay to Sentinel) ─────────────────
+
+@app.route("/api/sigbalbot/wallet-snapshots", methods=["GET"])
+def api_sigbalbot_wallet_snapshots():
+    """Wallet snapshot endpoint for SigBalBot context relay.
+
+    Returns active subscriber wallet snapshots that SigBalBot includes
+    in its context endpoint response for Sentinel consumption.
+    Auth: same admin check — only SigBalBot's server-to-server calls.
+    """
+    denied = require_admin()
+    if denied:
+        return denied
+
+    subs = load_json(SENTINEL_SUBSCRIPTIONS_FILE, {})
+    now_ts = int(time.time())
+    snapshots = []
+
+    for addr, sub in subs.items():
+        if not isinstance(sub, dict):
+            continue
+        expires = sub.get("expires_at", 0)
+        active = expires > now_ts
+        if not active:
+            continue
+
+        balance = get_thr_balance(addr)
+
+        snapshots.append({
+            "address": addr,
+            "tier": sub.get("tier", "starter"),
+            "rewards_multiplier": sub.get("rewards_multiplier", 1.0),
+            "active": True,
+            "verified": sub.get("verified", False),
+            "expires_at": expires,
+            "thr_balance": balance,
+            "subscribed_at": sub.get("subscribed_at"),
+            "snapshot_at": now_ts,
+        })
+
+    return jsonify({
+        "ok": True,
+        "wallet_snapshots": snapshots,
+        "total_active": len(snapshots),
+        "generated_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+    }), 200
+
+
 # ─── END SigBalBot Context Bridge ──────────────────────────────────────────
 
 

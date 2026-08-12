@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#00d4ff">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="manifest.json">
+<title>Sentinel Admin</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#0a0a1a;--surface:#111128;--surface2:#1a1a3e;
+  --accent:#00d4ff;--accent2:#7c3aed;--green:#10b981;--red:#ef4444;--yellow:#f59e0b;
+  --text:#e2e8f0;--text2:#94a3b8;--border:#1e293b;
+  --radius:12px;
+}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;padding-bottom:80px}
+.header{background:linear-gradient(135deg,var(--surface),var(--surface2));padding:16px 20px;position:sticky;top:0;z-index:100;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px}
+.header h1{font-size:18px;font-weight:700;background:linear-gradient(135deg,var(--accent),var(--accent2));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.header .status{margin-left:auto;font-size:11px;padding:4px 10px;border-radius:20px;background:var(--green);color:#fff;font-weight:600}
+.tabs{display:flex;position:fixed;bottom:0;left:0;right:0;background:var(--surface);border-top:1px solid var(--border);z-index:100;padding:4px 0 env(safe-area-inset-bottom)}
+.tab{flex:1;padding:10px 4px 6px;text-align:center;font-size:10px;color:var(--text2);cursor:pointer;transition:.2s;display:flex;flex-direction:column;align-items:center;gap:2px}
+.tab.active{color:var(--accent)}
+.tab svg{width:22px;height:22px}
+.page{display:none;padding:16px;max-width:600px;margin:0 auto}
+.page.active{display:block}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:12px}
+.card h3{font-size:14px;font-weight:600;margin-bottom:10px;color:var(--accent)}
+.stat-row{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+.stat{flex:1;min-width:80px;background:var(--surface2);border-radius:8px;padding:10px;text-align:center}
+.stat .val{font-size:20px;font-weight:700;color:var(--accent)}
+.stat .lbl{font-size:10px;color:var(--text2);margin-top:2px}
+.progress-bar{width:100%;height:8px;background:var(--surface2);border-radius:4px;overflow:hidden;margin:8px 0}
+.progress-bar .fill{height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2));border-radius:4px;transition:width .5s}
+input,select,textarea{width:100%;padding:10px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:14px;margin-bottom:8px;outline:none}
+input:focus,select:focus,textarea:focus{border-color:var(--accent)}
+textarea{resize:vertical;min-height:60px}
+label{font-size:12px;color:var(--text2);display:block;margin-bottom:4px}
+.btn{padding:10px 20px;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;width:100%;transition:.2s}
+.btn-primary{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff}
+.btn-primary:active{transform:scale(.98)}
+.btn-success{background:var(--green);color:#fff}
+.btn-danger{background:var(--red);color:#fff}
+.btn-sm{padding:6px 14px;font-size:12px;width:auto}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.alloc-item{border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:8px;background:var(--surface2)}
+.alloc-item .status-badge{display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600}
+.status-pending{background:#f59e0b22;color:var(--yellow)}
+.status-approved{background:#00d4ff22;color:var(--accent)}
+.status-confirmed{background:#10b98122;color:var(--green)}
+.status-failed{background:#ef444422;color:var(--red)}
+.trade-item{border-left:3px solid var(--accent);padding:8px 12px;margin-bottom:6px;background:var(--surface2);border-radius:0 8px 8px 0}
+.trade-item.sell{border-left-color:var(--red)}
+.trade-item .pair{font-weight:600;font-size:14px}
+.trade-item .meta{font-size:11px;color:var(--text2)}
+.sub-item{display:flex;justify-content:space-between;align-items:center;padding:10px 12px;margin-bottom:4px;background:var(--surface2);border-radius:8px}
+.sub-item .addr{font-family:monospace;font-size:12px}
+.sub-item .tier{font-size:10px;padding:2px 6px;border-radius:8px;background:var(--accent2);color:#fff}
+.toggle{position:relative;width:44px;height:24px;cursor:pointer}
+.toggle input{opacity:0;width:0;height:0}
+.toggle .slider{position:absolute;inset:0;background:var(--surface2);border-radius:12px;transition:.3s}
+.toggle .slider:before{content:"";position:absolute;width:18px;height:18px;border-radius:50%;background:#fff;top:3px;left:3px;transition:.3s}
+.toggle input:checked+.slider{background:var(--green)}
+.toggle input:checked+.slider:before{transform:translateX(20px)}
+.row{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.row label{margin:0;flex-shrink:0}
+.toast{position:fixed;top:20px;left:50%;transform:translateX(-50%);background:var(--green);color:#fff;padding:10px 20px;border-radius:8px;font-size:13px;font-weight:600;z-index:200;opacity:0;transition:.3s;pointer-events:none}
+.toast.show{opacity:1}
+.toast.error{background:var(--red)}
+.empty{text-align:center;padding:40px 20px;color:var(--text2);font-size:13px}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Sentinel Admin</h1>
+  <span class="status" id="connStatus">Loading...</span>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<!-- Dashboard -->
+<div id="page-dashboard" class="page active">
+  <div class="stat-row">
+    <div class="stat"><div class="val" id="s-wins">-</div><div class="lbl">Total Wins</div></div>
+    <div class="stat"><div class="val" id="s-milestones">-</div><div class="lbl">Milestones</div></div>
+    <div class="stat"><div class="val" id="s-subs">-</div><div class="lbl">Subscribers</div></div>
+  </div>
+  <div class="card">
+    <h3>Next Milestone Progress</h3>
+    <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text2)">
+      <span id="s-progress-wins">0 / 100</span>
+      <span id="s-progress-pct">0%</span>
+    </div>
+    <div class="progress-bar"><div class="fill" id="s-progress-bar" style="width:0%"></div></div>
+  </div>
+  <div class="card">
+    <h3>Distribution Summary</h3>
+    <div class="stat-row">
+      <div class="stat"><div class="val" id="s-thr">0</div><div class="lbl">THR Distributed</div></div>
+      <div class="stat"><div class="val" id="s-pending">0</div><div class="lbl">Pending</div></div>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Auto-Distribution</h3>
+    <div class="row">
+      <label>Enable</label>
+      <label class="toggle"><input type="checkbox" id="autoDistToggle" onchange="toggleAutoDist()"><span class="slider"></span></label>
+      <span style="font-size:12px;color:var(--text2)" id="autoDistLabel">Off</span>
+    </div>
+    <div class="row">
+      <label>Delay (hours)</label>
+      <input type="number" id="autoDistDelay" value="24" min="1" max="168" style="width:80px;margin:0">
+      <button class="btn btn-sm btn-primary" onclick="saveAutoDist()">Save</button>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Admin Wallet</h3>
+    <input type="text" id="adminWallet" placeholder="THR address...">
+    <button class="btn btn-primary" onclick="saveWallet()">Save Wallet</button>
+  </div>
+</div>
+
+<!-- Trades -->
+<div id="page-trades" class="page">
+  <div class="card">
+    <h3>Feed a Trade</h3>
+    <label>Symbol</label>
+    <input type="text" id="t-symbol" placeholder="BTC/USDT">
+    <div style="display:flex;gap:8px">
+      <div style="flex:1">
+        <label>Side</label>
+        <select id="t-side"><option value="LONG">LONG</option><option value="SHORT">SHORT</option></select>
+      </div>
+      <div style="flex:1">
+        <label>Timeframe</label>
+        <select id="t-tf"><option value="1h">1H</option><option value="4h" selected>4H</option><option value="1d">1D</option><option value="1w">1W</option></select>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px">
+      <div style="flex:1"><label>Entry</label><input type="number" id="t-entry" step="0.01" placeholder="Entry price"></div>
+      <div style="flex:1"><label>SL</label><input type="number" id="t-sl" step="0.01" placeholder="Stop loss"></div>
+      <div style="flex:1"><label>TP</label><input type="number" id="t-tp" step="0.01" placeholder="Take profit"></div>
+    </div>
+    <label>Status</label>
+    <select id="t-status"><option value="open">Open</option><option value="closed_win">Closed Win</option><option value="closed_loss">Closed Loss</option></select>
+    <div style="display:flex;gap:8px">
+      <div style="flex:1"><label>Exit Price</label><input type="number" id="t-exit" step="0.01" placeholder="Exit price"></div>
+      <div style="flex:1"><label>PnL %</label><input type="number" id="t-pnl" step="0.01" placeholder="PnL %"></div>
+    </div>
+    <label>Notes</label>
+    <textarea id="t-notes" placeholder="Trade reasoning, pattern spotted..."></textarea>
+    <button class="btn btn-success" onclick="feedTrade()">Submit Trade</button>
+  </div>
+  <div class="card">
+    <h3>Recent Trades</h3>
+    <div id="tradesList"></div>
+  </div>
+</div>
+
+<!-- Milestones -->
+<div id="page-milestones" class="page">
+  <div class="card">
+    <h3>Pending Allocations</h3>
+    <div id="allocPending"></div>
+  </div>
+  <div class="card">
+    <h3>All Allocations</h3>
+    <div id="allocAll"></div>
+  </div>
+</div>
+
+<!-- Subscribers -->
+<div id="page-subs" class="page">
+  <div class="card">
+    <h3>Subscriber Wallets</h3>
+    <div id="subsList"></div>
+  </div>
+</div>
+
+<!-- Tabs -->
+<div class="tabs">
+  <div class="tab active" onclick="switchTab('dashboard')">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+    Dashboard
+  </div>
+  <div class="tab" onclick="switchTab('trades')">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22,7 13.5,15.5 8.5,10.5 2,17"/><polyline points="16,7 22,7 22,13"/></svg>
+    Trades
+  </div>
+  <div class="tab" onclick="switchTab('milestones')">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>
+    Milestones
+  </div>
+  <div class="tab" onclick="switchTab('subs')">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+    Wallets
+  </div>
+</div>
+
+<script>
+const API = window.location.origin;
+const AUTH = btoa(prompt("Admin password:") || "");
+
+function headers(){return{"Content-Type":"application/json","Authorization":"Basic "+AUTH}}
+function toast(msg,err){const t=document.getElementById("toast");t.textContent=msg;t.className="toast"+(err?" error":"")+" show";setTimeout(()=>t.className="toast",2500)}
+
+function switchTab(name){
+  document.querySelectorAll(".page").forEach(p=>p.classList.remove("active"));
+  document.querySelectorAll(".tab").forEach(t=>t.classList.remove("active"));
+  document.getElementById("page-"+name).classList.add("active");
+  document.querySelectorAll(".tab")[["dashboard","trades","milestones","subs"].indexOf(name)].classList.add("active");
+  if(name==="dashboard")loadDashboard();
+  if(name==="trades")loadTrades();
+  if(name==="milestones")loadAllocations();
+  if(name==="subs")loadSubscribers();
+}
+
+async function api(path,opts={}){
+  try{
+    const r=await fetch(API+path,{headers:headers(),...opts});
+    const d=await r.json();
+    if(!d.ok&&d.error)toast(d.error,true);
+    return d;
+  }catch(e){toast("Network error",true);return{ok:false}}
+}
+
+async function loadDashboard(){
+  const [status,progress,config]=await Promise.all([
+    api("/api/admin/sigbalbot/milestone"),
+    api("/api/sigbalbot/milestone/progress"),
+    api("/api/admin/sentinel/wallet"),
+  ]);
+  if(status.ok&&status.milestone){
+    const m=status.milestone;
+    document.getElementById("s-wins").textContent=m.total_wins;
+    document.getElementById("s-milestones").textContent=m.milestones_reached;
+    document.getElementById("s-subs").textContent=m.active_subscribers;
+    document.getElementById("s-thr").textContent=m.total_thr_distributed.toFixed(2);
+    document.getElementById("s-pending").textContent=m.pending_allocations||0;
+  }
+  if(progress.ok&&progress.progress){
+    const p=progress.progress;
+    document.getElementById("s-progress-wins").textContent=p.wins_in_current_milestone+" / "+p.wins_needed;
+    document.getElementById("s-progress-pct").textContent=p.progress_pct+"%";
+    document.getElementById("s-progress-bar").style.width=p.progress_pct+"%";
+  }
+  if(config.ok){
+    document.getElementById("adminWallet").value=config.wallet_address||"";
+    document.getElementById("autoDistToggle").checked=config.auto_distribute_enabled;
+    document.getElementById("autoDistDelay").value=config.auto_distribute_delay_hours||24;
+    document.getElementById("autoDistLabel").textContent=config.auto_distribute_enabled?"On":"Off";
+  }
+  document.getElementById("connStatus").textContent="Connected";
+}
+
+async function saveWallet(){
+  const addr=document.getElementById("adminWallet").value.trim();
+  if(!addr)return toast("Enter a wallet address",true);
+  const r=await api("/api/admin/sentinel/wallet",{method:"POST",body:JSON.stringify({wallet_address:addr})});
+  if(r.ok)toast("Wallet saved");
+}
+
+async function toggleAutoDist(){saveAutoDist()}
+async function saveAutoDist(){
+  const enabled=document.getElementById("autoDistToggle").checked;
+  const delay=parseInt(document.getElementById("autoDistDelay").value)||24;
+  const r=await api("/api/admin/sentinel/auto-distribute",{method:"POST",body:JSON.stringify({enabled,delay_hours:delay})});
+  if(r.ok){
+    document.getElementById("autoDistLabel").textContent=enabled?"On":"Off";
+    toast("Auto-distribution "+(enabled?"enabled":"disabled"));
+  }
+}
+
+async function feedTrade(){
+  const data={
+    symbol:document.getElementById("t-symbol").value,
+    side:document.getElementById("t-side").value,
+    entry_price:document.getElementById("t-entry").value,
+    stop_loss:document.getElementById("t-sl").value||undefined,
+    take_profit:document.getElementById("t-tp").value||undefined,
+    exit_price:document.getElementById("t-exit").value||undefined,
+    pnl_pct:document.getElementById("t-pnl").value||undefined,
+    timeframe:document.getElementById("t-tf").value,
+    status:document.getElementById("t-status").value,
+    notes:document.getElementById("t-notes").value,
+  };
+  if(!data.symbol||!data.entry_price)return toast("Symbol and entry price required",true);
+  const r=await api("/api/admin/trades/feed",{method:"POST",body:JSON.stringify(data)});
+  if(r.ok){
+    toast("Trade submitted");
+    document.getElementById("t-symbol").value="";
+    document.getElementById("t-entry").value="";
+    document.getElementById("t-sl").value="";
+    document.getElementById("t-tp").value="";
+    document.getElementById("t-exit").value="";
+    document.getElementById("t-pnl").value="";
+    document.getElementById("t-notes").value="";
+    loadTrades();
+  }
+}
+
+async function loadTrades(){
+  const r=await api("/api/admin/trades?limit=20");
+  const el=document.getElementById("tradesList");
+  if(!r.ok||!r.trades||!r.trades.length){el.innerHTML='<div class="empty">No trades yet</div>';return}
+  el.innerHTML=r.trades.reverse().map(t=>`
+    <div class="trade-item ${t.side==='SHORT'?'sell':''}">
+      <div class="pair">${t.side} ${t.symbol}</div>
+      <div class="meta">Entry: ${t.entry_price} | ${t.timeframe} | ${t.status}${t.pnl_pct!=null?' | PnL: '+t.pnl_pct+'%':''}</div>
+      ${t.notes?'<div class="meta" style="margin-top:4px">'+t.notes+'</div>':''}
+    </div>
+  `).join("");
+}
+
+async function loadAllocations(){
+  const r=await api("/api/admin/sigbalbot/milestone/allocations");
+  const pending=document.getElementById("allocPending");
+  const all=document.getElementById("allocAll");
+  if(!r.ok||!r.allocations){pending.innerHTML=all.innerHTML='<div class="empty">None</div>';return}
+
+  const pList=r.allocations.filter(a=>a.status==="pending");
+  pending.innerHTML=pList.length?pList.map(a=>allocCard(a,true)).join(""):'<div class="empty">No pending allocations</div>';
+  all.innerHTML=r.allocations.map(a=>allocCard(a,false)).join("");
+}
+
+function allocCard(a,showActions){
+  return `<div class="alloc-item">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+      <span style="font-weight:600;font-size:13px">Milestone #${a.milestone_number}</span>
+      <span class="status-badge status-${a.status}">${a.status}</span>
+    </div>
+    <div style="font-size:11px;color:var(--text2)">
+      ${a.active_subscribers} subscribers | ${a.total_required_thr} THR required | ${a.created_at||""}
+    </div>
+    ${showActions?`
+      <div style="display:flex;gap:6px;margin-top:8px">
+        <button class="btn btn-sm btn-primary" onclick="approveAlloc('${a.batch_id}')">Approve</button>
+        <button class="btn btn-sm btn-success" onclick="dryRunAlloc('${a.batch_id}')">Dry Run</button>
+      </div>
+    `:""}
+    ${a.status==="approved"?`
+      <div style="margin-top:8px">
+        <button class="btn btn-sm btn-success" onclick="executeAlloc('${a.batch_id}')">Execute Now</button>
+      </div>
+    `:""}
+  </div>`;
+}
+
+async function approveAlloc(id){
+  const r=await api("/api/admin/sigbalbot/milestone/approve/"+id,{method:"POST",body:"{}"});
+  if(r.ok){toast("Allocation approved");loadAllocations();loadDashboard()}
+}
+async function dryRunAlloc(id){
+  await approveAlloc(id);
+  const r=await api("/api/admin/sigbalbot/milestone/execute/"+id,{method:"POST",body:JSON.stringify({dry_run:true})});
+  if(r.ok)toast(`Dry run: ${r.confirmed} confirmed, ${r.total_distributed} THR`);
+  loadAllocations();
+}
+async function executeAlloc(id){
+  if(!confirm("Execute this distribution? THR will be sent to subscriber wallets."))return;
+  const r=await api("/api/admin/sigbalbot/milestone/execute/"+id,{method:"POST",body:JSON.stringify({dry_run:false})});
+  if(r.ok)toast(`Distributed: ${r.total_distributed} THR to ${r.confirmed} subscribers`);
+  loadAllocations();loadDashboard();
+}
+
+async function loadSubscribers(){
+  const r=await api("/api/admin/subscribers/wallets");
+  const el=document.getElementById("subsList");
+  if(!r.ok||!r.subscribers||!r.subscribers.length){el.innerHTML='<div class="empty">No subscribers</div>';return}
+  el.innerHTML=r.subscribers.map(s=>`
+    <div class="sub-item">
+      <div>
+        <div class="addr">${s.address}</div>
+        <div style="font-size:10px;color:var(--text2)">${s.active?"Active":"Expired"} | x${s.rewards_multiplier}</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px">
+        <span class="tier">${s.tier}</span>
+        ${s.verified?'<span style="color:var(--green);font-size:11px">Verified</span>':'<button class="btn btn-sm btn-primary" onclick="verifySub(\''+s.address+'\')">Verify</button>'}
+      </div>
+    </div>
+  `).join("");
+}
+
+async function verifySub(addr){
+  const r=await api("/api/admin/subscribers/wallets/"+addr+"/verify",{method:"POST",body:"{}"});
+  if(r.ok){toast("Subscriber verified");loadSubscribers()}
+}
+
+if("serviceWorker" in navigator){navigator.serviceWorker.register("sw.js")}
+loadDashboard();
+</script>
+</body>
+</html>

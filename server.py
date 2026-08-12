@@ -15555,6 +15555,202 @@ def api_admin_sigbalbot_execute(batch_id):
         return jsonify({"ok": False, "error": "sigbalbot_milestone_airdrop module not available"}), 404
 
 
+# ─── Admin Trade Feed & Wallet Management ─────────────────────────────────
+
+ADMIN_TRADE_FEED_FILE = os.path.join(DATA_DIR, "admin_trade_feed.json")
+ADMIN_CONFIG_FILE = os.path.join(DATA_DIR, "admin_sentinel_config.json")
+
+
+@app.route("/api/admin/sentinel/wallet", methods=["GET"])
+def api_admin_sentinel_wallet_get():
+    denied = require_admin()
+    if denied:
+        return denied
+    config = load_json(ADMIN_CONFIG_FILE, {})
+    return jsonify({
+        "ok": True,
+        "wallet_address": config.get("wallet_address"),
+        "auto_distribute_enabled": config.get("auto_distribute_enabled", False),
+        "auto_distribute_delay_hours": config.get("auto_distribute_delay_hours", 24),
+    }), 200
+
+
+@app.route("/api/admin/sentinel/wallet", methods=["POST"])
+def api_admin_sentinel_wallet_set():
+    denied = require_admin()
+    if denied:
+        return denied
+    data = request.get_json(silent=True) or {}
+    wallet = (data.get("wallet_address") or "").strip()
+    if not wallet:
+        return jsonify({"ok": False, "error": "wallet_address required"}), 400
+
+    config = load_json(ADMIN_CONFIG_FILE, {})
+    config["wallet_address"] = wallet
+    config["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    save_json(ADMIN_CONFIG_FILE, config)
+
+    return jsonify({"ok": True, "wallet_address": wallet}), 200
+
+
+@app.route("/api/admin/sentinel/auto-distribute", methods=["POST"])
+def api_admin_sentinel_auto_distribute():
+    denied = require_admin()
+    if denied:
+        return denied
+    data = request.get_json(silent=True) or {}
+    enabled = bool(data.get("enabled", False))
+    delay_hours = int(data.get("delay_hours", 24))
+
+    config = load_json(ADMIN_CONFIG_FILE, {})
+    config["auto_distribute_enabled"] = enabled
+    config["auto_distribute_delay_hours"] = max(1, min(168, delay_hours))
+    config["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    save_json(ADMIN_CONFIG_FILE, config)
+
+    return jsonify({
+        "ok": True,
+        "auto_distribute_enabled": config["auto_distribute_enabled"],
+        "auto_distribute_delay_hours": config["auto_distribute_delay_hours"],
+    }), 200
+
+
+@app.route("/api/admin/trades/feed", methods=["POST"])
+def api_admin_trades_feed():
+    denied = require_admin()
+    if denied:
+        return denied
+    data = request.get_json(silent=True) or {}
+    required = ["symbol", "side", "entry_price"]
+    missing = [f for f in required if not data.get(f)]
+    if missing:
+        return jsonify({"ok": False, "error": f"missing fields: {missing}"}), 400
+
+    feed = load_json(ADMIN_TRADE_FEED_FILE, [])
+    if not isinstance(feed, list):
+        feed = []
+
+    trade = {
+        "id": f"trade-{int(time.time())}-{secrets.token_hex(3)}",
+        "symbol": data["symbol"].upper(),
+        "side": data["side"].upper(),
+        "entry_price": float(data["entry_price"]),
+        "exit_price": float(data["exit_price"]) if data.get("exit_price") else None,
+        "stop_loss": float(data["stop_loss"]) if data.get("stop_loss") else None,
+        "take_profit": float(data["take_profit"]) if data.get("take_profit") else None,
+        "timeframe": data.get("timeframe", "4h"),
+        "notes": data.get("notes", ""),
+        "status": data.get("status", "open"),
+        "result": data.get("result"),
+        "pnl_pct": float(data["pnl_pct"]) if data.get("pnl_pct") else None,
+        "created_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+    }
+    feed.append(trade)
+    save_json(ADMIN_TRADE_FEED_FILE, feed)
+
+    logger.info("[ADMIN-TRADE] Trade fed: %s %s %s @ %s",
+                trade["side"], trade["symbol"], trade["status"], trade["entry_price"])
+
+    return jsonify({"ok": True, "trade": trade}), 201
+
+
+@app.route("/api/admin/trades", methods=["GET"])
+def api_admin_trades_list():
+    denied = require_admin()
+    if denied:
+        return denied
+    feed = load_json(ADMIN_TRADE_FEED_FILE, [])
+    if not isinstance(feed, list):
+        feed = []
+    limit = int(request.args.get("limit", 50))
+    return jsonify({"ok": True, "trades": feed[-limit:], "total": len(feed)}), 200
+
+
+@app.route("/api/admin/subscribers/wallets", methods=["GET"])
+def api_admin_subscribers_wallets():
+    denied = require_admin()
+    if denied:
+        return denied
+    subs = load_json(os.path.join(DATA_DIR, "sentinel_subscriptions.json"), {})
+    now_ts = int(time.time())
+    result = []
+    for addr, sub in subs.items():
+        if not isinstance(sub, dict):
+            continue
+        result.append({
+            "address": addr,
+            "tier": sub.get("tier", "starter"),
+            "rewards_multiplier": sub.get("rewards_multiplier", 1.0),
+            "subscribed_at": sub.get("subscribed_at"),
+            "expires_at": sub.get("expires_at"),
+            "active": sub.get("expires_at", 0) > now_ts,
+            "verified": sub.get("verified", False),
+        })
+    return jsonify({"ok": True, "subscribers": result, "total": len(result)}), 200
+
+
+@app.route("/api/admin/subscribers/wallets/<address>/verify", methods=["POST"])
+def api_admin_subscribers_verify(address):
+    denied = require_admin()
+    if denied:
+        return denied
+    subs_file = os.path.join(DATA_DIR, "sentinel_subscriptions.json")
+    subs = load_json(subs_file, {})
+    if address not in subs:
+        return jsonify({"ok": False, "error": "subscriber not found"}), 404
+    subs[address]["verified"] = True
+    subs[address]["verified_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    save_json(subs_file, subs)
+    return jsonify({"ok": True, "address": address, "verified": True}), 200
+
+
+# ── Milestone auto-distribution scheduler job ──────────────────────────────
+
+def _check_auto_distribute():
+    """Scheduler job: auto-execute approved allocations after delay period."""
+    try:
+        config = load_json(ADMIN_CONFIG_FILE, {})
+        if not config.get("auto_distribute_enabled", False):
+            return
+
+        delay_hours = config.get("auto_distribute_delay_hours", 24)
+        from sigbalbot_milestone_airdrop import SigBalBotMilestoneAirdrop
+        airdrop = SigBalBotMilestoneAirdrop()
+
+        for batch_id, alloc in airdrop.allocations.items():
+            if alloc.get("status") != "approved":
+                continue
+            approved_at = alloc.get("approved_at", "")
+            if not approved_at:
+                continue
+            try:
+                approved_ts = time.mktime(time.strptime(approved_at, "%Y-%m-%d %H:%M:%S UTC"))
+            except (ValueError, OverflowError):
+                continue
+            if time.time() - approved_ts >= delay_hours * 3600:
+                logger.info("[AUTO-DISTRIBUTE] Executing batch %s (approved %s, delay=%dh)",
+                           batch_id, approved_at, delay_hours)
+                result = airdrop.execute_approved_allocation(batch_id)
+                logger.info("[AUTO-DISTRIBUTE] Result: confirmed=%d, failed=%d, total=%.6f THR",
+                           result.get("confirmed", 0), result.get("failed", 0),
+                           result.get("total_distributed", 0.0))
+    except Exception as exc:
+        logger.warning("[AUTO-DISTRIBUTE] Error: %s", str(exc)[:200])
+
+
+# ─── Admin PWA Serve ───────────────────────────────────────────────────────
+
+@app.route("/admin-pwa")
+@app.route("/admin-pwa/")
+def serve_admin_pwa():
+    return send_from_directory(os.path.join(BASE_DIR, "static", "admin-pwa"), "index.html")
+
+
+@app.route("/admin-pwa/<path:filename>")
+def serve_admin_pwa_assets(filename):
+    return send_from_directory(os.path.join(BASE_DIR, "static", "admin-pwa"), filename)
+
+
 # ─── END SigBalBot Context Bridge ──────────────────────────────────────────
 
 
@@ -33242,6 +33438,12 @@ if NODE_ROLE == "master" and SCHEDULER_ENABLED and ENABLE_CHAIN:
     except Exception as e:
         _sigbalbot_bridge = None
         print(f"[SCHEDULER] SigBalBot context bridge init error: {e}")
+
+    # Milestone auto-distribution – checks hourly for approved allocations past delay
+    scheduler.add_job(_with_app_context(_check_auto_distribute), "interval",
+                     seconds=3600, coalesce=True, max_instances=1,
+                     id="milestone_auto_distribute")
+    print("[SCHEDULER] Milestone auto-distribute checker scheduled (hourly)")
 
     scheduler.start()
     _active_schedulers.append(scheduler)

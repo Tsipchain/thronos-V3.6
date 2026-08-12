@@ -10,6 +10,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS } from '../constants/theme';
 import { createNewWallet, markBackedUp, generateMnemonic } from '../services/wallet';
+import { linkWalletToSentinel } from '../services/api';
 import { useStore } from '../store/useStore';
 import type { RootStackParamList } from '../../App';
 
@@ -72,6 +73,7 @@ export default function CreateWalletScreen() {
       activeChain: 'thronos',
       chainAddresses: { thronos: wallet.address, bitcoin: null, ethereum: null },
     });
+    linkWalletToSentinel(wallet.address).catch(() => {});
     navigation.reset({ index: 0, routes: [{ name: 'MainTabs' }] });
   };
 

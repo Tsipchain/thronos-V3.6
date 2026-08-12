@@ -72,6 +72,9 @@ const QUICK_ACTIONS: Array<{
   { label: 'New Token', icon: 'add-circle', color: COLORS.success, screen: 'CreateToken' },
   { label: 'NFTs', icon: 'image', color: COLORS.primary, screen: 'NFT' },
   { label: 'Epoch', icon: 'hourglass', color: COLORS.warning, screen: 'Epoch' },
+  { label: 'Signals', icon: 'analytics', color: COLORS.gold, screen: 'Signals' },
+  { label: 'Subscribe', icon: 'ribbon', color: COLORS.primary, screen: 'Subscription' },
+  { label: 'Milestones', icon: 'trophy', color: COLORS.success, screen: 'Milestones' },
 ];
 
 // USD price per THR (derived from 1 THR = 0.0001 BTC)

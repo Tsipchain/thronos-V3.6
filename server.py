@@ -15751,6 +15751,277 @@ def serve_admin_pwa_assets(filename):
     return send_from_directory(os.path.join(BASE_DIR, "static", "admin-pwa"), filename)
 
 
+# ─── Mobile Sentinel API (wallet-app integration) ─────────────────────────
+
+MOBILE_SIGNALS_FILE = os.path.join(DATA_DIR, "mobile_sentinel_signals.json")
+
+
+def _require_wallet_auth():
+    """Validate wallet address from request JSON or query param."""
+    wallet = None
+    if request.method == "POST":
+        data = request.get_json(silent=True) or {}
+        wallet = (data.get("wallet_address") or "").strip()
+    else:
+        wallet = (request.args.get("wallet") or "").strip()
+    if not wallet or not wallet.startswith("THR") or len(wallet) < 10:
+        return None, jsonify({"ok": False, "error": "valid THR wallet_address required"}), 401
+    return wallet, None, None
+
+
+@app.route("/api/mobile/sentinel/signals", methods=["GET"])
+def api_mobile_sentinel_signals():
+    """Recent trading signals for the wallet app.
+
+    Query params: wallet (THR address), limit (default 20)
+    Returns signals visible to this subscriber's tier.
+    """
+    wallet = (request.args.get("wallet") or "").strip()
+    if not wallet or not wallet.startswith("THR"):
+        return jsonify({"ok": False, "error": "wallet param required"}), 401
+
+    subs = load_json(SENTINEL_SUBSCRIPTIONS_FILE, {})
+    sub = subs.get(wallet)
+    now_ts = int(time.time())
+    if not sub or sub.get("expires_at", 0) <= now_ts:
+        return jsonify({"ok": False, "error": "no active subscription", "subscribe_url": "/api/sentinel/packages"}), 403
+
+    tier = sub.get("tier", "starter")
+    limit = min(int(request.args.get("limit", 20)), 100)
+
+    feed = load_json(ADMIN_TRADE_FEED_FILE, [])
+    if not isinstance(feed, list):
+        feed = []
+
+    signals = []
+    for trade in reversed(feed[-200:]):
+        sig = {
+            "id": trade.get("id"),
+            "symbol": trade.get("symbol"),
+            "side": trade.get("side"),
+            "entry_price": trade.get("entry_price"),
+            "stop_loss": trade.get("stop_loss"),
+            "take_profit": trade.get("take_profit"),
+            "timeframe": trade.get("timeframe", "4h"),
+            "status": trade.get("status", "open"),
+            "created_at": trade.get("created_at"),
+        }
+        if tier in ("elite", "whale"):
+            sig["notes"] = trade.get("notes", "")
+            sig["pnl_pct"] = trade.get("pnl_pct")
+            sig["exit_price"] = trade.get("exit_price")
+        signals.append(sig)
+        if len(signals) >= limit:
+            break
+
+    return jsonify({"ok": True, "signals": signals, "tier": tier, "total": len(feed)}), 200
+
+
+@app.route("/api/mobile/sentinel/subscription", methods=["GET"])
+def api_mobile_sentinel_subscription():
+    """Subscription status for a wallet."""
+    wallet = (request.args.get("wallet") or "").strip()
+    if not wallet or not wallet.startswith("THR"):
+        return jsonify({"ok": False, "error": "wallet param required"}), 401
+
+    subs = load_json(SENTINEL_SUBSCRIPTIONS_FILE, {})
+    sub = subs.get(wallet)
+    now_ts = int(time.time())
+
+    if not sub:
+        return jsonify({
+            "ok": True,
+            "subscribed": False,
+            "packages": SENTINEL_PACKAGES,
+        }), 200
+
+    active = sub.get("expires_at", 0) > now_ts
+    rewards_file = os.path.join(DATA_DIR, "sentinel_rewards.json")
+    rewards = load_json(rewards_file, {})
+    wallet_rewards = rewards.get(wallet, {})
+
+    return jsonify({
+        "ok": True,
+        "subscribed": True,
+        "active": active,
+        "tier": sub.get("tier"),
+        "expires_at": sub.get("expires_at"),
+        "rewards_multiplier": sub.get("rewards_multiplier", 1.0),
+        "subscribed_at": sub.get("subscribed_at"),
+        "rewards_earned": wallet_rewards.get("total_earned", 0),
+        "rewards_pending": wallet_rewards.get("pending", 0),
+        "verified": sub.get("verified", False),
+    }), 200
+
+
+@app.route("/api/mobile/sentinel/packages", methods=["GET"])
+def api_mobile_sentinel_packages():
+    """List available subscription packages for the wallet app."""
+    return jsonify({"ok": True, "packages": SENTINEL_PACKAGES}), 200
+
+
+@app.route("/api/mobile/sentinel/subscribe", methods=["POST"])
+def api_mobile_sentinel_subscribe():
+    """Subscribe from wallet app — validates wallet, deducts THR, activates.
+
+    Delegates to the existing subscribe endpoint logic but accepts
+    wallet-app JSON format: {wallet_address, package_id}
+    """
+    data = request.get_json(silent=True) or {}
+    wallet = (data.get("wallet_address") or "").strip()
+    package_id = (data.get("package_id") or "").strip().lower()
+
+    if not wallet or not wallet.startswith("THR") or len(wallet) < 10:
+        return jsonify({"ok": False, "error": "valid wallet_address required"}), 400
+    if package_id not in SENTINEL_PACKAGES:
+        return jsonify({"ok": False, "error": f"invalid package: {package_id}",
+                        "valid": list(SENTINEL_PACKAGES.keys())}), 400
+
+    pkg = SENTINEL_PACKAGES[package_id]
+    price_thr = pkg["price_thr"]
+
+    balance = get_thr_balance(wallet)
+    if balance < price_thr:
+        return jsonify({
+            "ok": False,
+            "error": "insufficient THR balance",
+            "required": price_thr,
+            "balance": balance,
+        }), 400
+
+    ledger = load_json(LEDGER_FILE, {})
+    matched_key = None
+    for k in ledger:
+        if k.upper() == wallet.upper():
+            matched_key = k
+            break
+    if matched_key is None:
+        return jsonify({"ok": False, "error": "wallet not found in ledger"}), 404
+
+    ledger[matched_key] = round(ledger[matched_key] - price_thr, 6)
+    save_json(LEDGER_FILE, ledger)
+
+    fee_split = _sentinel_split_fee(price_thr)
+
+    subs = load_json(SENTINEL_SUBSCRIPTIONS_FILE, {})
+    now_ts = int(time.time())
+    duration = pkg["duration_days"] * 86400
+
+    existing = subs.get(wallet)
+    if existing and existing.get("expires_at", 0) > now_ts:
+        expires_at = existing["expires_at"] + duration
+    else:
+        expires_at = now_ts + duration
+
+    blockchain_ref = hashlib.sha256(f"{wallet}:{now_ts}:{package_id}".encode()).hexdigest()[:48]
+
+    subs[wallet] = {
+        "tier": package_id,
+        "subscribed_at": now_ts,
+        "expires_at": expires_at,
+        "amount_paid": price_thr,
+        "token": "THR",
+        "payment_chain": "thronos",
+        "payment_tx_hash": "",
+        "blockchain_ref": blockchain_ref,
+        "rewards_multiplier": pkg["rewards_multiplier"],
+        "auto_renew": False,
+        "treasury_address": SENTINEL_TREASURY_ADDRESSES.get("thronos", ""),
+    }
+    save_json(SENTINEL_SUBSCRIPTIONS_FILE, subs)
+
+    logger.info("[MOBILE-SUBSCRIBE] %s subscribed to %s (%.2f THR)", wallet, package_id, price_thr)
+
+    return jsonify({
+        "ok": True,
+        "tier": package_id,
+        "expires_at": expires_at,
+        "amount_charged": price_thr,
+        "blockchain_ref": blockchain_ref,
+    }), 201
+
+
+@app.route("/api/mobile/sentinel/milestones", methods=["GET"])
+def api_mobile_sentinel_milestones():
+    """Milestone progress and reward status for a wallet subscriber."""
+    wallet = (request.args.get("wallet") or "").strip()
+    if not wallet or not wallet.startswith("THR"):
+        return jsonify({"ok": False, "error": "wallet param required"}), 401
+
+    subs = load_json(SENTINEL_SUBSCRIPTIONS_FILE, {})
+    sub = subs.get(wallet)
+    if not sub:
+        return jsonify({"ok": False, "error": "not subscribed"}), 403
+
+    try:
+        from sigbalbot_milestone_airdrop import SigBalBotMilestoneAirdrop
+        airdrop = SigBalBotMilestoneAirdrop()
+        progress = airdrop.get_progress()
+        status = airdrop.get_status()
+
+        wallet_allocations = []
+        for batch_id, alloc in airdrop.allocations.items():
+            for payout in alloc.get("payouts", []):
+                if payout.get("address", "").upper() == wallet.upper():
+                    wallet_allocations.append({
+                        "batch_id": batch_id,
+                        "milestone": alloc.get("milestone_number"),
+                        "status": payout.get("status"),
+                        "amount": payout.get("amount"),
+                        "tx_id": payout.get("tx_id"),
+                    })
+
+        return jsonify({
+            "ok": True,
+            "milestone_progress": progress,
+            "total_wins": status.get("total_wins", 0),
+            "milestones_reached": status.get("milestones_reached", 0),
+            "wallet_rewards": wallet_allocations,
+        }), 200
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)[:200]}), 500
+
+
+@app.route("/api/mobile/wallet/link", methods=["POST"])
+def api_mobile_wallet_link():
+    """Link a wallet address to a Sentinel subscription for signal delivery.
+
+    Called from the wallet app after wallet creation/import to register
+    the address for signal delivery and milestone rewards.
+    """
+    data = request.get_json(silent=True) or {}
+    wallet = (data.get("wallet_address") or "").strip()
+    device_id = (data.get("device_id") or "").strip()
+
+    if not wallet or not wallet.startswith("THR") or len(wallet) < 10:
+        return jsonify({"ok": False, "error": "valid wallet_address required"}), 400
+
+    profiles_file = os.path.join(DATA_DIR, "user_profiles.json")
+    profiles = load_json(profiles_file, {})
+
+    profile = profiles.get(wallet, {})
+    profile["thr_address"] = wallet
+    profile["linked_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    if device_id:
+        profile["device_id"] = device_id
+    profile["source"] = "mobile_app"
+    profiles[wallet] = profile
+    save_json(profiles_file, profiles)
+
+    subs = load_json(SENTINEL_SUBSCRIPTIONS_FILE, {})
+    has_subscription = wallet in subs
+    active = has_subscription and subs[wallet].get("expires_at", 0) > int(time.time())
+
+    return jsonify({
+        "ok": True,
+        "wallet_address": wallet,
+        "linked": True,
+        "has_subscription": has_subscription,
+        "subscription_active": active,
+        "tier": subs[wallet].get("tier") if has_subscription else None,
+    }), 200
+
+
 # ─── END SigBalBot Context Bridge ──────────────────────────────────────────
 
 

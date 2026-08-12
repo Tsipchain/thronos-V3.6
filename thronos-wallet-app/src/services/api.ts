@@ -749,3 +749,75 @@ export async function getPythiaLiquidityHistory(
   if (source) p.set('source', source);
   return request(`/api/wallet/history/normalized?${p}`);
 }
+
+// ── Sentinel Mobile API ──────────────────────────────────────────────────
+
+export interface SentinelSignal {
+  id: string;
+  symbol: string;
+  signal: string;
+  timeframe: string;
+  price: number;
+  confidence: number;
+  risk: string;
+  reason: string;
+  strategy: string;
+  market_regime: string;
+  confluence_score: number;
+  model_version: string;
+  confirmations: string[];
+  entry: number | null;
+  tp1: number | null;
+  tp2: number | null;
+  sl: number | null;
+  created_at?: string;
+}
+
+export interface SentinelSubscription {
+  address: string;
+  tier: string;
+  rewards_multiplier: number;
+  active: boolean;
+  verified: boolean;
+  expires_at: number | null;
+  thr_balance: number;
+}
+
+export interface SentinelMilestone {
+  id: string;
+  title: string;
+  status: 'pending' | 'approved' | 'submitted' | 'confirmed' | 'failed';
+  amount: number;
+  created_at: number;
+  confirmed_at?: number;
+  tx_hash?: string;
+}
+
+export async function getSentinelSignals(
+  address: string,
+  limit = 20,
+): Promise<{ ok: boolean; signals: SentinelSignal[] }> {
+  const p = new URLSearchParams({ address, limit: String(limit) });
+  return request(`/api/mobile/sentinel/signals?${p}`);
+}
+
+export async function getSentinelSubscription(
+  address: string,
+): Promise<SentinelSubscription> {
+  return request(`/api/mobile/sentinel/subscription/${address}`);
+}
+
+export async function getSentinelMilestones(
+  address: string,
+): Promise<{ ok: boolean; milestones: SentinelMilestone[] }> {
+  return request(`/api/mobile/sentinel/milestones/${address}`);
+}
+
+export async function linkWalletToSentinel(
+  address: string,
+): Promise<{ ok: boolean; linked: boolean }> {
+  return request('/api/mobile/sentinel/wallet/link', {
+    method: 'POST',
+    body: JSON.stringify({ address }),
+  });
+}

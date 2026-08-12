@@ -30,6 +30,9 @@ import PoolsScreen from './src/screens/PoolsScreen';
 import CreateTokenScreen from './src/screens/CreateTokenScreen';
 import NFTScreen from './src/screens/NFTScreen';
 import EpochScreen from './src/screens/EpochScreen';
+import SignalsScreen from './src/screens/SignalsScreen';
+import SubscriptionScreen from './src/screens/SubscriptionScreen';
+import MilestonesScreen from './src/screens/MilestonesScreen';
 
 import { useStore } from './src/store/useStore';
 import { COLORS } from './src/constants/theme';
@@ -55,6 +58,9 @@ export type RootStackParamList = {
   NFT: undefined;
   Epoch: undefined;
   Withdraw: undefined;
+  Signals: undefined;
+  Subscription: undefined;
+  Milestones: undefined;
 };
 
 export type TabParamList = {
@@ -181,6 +187,9 @@ export default function App() {
               <Stack.Screen name="NFT" component={NFTScreen} options={{ presentation: 'modal' }} />
               <Stack.Screen name="Withdraw" component={WithdrawScreen} options={{ presentation: 'modal' }} />
               <Stack.Screen name="Epoch" component={EpochScreen} options={{ presentation: 'modal' }} />
+              <Stack.Screen name="Signals" component={SignalsScreen} options={{ presentation: 'modal' }} />
+              <Stack.Screen name="Subscription" component={SubscriptionScreen} options={{ presentation: 'modal' }} />
+              <Stack.Screen name="Milestones" component={MilestonesScreen} options={{ presentation: 'modal' }} />
             </>
           )}
         </Stack.Navigator>

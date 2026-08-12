@@ -14,6 +14,7 @@ import {
   importWallet, importWalletFromRecoveryJson,
   isBiometricAvailable, authenticateWithBiometrics, setBiometricEnabled,
 } from '../services/wallet';
+import { linkWalletToSentinel } from '../services/api';
 import { useStore } from '../store/useStore';
 import type { RootStackParamList } from '../../App';
 
@@ -46,6 +47,7 @@ export default function ImportWalletScreen() {
 
   const afterImport = async (addr: string) => {
     setWallet({ isConnected: true, address: addr, backedUp: true });
+    linkWalletToSentinel(addr).catch(() => {});
     const hasBio = await isBiometricAvailable();
     if (hasBio) {
       Alert.alert(

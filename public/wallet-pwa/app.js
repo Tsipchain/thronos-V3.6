@@ -1855,6 +1855,14 @@ function showWalletConnect() {
         <div id="wcRequestArea"></div>
       </div>
 
+      <!-- Desktop connect — generate QR for desktop wallet to scan -->
+      <div class="card" style="padding:12px;margin-top:12px">
+        <div style="font-size:.7rem;text-transform:uppercase;letter-spacing:1px;color:#b08cf8;margin-bottom:8px">Desktop Connect</div>
+        <p style="color:var(--muted);font-size:.78rem;margin-bottom:10px">Generate a QR code that a Thronos desktop wallet can scan to connect to this mobile wallet.</p>
+        <button class="btn btn--ghost" id="desktopConnectBtn" style="width:100%;padding:10px;font-size:.85rem">🖥️ Generate Desktop QR</button>
+        <div id="desktopQrArea" style="display:none;margin-top:10px;text-align:center"></div>
+      </div>
+
       <div style="margin-top:12px;padding:10px;background:#0a0a14;border-radius:6px;font-size:.72rem;color:var(--muted)">
         <b style="color:var(--accent)">Wallet:</b><br>
         <span style="font-family:monospace;word-break:break-all">${address}</span>
@@ -1865,6 +1873,45 @@ function showWalletConnect() {
   document.getElementById('wcBackBtn').addEventListener('click', () => {
     if (_wcPollTimer) { clearInterval(_wcPollTimer); _wcPollTimer = null; }
     showWallet();
+  });
+
+  document.getElementById('desktopConnectBtn').addEventListener('click', async () => {
+    const btn = document.getElementById('desktopConnectBtn');
+    const area = document.getElementById('desktopQrArea');
+    btn.disabled = true; btn.textContent = 'Generating…';
+    try {
+      const r = await fetch(`${API_BASE}/api/hub/connect`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dapp: 'ThronosDesktopWallet' }),
+      });
+      const d = await r.json();
+      if (!r.ok || !d.ok) throw new Error(d.error || 'Failed to create session');
+      area.style.display = '';
+      area.innerHTML = `
+        <img src="${escHtml(d.qr_url)}" alt="Desktop QR" style="width:200px;height:200px;border-radius:8px;margin-bottom:8px" loading="lazy">
+        <div style="font-size:.72rem;color:var(--muted);margin-bottom:4px">Scan with your Thronos desktop wallet</div>
+        <div style="font-family:monospace;font-size:.65rem;color:var(--accent);word-break:break-all;background:#0d0a1a;border-radius:6px;padding:6px;margin-bottom:8px">${escHtml(d.uri)}</div>
+        <div style="font-size:.68rem;color:var(--muted)">Session: ${escHtml((d.session_id || '').slice(0, 8))}…</div>
+      `;
+      btn.textContent = '✓ QR Generated';
+      // Auto-pair: once desktop scans, poll for pairing
+      const sid = d.session_id;
+      const pairPoll = setInterval(async () => {
+        try {
+          const pr = await fetch(`${API_BASE}/api/hub/connect/${encodeURIComponent(sid)}`);
+          const pd = await pr.json();
+          if (pd.status === 'paired' || pd.address) {
+            clearInterval(pairPoll);
+            area.innerHTML += '<div style="color:#00ff66;font-size:.82rem;margin-top:8px">✓ Desktop wallet connected!</div>';
+          }
+        } catch {}
+      }, 3000);
+      setTimeout(() => clearInterval(pairPoll), 120000);
+    } catch (e) {
+      area.style.display = '';
+      area.innerHTML = `<div style="color:#ff6b6b;font-size:.82rem">${escHtml(e.message)}</div>`;
+      btn.disabled = false; btn.textContent = '🖥️ Generate Desktop QR';
+    }
   });
 
   if (canScan) {

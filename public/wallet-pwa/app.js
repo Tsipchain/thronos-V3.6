@@ -454,6 +454,19 @@ async function sendToken(from, to, amount, token) {
   throw new Error(d.error || d.message || 'send_failed');
 }
 
+async function requireSendAuth(address) {
+  const fid = LS.getObj(`thr_fid_${address}`);
+  if (fid?.credId) {
+    await assertWebAuthn(fid.credId);
+    return;
+  }
+  const ok = confirm(
+    'No biometric registered on this device.\n\n' +
+    'Confirm you want to proceed with this send?'
+  );
+  if (!ok) throw new Error('send_cancelled');
+}
+
 // ─── DOM helpers ──────────────────────────────────────────────────────────────
 
 const root = document.getElementById('root');
@@ -1427,6 +1440,7 @@ async function showWallet() {
         <button class="action-btn" id="nftBtn"><span class="action-btn__icon">🖼️</span>NFTs</button>
         <button class="action-btn" id="epochBtn"><span class="action-btn__icon">⏳</span>Epoch</button>
         <button class="action-btn" id="withdrawBtn"><span class="action-btn__icon">💰</span>Withdraw</button>
+        <button class="action-btn" id="huntersBtn" style="display:none"><span class="action-btn__icon">🎯</span>Hunters</button>
       </div>
     </div>
   `);
@@ -1486,6 +1500,14 @@ async function showWallet() {
   document.getElementById('epochBtn').addEventListener('click', showEpoch);
   document.getElementById('historyBtn').addEventListener('click', () => showHistory(address));
   document.getElementById('withdrawBtn').addEventListener('click', () => showWithdraw(address));
+  document.getElementById('huntersBtn').addEventListener('click', showCryptoHunters);
+
+  fetch(`${API_BASE}/api/v1/features`).then(r => r.json()).then(f => {
+    if (f.crypto_hunters) {
+      const hb = document.getElementById('huntersBtn');
+      if (hb) hb.style.display = '';
+    }
+  }).catch(() => {});
 
   const setAddrBarValue = (full) => {
     const lineEl = document.getElementById('addrLine');
@@ -2590,8 +2612,16 @@ async function showBridge(fromToken = 'BTC', toToken = 'WBTC') {
     const amt = parseFloat(document.getElementById('bridgeAmt').value);
     if (!amt || amt <= 0) return;
     const btn = document.getElementById('bridgeBtn');
-    btn.disabled = true; btn.textContent = 'Bridging…';
+    btn.disabled = true; btn.textContent = 'Confirm with biometric…';
     document.getElementById('bridgeErr').style.display = 'none';
+    try {
+      await requireSendAuth(address);
+    } catch (authErr) {
+      btn.disabled = false; btn.textContent = 'Bridge Now';
+      if (authErr.message === 'send_cancelled') { document.getElementById('bridgeErr').textContent = 'Bridge cancelled by user.'; document.getElementById('bridgeErr').style.display = ''; return; }
+      document.getElementById('bridgeErr').textContent = 'Biometric confirmation failed — bridge aborted.'; document.getElementById('bridgeErr').style.display = ''; return;
+    }
+    btn.textContent = 'Bridging…';
     try {
       const r = await fetch(`${API_WRITE}/api/bridge/execute`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -3313,9 +3343,15 @@ function showSend(preselectedToken = null, prefillAddr = null) {
     }
 
     const btn = document.getElementById('sendBtn');
-    btn.disabled = true; btn.textContent = 'Sending…'; setError(null);
+    btn.disabled = true; btn.textContent = 'Confirm with biometric…'; setError(null);
     try {
       if (!privHex) throw new Error('Wallet is locked — please unlock first');
+      try { await requireSendAuth(address); } catch (authErr) {
+        btn.disabled = false; btn.textContent = 'Send';
+        if (authErr.message === 'send_cancelled') { setError('Send cancelled by user.'); return; }
+        setError('Biometric confirmation failed — send aborted.'); return;
+      }
+      btn.textContent = 'Sending…';
       const result = await sendToken(address, to.toUpperCase(), amount, token, privHex);
       setSuccess(`Sent! TX: ${result.tx_hash || result.txid || result.tx || 'submitted'}`);
       btn.textContent = 'Sent ✓';
@@ -3487,13 +3523,19 @@ async function showSwap(preselectedIn = null) {
     const minOut = lastQuote.amount_out * 0.97; // 3% slippage tolerance
 
     const btn = document.getElementById('swapExecBtn');
-    btn.disabled = true; btn.textContent = 'Approving…';
+    btn.disabled = true; btn.textContent = 'Confirm with biometric…';
     setSwapErr(null); setSwapOk(null);
 
     try {
       if (!ws || !ws.buildWalletActionIntent) {
         setSwapErr('Unlock wallet with biometric/passkey to approve this action.'); btn.disabled = false; btn.textContent = 'Swap Now'; return;
       }
+      try { await requireSendAuth(address); } catch (authErr) {
+        btn.disabled = false; btn.textContent = 'Swap Now';
+        if (authErr.message === 'send_cancelled') { setSwapErr('Swap cancelled by user.'); return; }
+        setSwapErr('Biometric confirmation failed — swap aborted.'); return;
+      }
+      btn.textContent = 'Approving…';
       // Signed intent — no private key sent to server
       const payload = { token_in: tokenIn, token_out: tokenOut, amount_in: amtIn, min_amount_out: minOut };
       const intent = await ws.buildWalletActionIntent(
@@ -4593,6 +4635,10 @@ async function showAddLiquidity(poolId, tokenA, tokenB, poolMeta) {
         const ws = window.walletSession;
         if (!ws || !ws.buildWalletActionIntent) throw new Error('Unlock wallet with biometric/passkey to approve this action.');
         if (ws.isLocked && ws.isLocked()) throw new Error('Unlock wallet with biometric/passkey to approve this action.');
+        try { await requireSendAuth(address); } catch (authErr) {
+          if (authErr.message === 'send_cancelled') throw new Error('Add liquidity cancelled by user.');
+          throw new Error('Biometric confirmation failed — add liquidity aborted.');
+        }
         const liqPayload = { pool_id: poolId, amount_a: amtA, amount_b: amtB };
         const liqIntent = await ws.buildWalletActionIntent(
           'pool_deposit_intent',
@@ -4748,7 +4794,15 @@ async function showCreateToken() {
     }
 
     const btn = document.getElementById('tokCreateBtn');
-    btn.disabled = true; btn.textContent = 'Approving…';
+    btn.disabled = true; btn.textContent = 'Confirm with biometric…';
+    try {
+      await requireSendAuth(address);
+    } catch (authErr) {
+      btn.disabled = false; btn.textContent = 'Create Token';
+      if (authErr.message === 'send_cancelled') { errEl.textContent = 'Token creation cancelled.'; errEl.style.display = ''; return; }
+      errEl.textContent = 'Biometric confirmation failed — token creation aborted.'; errEl.style.display = ''; return;
+    }
+    btn.textContent = 'Approving…';
     try {
       const effDecimals = isNaN(decimals) ? 8 : decimals;
       if (!ws || !ws.buildWalletActionIntent) {
@@ -4846,7 +4900,12 @@ async function buyNFT(nftId) {
   if (ws && ws.isLocked && ws.isLocked()) {
     alert('Unlock wallet with biometric/passkey to approve this action.'); return;
   }
-  if (!confirm('Buy this NFT?')) return;
+  try {
+    await requireSendAuth(address);
+  } catch (authErr) {
+    if (authErr.message === 'send_cancelled') return;
+    alert('Biometric confirmation failed — purchase aborted.'); return;
+  }
   try {
     if (!ws || !ws.buildWalletActionIntent) { alert('Unlock wallet with biometric/passkey to approve this action.'); return; }
     const buyPayload = { nft_id: nftId };
@@ -5370,6 +5429,29 @@ async function pwaOpenEvmSendModal(network, evmAddr, tokenSym) {
         if (resultEl) resultEl.innerHTML = '<span style="color:#f88">Provide authorization to proceed.</span>'; return;
       }
 
+      const thrForAuth = _pwaSigningCtx?.address || fromThr;
+      const fidInt = thrForAuth ? LS.getObj(`thr_fid_${thrForAuth}`) : null;
+      if (fidInt?.credId) {
+        if (resultEl) resultEl.innerHTML = '<span style="color:#8af">Confirm with biometric / passkey…</span>';
+        try {
+          await assertWebAuthn(fidInt.credId);
+        } catch (biomErr) {
+          if (resultEl) resultEl.innerHTML = '<span style="color:#f88">Biometric confirmation cancelled — transfer aborted.</span>';
+          return;
+        }
+      } else {
+        const ok = confirm(
+          `Confirm internal transfer:\n\n` +
+          `Amount: ${amt} ${(tokenSym || sendSym).toUpperCase()}\n` +
+          `To: ${toAddr}\n\n` +
+          `No biometric registered — confirm to proceed.`
+        );
+        if (!ok) {
+          if (resultEl) resultEl.innerHTML = '<span style="color:#f88">Transfer cancelled by user.</span>';
+          return;
+        }
+      }
+
       if (resultEl) resultEl.innerHTML = '<span style="color:#8af">Processing internal transfer…</span>';
 
       const assetStr  = (tokenSym || sendSym).toUpperCase();
@@ -5732,6 +5814,126 @@ async function pwaOpenPoolDepositModal(network, evmAddr) {
   });
 }
 
+// ─── Crypto Hunters ──────────────────────────────────────────────────────────
+
+async function showCryptoHunters() {
+  const address = getActiveAddr();
+
+  let features = {};
+  try {
+    const r = await fetch(`${API_BASE}/api/v1/features`);
+    features = await r.json();
+  } catch { /* offline fallback */ }
+
+  if (!features.crypto_hunters) {
+    render(`
+      <div class="screen">
+        <div class="header">
+          <button class="btn--icon" id="backBtn">←</button>
+          <span class="header__title">🎯 Crypto Hunters</span>
+        </div>
+        <div class="card" style="padding:20px;text-align:center;margin-top:20px">
+          <div style="font-size:2.2rem;margin-bottom:10px">🔒</div>
+          <div style="font-size:.92rem;color:var(--text);font-weight:600;margin-bottom:6px">Feature Not Available</div>
+          <div style="font-size:.78rem;color:var(--muted)">Crypto Hunters Midday is not enabled on this node. Contact your administrator to enable the feature.</div>
+        </div>
+      </div>
+    `);
+    document.getElementById('backBtn').addEventListener('click', () => showWallet(address));
+    return;
+  }
+
+  const telegramUrl = features.crypto_hunters_telegram_url || '';
+  const portalUrl = features.crypto_hunters_portal_url || '';
+  const hunterModeEnabled = !!features.hunter_mode;
+
+  render(`
+    <div class="screen">
+      <div class="header">
+        <button class="btn--icon" id="backBtn">←</button>
+        <span class="header__title">🎯 Crypto Hunters</span>
+      </div>
+
+      <!-- Community card -->
+      <div class="card" style="padding:16px;margin-top:10px">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
+          <div style="width:52px;height:52px;border-radius:12px;background:linear-gradient(135deg,#1a1040,#7c5cbf);display:flex;align-items:center;justify-content:center;font-size:1.6rem;flex-shrink:0">🎯</div>
+          <div>
+            <div style="font-size:1rem;font-weight:700;color:#fff">Crypto Hunters Midday</div>
+            <div style="font-size:.76rem;color:var(--muted)">Community-driven play-to-earn on Thronos</div>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">
+          <span style="font-size:.68rem;padding:3px 8px;border-radius:4px;background:#7c5cbf22;color:#b08cf8;border:1px solid #7c5cbf44">P2E</span>
+          <span style="font-size:.68rem;padding:3px 8px;border-radius:4px;background:#00ff6622;color:#00ff66;border:1px solid #00ff6644">${hunterModeEnabled ? '● Active' : '○ Standby'}</span>
+          <span style="font-size:.68rem;padding:3px 8px;border-radius:4px;background:#ffffff08;color:var(--muted);border:1px solid #ffffff15">Community Sponsor</span>
+        </div>
+
+        <div style="font-size:.8rem;color:var(--text);line-height:1.5;margin-bottom:14px">
+          Join the Crypto Hunters community. Complete challenges, earn DRX game tokens, and participate in seasonal events. Connect with fellow hunters through Telegram.
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:8px">
+          ${telegramUrl ? `<button class="btn btn--primary" id="telegramBtn" style="width:100%;padding:11px;font-size:.88rem">📲 Join Telegram Community</button>` : ''}
+          <button class="btn ${hunterModeEnabled ? 'btn--primary' : 'btn--ghost'}" id="hunterModeBtn" style="width:100%;padding:11px;font-size:.88rem" ${!hunterModeEnabled ? 'disabled' : ''}>
+            🎮 ${hunterModeEnabled ? 'Open Hunter Mode' : 'Hunter Mode (Coming Soon)'}
+          </button>
+        </div>
+      </div>
+
+      <!-- Score card -->
+      <div class="card" style="padding:14px;margin-top:8px">
+        <div style="font-size:.7rem;text-transform:uppercase;letter-spacing:1px;color:#b08cf8;margin-bottom:8px">Your Stats</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <div style="text-align:center">
+            <div style="font-size:1.1rem;font-weight:700;color:#fff" id="hunterScore">—</div>
+            <div style="font-size:.68rem;color:var(--muted)">Total Score</div>
+          </div>
+          <div style="text-align:center">
+            <div style="font-size:1.1rem;font-weight:700;color:#00ff66" id="hunterRewards">—</div>
+            <div style="font-size:.68rem;color:var(--muted)">DRX Earned</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Sponsor disclosure -->
+      <div style="margin-top:14px;padding:10px 12px;border-radius:8px;background:#ffffff06;border:1px solid #ffffff10">
+        <div style="font-size:.68rem;color:var(--muted);line-height:1.5">
+          <strong>Sponsor disclosure:</strong> Crypto Hunters Midday is operated by an independent community sponsor and is not part of the core Thronos protocol. DRX game tokens are issued by the Crypto Hunters project and carry no guaranteed value. Play responsibly.
+        </div>
+      </div>
+    </div>
+  `);
+
+  document.getElementById('backBtn').addEventListener('click', () => showWallet(address));
+
+  if (telegramUrl) {
+    document.getElementById('telegramBtn').addEventListener('click', () => {
+      window.open(telegramUrl, '_blank', 'noopener,noreferrer');
+    });
+  }
+
+  if (hunterModeEnabled && portalUrl) {
+    document.getElementById('hunterModeBtn').addEventListener('click', () => {
+      window.open(portalUrl, '_blank', 'noopener,noreferrer');
+    });
+  }
+
+  if (address) {
+    fetch(`${API_BASE}/api/game/leaderboard`).then(r => r.json()).then(data => {
+      const lb = data.leaderboard || data.scores || [];
+      const entry = lb.find(e => e.wallet === address || e.address === address);
+      if (entry) {
+        const scoreEl = document.getElementById('hunterScore');
+        const rewardsEl = document.getElementById('hunterRewards');
+        if (scoreEl) scoreEl.textContent = Number(entry.score || 0).toLocaleString();
+        if (rewardsEl) rewardsEl.textContent = `${Number(entry.rewards || entry.drx || 0).toFixed(2)} DRX`;
+      }
+    }).catch(() => {});
+  }
+}
+
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 
 async function boot() {
@@ -5762,5 +5964,6 @@ window.buyNFT = buyNFT;
 window.pwaOpenEvmAssetActions = pwaOpenEvmAssetActions;
 window.pwaOpenEvmSendModal = pwaOpenEvmSendModal;
 window.pwaOpenPoolDepositModal = pwaOpenPoolDepositModal;
+window.showCryptoHunters = showCryptoHunters;
 
 boot();

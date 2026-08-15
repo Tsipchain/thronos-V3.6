@@ -1527,6 +1527,12 @@ BURN_ADDRESS      = "0x0"
 SWAP_POOL_ADDRESS = "THR_SWAP_POOL_V1"
 GAME_POOL_ADDRESS = "THR_CRYPTO_HUNTERS_POOL"
 GAME_PANEL_URL    = os.getenv("GAME_PANEL_URL", "/game")  # Crypto Hunters admin panel URL
+
+CRYPTO_HUNTERS_ENABLED       = os.getenv("CRYPTO_HUNTERS_ENABLED", "false").lower() == "true"
+CRYPTO_HUNTERS_TELEGRAM_URL  = _strip_env_quotes(os.getenv("CRYPTO_HUNTERS_TELEGRAM_URL", ""))
+CRYPTO_HUNTERS_PORTAL_URL    = _strip_env_quotes(os.getenv("CRYPTO_HUNTERS_PORTAL_URL", ""))
+THRONOS_HUNTER_MODE_ENABLED  = os.getenv("THRONOS_HUNTER_MODE_ENABLED", "false").lower() == "true"
+THRONOS_RELAY_REWARDS_ENABLED = os.getenv("THRONOS_RELAY_REWARDS_ENABLED", "false").lower() == "true"
 GATEWAY_ADDRESS   = "THR_FIAT_GATEWAY_V1"
 
 # FIX 8: Initialize billing module (clean separation: Chat=credits, Architect=THR)
@@ -33464,6 +33470,17 @@ def api_v1_block_by_hash(block_hash: str):
         }
 
     return jsonify(block=block, height=height_calc), 200
+
+
+@app.route("/api/v1/features", methods=["GET"])
+def api_v1_features():
+    """Return feature-flag state for the PWA and external clients."""
+    return jsonify(
+        crypto_hunters=CRYPTO_HUNTERS_ENABLED,
+        crypto_hunters_telegram_url=CRYPTO_HUNTERS_TELEGRAM_URL if CRYPTO_HUNTERS_ENABLED else "",
+        crypto_hunters_portal_url=CRYPTO_HUNTERS_PORTAL_URL if CRYPTO_HUNTERS_ENABLED else "",
+        hunter_mode=THRONOS_HUNTER_MODE_ENABLED,
+    ), 200
 
 
 @app.route("/api/v1/status", methods=["GET"])

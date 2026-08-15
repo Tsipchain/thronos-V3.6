@@ -454,6 +454,19 @@ async function sendToken(from, to, amount, token) {
   throw new Error(d.error || d.message || 'send_failed');
 }
 
+async function requireSendAuth(address) {
+  const fid = LS.getObj(`thr_fid_${address}`);
+  if (fid?.credId) {
+    await assertWebAuthn(fid.credId);
+    return;
+  }
+  const ok = confirm(
+    'No biometric registered on this device.\n\n' +
+    'Confirm you want to proceed with this send?'
+  );
+  if (!ok) throw new Error('send_cancelled');
+}
+
 // ─── DOM helpers ──────────────────────────────────────────────────────────────
 
 const root = document.getElementById('root');
@@ -1320,6 +1333,7 @@ function showAccountPicker() {
 // ─── Main wallet screen ───────────────────────────────────────────────────────
 
 const HOME_NETWORKS = [
+  { id: 'all',      icon: '🌐', label: 'All Networks' },
   { id: 'thronos',  icon: '⬡',  label: 'Thronos' },
   { id: 'bitcoin',  icon: '₿',  label: 'Bitcoin' },
   { id: 'ethereum', icon: 'Ξ',  label: 'Ethereum' },
@@ -1426,6 +1440,7 @@ async function showWallet() {
         <button class="action-btn" id="nftBtn"><span class="action-btn__icon">🖼️</span>NFTs</button>
         <button class="action-btn" id="epochBtn"><span class="action-btn__icon">⏳</span>Epoch</button>
         <button class="action-btn" id="withdrawBtn"><span class="action-btn__icon">💰</span>Withdraw</button>
+        <button class="action-btn" id="huntersBtn" style="display:none"><span class="action-btn__icon">🎯</span>Hunters</button>
       </div>
     </div>
   `);
@@ -1485,6 +1500,14 @@ async function showWallet() {
   document.getElementById('epochBtn').addEventListener('click', showEpoch);
   document.getElementById('historyBtn').addEventListener('click', () => showHistory(address));
   document.getElementById('withdrawBtn').addEventListener('click', () => showWithdraw(address));
+  document.getElementById('huntersBtn').addEventListener('click', showCryptoHunters);
+
+  fetch(`${API_BASE}/api/v1/features`).then(r => r.json()).then(f => {
+    if (f.crypto_hunters) {
+      const hb = document.getElementById('huntersBtn');
+      if (hb) hb.style.display = '';
+    }
+  }).catch(() => {});
 
   const setAddrBarValue = (full) => {
     const lineEl = document.getElementById('addrLine');
@@ -1832,6 +1855,14 @@ function showWalletConnect() {
         <div id="wcRequestArea"></div>
       </div>
 
+      <!-- Desktop connect — generate QR for desktop wallet to scan -->
+      <div class="card" style="padding:12px;margin-top:12px">
+        <div style="font-size:.7rem;text-transform:uppercase;letter-spacing:1px;color:#b08cf8;margin-bottom:8px">Desktop Connect</div>
+        <p style="color:var(--muted);font-size:.78rem;margin-bottom:10px">Generate a QR code that a Thronos desktop wallet can scan to connect to this mobile wallet.</p>
+        <button class="btn btn--ghost" id="desktopConnectBtn" style="width:100%;padding:10px;font-size:.85rem">🖥️ Generate Desktop QR</button>
+        <div id="desktopQrArea" style="display:none;margin-top:10px;text-align:center"></div>
+      </div>
+
       <div style="margin-top:12px;padding:10px;background:#0a0a14;border-radius:6px;font-size:.72rem;color:var(--muted)">
         <b style="color:var(--accent)">Wallet:</b><br>
         <span style="font-family:monospace;word-break:break-all">${address}</span>
@@ -1842,6 +1873,45 @@ function showWalletConnect() {
   document.getElementById('wcBackBtn').addEventListener('click', () => {
     if (_wcPollTimer) { clearInterval(_wcPollTimer); _wcPollTimer = null; }
     showWallet();
+  });
+
+  document.getElementById('desktopConnectBtn').addEventListener('click', async () => {
+    const btn = document.getElementById('desktopConnectBtn');
+    const area = document.getElementById('desktopQrArea');
+    btn.disabled = true; btn.textContent = 'Generating…';
+    try {
+      const r = await fetch(`${API_BASE}/api/hub/connect`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dapp: 'ThronosDesktopWallet' }),
+      });
+      const d = await r.json();
+      if (!r.ok || !d.ok) throw new Error(d.error || 'Failed to create session');
+      area.style.display = '';
+      area.innerHTML = `
+        <img src="${escHtml(d.qr_url)}" alt="Desktop QR" style="width:200px;height:200px;border-radius:8px;margin-bottom:8px" loading="lazy">
+        <div style="font-size:.72rem;color:var(--muted);margin-bottom:4px">Scan with your Thronos desktop wallet</div>
+        <div style="font-family:monospace;font-size:.65rem;color:var(--accent);word-break:break-all;background:#0d0a1a;border-radius:6px;padding:6px;margin-bottom:8px">${escHtml(d.uri)}</div>
+        <div style="font-size:.68rem;color:var(--muted)">Session: ${escHtml((d.session_id || '').slice(0, 8))}…</div>
+      `;
+      btn.textContent = '✓ QR Generated';
+      // Auto-pair: once desktop scans, poll for pairing
+      const sid = d.session_id;
+      const pairPoll = setInterval(async () => {
+        try {
+          const pr = await fetch(`${API_BASE}/api/hub/connect/${encodeURIComponent(sid)}`);
+          const pd = await pr.json();
+          if (pd.status === 'paired' || pd.address) {
+            clearInterval(pairPoll);
+            area.innerHTML += '<div style="color:#00ff66;font-size:.82rem;margin-top:8px">✓ Desktop wallet connected!</div>';
+          }
+        } catch {}
+      }, 3000);
+      setTimeout(() => clearInterval(pairPoll), 120000);
+    } catch (e) {
+      area.style.display = '';
+      area.innerHTML = `<div style="color:#ff6b6b;font-size:.82rem">${escHtml(e.message)}</div>`;
+      btn.disabled = false; btn.textContent = '🖥️ Generate Desktop QR';
+    }
   });
 
   if (canScan) {
@@ -2589,8 +2659,16 @@ async function showBridge(fromToken = 'BTC', toToken = 'WBTC') {
     const amt = parseFloat(document.getElementById('bridgeAmt').value);
     if (!amt || amt <= 0) return;
     const btn = document.getElementById('bridgeBtn');
-    btn.disabled = true; btn.textContent = 'Bridging…';
+    btn.disabled = true; btn.textContent = 'Confirm with biometric…';
     document.getElementById('bridgeErr').style.display = 'none';
+    try {
+      await requireSendAuth(address);
+    } catch (authErr) {
+      btn.disabled = false; btn.textContent = 'Bridge Now';
+      if (authErr.message === 'send_cancelled') { document.getElementById('bridgeErr').textContent = 'Bridge cancelled by user.'; document.getElementById('bridgeErr').style.display = ''; return; }
+      document.getElementById('bridgeErr').textContent = 'Biometric confirmation failed — bridge aborted.'; document.getElementById('bridgeErr').style.display = ''; return;
+    }
+    btn.textContent = 'Bridging…';
     try {
       const r = await fetch(`${API_WRITE}/api/bridge/execute`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -3312,9 +3390,15 @@ function showSend(preselectedToken = null, prefillAddr = null) {
     }
 
     const btn = document.getElementById('sendBtn');
-    btn.disabled = true; btn.textContent = 'Sending…'; setError(null);
+    btn.disabled = true; btn.textContent = 'Confirm with biometric…'; setError(null);
     try {
       if (!privHex) throw new Error('Wallet is locked — please unlock first');
+      try { await requireSendAuth(address); } catch (authErr) {
+        btn.disabled = false; btn.textContent = 'Send';
+        if (authErr.message === 'send_cancelled') { setError('Send cancelled by user.'); return; }
+        setError('Biometric confirmation failed — send aborted.'); return;
+      }
+      btn.textContent = 'Sending…';
       const result = await sendToken(address, to.toUpperCase(), amount, token, privHex);
       setSuccess(`Sent! TX: ${result.tx_hash || result.txid || result.tx || 'submitted'}`);
       btn.textContent = 'Sent ✓';
@@ -3486,13 +3570,19 @@ async function showSwap(preselectedIn = null) {
     const minOut = lastQuote.amount_out * 0.97; // 3% slippage tolerance
 
     const btn = document.getElementById('swapExecBtn');
-    btn.disabled = true; btn.textContent = 'Approving…';
+    btn.disabled = true; btn.textContent = 'Confirm with biometric…';
     setSwapErr(null); setSwapOk(null);
 
     try {
       if (!ws || !ws.buildWalletActionIntent) {
         setSwapErr('Unlock wallet with biometric/passkey to approve this action.'); btn.disabled = false; btn.textContent = 'Swap Now'; return;
       }
+      try { await requireSendAuth(address); } catch (authErr) {
+        btn.disabled = false; btn.textContent = 'Swap Now';
+        if (authErr.message === 'send_cancelled') { setSwapErr('Swap cancelled by user.'); return; }
+        setSwapErr('Biometric confirmation failed — swap aborted.'); return;
+      }
+      btn.textContent = 'Approving…';
       // Signed intent — no private key sent to server
       const payload = { token_in: tokenIn, token_out: tokenOut, amount_in: amtIn, min_amount_out: minOut };
       const intent = await ws.buildWalletActionIntent(
@@ -3553,7 +3643,9 @@ const _DEPOSIT_FILTER_TYPES = new Set([
   'pool_add_liquidity_external_tx_confirmed',
   'crosschain_deposit_detected',
   'crosschain_deposit_confirmed',
+  'crosschain_transfer_received',
   'bridge_deposit_detected',
+  'bridge_in',
   'token_receive',
   'evm_token_receive',
 ]);
@@ -3580,6 +3672,9 @@ const _CROSSCHAIN_FILTER_TYPES = new Set([
   'crosschain_withdraw',
   'bridge_deposit_detected',
   'bridge',
+  'bridge_in',
+  'bridge_out',
+  'wbtc_burn',
 ]);
 
 // Map from app network ID to chain IDs stored in wallet history events
@@ -3642,6 +3737,9 @@ const _EVENT_TYPE_LABELS = {
   crosschain_withdraw:                      '🔄 Cross-chain withdrawal',
   gateway_payout:                           '💰 Gateway payout',
   bridge:                                   '⚡ Bridge',
+  bridge_in:                                '⬇️ Bridge In',
+  bridge_out:                               '⬆️ Bridge Out',
+  wbtc_burn:                                '🔥 wBTC Burn',
 };
 
 function _renderHistoryRow(tx) {
@@ -3797,15 +3895,17 @@ async function showHistory(address) {
         filtered = allTx.filter(tx => et(tx) === activeFilter);
       }
     }
-    // Network filter: strict — only show events whose chain matches the selected network.
-    // Exception: if chain field is empty/missing (legacy events), show on Thronos view only.
-    const netChains = HISTORY_CHAIN_MAP[activeNetwork] || [];
-    if (netChains.length) {
-      filtered = filtered.filter(tx => {
-        const c = (tx.chain || '').toLowerCase();
-        if (!c) return activeNetwork === 'thronos'; // legacy events with no chain → Thronos only
-        return netChains.includes(c);
-      });
+    // Network filter: "all" shows every chain; otherwise strict match.
+    // Legacy events with no chain field show on Thronos and All views only.
+    if (activeNetwork !== 'all') {
+      const netChains = HISTORY_CHAIN_MAP[activeNetwork] || [];
+      if (netChains.length) {
+        filtered = filtered.filter(tx => {
+          const c = (tx.chain || '').toLowerCase();
+          if (!c) return activeNetwork === 'thronos';
+          return netChains.includes(c);
+        });
+      }
     }
     if (!filtered.length) {
       const netLabel = HOME_NETWORKS.find(n => n.id === activeNetwork)?.label || activeNetwork;
@@ -3823,25 +3923,32 @@ async function showHistory(address) {
     const el = document.getElementById('historyBody');
     if (el) el.innerHTML = '<p style="color:var(--muted);text-align:center;padding:20px">Loading history…</p>';
     try {
-      // Load from both legacy endpoint and new v1 wallet history endpoint and merge
-      const [legacyTx, v1Res] = await Promise.allSettled([
+      const [normalizedRes, legacyTx, v1Res] = await Promise.allSettled([
+        fetch(`${API_WRITE}/api/wallet/history/normalized?address=${encodeURIComponent(address)}&limit=300`).then(r => r.json()).catch(() => null),
         fetchHistory(address),
         fetch(`${API_BASE}/api/wallet/history/${encodeURIComponent(address)}?limit=200`).then(r => r.json()).catch(() => null),
       ]);
+      const normalized = (normalizedRes.status === 'fulfilled' && normalizedRes.value?.ok) ? (normalizedRes.value.history || []) : [];
       const legacy = legacyTx.status === 'fulfilled' ? (legacyTx.value || []) : [];
       const v1 = (v1Res.status === 'fulfilled' && v1Res.value?.ok) ? (v1Res.value.history || []) : [];
-      // Merge: v1 events have event_type/chain/network_label; normalize kind for filter compat
-      const v1Normalized = v1.map(e => ({
+      const normMapped = normalized.map(e => ({
+        ...e,
+        kind: e.original_event_type || e.event_type || e.kind || 'transfer',
+        category: e.original_event_type || e.event_type || e.kind,
+        asset_symbol: e.asset || e.asset_symbol,
+      }));
+      const v1Mapped = v1.map(e => ({
         ...e,
         kind: e.event_type || e.kind || 'transfer',
         category: e.event_type || e.kind,
         asset_symbol: e.asset || e.asset_symbol,
       }));
-      // Deduplicate by id
       const seen = new Set();
       allTx = [];
-      for (const tx of [...v1Normalized, ...legacy]) {
-        const id = tx.id || tx.tx_id || tx.txid || JSON.stringify(tx).slice(0, 60);
+      for (const tx of [...normMapped, ...v1Mapped, ...legacy]) {
+        const chainKey = (tx.chain || '').toLowerCase();
+        const txid = tx.external_txid || '';
+        const id = (chainKey && txid) ? `${chainKey}:${txid}` : (tx.id || tx.tx_id || tx.txid || JSON.stringify(tx).slice(0, 60));
         if (!seen.has(id)) { seen.add(id); allTx.push(tx); }
       }
       renderList();
@@ -4575,6 +4682,10 @@ async function showAddLiquidity(poolId, tokenA, tokenB, poolMeta) {
         const ws = window.walletSession;
         if (!ws || !ws.buildWalletActionIntent) throw new Error('Unlock wallet with biometric/passkey to approve this action.');
         if (ws.isLocked && ws.isLocked()) throw new Error('Unlock wallet with biometric/passkey to approve this action.');
+        try { await requireSendAuth(address); } catch (authErr) {
+          if (authErr.message === 'send_cancelled') throw new Error('Add liquidity cancelled by user.');
+          throw new Error('Biometric confirmation failed — add liquidity aborted.');
+        }
         const liqPayload = { pool_id: poolId, amount_a: amtA, amount_b: amtB };
         const liqIntent = await ws.buildWalletActionIntent(
           'pool_deposit_intent',
@@ -4730,7 +4841,15 @@ async function showCreateToken() {
     }
 
     const btn = document.getElementById('tokCreateBtn');
-    btn.disabled = true; btn.textContent = 'Approving…';
+    btn.disabled = true; btn.textContent = 'Confirm with biometric…';
+    try {
+      await requireSendAuth(address);
+    } catch (authErr) {
+      btn.disabled = false; btn.textContent = 'Create Token';
+      if (authErr.message === 'send_cancelled') { errEl.textContent = 'Token creation cancelled.'; errEl.style.display = ''; return; }
+      errEl.textContent = 'Biometric confirmation failed — token creation aborted.'; errEl.style.display = ''; return;
+    }
+    btn.textContent = 'Approving…';
     try {
       const effDecimals = isNaN(decimals) ? 8 : decimals;
       if (!ws || !ws.buildWalletActionIntent) {
@@ -4828,7 +4947,12 @@ async function buyNFT(nftId) {
   if (ws && ws.isLocked && ws.isLocked()) {
     alert('Unlock wallet with biometric/passkey to approve this action.'); return;
   }
-  if (!confirm('Buy this NFT?')) return;
+  try {
+    await requireSendAuth(address);
+  } catch (authErr) {
+    if (authErr.message === 'send_cancelled') return;
+    alert('Biometric confirmation failed — purchase aborted.'); return;
+  }
   try {
     if (!ws || !ws.buildWalletActionIntent) { alert('Unlock wallet with biometric/passkey to approve this action.'); return; }
     const buyPayload = { nft_id: nftId };
@@ -5352,6 +5476,29 @@ async function pwaOpenEvmSendModal(network, evmAddr, tokenSym) {
         if (resultEl) resultEl.innerHTML = '<span style="color:#f88">Provide authorization to proceed.</span>'; return;
       }
 
+      const thrForAuth = _pwaSigningCtx?.address || fromThr;
+      const fidInt = thrForAuth ? LS.getObj(`thr_fid_${thrForAuth}`) : null;
+      if (fidInt?.credId) {
+        if (resultEl) resultEl.innerHTML = '<span style="color:#8af">Confirm with biometric / passkey…</span>';
+        try {
+          await assertWebAuthn(fidInt.credId);
+        } catch (biomErr) {
+          if (resultEl) resultEl.innerHTML = '<span style="color:#f88">Biometric confirmation cancelled — transfer aborted.</span>';
+          return;
+        }
+      } else {
+        const ok = confirm(
+          `Confirm internal transfer:\n\n` +
+          `Amount: ${amt} ${(tokenSym || sendSym).toUpperCase()}\n` +
+          `To: ${toAddr}\n\n` +
+          `No biometric registered — confirm to proceed.`
+        );
+        if (!ok) {
+          if (resultEl) resultEl.innerHTML = '<span style="color:#f88">Transfer cancelled by user.</span>';
+          return;
+        }
+      }
+
       if (resultEl) resultEl.innerHTML = '<span style="color:#8af">Processing internal transfer…</span>';
 
       const assetStr  = (tokenSym || sendSym).toUpperCase();
@@ -5714,6 +5861,318 @@ async function pwaOpenPoolDepositModal(network, evmAddr) {
   });
 }
 
+// ─── Crypto Hunters ──────────────────────────────────────────────────────────
+
+async function showCryptoHunters() {
+  const address = getActiveAddr();
+
+  let features = {};
+  try {
+    const r = await fetch(`${API_BASE}/api/v1/features`);
+    features = await r.json();
+  } catch { /* offline fallback */ }
+
+  if (!features.crypto_hunters) {
+    render(`
+      <div class="screen">
+        <div class="header">
+          <button class="btn--icon" id="backBtn">←</button>
+          <span class="header__title">🎯 Crypto Hunters</span>
+        </div>
+        <div class="card" style="padding:20px;text-align:center;margin-top:20px">
+          <div style="font-size:2.2rem;margin-bottom:10px">🔒</div>
+          <div style="font-size:.92rem;color:var(--text);font-weight:600;margin-bottom:6px">Feature Not Available</div>
+          <div style="font-size:.78rem;color:var(--muted)">Crypto Hunters Midday is not enabled on this node. Contact your administrator to enable the feature.</div>
+        </div>
+      </div>
+    `);
+    document.getElementById('backBtn').addEventListener('click', () => showWallet(address));
+    return;
+  }
+
+  const telegramUrl = features.crypto_hunters_telegram_url || '';
+  const portalUrl = features.crypto_hunters_portal_url || '';
+  const hunterModeEnabled = !!features.hunter_mode;
+
+  render(`
+    <div class="screen">
+      <div class="header">
+        <button class="btn--icon" id="backBtn">←</button>
+        <span class="header__title">🎯 Crypto Hunters</span>
+      </div>
+
+      <!-- Community card -->
+      <div class="card" style="padding:16px;margin-top:10px">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
+          <div style="width:52px;height:52px;border-radius:12px;background:linear-gradient(135deg,#1a1040,#7c5cbf);display:flex;align-items:center;justify-content:center;font-size:1.6rem;flex-shrink:0">🎯</div>
+          <div>
+            <div style="font-size:1rem;font-weight:700;color:#fff">Crypto Hunters Midday</div>
+            <div style="font-size:.76rem;color:var(--muted)">Community-driven play-to-earn on Thronos</div>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">
+          <span style="font-size:.68rem;padding:3px 8px;border-radius:4px;background:#7c5cbf22;color:#b08cf8;border:1px solid #7c5cbf44">P2E</span>
+          <span style="font-size:.68rem;padding:3px 8px;border-radius:4px;background:#00ff6622;color:#00ff66;border:1px solid #00ff6644">${hunterModeEnabled ? '● Active' : '○ Standby'}</span>
+          <span style="font-size:.68rem;padding:3px 8px;border-radius:4px;background:#ffffff08;color:var(--muted);border:1px solid #ffffff15">Community Sponsor</span>
+        </div>
+
+        <div style="font-size:.8rem;color:var(--text);line-height:1.5;margin-bottom:14px">
+          Join the Crypto Hunters community. Complete challenges, earn DRX game tokens, and participate in seasonal events. Connect with fellow hunters through Telegram.
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:8px">
+          ${telegramUrl ? `<button class="btn btn--primary" id="telegramBtn" style="width:100%;padding:11px;font-size:.88rem">📲 Join Telegram Community</button>` : ''}
+          <button class="btn ${hunterModeEnabled ? 'btn--primary' : 'btn--ghost'}" id="hunterModeBtn" style="width:100%;padding:11px;font-size:.88rem" ${!hunterModeEnabled ? 'disabled' : ''}>
+            🎮 ${hunterModeEnabled ? 'Open Hunter Mode' : 'Hunter Mode (Coming Soon)'}
+          </button>
+        </div>
+      </div>
+
+      <!-- Score card -->
+      <div class="card" style="padding:14px;margin-top:8px">
+        <div style="font-size:.7rem;text-transform:uppercase;letter-spacing:1px;color:#b08cf8;margin-bottom:8px">Your Stats</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <div style="text-align:center">
+            <div style="font-size:1.1rem;font-weight:700;color:#fff" id="hunterScore">—</div>
+            <div style="font-size:.68rem;color:var(--muted)">Total Score</div>
+          </div>
+          <div style="text-align:center">
+            <div style="font-size:1.1rem;font-weight:700;color:#00ff66" id="hunterRewards">—</div>
+            <div style="font-size:.68rem;color:var(--muted)">DRX Earned</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Sponsor disclosure -->
+      <div style="margin-top:14px;padding:10px 12px;border-radius:8px;background:#ffffff06;border:1px solid #ffffff10">
+        <div style="font-size:.68rem;color:var(--muted);line-height:1.5">
+          <strong>Sponsor disclosure:</strong> Crypto Hunters Midday is operated by an independent community sponsor and is not part of the core Thronos protocol. DRX game tokens are issued by the Crypto Hunters project and carry no guaranteed value. Play responsibly.
+        </div>
+      </div>
+    </div>
+  `);
+
+  document.getElementById('backBtn').addEventListener('click', () => showWallet(address));
+
+  if (telegramUrl) {
+    document.getElementById('telegramBtn').addEventListener('click', () => {
+      window.open(telegramUrl, '_blank', 'noopener,noreferrer');
+    });
+  }
+
+  if (hunterModeEnabled && portalUrl) {
+    document.getElementById('hunterModeBtn').addEventListener('click', () => {
+      showHunterBrowser(portalUrl, address, !!features.hunter_bridge);
+    });
+  }
+
+  if (address) {
+    fetch(`${API_BASE}/api/game/leaderboard`).then(r => r.json()).then(data => {
+      const lb = data.leaderboard || data.scores || [];
+      const entry = lb.find(e => e.wallet === address || e.address === address);
+      if (entry) {
+        const scoreEl = document.getElementById('hunterScore');
+        const rewardsEl = document.getElementById('hunterRewards');
+        if (scoreEl) scoreEl.textContent = Number(entry.score || 0).toLocaleString();
+        if (rewardsEl) rewardsEl.textContent = `${Number(entry.rewards || entry.drx || 0).toFixed(2)} DRX`;
+      }
+    }).catch(() => {});
+  }
+}
+
+// ─── Hunter Browser Shell ────────────────────────────────────────────────────
+
+const _HUNTER_ORIGIN_ALLOWLIST = new Set();
+
+function _hunterParseOrigin(url) {
+  try { return new URL(url).origin; } catch { return null; }
+}
+
+function _hunterBuildAllowlist(portalUrl) {
+  _HUNTER_ORIGIN_ALLOWLIST.clear();
+  const o = _hunterParseOrigin(portalUrl);
+  if (o && o !== 'null') _HUNTER_ORIGIN_ALLOWLIST.add(o);
+}
+
+function showHunterBrowser(portalUrl, address, bridgeEnabled = false) {
+  const origin = _hunterParseOrigin(portalUrl);
+  if (!origin || origin === 'null') {
+    alert('Invalid portal URL configured.'); return;
+  }
+  _hunterBuildAllowlist(portalUrl);
+  _hunterBridgeEnabled = bridgeEnabled;
+  _hunterBridgeAddress = address || '';
+  if (bridgeEnabled) {
+    _HUNTER_CAPABILITIES['wallet:read_public_address'].enabled = true;
+    _HUNTER_CAPABILITIES['wallet:request_challenge_signature'].enabled = true;
+  } else {
+    _HUNTER_CAPABILITIES['wallet:read_public_address'].enabled = false;
+    _HUNTER_CAPABILITIES['wallet:request_challenge_signature'].enabled = false;
+  }
+
+  render(`
+    <div class="screen" style="display:flex;flex-direction:column;height:100vh;overflow:hidden">
+      <!-- Origin bar — always visible, cannot be hidden by embedded content -->
+      <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:#0a0a14;border-bottom:1px solid #2a2050;flex-shrink:0;z-index:10">
+        <button class="btn--icon" id="hbBackBtn" style="font-size:1rem">←</button>
+        <div style="flex:1;display:flex;align-items:center;gap:6px;min-width:0">
+          <span style="font-size:.65rem;padding:2px 6px;border-radius:3px;background:#00ff6622;color:#00ff66;border:1px solid #00ff6644;flex-shrink:0">🔒</span>
+          <span id="hbOriginLabel" style="font-size:.72rem;color:var(--muted);font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(origin)}</span>
+        </div>
+        <button class="btn--icon" id="hbExternalBtn" style="font-size:.85rem" title="Open in external browser">↗</button>
+      </div>
+      <!-- Sandboxed iframe -->
+      <iframe
+        id="hbFrame"
+        src="${escHtml(portalUrl)}"
+        sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+        referrerpolicy="no-referrer"
+        allow=""
+        style="flex:1;width:100%;border:none;background:#0a0a0f"
+      ></iframe>
+      <!-- Sponsor bar -->
+      <div style="padding:4px 10px;background:#0a0a14;border-top:1px solid #2a2050;flex-shrink:0">
+        <div style="font-size:.6rem;color:var(--muted);text-align:center">Community sponsor content — not part of Thronos core</div>
+      </div>
+    </div>
+  `);
+
+  document.getElementById('hbBackBtn').addEventListener('click', () => showCryptoHunters());
+  document.getElementById('hbExternalBtn').addEventListener('click', () => {
+    window.open(portalUrl, '_blank', 'noopener,noreferrer');
+  });
+
+  const frame = document.getElementById('hbFrame');
+  frame.addEventListener('load', () => {
+    try {
+      const loadedOrigin = _hunterParseOrigin(frame.contentWindow?.location?.href);
+      const label = document.getElementById('hbOriginLabel');
+      if (label && loadedOrigin) label.textContent = loadedOrigin;
+    } catch {
+      // cross-origin — expected, origin bar keeps showing initial origin
+    }
+  });
+
+  window.addEventListener('message', _hunterMessageHandler);
+}
+
+const _HUNTER_CAPABILITIES = {
+  'wallet:read_public_address': { requiresApproval: false, enabled: false },
+  'wallet:request_challenge_signature': { requiresApproval: true, enabled: false },
+};
+
+let _hunterBridgeEnabled = false;
+let _hunterBridgeAddress = '';
+let _hunterPendingRequest = null;
+
+function _hunterMessageHandler(ev) {
+  if (!_HUNTER_ORIGIN_ALLOWLIST.has(ev.origin)) return;
+  if (!_hunterBridgeEnabled) return;
+  const msg = ev.data;
+  if (!msg || typeof msg !== 'object' || msg.protocol !== 'thronos-hunter-bridge-v1') return;
+
+  const { id, capability, nonce, params } = msg;
+  if (!id || !capability || !nonce) return;
+  if (typeof id !== 'string' || id.length > 128) return;
+  if (typeof nonce !== 'string' || nonce.length > 64) return;
+
+  const cap = _HUNTER_CAPABILITIES[capability];
+  if (!cap || !cap.enabled) {
+    _hunterReply(ev.source, ev.origin, id, nonce, { error: 'capability_disabled', message: `${capability} is not enabled` });
+    return;
+  }
+
+  if (cap.requiresApproval) {
+    _hunterPendingRequest = { source: ev.source, origin: ev.origin, id, capability, nonce, params };
+    _hunterShowApproval(capability, params);
+  } else {
+    _hunterExecuteCapability(ev.source, ev.origin, id, capability, nonce, params);
+  }
+}
+
+function _hunterReply(source, origin, id, nonce, payload) {
+  if (!source) return;
+  source.postMessage({
+    protocol: 'thronos-hunter-bridge-v1',
+    type: 'response',
+    id,
+    nonce,
+    ...payload,
+  }, origin);
+}
+
+function _hunterExecuteCapability(source, origin, id, capability, nonce, params) {
+  switch (capability) {
+    case 'wallet:read_public_address':
+      _hunterReply(source, origin, id, nonce, { result: { address: _hunterBridgeAddress } });
+      break;
+    case 'wallet:request_challenge_signature': {
+      const challenge = params?.challenge;
+      if (!challenge || typeof challenge !== 'string' || challenge.length > 1024) {
+        _hunterReply(source, origin, id, nonce, { error: 'invalid_params', message: 'challenge string required (max 1024 chars)' });
+        return;
+      }
+      const ws = window.walletSession;
+      if (!ws || (ws.isLocked && ws.isLocked()) || !ws.signMessage) {
+        _hunterReply(source, origin, id, nonce, { error: 'wallet_locked', message: 'Wallet is locked' });
+        return;
+      }
+      ws.signMessage(challenge).then(sig => {
+        _hunterReply(source, origin, id, nonce, { result: { signature: sig.signature, public_key: sig.public_key } });
+      }).catch(err => {
+        _hunterReply(source, origin, id, nonce, { error: 'sign_failed', message: err.message || 'Signing failed' });
+      });
+      break;
+    }
+    default:
+      _hunterReply(source, origin, id, nonce, { error: 'unknown_capability' });
+  }
+}
+
+function _hunterShowApproval(capability, params) {
+  const existing = document.getElementById('hunterApprovalOverlay');
+  if (existing) existing.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'hunterApprovalOverlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:#000000cc;z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px';
+  const challengePreview = params?.challenge ? escHtml(params.challenge.slice(0, 120)) + (params.challenge.length > 120 ? '...' : '') : '';
+  overlay.innerHTML = `
+    <div style="background:#13112a;border:1px solid #7c5cbf;border-radius:14px;max-width:380px;width:100%;padding:20px">
+      <div style="font-size:.92rem;font-weight:700;color:#fff;margin-bottom:10px">🔑 Permission Request</div>
+      <div style="font-size:.78rem;color:var(--muted);margin-bottom:12px">
+        The embedded Crypto Hunters portal is requesting:
+      </div>
+      <div style="background:#0d0a1a;border-radius:8px;padding:10px;margin-bottom:12px">
+        <div style="font-size:.8rem;color:#b08cf8;font-family:monospace;margin-bottom:4px">${escHtml(capability)}</div>
+        ${challengePreview ? `<div style="font-size:.72rem;color:var(--muted);word-break:break-all">Challenge: ${challengePreview}</div>` : ''}
+      </div>
+      <div style="font-size:.72rem;color:#ff6b6b;margin-bottom:14px">
+        This will sign a message with your wallet key. Only approve if you trust this request.
+      </div>
+      <div style="display:flex;gap:8px">
+        <button id="hunterDenyBtn" class="btn btn--ghost" style="flex:1;padding:10px">Deny</button>
+        <button id="hunterApproveBtn" class="btn btn--primary" style="flex:1;padding:10px">Approve</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  overlay.querySelector('#hunterDenyBtn').addEventListener('click', () => {
+    const req = _hunterPendingRequest;
+    _hunterPendingRequest = null;
+    overlay.remove();
+    if (req) _hunterReply(req.source, req.origin, req.id, req.nonce, { error: 'user_denied', message: 'User denied the request' });
+  });
+
+  overlay.querySelector('#hunterApproveBtn').addEventListener('click', () => {
+    const req = _hunterPendingRequest;
+    _hunterPendingRequest = null;
+    overlay.remove();
+    if (req) _hunterExecuteCapability(req.source, req.origin, req.id, req.capability, req.nonce, req.params);
+  });
+}
+
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 
 async function boot() {
@@ -5744,5 +6203,7 @@ window.buyNFT = buyNFT;
 window.pwaOpenEvmAssetActions = pwaOpenEvmAssetActions;
 window.pwaOpenEvmSendModal = pwaOpenEvmSendModal;
 window.pwaOpenPoolDepositModal = pwaOpenPoolDepositModal;
+window.showCryptoHunters = showCryptoHunters;
+window.showHunterBrowser = showHunterBrowser;
 
 boot();

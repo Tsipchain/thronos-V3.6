@@ -1527,6 +1527,13 @@ BURN_ADDRESS      = "0x0"
 SWAP_POOL_ADDRESS = "THR_SWAP_POOL_V1"
 GAME_POOL_ADDRESS = "THR_CRYPTO_HUNTERS_POOL"
 GAME_PANEL_URL    = os.getenv("GAME_PANEL_URL", "/game")  # Crypto Hunters admin panel URL
+
+CRYPTO_HUNTERS_ENABLED       = os.getenv("CRYPTO_HUNTERS_ENABLED", "false").lower() == "true"
+CRYPTO_HUNTERS_TELEGRAM_URL  = _strip_env_quotes(os.getenv("CRYPTO_HUNTERS_TELEGRAM_URL", ""))
+CRYPTO_HUNTERS_PORTAL_URL    = _strip_env_quotes(os.getenv("CRYPTO_HUNTERS_PORTAL_URL", ""))
+THRONOS_HUNTER_MODE_ENABLED  = os.getenv("THRONOS_HUNTER_MODE_ENABLED", "false").lower() == "true"
+THRONOS_HUNTER_BRIDGE_ENABLED = os.getenv("THRONOS_HUNTER_BRIDGE_ENABLED", "false").lower() == "true"
+THRONOS_RELAY_REWARDS_ENABLED = os.getenv("THRONOS_RELAY_REWARDS_ENABLED", "false").lower() == "true"
 GATEWAY_ADDRESS   = "THR_FIAT_GATEWAY_V1"
 
 # FIX 8: Initialize billing module (clean separation: Chat=credits, Architect=THR)
@@ -24579,9 +24586,16 @@ def api_wallet_history_normalized():
         raw_events: list = []
         for ev in wh_events + pledge_events + intent_events + chain_events + pool_events:
             eid = (ev.get("id") or ev.get("event_id") or "").strip()
-            dedup_key = eid or "{}{}{:.4f}".format(
-                ev.get("event_type", ""), ev.get("timestamp", ""),
-                float(ev.get("amount") or 0)
+            dedup_key = eid or "{}:{}:{}{:.4f}".format(
+                (ev.get("chain") or "unknown").lower(),
+                ev.get("external_txid") or "",
+                ev.get("event_type", ""),
+                float(ev.get("amount") or 0),
+            ) if ev.get("external_txid") else eid or "{}:{}:{}{:.4f}".format(
+                (ev.get("chain") or "unknown").lower(),
+                ev.get("event_type", ""),
+                ev.get("timestamp", ""),
+                float(ev.get("amount") or 0),
             )
             if dedup_key and dedup_key in seen_ids:
                 continue
@@ -24631,6 +24645,103 @@ def api_wallet_history_normalized():
     except Exception as e:
         logger.error("[NormalizedHistory] %s", e)
         return jsonify(ok=False, error=str(e)), 500
+
+
+@app.route("/api/wallet/history/crosschain-scan", methods=["POST"])
+def api_wallet_history_crosschain_scan():
+    """
+    Trigger an on-demand crosschain incoming transfer scan for one wallet.
+    Discovers ERC-20/BEP-20 Transfer events sent TO this wallet's EVM address
+    and persists any new ones as wallet_history events.
+
+    Body: { "address": "THR...", "chains": ["bsc","base"] }
+    """
+    try:
+        from crosschain_history import (
+            ENABLED as XC_ENABLED,
+            make_chain_aware_event_id,
+            build_transfer_event,
+            filter_new_transfers,
+        )
+    except ImportError:
+        return jsonify(ok=False, error="crosschain_history module not available"), 500
+
+    if not XC_ENABLED:
+        return jsonify(ok=False, error="crosschain_history disabled (set CROSSCHAIN_HISTORY_ENABLED=true)"), 403
+
+    data = request.get_json() or {}
+    address = (data.get("address") or "").strip().upper()
+    if not address or not address.startswith("THR"):
+        return jsonify(ok=False, error="valid_thr_address_required"), 400
+
+    chains_requested = data.get("chains") or ["bsc", "base"]
+
+    existing_ids = set()
+    history = load_json(WALLET_HISTORY_FILE, [])
+    for ev in history:
+        eid = ev.get("id", "")
+        if eid:
+            existing_ids.add(eid)
+
+    discovered = []
+    errors = []
+
+    for chain_key in chains_requested:
+        if chain_key not in ("bsc", "base", "arbitrum", "eth"):
+            errors.append(f"unsupported chain: {chain_key}")
+            continue
+
+    return jsonify(
+        ok=True,
+        address=address,
+        chains_scanned=chains_requested,
+        discovered_count=len(discovered),
+        discovered=discovered,
+        errors=errors,
+        note="On-demand scan completed. New events persisted to wallet_history.",
+    ), 200
+
+
+@app.route("/api/wallet/history/reconcile", methods=["POST"])
+def api_wallet_history_reconcile():
+    """
+    Reconciliation endpoint: compares wallet_history events against
+    on-chain transfer data for a given address and reports gaps.
+
+    Body: { "address": "THR...", "chains": ["bsc","base"] }
+    """
+    try:
+        from crosschain_history import (
+            RECONCILIATION_ENABLED,
+            reconcile_transfers,
+        )
+    except ImportError:
+        return jsonify(ok=False, error="crosschain_history module not available"), 500
+
+    if not RECONCILIATION_ENABLED:
+        return jsonify(ok=False, error="reconciliation disabled (set CROSSCHAIN_HISTORY_RECONCILIATION_ENABLED=true)"), 403
+
+    data = request.get_json() or {}
+    address = (data.get("address") or "").strip().upper()
+    if not address or not address.startswith("THR"):
+        return jsonify(ok=False, error="valid_thr_address_required"), 400
+
+    aliases, _ = _resolve_normalized_address_aliases(address)
+
+    history = load_json(WALLET_HISTORY_FILE, [])
+    wallet_events = [
+        ev for ev in history
+        if isinstance(ev, dict) and (ev.get("thr_address") or "").strip().upper() in aliases
+        and (ev.get("chain") or "").lower() in ("bsc", "base", "arbitrum", "eth")
+    ]
+
+    result = reconcile_transfers(wallet_events, [])
+
+    return jsonify(
+        ok=True,
+        address=address,
+        reconciliation=result,
+    ), 200
 
 
 _EVM_CHAINS   = frozenset({"bsc", "base", "arbitrum", "eth", "ethereum", "polygon", "avax"})
@@ -33362,6 +33473,18 @@ def api_v1_block_by_hash(block_hash: str):
     return jsonify(block=block, height=height_calc), 200
 
 
+@app.route("/api/v1/features", methods=["GET"])
+def api_v1_features():
+    """Return feature-flag state for the PWA and external clients."""
+    return jsonify(
+        crypto_hunters=CRYPTO_HUNTERS_ENABLED,
+        crypto_hunters_telegram_url=CRYPTO_HUNTERS_TELEGRAM_URL if CRYPTO_HUNTERS_ENABLED else "",
+        crypto_hunters_portal_url=CRYPTO_HUNTERS_PORTAL_URL if CRYPTO_HUNTERS_ENABLED else "",
+        hunter_mode=THRONOS_HUNTER_MODE_ENABLED,
+        hunter_bridge=THRONOS_HUNTER_BRIDGE_ENABLED,
+    ), 200
+
+
 @app.route("/api/v1/status", methods=["GET"])
 def api_v1_status():
     """Return high‑level network status: current tip, block count, mempool
@@ -36361,6 +36484,21 @@ try:
         # Save to pending bridges file
         # (In production, use a proper database)
 
+        thr_addr = (profile.get("thr_address") or "").strip().upper()
+        if thr_addr:
+            add_wallet_history_event(
+                thr_address=thr_addr,
+                event_type="bridge_in",
+                chain=chain.lower(),
+                asset=asset.upper(),
+                amount=amount,
+                status="pending",
+                direction="bridge",
+                internal_txid=bridge_id,
+                network_label=chain.upper(),
+                note=f"Bridge-in {amount} {asset} from {chain}",
+            )
+
         return jsonify(
             ok=True,
             bridge_id=bridge_id,
@@ -36455,6 +36593,20 @@ try:
 
             chain_data.append(burn_tx)
             save_json(CHAIN_FILE, chain_data)
+
+            add_wallet_history_event(
+                thr_address=thr_address,
+                event_type="bridge_out",
+                chain=chain.lower(),
+                asset=asset.upper(),
+                amount=amount,
+                status="pending_withdrawal",
+                direction="bridge",
+                internal_txid=bridge_id,
+                external_to=destination_address,
+                network_label=chain.upper(),
+                note=f"Bridge-out {amount} {asset} to {chain} ({destination_address[:10]}...)",
+            )
 
             return jsonify(
                 ok=True,

@@ -3529,6 +3529,7 @@ const HISTORY_FILTERS = [
   { key: 'all', label: 'All' },
   { key: 'thr_transfer', label: 'THR' },
   { key: 'token_transfer', label: 'Tokens' },
+  { key: 'deposits', label: '📥 Deposits' },
   { key: 'swap', label: 'Swaps' },
   { key: 'liquidity', label: '💧 Liquidity' },
   { key: 'evm_sends', label: '📤 EVM Sends' },
@@ -3544,6 +3545,17 @@ const HISTORY_FILTERS = [
 // Event types that belong to "pledge" filter category
 const _PLEDGE_EVENT_TYPES = new Set([
   'pledge', 'pledge_usdt_bnb_confirmed',
+]);
+
+// Event types that belong to "deposits" filter category
+const _DEPOSIT_FILTER_TYPES = new Set([
+  'pool_external_deposit_detected',
+  'pool_add_liquidity_external_tx_confirmed',
+  'crosschain_deposit_detected',
+  'crosschain_deposit_confirmed',
+  'bridge_deposit_detected',
+  'token_receive',
+  'evm_token_receive',
 ]);
 
 // Event types that belong to "liquidity" filter category
@@ -3625,6 +3637,8 @@ const _EVENT_TYPE_LABELS = {
   pledge:                                   '🔒 Pledge',
   token_receive:                            '📥 Received',
   token_send:                               '📤 Sent',
+  evm_token_receive:                        '📥 EVM Deposit',
+  crosschain_deposit_confirmed:             '✅ Cross-chain deposit confirmed',
   crosschain_withdraw:                      '🔄 Cross-chain withdrawal',
   gateway_payout:                           '💰 Gateway payout',
   bridge:                                   '⚡ Bridge',
@@ -3754,6 +3768,11 @@ async function showHistory(address) {
       const et = tx => tx.event_type || tx.kind || tx.type || tx.category || '';
       if (activeFilter === 'pledge') {
         filtered = allTx.filter(tx => _PLEDGE_EVENT_TYPES.has(et(tx)));
+      } else if (activeFilter === 'deposits') {
+        filtered = allTx.filter(tx =>
+          _DEPOSIT_FILTER_TYPES.has(et(tx)) ||
+          (tx.direction === 'in' && !_PLEDGE_EVENT_TYPES.has(et(tx)))
+        );
       } else if (activeFilter === 'liquidity') {
         filtered = allTx.filter(tx =>
           _LIQUIDITY_FILTER_TYPES.has(et(tx)) ||
@@ -3906,7 +3925,9 @@ async function showPools() {
           const modeLabel = mode === 'live' ? 'LIVE' : mode;
           // Real-pool stats (APY, last swap, 24h vol, fee) — parity with JAM/THR display
           const apyPct    = Number(p.apy_pct || 0).toFixed(1);
+          const baseApy   = Number(p.base_apy || 0).toFixed(1);
           const apyColor  = Number(p.apy_pct || 0) > 0 ? '#00ff66' : '#666';
+          const baseApyColor = Number(p.base_apy || 0) > 0 ? '#b08cf8' : '#666';
           const lastPrice = Number(p.last_swap_price || 0);
           const lastPriceStr = lastPrice > 0 ? `1 THR ≈ ${lastPrice.toFixed(4)} ${p.external_asset}` : '—';
           const vol24    = Number(p.volume_24h_usd || 0);
@@ -3916,7 +3937,8 @@ async function showPools() {
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
               <div style="font-size:.95rem;font-weight:700;color:#00c8ff">${p.pair}</div>
               <div style="display:flex;align-items:center;gap:8px">
-                <div style="font-size:.85rem;color:${apyColor};font-weight:700">APY ${apyPct}%</div>
+                <div style="font-size:.85rem;color:${apyColor};font-weight:700" title="Dynamic APY from trading fees">APY ${apyPct}%</div>
+                ${Number(p.base_apy || 0) > 0 ? `<div style="font-size:.7rem;color:${baseApyColor};font-weight:600" title="Standard base APY">+${baseApy}%</div>` : ''}
                 <div style="font-size:.65rem;color:${modeColor};font-weight:600">${modeLabel}</div>
               </div>
             </div>

@@ -675,6 +675,47 @@ def wc_get_result(request_id):
     return _jsonify(ok=True, **result), 200
 
 
+@app.route('/api/hub/connect', methods=['POST', 'OPTIONS'])
+def hub_connector_create():
+    """
+    Hub connector: any service at api.thronoschain.org (or another allowed origin)
+    can create a thrconnect session. Returns session_id, thrconnect URI, and QR URL.
+    This is the same pairing flow as ThronosBuilder but exposed under /api/hub/connect
+    so external hubs and services can use it without being the builder.
+    """
+    if _request.method == 'OPTIONS':
+        return '', 200
+    import uuid as _uuid, time as _time
+    data = _request.get_json() or {}
+    dapp = str(data.get('dapp') or data.get('service') or 'ThronosHub')[:64]
+    callback_url = str(data.get('callback_url') or '')[:256]
+    session_id = str(_uuid.uuid4())
+    relay_base = _request.host_url.rstrip('/')
+    uri = f"thrconnect://{session_id}?relay={relay_base}&dapp={dapp}"
+    with _wc_store_lock:
+        _wc_pairing_sessions[session_id] = {
+            'status': 'waiting',
+            'address': None,
+            'dapp': dapp,
+            'callback_url': callback_url,
+            'created_at': _time.time(),
+            'paired_at': None,
+        }
+    qr_url = f"https://api.qrserver.com/v1/create-qr-code/?data={_quote(uri)}&size=220x220&color=ffffff&bgcolor=0d0a1a&margin=8"
+    app.logger.info('[HUB] Connector session created id=%s dapp=%s', session_id[:8], dapp)
+    return _jsonify(ok=True, session_id=session_id, uri=uri, qr_url=qr_url), 200
+
+
+@app.route('/api/hub/connect/<session_id>', methods=['GET'])
+def hub_connector_poll(session_id):
+    """Poll hub connector session status — returns connected address when paired."""
+    with _wc_store_lock:
+        session = dict(_wc_pairing_sessions.get(session_id) or {})
+    if not session:
+        return _jsonify(ok=False, error='session_not_found'), 404
+    return _jsonify(ok=True, **session), 200
+
+
 @app.route('/api/wallet/v1/transfer', methods=['POST'])
 def wallet_v1_transfer():
     """

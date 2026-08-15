@@ -1320,6 +1320,7 @@ function showAccountPicker() {
 // ─── Main wallet screen ───────────────────────────────────────────────────────
 
 const HOME_NETWORKS = [
+  { id: 'all',      icon: '🌐', label: 'All Networks' },
   { id: 'thronos',  icon: '⬡',  label: 'Thronos' },
   { id: 'bitcoin',  icon: '₿',  label: 'Bitcoin' },
   { id: 'ethereum', icon: 'Ξ',  label: 'Ethereum' },
@@ -3553,7 +3554,9 @@ const _DEPOSIT_FILTER_TYPES = new Set([
   'pool_add_liquidity_external_tx_confirmed',
   'crosschain_deposit_detected',
   'crosschain_deposit_confirmed',
+  'crosschain_transfer_received',
   'bridge_deposit_detected',
+  'bridge_in',
   'token_receive',
   'evm_token_receive',
 ]);
@@ -3580,6 +3583,9 @@ const _CROSSCHAIN_FILTER_TYPES = new Set([
   'crosschain_withdraw',
   'bridge_deposit_detected',
   'bridge',
+  'bridge_in',
+  'bridge_out',
+  'wbtc_burn',
 ]);
 
 // Map from app network ID to chain IDs stored in wallet history events
@@ -3642,6 +3648,9 @@ const _EVENT_TYPE_LABELS = {
   crosschain_withdraw:                      '🔄 Cross-chain withdrawal',
   gateway_payout:                           '💰 Gateway payout',
   bridge:                                   '⚡ Bridge',
+  bridge_in:                                '⬇️ Bridge In',
+  bridge_out:                               '⬆️ Bridge Out',
+  wbtc_burn:                                '🔥 wBTC Burn',
 };
 
 function _renderHistoryRow(tx) {
@@ -3797,15 +3806,17 @@ async function showHistory(address) {
         filtered = allTx.filter(tx => et(tx) === activeFilter);
       }
     }
-    // Network filter: strict — only show events whose chain matches the selected network.
-    // Exception: if chain field is empty/missing (legacy events), show on Thronos view only.
-    const netChains = HISTORY_CHAIN_MAP[activeNetwork] || [];
-    if (netChains.length) {
-      filtered = filtered.filter(tx => {
-        const c = (tx.chain || '').toLowerCase();
-        if (!c) return activeNetwork === 'thronos'; // legacy events with no chain → Thronos only
-        return netChains.includes(c);
-      });
+    // Network filter: "all" shows every chain; otherwise strict match.
+    // Legacy events with no chain field show on Thronos and All views only.
+    if (activeNetwork !== 'all') {
+      const netChains = HISTORY_CHAIN_MAP[activeNetwork] || [];
+      if (netChains.length) {
+        filtered = filtered.filter(tx => {
+          const c = (tx.chain || '').toLowerCase();
+          if (!c) return activeNetwork === 'thronos';
+          return netChains.includes(c);
+        });
+      }
     }
     if (!filtered.length) {
       const netLabel = HOME_NETWORKS.find(n => n.id === activeNetwork)?.label || activeNetwork;
@@ -3823,25 +3834,32 @@ async function showHistory(address) {
     const el = document.getElementById('historyBody');
     if (el) el.innerHTML = '<p style="color:var(--muted);text-align:center;padding:20px">Loading history…</p>';
     try {
-      // Load from both legacy endpoint and new v1 wallet history endpoint and merge
-      const [legacyTx, v1Res] = await Promise.allSettled([
+      const [normalizedRes, legacyTx, v1Res] = await Promise.allSettled([
+        fetch(`${API_WRITE}/api/wallet/history/normalized?address=${encodeURIComponent(address)}&limit=300`).then(r => r.json()).catch(() => null),
         fetchHistory(address),
         fetch(`${API_BASE}/api/wallet/history/${encodeURIComponent(address)}?limit=200`).then(r => r.json()).catch(() => null),
       ]);
+      const normalized = (normalizedRes.status === 'fulfilled' && normalizedRes.value?.ok) ? (normalizedRes.value.history || []) : [];
       const legacy = legacyTx.status === 'fulfilled' ? (legacyTx.value || []) : [];
       const v1 = (v1Res.status === 'fulfilled' && v1Res.value?.ok) ? (v1Res.value.history || []) : [];
-      // Merge: v1 events have event_type/chain/network_label; normalize kind for filter compat
-      const v1Normalized = v1.map(e => ({
+      const normMapped = normalized.map(e => ({
+        ...e,
+        kind: e.original_event_type || e.event_type || e.kind || 'transfer',
+        category: e.original_event_type || e.event_type || e.kind,
+        asset_symbol: e.asset || e.asset_symbol,
+      }));
+      const v1Mapped = v1.map(e => ({
         ...e,
         kind: e.event_type || e.kind || 'transfer',
         category: e.event_type || e.kind,
         asset_symbol: e.asset || e.asset_symbol,
       }));
-      // Deduplicate by id
       const seen = new Set();
       allTx = [];
-      for (const tx of [...v1Normalized, ...legacy]) {
-        const id = tx.id || tx.tx_id || tx.txid || JSON.stringify(tx).slice(0, 60);
+      for (const tx of [...normMapped, ...v1Mapped, ...legacy]) {
+        const chainKey = (tx.chain || '').toLowerCase();
+        const txid = tx.external_txid || '';
+        const id = (chainKey && txid) ? `${chainKey}:${txid}` : (tx.id || tx.tx_id || tx.txid || JSON.stringify(tx).slice(0, 60));
         if (!seen.has(id)) { seen.add(id); allTx.push(tx); }
       }
       renderList();

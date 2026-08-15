@@ -5916,7 +5916,7 @@ async function showCryptoHunters() {
 
   if (hunterModeEnabled && portalUrl) {
     document.getElementById('hunterModeBtn').addEventListener('click', () => {
-      window.open(portalUrl, '_blank', 'noopener,noreferrer');
+      showHunterBrowser(portalUrl, address, !!features.hunter_bridge);
     });
   }
 
@@ -5932,6 +5932,198 @@ async function showCryptoHunters() {
       }
     }).catch(() => {});
   }
+}
+
+// ─── Hunter Browser Shell ────────────────────────────────────────────────────
+
+const _HUNTER_ORIGIN_ALLOWLIST = new Set();
+
+function _hunterParseOrigin(url) {
+  try { return new URL(url).origin; } catch { return null; }
+}
+
+function _hunterBuildAllowlist(portalUrl) {
+  _HUNTER_ORIGIN_ALLOWLIST.clear();
+  const o = _hunterParseOrigin(portalUrl);
+  if (o && o !== 'null') _HUNTER_ORIGIN_ALLOWLIST.add(o);
+}
+
+function showHunterBrowser(portalUrl, address, bridgeEnabled = false) {
+  const origin = _hunterParseOrigin(portalUrl);
+  if (!origin || origin === 'null') {
+    alert('Invalid portal URL configured.'); return;
+  }
+  _hunterBuildAllowlist(portalUrl);
+  _hunterBridgeEnabled = bridgeEnabled;
+  _hunterBridgeAddress = address || '';
+  if (bridgeEnabled) {
+    _HUNTER_CAPABILITIES['wallet:read_public_address'].enabled = true;
+    _HUNTER_CAPABILITIES['wallet:request_challenge_signature'].enabled = true;
+  } else {
+    _HUNTER_CAPABILITIES['wallet:read_public_address'].enabled = false;
+    _HUNTER_CAPABILITIES['wallet:request_challenge_signature'].enabled = false;
+  }
+
+  render(`
+    <div class="screen" style="display:flex;flex-direction:column;height:100vh;overflow:hidden">
+      <!-- Origin bar — always visible, cannot be hidden by embedded content -->
+      <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:#0a0a14;border-bottom:1px solid #2a2050;flex-shrink:0;z-index:10">
+        <button class="btn--icon" id="hbBackBtn" style="font-size:1rem">←</button>
+        <div style="flex:1;display:flex;align-items:center;gap:6px;min-width:0">
+          <span style="font-size:.65rem;padding:2px 6px;border-radius:3px;background:#00ff6622;color:#00ff66;border:1px solid #00ff6644;flex-shrink:0">🔒</span>
+          <span id="hbOriginLabel" style="font-size:.72rem;color:var(--muted);font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(origin)}</span>
+        </div>
+        <button class="btn--icon" id="hbExternalBtn" style="font-size:.85rem" title="Open in external browser">↗</button>
+      </div>
+      <!-- Sandboxed iframe -->
+      <iframe
+        id="hbFrame"
+        src="${escHtml(portalUrl)}"
+        sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+        referrerpolicy="no-referrer"
+        allow=""
+        style="flex:1;width:100%;border:none;background:#0a0a0f"
+      ></iframe>
+      <!-- Sponsor bar -->
+      <div style="padding:4px 10px;background:#0a0a14;border-top:1px solid #2a2050;flex-shrink:0">
+        <div style="font-size:.6rem;color:var(--muted);text-align:center">Community sponsor content — not part of Thronos core</div>
+      </div>
+    </div>
+  `);
+
+  document.getElementById('hbBackBtn').addEventListener('click', () => showCryptoHunters());
+  document.getElementById('hbExternalBtn').addEventListener('click', () => {
+    window.open(portalUrl, '_blank', 'noopener,noreferrer');
+  });
+
+  const frame = document.getElementById('hbFrame');
+  frame.addEventListener('load', () => {
+    try {
+      const loadedOrigin = _hunterParseOrigin(frame.contentWindow?.location?.href);
+      const label = document.getElementById('hbOriginLabel');
+      if (label && loadedOrigin) label.textContent = loadedOrigin;
+    } catch {
+      // cross-origin — expected, origin bar keeps showing initial origin
+    }
+  });
+
+  window.addEventListener('message', _hunterMessageHandler);
+}
+
+const _HUNTER_CAPABILITIES = {
+  'wallet:read_public_address': { requiresApproval: false, enabled: false },
+  'wallet:request_challenge_signature': { requiresApproval: true, enabled: false },
+};
+
+let _hunterBridgeEnabled = false;
+let _hunterBridgeAddress = '';
+let _hunterPendingRequest = null;
+
+function _hunterMessageHandler(ev) {
+  if (!_HUNTER_ORIGIN_ALLOWLIST.has(ev.origin)) return;
+  if (!_hunterBridgeEnabled) return;
+  const msg = ev.data;
+  if (!msg || typeof msg !== 'object' || msg.protocol !== 'thronos-hunter-bridge-v1') return;
+
+  const { id, capability, nonce, params } = msg;
+  if (!id || !capability || !nonce) return;
+  if (typeof id !== 'string' || id.length > 128) return;
+  if (typeof nonce !== 'string' || nonce.length > 64) return;
+
+  const cap = _HUNTER_CAPABILITIES[capability];
+  if (!cap || !cap.enabled) {
+    _hunterReply(ev.source, ev.origin, id, nonce, { error: 'capability_disabled', message: `${capability} is not enabled` });
+    return;
+  }
+
+  if (cap.requiresApproval) {
+    _hunterPendingRequest = { source: ev.source, origin: ev.origin, id, capability, nonce, params };
+    _hunterShowApproval(capability, params);
+  } else {
+    _hunterExecuteCapability(ev.source, ev.origin, id, capability, nonce, params);
+  }
+}
+
+function _hunterReply(source, origin, id, nonce, payload) {
+  if (!source) return;
+  source.postMessage({
+    protocol: 'thronos-hunter-bridge-v1',
+    type: 'response',
+    id,
+    nonce,
+    ...payload,
+  }, origin);
+}
+
+function _hunterExecuteCapability(source, origin, id, capability, nonce, params) {
+  switch (capability) {
+    case 'wallet:read_public_address':
+      _hunterReply(source, origin, id, nonce, { result: { address: _hunterBridgeAddress } });
+      break;
+    case 'wallet:request_challenge_signature': {
+      const challenge = params?.challenge;
+      if (!challenge || typeof challenge !== 'string' || challenge.length > 1024) {
+        _hunterReply(source, origin, id, nonce, { error: 'invalid_params', message: 'challenge string required (max 1024 chars)' });
+        return;
+      }
+      const ws = window.walletSession;
+      if (!ws || (ws.isLocked && ws.isLocked()) || !ws.signMessage) {
+        _hunterReply(source, origin, id, nonce, { error: 'wallet_locked', message: 'Wallet is locked' });
+        return;
+      }
+      ws.signMessage(challenge).then(sig => {
+        _hunterReply(source, origin, id, nonce, { result: { signature: sig.signature, public_key: sig.public_key } });
+      }).catch(err => {
+        _hunterReply(source, origin, id, nonce, { error: 'sign_failed', message: err.message || 'Signing failed' });
+      });
+      break;
+    }
+    default:
+      _hunterReply(source, origin, id, nonce, { error: 'unknown_capability' });
+  }
+}
+
+function _hunterShowApproval(capability, params) {
+  const existing = document.getElementById('hunterApprovalOverlay');
+  if (existing) existing.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'hunterApprovalOverlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:#000000cc;z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px';
+  const challengePreview = params?.challenge ? escHtml(params.challenge.slice(0, 120)) + (params.challenge.length > 120 ? '...' : '') : '';
+  overlay.innerHTML = `
+    <div style="background:#13112a;border:1px solid #7c5cbf;border-radius:14px;max-width:380px;width:100%;padding:20px">
+      <div style="font-size:.92rem;font-weight:700;color:#fff;margin-bottom:10px">🔑 Permission Request</div>
+      <div style="font-size:.78rem;color:var(--muted);margin-bottom:12px">
+        The embedded Crypto Hunters portal is requesting:
+      </div>
+      <div style="background:#0d0a1a;border-radius:8px;padding:10px;margin-bottom:12px">
+        <div style="font-size:.8rem;color:#b08cf8;font-family:monospace;margin-bottom:4px">${escHtml(capability)}</div>
+        ${challengePreview ? `<div style="font-size:.72rem;color:var(--muted);word-break:break-all">Challenge: ${challengePreview}</div>` : ''}
+      </div>
+      <div style="font-size:.72rem;color:#ff6b6b;margin-bottom:14px">
+        This will sign a message with your wallet key. Only approve if you trust this request.
+      </div>
+      <div style="display:flex;gap:8px">
+        <button id="hunterDenyBtn" class="btn btn--ghost" style="flex:1;padding:10px">Deny</button>
+        <button id="hunterApproveBtn" class="btn btn--primary" style="flex:1;padding:10px">Approve</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  overlay.querySelector('#hunterDenyBtn').addEventListener('click', () => {
+    const req = _hunterPendingRequest;
+    _hunterPendingRequest = null;
+    overlay.remove();
+    if (req) _hunterReply(req.source, req.origin, req.id, req.nonce, { error: 'user_denied', message: 'User denied the request' });
+  });
+
+  overlay.querySelector('#hunterApproveBtn').addEventListener('click', () => {
+    const req = _hunterPendingRequest;
+    _hunterPendingRequest = null;
+    overlay.remove();
+    if (req) _hunterExecuteCapability(req.source, req.origin, req.id, req.capability, req.nonce, req.params);
+  });
 }
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
@@ -5965,5 +6157,6 @@ window.pwaOpenEvmAssetActions = pwaOpenEvmAssetActions;
 window.pwaOpenEvmSendModal = pwaOpenEvmSendModal;
 window.pwaOpenPoolDepositModal = pwaOpenPoolDepositModal;
 window.showCryptoHunters = showCryptoHunters;
+window.showHunterBrowser = showHunterBrowser;
 
 boot();

@@ -1532,6 +1532,7 @@ CRYPTO_HUNTERS_ENABLED       = os.getenv("CRYPTO_HUNTERS_ENABLED", "false").lowe
 CRYPTO_HUNTERS_TELEGRAM_URL  = _strip_env_quotes(os.getenv("CRYPTO_HUNTERS_TELEGRAM_URL", ""))
 CRYPTO_HUNTERS_PORTAL_URL    = _strip_env_quotes(os.getenv("CRYPTO_HUNTERS_PORTAL_URL", ""))
 THRONOS_HUNTER_MODE_ENABLED  = os.getenv("THRONOS_HUNTER_MODE_ENABLED", "false").lower() == "true"
+THRONOS_HUNTER_BRIDGE_ENABLED = os.getenv("THRONOS_HUNTER_BRIDGE_ENABLED", "false").lower() == "true"
 THRONOS_RELAY_REWARDS_ENABLED = os.getenv("THRONOS_RELAY_REWARDS_ENABLED", "false").lower() == "true"
 GATEWAY_ADDRESS   = "THR_FIAT_GATEWAY_V1"
 
@@ -33480,6 +33481,7 @@ def api_v1_features():
         crypto_hunters_telegram_url=CRYPTO_HUNTERS_TELEGRAM_URL if CRYPTO_HUNTERS_ENABLED else "",
         crypto_hunters_portal_url=CRYPTO_HUNTERS_PORTAL_URL if CRYPTO_HUNTERS_ENABLED else "",
         hunter_mode=THRONOS_HUNTER_MODE_ENABLED,
+        hunter_bridge=THRONOS_HUNTER_BRIDGE_ENABLED,
     ), 200
 
 

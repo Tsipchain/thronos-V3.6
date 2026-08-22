@@ -24647,10 +24647,12 @@ _POOL_CONFIGS: dict = {
     "bsc-usdt": {
         "pool_id": "bsc-usdt", "pair": "THR-USDT", "chain": "bsc",
         "external_asset": "USDT", "internal_asset": "THR", "internal_fee_asset": "THR",
+        "base_apy": 5.0,
     },
     "base-usdc": {
         "pool_id": "base-usdc", "pair": "THR-USDC", "chain": "base",
         "external_asset": "USDC", "internal_asset": "THR", "internal_fee_asset": "THR",
+        "base_apy": 5.0,
     },
 }
 _AMM_WORKER_NAME = "pythia_amm_worker"
@@ -25201,10 +25203,13 @@ def _pool_stats(pool: dict, cfg: dict) -> dict:
     fees_24h = volume_24h_ext * (fee_bps / 10000.0)
     apy_pct  = ((fees_24h * 365.0) / tvl_usd * 100.0) if tvl_usd > 0 else 0.0
 
+    base_apy = float(cfg.get("base_apy") or 0)
+
     return {
         "last_swap_price": round(last_swap_price, 8) if last_swap_price else 0.0,
         "volume_24h_usd":  round(volume_24h_ext, 6),
         "apy_pct":         round(apy_pct, 3),
+        "base_apy":        round(base_apy, 2),
         "fee_bps":         fee_bps,
     }
 
@@ -26132,6 +26137,23 @@ def api_admin_pools_watcher_credit_external():
         except Exception as intent_err:
             logger.warning("[pool_watcher] intent match failed: %s", intent_err)
 
+        # If no intent matched, try to resolve the depositor's THR address from
+        # their EVM address so we can still emit a wallet history event.
+        depositor_resolved = ""
+        if not credited_address and from_addr:
+            try:
+                wallet_info = _lookup_thronos_wallet(from_addr)
+                if wallet_info and wallet_info.get("thr_address"):
+                    depositor_resolved = wallet_info["thr_address"].strip().upper()
+                else:
+                    bnb_reg_file = os.path.join(DATA_DIR, "bnb_user_registry.json")
+                    bnb_reg = load_json(bnb_reg_file, {})
+                    hit = bnb_reg.get(from_addr.lower())
+                    if hit and isinstance(hit, dict):
+                        depositor_resolved = (hit.get("thr_address") or "").strip().upper()
+            except Exception as resolve_err:
+                logger.debug("[pool_watcher] depositor resolve failed: %s", resolve_err)
+
         # If matched, credit LP shares to the depositor's position and emit history
         if credited_address and credited_address.startswith("THR"):
             try:
@@ -26172,6 +26194,28 @@ def api_admin_pools_watcher_credit_external():
                             amount, credited_address, pool_id, tx_hash[:20])
             except Exception as pos_err:
                 logger.warning("[pool_watcher] LP share credit failed: %s", pos_err)
+        elif depositor_resolved and depositor_resolved.startswith("THR"):
+            try:
+                add_wallet_history_event(
+                    thr_address=depositor_resolved,
+                    event_type="pool_external_deposit_detected",
+                    chain=chain,
+                    asset=asset,
+                    amount=amount,
+                    status="confirmed",
+                    direction="in",
+                    internal_txid=event_id,
+                    external_txid=tx_hash,
+                    external_from=from_addr,
+                    external_to=to_addr,
+                    pool_id=pool_id,
+                    pair=cfg.get("pair", ""),
+                    note=f"External deposit detected via pool_deposit_watcher (no intent matched, resolved from EVM address)",
+                )
+                logger.info("[pool_watcher] deposit history recorded for %s in pool %s (tx=%s, no intent)",
+                            depositor_resolved, pool_id, tx_hash[:20])
+            except Exception as hist_err:
+                logger.warning("[pool_watcher] deposit history write failed: %s", hist_err)
 
         logger.info("[pool_watcher] credited %.6f %s → %s external_reserve | tx=%s log=%d",
                     amount, asset, pool_id, tx_hash[:20], log_index)

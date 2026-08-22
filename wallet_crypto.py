@@ -59,8 +59,6 @@ def generate_wallet() -> WalletKey:
 def main() -> None:
     wallet = generate_wallet()
     print("Address :", wallet.address)
-    print("Public  :", wallet.public_key)
-    print("Private :", wallet.private_key)
 
 
 if __name__ == "__main__":

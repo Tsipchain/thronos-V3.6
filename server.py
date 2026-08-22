@@ -41384,20 +41384,39 @@ def api_v1_pools_add_liquidity_crosschain():
     """
     data = request.get_json() or {}
 
-    pool_id = (data.get("pool_id") or "").strip()
-    chain = (data.get("chain") or "").lower().strip()
-    token_contract = (data.get("token_contract") or "").strip()
-    evm_address = (data.get("evm_address") or "").strip()
-    decimals_raw = data.get("decimals", 18)
-    auth_secret = (data.get("auth_secret") or "").strip()
-    provider = (data.get("provider_thr") or data.get("from") or "").strip()
+    # V1 signed intent path — extract fields from payload if present
+    intent_raw = data.get("intent")
+    v1_signature = (data.get("signature") or "").strip()
+    v1_public_key = (data.get("public_key") or "").strip()
+    v1_payload = data.get("payload") or {}
+    use_v1_intent = bool(intent_raw and v1_signature and v1_public_key)
 
-    try:
-        amt_a = float(data.get("amount_a", 0))
-        amt_b = float(data.get("amount_b", 0))
-        decimals = int(decimals_raw)
-    except (TypeError, ValueError):
-        return jsonify(ok=False, error="invalid_amounts"), 400
+    if use_v1_intent:
+        pool_id = (v1_payload.get("pool_id") or "").strip()
+        chain = (v1_payload.get("chain") or "").lower().strip()
+        token_contract = (v1_payload.get("token_contract") or "").strip()
+        evm_address = (v1_payload.get("evm_address") or "").strip()
+        decimals_raw = v1_payload.get("decimals", 18)
+        provider = (v1_payload.get("provider_thr") or "").strip()
+        try:
+            amt_a = float(v1_payload.get("amount_a", 0))
+            amt_b = float(v1_payload.get("amount_b", 0))
+            decimals = int(decimals_raw)
+        except (TypeError, ValueError):
+            return jsonify(ok=False, error="invalid_amounts"), 400
+    else:
+        pool_id = (data.get("pool_id") or "").strip()
+        chain = (data.get("chain") or "").lower().strip()
+        token_contract = (data.get("token_contract") or "").strip()
+        evm_address = (data.get("evm_address") or "").strip()
+        decimals_raw = data.get("decimals", 18)
+        provider = (data.get("provider_thr") or data.get("from") or "").strip()
+        try:
+            amt_a = float(data.get("amount_a", 0))
+            amt_b = float(data.get("amount_b", 0))
+            decimals = int(decimals_raw)
+        except (TypeError, ValueError):
+            return jsonify(ok=False, error="invalid_amounts"), 400
 
     if not pool_id or amt_a <= 0 or amt_b <= 0:
         return jsonify(ok=False, error="missing_fields",
@@ -41430,14 +41449,32 @@ def api_v1_pools_add_liquidity_crosschain():
     token_standard = token_meta["token_standard"]
     network_label = token_meta["network_label"]
 
-    # V1 wallet access gate: covers new pledge users, old/migration users, whitelisted users
-    _access_err, _access_msg = _validate_pool_access(provider, auth_secret)
-    if _access_err != "ok":
-        logger.warning("[add_liquidity_intent] pool_access_denied provider=%s err=%s",
-                       provider[:10] if provider else "", _access_err)
-        return jsonify(ok=False, error=_access_err, message=_access_msg), (
-            401 if _access_err == "invalid_auth_secret" else 403
-        )
+    # Auth gate: V1 signed intent or legacy auth_secret
+    if use_v1_intent:
+        try:
+            from server_ext import _verify_wallet_action_intent, _verify_action_payload_hash
+            intent = intent_raw if isinstance(intent_raw, dict) else {}
+            ok_v1, err_code, err_detail = _verify_wallet_action_intent(intent, v1_signature, v1_public_key)
+            if not ok_v1:
+                return jsonify(ok=False, error=err_code, detail=err_detail), 400
+            if not _verify_action_payload_hash(intent.get("payload_hash", ""), v1_payload):
+                return jsonify(ok=False, error="payload_hash_mismatch",
+                               detail="payload does not match signed intent"), 400
+            if intent.get("from_thr", "").upper() != provider.upper():
+                return jsonify(ok=False, error="intent_provider_mismatch",
+                               detail="Intent from_thr does not match provider"), 400
+        except ImportError:
+            return jsonify(ok=False, error="v1_signing_unavailable",
+                           message="V1 wallet signing not available on this node"), 503
+    else:
+        auth_secret = (data.get("auth_secret") or "").strip()
+        _access_err, _access_msg = _validate_pool_access(provider, auth_secret)
+        if _access_err != "ok":
+            logger.warning("[add_liquidity_intent] pool_access_denied provider=%s err=%s",
+                           provider[:10] if provider else "", _access_err)
+            return jsonify(ok=False, error=_access_err, message=_access_msg), (
+                401 if _access_err == "invalid_auth_secret" else 403
+            )
 
     # Load pool
     pools = load_pools()

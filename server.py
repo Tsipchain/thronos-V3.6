@@ -24374,7 +24374,9 @@ def _collect_normalized_history_from_wallet_history(
     aliases: set, limit_overfetch: int
 ) -> tuple[list, dict]:
     """
-    Scan wallet_history.json for all events whose thr_address is in aliases.
+    Scan wallet_history.json for all events whose thr_address, external_from,
+    or external_to is in aliases.  This ensures incoming transfers and
+    cross-chain deposits appear for the recipient, not just the sender.
     Returns (events, source_counts).
     """
     source_counts: dict = {}
@@ -24386,7 +24388,11 @@ def _collect_normalized_history_from_wallet_history(
             if not isinstance(e, dict):
                 continue
             ta = (e.get("thr_address") or "").strip()
-            if ta in aliases or ta.upper() in aliases:
+            ef = (e.get("external_from") or "").strip()
+            et = (e.get("external_to") or "").strip()
+            if (ta in aliases or ta.upper() in aliases
+                    or ef in aliases or ef.upper() in aliases
+                    or et in aliases or et.upper() in aliases):
                 ev = dict(e)
                 ev.setdefault("_source", "wallet_history")
                 events.append(ev)
@@ -30746,6 +30752,9 @@ def api_wallet_evm_tx_record():
         # (PWA/Mobile/Web read from that endpoint). Display-only — status stays
         # unverified until the on-chain watcher confirms.
         try:
+            _evm_network_label = {"bsc": "BNB Chain", "base": "Base",
+                                  "arbitrum": "Arbitrum One", "eth": "Ethereum"}.get(chain_norm, chain_norm.upper())
+            _evm_token_std = "ERC20" if chain_norm in ("eth", "arbitrum", "base") else "BEP20"
             add_wallet_history_event(
                 thr_address=address,
                 event_type="evm_token_send",
@@ -30757,12 +30766,28 @@ def api_wallet_evm_tx_record():
                 external_txid=tx_hash,
                 external_from=address,
                 external_to=to_addr,
-                token_standard="ERC20" if chain_norm in ("eth", "arbitrum", "base") else "BEP20",
-                network_label={"bsc": "BNB Chain", "base": "Base",
-                               "arbitrum": "Arbitrum One", "eth": "Ethereum"}.get(chain_norm, chain_norm.upper()),
+                token_standard=_evm_token_std,
+                network_label=_evm_network_label,
                 timestamp=now_ts,
                 note="client_reported_external_send",
             )
+            if to_addr and to_addr.upper() != address.upper():
+                add_wallet_history_event(
+                    thr_address=to_addr,
+                    event_type="evm_token_receive",
+                    chain=chain_norm,
+                    asset=asset,
+                    amount=amount,
+                    status="unverified_local_submission",
+                    direction="in",
+                    external_txid=tx_hash,
+                    external_from=address,
+                    external_to=to_addr,
+                    token_standard=_evm_token_std,
+                    network_label=_evm_network_label,
+                    timestamp=now_ts,
+                    note="client_reported_external_receive",
+                )
         except Exception as history_err:
             logger.warning("[evm-tx/record] wallet history append failed: %s", history_err)
 
@@ -34879,10 +34904,23 @@ def add_wallet_history_event(
 
 
 def get_wallet_history(thr_address: str, limit: int = 100) -> list:
-    """Get transaction history for a wallet (most recent first)."""
+    """Get transaction history for a wallet (most recent first).
+
+    Matches on thr_address (initiator) as well as external_from / external_to
+    so that incoming transfers, cross-chain deposits, and EVM receives are
+    visible to the recipient wallet — not just the sender.
+    """
     try:
         history = load_json(WALLET_HISTORY_FILE, [])
-        wallet_events = [e for e in history if isinstance(e, dict) and e.get("thr_address") == thr_address]
+        addr_upper = thr_address.upper()
+        wallet_events = []
+        for e in history:
+            if not isinstance(e, dict):
+                continue
+            if (e.get("thr_address", "").upper() == addr_upper
+                    or e.get("external_from", "").upper() == addr_upper
+                    or e.get("external_to", "").upper() == addr_upper):
+                wallet_events.append(e)
         # Sort by timestamp descending (most recent first)
         wallet_events.sort(key=lambda e: e.get("timestamp", 0), reverse=True)
         return wallet_events[:limit]

@@ -3531,7 +3531,7 @@ const HISTORY_FILTERS = [
   { key: 'token_transfer', label: 'Tokens' },
   { key: 'swap', label: 'Swaps' },
   { key: 'liquidity', label: '💧 Liquidity' },
-  { key: 'evm_sends', label: '📤 EVM Sends' },
+  { key: 'evm_sends', label: '🔄 EVM Transfers' },
   { key: 'mining_reward', label: 'Mining' },
   { key: 'pledge', label: 'Pledges' },
   { key: 'crosschain', label: 'Cross-Chain' },
@@ -3566,6 +3566,8 @@ const _CROSSCHAIN_FILTER_TYPES = new Set([
   'crosschain_transfer_received',
   'crosschain_transfer_sent',
   'crosschain_withdraw',
+  'crosschain_withdrawal_requested',
+  'crosschain_withdrawal_fee_charged',
   'bridge_deposit_detected',
   'bridge',
 ]);
@@ -3625,7 +3627,10 @@ const _EVENT_TYPE_LABELS = {
   pledge:                                   '🔒 Pledge',
   token_receive:                            '📥 Received',
   token_send:                               '📤 Sent',
+  evm_token_receive:                        '📥 EVM Received',
   crosschain_withdraw:                      '🔄 Cross-chain withdrawal',
+  crosschain_withdrawal_requested:          '📤 Withdrawal requested',
+  crosschain_withdrawal_fee_charged:        '🔥 Withdrawal fee',
   gateway_payout:                           '💰 Gateway payout',
   bridge:                                   '⚡ Bridge',
 };

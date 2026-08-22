@@ -767,6 +767,9 @@ def wallet_v1_transfer():
         return _jsonify(ok=False, error='transfer_failed', detail=str(_e)), 500
 
 
+_withdraw_lock = _threading.Lock()
+
+
 @app.route('/api/wallet/v1/withdraw', methods=['POST'])
 def wallet_v1_withdraw():
     """
@@ -836,22 +839,6 @@ def wallet_v1_withdraw():
         return _jsonify(ok=False, error='token_not_supported_on_chain',
                         chain=dest_chain, supported_tokens=chain_cfg['tokens']), 400
 
-    # Pool liquidity check
-    pools = _srv.load_pools()
-    pool = next(
-        (p for p in pools
-         if {(p.get('token_a') or '').upper(), (p.get('token_b') or '').upper()} == {'THR', 'USDT'}),
-        None,
-    )
-    if not pool:
-        return _jsonify(ok=False, error='pool_not_initialized'), 503
-
-    usdt_reserve = float(pool.get('reserves_b', 0))
-    max_allowed  = round(usdt_reserve * 0.9, 6)
-    if amount > max_allowed:
-        return _jsonify(ok=False, error='insufficient_pool_liquidity',
-                        available_usdt=max_allowed), 400
-
     # Flat fee: 0.20 USDT/USDC
     flat_fee = 0.20
     if amount <= flat_fee:
@@ -859,34 +846,89 @@ def wallet_v1_withdraw():
                         detail=f'Amount must exceed flat fee of {flat_fee} {token}'), 400
     amount_net = round(amount - flat_fee, 6)
 
-    # Deduct net from pool (fee stays in pool as reserve)
-    pool['reserves_b'] = round(usdt_reserve - amount_net, 6)
-    _srv.save_pools(pools)
+    # ── FUNDS-SAFETY GATE ─────────────────────────────────────────────
+    # Serialise balance-check → debit → pool-debit → queue-append so
+    # two concurrent signed intents cannot double-spend the same balance.
+    with _withdraw_lock:
+        # 1. Per-wallet balance ownership
+        wallet_bal, bal_source = _srv._get_or_bootstrap_internal_asset_balance(
+            thr_address, token, dest_chain
+        )
+        if wallet_bal < amount:
+            return _jsonify(ok=False, error='insufficient_balance',
+                            balance=round(wallet_bal, 6),
+                            required=round(amount, 6),
+                            token=token, chain=dest_chain,
+                            balance_source=bal_source), 400
 
-    # Queue the withdrawal
-    withdraw_id = f"WD-{int(_time_mod.time())}-{_secrets_mod.token_hex(4).upper()}"
-    ts = _time_mod.strftime('%Y-%m-%d %H:%M:%S UTC', _time_mod.gmtime())
-    current_ts = _time_mod.time()
+        # 2. Pool liquidity — token-specific (USDT→THR/USDT, USDC→THR/USDC)
+        pools = _srv.load_pools()
+        pool = next(
+            (p for p in pools
+             if {(p.get('token_a') or '').upper(),
+                 (p.get('token_b') or '').upper()} == {'THR', token}),
+            None,
+        )
+        if not pool:
+            return _jsonify(ok=False, error='pool_not_initialized',
+                            token=token), 503
 
-    payout_wallet = chain_cfg.get('payout_wallet', '')
-    queue_entry = {
-        'id':                withdraw_id,
-        'thr_address':       thr_address,
-        'dest_chain':        dest_chain,
-        'dest_chain_label':  chain_cfg.get('label', dest_chain),
-        'dest_address':      dest_address,
-        'token':             token,
-        'amount':            amount,
-        'amount_net':        amount_net,
-        'flat_fee':          flat_fee,
-        'fee_mode':          'FLAT_FEE',
-        'payout_wallet':     payout_wallet,
-        'status':            'queued',
-        'created_at':        ts,
-    }
-    queue = _srv.load_json(_srv.WITHDRAW_QUEUE_FILE, [])
-    queue.append(queue_entry)
-    _srv.save_json(_srv.WITHDRAW_QUEUE_FILE, queue)
+        _rk = 'reserves_b' if (pool.get('token_b') or '').upper() == token else 'reserves_a'
+        stablecoin_reserve = float(pool.get(_rk, 0))
+        max_allowed = round(stablecoin_reserve * 0.9, 6)
+        if amount > max_allowed:
+            return _jsonify(ok=False, error='insufficient_pool_liquidity',
+                            available=max_allowed, token=token), 400
+
+        # 3. Atomically debit wallet balance BEFORE touching pool
+        new_wallet_bal = round(wallet_bal - amount, 6)
+        _srv._set_internal_asset_balance(thr_address, token, dest_chain, new_wallet_bal)
+
+        # 4. Deduct net from pool (flat fee stays as reserve)
+        pool[_rk] = round(stablecoin_reserve - amount_net, 6)
+        try:
+            _srv.save_pools(pools)
+        except Exception as _pool_exc:
+            _srv._set_internal_asset_balance(thr_address, token, dest_chain, wallet_bal)
+            app.logger.error('[V1Withdraw] pool save failed, balance rolled back: %s', _pool_exc)
+            return _jsonify(ok=False, error='internal_error',
+                            detail='pool save failed, no funds deducted'), 500
+
+        # 5. Queue the withdrawal — rollback balance + pool on failure
+        withdraw_id = f"WD-{int(_time_mod.time())}-{_secrets_mod.token_hex(4).upper()}"
+        ts = _time_mod.strftime('%Y-%m-%d %H:%M:%S UTC', _time_mod.gmtime())
+        current_ts = _time_mod.time()
+        payout_wallet = chain_cfg.get('payout_wallet', '')
+        intent_nonce = str(intent.get('nonce', ''))
+        queue_entry = {
+            'id':                withdraw_id,
+            'thr_address':       thr_address,
+            'dest_chain':        dest_chain,
+            'dest_chain_label':  chain_cfg.get('label', dest_chain),
+            'dest_address':      dest_address,
+            'token':             token,
+            'amount':            amount,
+            'amount_net':        amount_net,
+            'flat_fee':          flat_fee,
+            'fee_mode':          'FLAT_FEE',
+            'payout_wallet':     payout_wallet,
+            'status':            'queued',
+            'created_at':        ts,
+            'intent_nonce':      intent_nonce,
+            'balance_before':    wallet_bal,
+            'balance_after':     new_wallet_bal,
+        }
+        try:
+            queue = _srv.load_json(_srv.WITHDRAW_QUEUE_FILE, [])
+            queue.append(queue_entry)
+            _srv.save_json(_srv.WITHDRAW_QUEUE_FILE, queue)
+        except Exception as _q_exc:
+            _srv._set_internal_asset_balance(thr_address, token, dest_chain, wallet_bal)
+            pool[_rk] = stablecoin_reserve
+            _srv.save_pools(pools)
+            app.logger.error('[V1Withdraw] queue save failed, balance+pool rolled back: %s', _q_exc)
+            return _jsonify(ok=False, error='internal_error',
+                            detail='queue save failed, no funds deducted'), 500
 
     # Record wallet history event
     _srv.add_wallet_history_event(

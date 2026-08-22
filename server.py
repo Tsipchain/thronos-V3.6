@@ -27805,6 +27805,7 @@ _PERSONAL_IN_EVENTS = frozenset({
 # Personal out-events that decrease wallet's internal asset balance
 _PERSONAL_OUT_EVENTS = frozenset({
     "internal_asset_transfer",
+    "crosschain_withdrawal_requested",
 })
 _CHAIN_ALIASES = {"bnb": "bsc", "binance": "bsc", "ethereum": "eth"}
 

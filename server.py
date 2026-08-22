@@ -30816,22 +30816,30 @@ def api_wallet_evm_tx_record():
                 note="client_reported_external_send",
             )
             if to_addr and to_addr.upper() != address.upper():
-                add_wallet_history_event(
-                    thr_address=to_addr,
-                    event_type="evm_token_receive",
-                    chain=chain_norm,
-                    asset=asset,
-                    amount=amount,
-                    status="unverified_local_submission",
-                    direction="in",
-                    external_txid=tx_hash,
-                    external_from=address,
-                    external_to=to_addr,
-                    token_standard=_evm_token_std,
-                    network_label=_evm_network_label,
-                    timestamp=now_ts,
-                    note="client_reported_external_receive",
-                )
+                _hist = load_json(WALLET_HISTORY_FILE, [])
+                _dup = any(
+                    e.get("event_type") == "evm_token_receive"
+                    and e.get("external_txid") == tx_hash
+                    and e.get("thr_address", "").upper() == to_addr.upper()
+                    for e in _hist
+                ) if tx_hash else False
+                if not _dup:
+                    add_wallet_history_event(
+                        thr_address=to_addr,
+                        event_type="evm_token_receive",
+                        chain=chain_norm,
+                        asset=asset,
+                        amount=amount,
+                        status="unverified_local_submission",
+                        direction="in",
+                        external_txid=tx_hash,
+                        external_from=address,
+                        external_to=to_addr,
+                        token_standard=_evm_token_std,
+                        network_label=_evm_network_label,
+                        timestamp=now_ts,
+                        note="client_reported_external_receive",
+                    )
         except Exception as history_err:
             logger.warning("[evm-tx/record] wallet history append failed: %s", history_err)
 

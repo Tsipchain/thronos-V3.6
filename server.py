@@ -58,7 +58,7 @@ import fcntl
 import requests
 import redis
 from urllib.parse import urlparse
-from flask import Flask, request, jsonify, send_from_directory, render_template, url_for, send_file, Response, make_response, redirect
+from flask import Flask, request, jsonify, send_from_directory, render_template, render_template_string, url_for, send_file, Response, make_response, redirect
 
 try:
     from flask_cors import CORS
@@ -9975,6 +9975,182 @@ def api_v2_wallet_history():
         "endpoint": "v2",
         "node": "microservice-optimized"
     }), 200
+
+
+@app.route("/login")
+def login_page():
+    """Login with Thronos Wallet — QR code login page."""
+    server_url = request.host_url.rstrip("/")
+    return render_template_string(_LOGIN_PAGE_HTML, server_url=server_url)
+
+
+_LOGIN_PAGE_HTML = r'''<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Login — Thronos Wallet</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#0a0e17;--card:#111827;--accent:#00c8ff;--accent2:#00ff66;--text:#e2e8f0;--muted:#94a3b8;--border:#1e293b;--danger:#ff6b6b}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center}
+.login-card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:40px;max-width:420px;width:90vw;text-align:center}
+.logo{font-size:2rem;font-weight:700;margin-bottom:8px;background:linear-gradient(135deg,var(--accent),var(--accent2));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.subtitle{color:var(--muted);font-size:.9rem;margin-bottom:28px}
+#qrContainer{margin:24px auto;width:240px;height:240px;background:#fff;border-radius:12px;display:flex;align-items:center;justify-content:center;position:relative}
+#qrContainer img{width:220px;height:220px;image-rendering:pixelated}
+#qrContainer canvas{width:220px;height:220px}
+.spinner{width:40px;height:40px;border:3px solid #ddd;border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.instruction{color:var(--muted);font-size:.85rem;margin-top:16px;line-height:1.5}
+.instruction b{color:var(--text)}
+#statusText{margin-top:16px;font-size:.9rem;min-height:24px}
+.status-waiting{color:var(--accent)}
+.status-success{color:var(--accent2)}
+.status-error{color:var(--danger)}
+#refreshBtn{margin-top:16px;padding:10px 28px;background:transparent;border:1px solid var(--accent);color:var(--accent);border-radius:8px;cursor:pointer;font-size:.85rem;display:none}
+#refreshBtn:hover{background:rgba(0,200,255,.1)}
+.timer{color:var(--muted);font-size:.75rem;margin-top:8px}
+.footer{margin-top:24px;padding-top:16px;border-top:1px solid var(--border);color:var(--muted);font-size:.75rem}
+.footer a{color:var(--accent);text-decoration:none}
+</style>
+</head>
+<body>
+<div class="login-card">
+  <div class="logo">Thronos</div>
+  <div class="subtitle">Login with your Thronos Wallet</div>
+  <div id="qrContainer"><div class="spinner"></div></div>
+  <div class="instruction">
+    Open your <b>Thronos Wallet</b> app<br>
+    Tap <b>Scan QR</b> and point at the code above
+  </div>
+  <div id="statusText" class="status-waiting">Generating challenge...</div>
+  <div id="timerText" class="timer"></div>
+  <button id="refreshBtn" onclick="newChallenge()">Generate New QR</button>
+  <div class="footer">
+    Don't have a wallet? <a href="/wallet-pwa/">Create one</a>
+  </div>
+</div>
+<script>
+(function(){
+  const API = '{{ server_url }}';
+  const qrContainer = document.getElementById('qrContainer');
+  const statusText = document.getElementById('statusText');
+  const timerText = document.getElementById('timerText');
+  const refreshBtn = document.getElementById('refreshBtn');
+  let challengeId = null;
+  let pollTimer = null;
+  let countdownTimer = null;
+  let expiresAt = 0;
+
+  async function newChallenge() {
+    qrContainer.innerHTML = '<div class="spinner"></div>';
+    statusText.textContent = 'Generating challenge...';
+    statusText.className = 'status-waiting';
+    timerText.textContent = '';
+    refreshBtn.style.display = 'none';
+    if (pollTimer) clearInterval(pollTimer);
+    if (countdownTimer) clearInterval(countdownTimer);
+    try {
+      const resp = await fetch(API + '/api/auth/challenge', { method: 'POST', credentials: 'include' });
+      const data = await resp.json();
+      if (!data.ok) { showError(data.error || 'Failed to create challenge'); return; }
+      challengeId = data.challenge.challenge_id;
+      expiresAt = Date.now() + (data.expires_in * 1000);
+      const qrUri = data.qr_uri;
+      const img = document.createElement('img');
+      img.src = API + '/api/qr?address=' + encodeURIComponent(qrUri) + '&format=json';
+      // Use the JSON endpoint for base64
+      const qrResp = await fetch(API + '/api/qr?address=' + encodeURIComponent(qrUri) + '&json=1');
+      const qrData = await qrResp.json();
+      if (qrData.ok && qrData.data_url) {
+        img.src = qrData.data_url;
+      } else {
+        img.src = API + '/api/qr?address=' + encodeURIComponent(qrUri);
+      }
+      img.alt = 'Login QR';
+      qrContainer.innerHTML = '';
+      qrContainer.appendChild(img);
+      statusText.textContent = 'Scan with your Thronos Wallet';
+      statusText.className = 'status-waiting';
+      startPolling();
+      startCountdown();
+    } catch(e) {
+      showError('Network error: ' + e.message);
+    }
+  }
+
+  function startCountdown() {
+    countdownTimer = setInterval(function() {
+      const remaining = Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000));
+      if (remaining <= 0) {
+        clearInterval(countdownTimer);
+        clearInterval(pollTimer);
+        timerText.textContent = '';
+        statusText.textContent = 'QR expired';
+        statusText.className = 'status-error';
+        refreshBtn.style.display = 'inline-block';
+        return;
+      }
+      timerText.textContent = 'Expires in ' + remaining + 's';
+    }, 1000);
+  }
+
+  function startPolling() {
+    pollTimer = setInterval(async function() {
+      if (!challengeId) return;
+      try {
+        const resp = await fetch(API + '/api/auth/challenge/status/' + challengeId, { credentials: 'include' });
+        const data = await resp.json();
+        if (data.ok && data.consumed) {
+          clearInterval(pollTimer);
+          clearInterval(countdownTimer);
+          statusText.textContent = 'Wallet verified! Checking session...';
+          statusText.className = 'status-success';
+          timerText.textContent = '';
+          checkSession();
+        } else if (!data.ok && data.error === 'challenge_expired') {
+          clearInterval(pollTimer);
+          clearInterval(countdownTimer);
+          timerText.textContent = '';
+          statusText.textContent = 'QR expired';
+          statusText.className = 'status-error';
+          refreshBtn.style.display = 'inline-block';
+        }
+      } catch(_) {}
+    }, 2000);
+  }
+
+  async function checkSession() {
+    try {
+      const resp = await fetch(API + '/api/auth/session', { credentials: 'include' });
+      const data = await resp.json();
+      if (data.ok) {
+        statusText.textContent = 'Logged in as ' + data.address.slice(0, 10) + '...';
+        statusText.className = 'status-success';
+        setTimeout(function() { window.location.href = data.route || '/dashboard'; }, 1200);
+      } else {
+        statusText.textContent = 'Session not ready — scan again';
+        statusText.className = 'status-error';
+        refreshBtn.style.display = 'inline-block';
+      }
+    } catch(e) {
+      statusText.textContent = 'Error checking session';
+      statusText.className = 'status-error';
+    }
+  }
+
+  function showError(msg) {
+    statusText.textContent = msg;
+    statusText.className = 'status-error';
+    refreshBtn.style.display = 'inline-block';
+  }
+
+  newChallenge();
+})();
+</script>
+</body>
+</html>'''
 
 
 @app.route("/api/wallet/qr/<thr_addr>")

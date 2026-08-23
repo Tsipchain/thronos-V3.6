@@ -338,6 +338,7 @@ import time as _time_wa
 _WALLET_ACTION_ALLOWED_ACTIONS = frozenset({
     'internal_transfer', 'external_send_record',
     'pool_deposit_intent', 'pool_withdraw_intent',
+    'crosschain_withdraw', 'crosschain_add_liquidity',
     'swap', 'bridge', 'pledge', 'token_create',
     'nft_mint', 'nft_buy',
 })
@@ -764,6 +765,224 @@ def wallet_v1_transfer():
     except Exception as _e:
         app.logger.error('[V1Transfer] transfer_error: %s', _e)
         return _jsonify(ok=False, error='transfer_failed', detail=str(_e)), 500
+
+
+_withdraw_lock = _threading.Lock()
+
+
+@app.route('/api/wallet/v1/withdraw', methods=['POST'])
+def wallet_v1_withdraw():
+    """
+    PWA cross-chain withdrawal — requires signed action intent (no send_secret).
+
+    Required fields:
+      intent      – action='crosschain_withdraw'
+      signature, public_key
+      payload     – { amount, token, dest_chain, dest_address }
+
+    Flat fee: 0.20 USDT/USDC deducted from withdrawal amount.
+    """
+    import server as _srv
+    import re as _re
+    import time as _time_mod
+    import secrets as _secrets_mod
+
+    data = _request.get_json() or {}
+    intent_raw = data.get('intent')
+    signature  = (data.get('signature')  or '').strip()
+    public_key = (data.get('public_key') or '').strip()
+
+    if not (intent_raw and signature and public_key):
+        return _jsonify(ok=False, error='signed_wallet_action_required',
+                        detail='intent, signature, and public_key are required'), 401
+
+    intent = intent_raw if isinstance(intent_raw, dict) else {}
+    ok, err_code, err_detail = _verify_wallet_action_intent(intent, signature, public_key)
+    if not ok:
+        return _jsonify(ok=False, error=err_code, detail=err_detail), 400
+    payload = data.get('payload') or {}
+    if not _verify_action_payload_hash(intent.get('payload_hash', ''), payload):
+        return _jsonify(ok=False, error='payload_hash_mismatch',
+                        detail='payload does not match signed intent'), 400
+
+    thr_address  = str(intent.get('from_thr', '')).strip().upper()
+    amount       = float(payload.get('amount', 0) or 0)
+    token        = str(payload.get('token') or 'USDT').strip().upper()
+    dest_chain   = str(payload.get('dest_chain') or 'bsc').strip().lower()
+    dest_address = str(payload.get('dest_address') or '').strip().lower()
+
+    # Validation
+    if not _srv.validate_thr_address(thr_address):
+        return _jsonify(ok=False, error='invalid_thr_address'), 400
+    if token not in _srv.WITHDRAW_SUPPORTED_TOKENS:
+        return _jsonify(ok=False, error='unsupported_token',
+                        supported=list(_srv.WITHDRAW_SUPPORTED_TOKENS)), 400
+    if not _re.match(r'^0x[a-f0-9]{40}$', dest_address):
+        return _jsonify(ok=False, error='invalid_dest_address'), 400
+    if amount <= 0:
+        return _jsonify(ok=False, error='amount_must_be_positive'), 400
+    if amount > _srv.MAX_USDT_WITHDRAW:
+        return _jsonify(ok=False, error='exceeds_max_withdrawal',
+                        max_withdrawal=_srv.MAX_USDT_WITHDRAW, token=token), 400
+
+    # Chain config
+    available_chains = _srv.get_available_withdraw_chains()
+    if dest_chain not in _srv.WITHDRAW_CHAIN_CONFIG:
+        return _jsonify(ok=False, error='unknown_chain',
+                        available=list(available_chains.keys())), 400
+    if dest_chain not in available_chains:
+        return _jsonify(ok=False, error='chain_not_configured',
+                        detail=f'{dest_chain} is not enabled',
+                        available=list(available_chains.keys())), 503
+    chain_cfg = _srv.WITHDRAW_CHAIN_CONFIG[dest_chain]
+    if token not in chain_cfg.get('tokens', []):
+        return _jsonify(ok=False, error='token_not_supported_on_chain',
+                        chain=dest_chain, supported_tokens=chain_cfg['tokens']), 400
+
+    # Flat fee: 0.20 USDT/USDC
+    flat_fee = 0.20
+    if amount <= flat_fee:
+        return _jsonify(ok=False, error='amount_too_small',
+                        detail=f'Amount must exceed flat fee of {flat_fee} {token}'), 400
+    amount_net = round(amount - flat_fee, 6)
+
+    # ── FUNDS-SAFETY GATE ─────────────────────────────────────────────
+    # Serialise balance-check → debit → pool-debit → queue-append so
+    # two concurrent signed intents cannot double-spend the same balance.
+    with _withdraw_lock:
+        # 1. Per-wallet balance ownership
+        wallet_bal, bal_source = _srv._get_or_bootstrap_internal_asset_balance(
+            thr_address, token, dest_chain
+        )
+        if wallet_bal < amount:
+            return _jsonify(ok=False, error='insufficient_balance',
+                            balance=round(wallet_bal, 6),
+                            required=round(amount, 6),
+                            token=token, chain=dest_chain,
+                            balance_source=bal_source), 400
+
+        # 2. Pool liquidity — token-specific (USDT→THR/USDT, USDC→THR/USDC)
+        pools = _srv.load_pools()
+        pool = next(
+            (p for p in pools
+             if {(p.get('token_a') or '').upper(),
+                 (p.get('token_b') or '').upper()} == {'THR', token}),
+            None,
+        )
+        if not pool:
+            return _jsonify(ok=False, error='pool_not_initialized',
+                            token=token), 503
+
+        _rk = 'reserves_b' if (pool.get('token_b') or '').upper() == token else 'reserves_a'
+        stablecoin_reserve = float(pool.get(_rk, 0))
+        max_allowed = round(stablecoin_reserve * 0.9, 6)
+        if amount > max_allowed:
+            return _jsonify(ok=False, error='insufficient_pool_liquidity',
+                            available=max_allowed, token=token), 400
+
+        # 3. Atomically debit wallet balance BEFORE touching pool
+        new_wallet_bal = round(wallet_bal - amount, 6)
+        _srv._set_internal_asset_balance(thr_address, token, dest_chain, new_wallet_bal)
+
+        # 4. Deduct net from pool (flat fee stays as reserve)
+        pool[_rk] = round(stablecoin_reserve - amount_net, 6)
+        try:
+            _srv.save_pools(pools)
+        except Exception as _pool_exc:
+            _srv._set_internal_asset_balance(thr_address, token, dest_chain, wallet_bal)
+            app.logger.error('[V1Withdraw] pool save failed, balance rolled back: %s', _pool_exc)
+            return _jsonify(ok=False, error='internal_error',
+                            detail='pool save failed, no funds deducted'), 500
+
+        # 5. Queue the withdrawal — rollback balance + pool on failure
+        withdraw_id = f"WD-{int(_time_mod.time())}-{_secrets_mod.token_hex(4).upper()}"
+        ts = _time_mod.strftime('%Y-%m-%d %H:%M:%S UTC', _time_mod.gmtime())
+        current_ts = _time_mod.time()
+        payout_wallet = chain_cfg.get('payout_wallet', '')
+        intent_nonce = str(intent.get('nonce', ''))
+        queue_entry = {
+            'id':                withdraw_id,
+            'thr_address':       thr_address,
+            'dest_chain':        dest_chain,
+            'dest_chain_label':  chain_cfg.get('label', dest_chain),
+            'dest_address':      dest_address,
+            'token':             token,
+            'amount':            amount,
+            'amount_net':        amount_net,
+            'flat_fee':          flat_fee,
+            'fee_mode':          'FLAT_FEE',
+            'payout_wallet':     payout_wallet,
+            'status':            'queued',
+            'created_at':        ts,
+            'intent_nonce':      intent_nonce,
+            'balance_before':    wallet_bal,
+            'balance_after':     new_wallet_bal,
+        }
+        try:
+            queue = _srv.load_json(_srv.WITHDRAW_QUEUE_FILE, [])
+            queue.append(queue_entry)
+            _srv.save_json(_srv.WITHDRAW_QUEUE_FILE, queue)
+        except Exception as _q_exc:
+            _srv._set_internal_asset_balance(thr_address, token, dest_chain, wallet_bal)
+            pool[_rk] = stablecoin_reserve
+            _srv.save_pools(pools)
+            app.logger.error('[V1Withdraw] queue save failed, balance+pool rolled back: %s', _q_exc)
+            return _jsonify(ok=False, error='internal_error',
+                            detail='queue save failed, no funds deducted'), 500
+
+    # Record wallet history event
+    _srv.add_wallet_history_event(
+        thr_address=thr_address,
+        event_type='crosschain_withdrawal_requested',
+        chain=dest_chain,
+        asset=token,
+        amount=amount,
+        status='queued',
+        direction='out',
+        internal_txid=withdraw_id,
+        network_label=chain_cfg.get('label', dest_chain),
+        external_to=dest_address,
+        timestamp=current_ts,
+    )
+
+    # Chain ledger record
+    chain_data = _srv.load_json(_srv.CHAIN_FILE, [])
+    tx_record = {
+        'type':              'crosschain_withdrawal_requested',
+        'tx_id':             withdraw_id,
+        'from':              thr_address,
+        'to':                dest_address,
+        'token':             token,
+        'amount':            amount,
+        'amount_net':        amount_net,
+        'dest_chain':        dest_chain,
+        'flat_fee':          flat_fee,
+        'fee_mode':          'FLAT_FEE',
+        'payout_wallet':     payout_wallet,
+        'status':            'queued',
+        'timestamp':         ts,
+    }
+    chain_data.append(tx_record)
+    _srv.save_json(_srv.CHAIN_FILE, chain_data)
+    _srv.update_last_block(tx_record, is_block=False)
+
+    app.logger.info('[V1Withdraw] %s -> %s on %s | amount=%s net=%s fee=%s id=%s',
+                    thr_address, dest_address, dest_chain, amount, amount_net, flat_fee, withdraw_id)
+
+    return _jsonify(
+        ok=True,
+        withdraw_id=withdraw_id,
+        token=token,
+        amount=amount,
+        amount_net=amount_net,
+        flat_fee=flat_fee,
+        fee_mode='FLAT_FEE',
+        dest_chain=dest_chain,
+        dest_chain_label=chain_cfg.get('label', dest_chain),
+        dest_address=dest_address,
+        estimated_minutes=5,
+        status='queued',
+    ), 200
 
 
 @app.route('/api/wallet/v1/swap', methods=['POST'])

@@ -46,7 +46,7 @@ except Exception as exc:  # pragma: no cover
 # Lets pledge/HMAC users find their old THR address via send_secret only,
 # then migrate to a V1 wallet and set up PIN + passkey.
 import hashlib as _hashlib
-from flask import jsonify as _jsonify, request as _request
+from flask import jsonify as _jsonify, request as _request, make_response as _make_response
 
 import server as _srv
 
@@ -466,6 +466,269 @@ def _verify_wallet_action_intent(intent: dict, signature_hex: str, public_key_he
     save_json(nonces_file, nonces_store)
 
     return True, '', ''
+
+
+# ── THRONOS_API_LOGIN_V1 — QR Wallet Login ───────────────────────────────────
+# Domain-separated from wallet actions: type='thronos_api_login', NOT 'thronos_wallet_action'.
+# Flow: server issues challenge → QR displayed → PWA scans → signs challenge → server verifies → session.
+
+import secrets as _secrets_login
+import hashlib as _hashlib_login
+import os as _os_login
+import threading as _threading_wa
+
+_LOGIN_CHALLENGE_TTL = 120  # seconds (user spec: 60-120s)
+_LOGIN_SESSION_TTL = 3600   # 1 hour
+_LOGIN_CHALLENGE_STORE_LOCK = _threading_wa.Lock()
+_LOGIN_CHALLENGE_STORE: dict = {}  # { challenge_id: { nonce, audience, created_at, consumed } }
+_LOGIN_SESSION_STORE: dict = {}    # { session_token: { address, pledge_state, created_at, expires_at } }
+
+_LOGIN_AUDIENCE = _os_login.getenv('LOGIN_AUDIENCE', 'api.thronoschain.org')
+
+
+def _prune_login_challenges():
+    now = _time_wa.time()
+    with _LOGIN_CHALLENGE_STORE_LOCK:
+        expired = [k for k, v in _LOGIN_CHALLENGE_STORE.items()
+                   if now - v['created_at'] > _LOGIN_CHALLENGE_TTL + 30]
+        for k in expired:
+            del _LOGIN_CHALLENGE_STORE[k]
+
+
+def _prune_login_sessions():
+    now = _time_wa.time()
+    expired = [k for k, v in _LOGIN_SESSION_STORE.items() if v['expires_at'] < now]
+    for k in expired:
+        del _LOGIN_SESSION_STORE[k]
+
+
+def _canonical_login_challenge_msg(challenge: dict) -> str:
+    fields = ('audience', 'challenge_id', 'nonce', 'timestamp', 'type', 'version')
+    parts = [f'"{k}":{_json_wa.dumps(str(challenge.get(k, "")))}' for k in fields]
+    return '{' + ','.join(parts) + '}'
+
+
+@app.route('/api/auth/challenge', methods=['POST'])
+def api_auth_challenge():
+    _prune_login_challenges()
+    challenge_id = _secrets_login.token_urlsafe(32)
+    nonce = _secrets_login.token_hex(16)
+    now = _time_wa.time()
+    challenge = {
+        'type': 'thronos_api_login',
+        'version': '1',
+        'challenge_id': challenge_id,
+        'nonce': nonce,
+        'audience': _LOGIN_AUDIENCE,
+        'timestamp': str(int(now)),
+    }
+    with _LOGIN_CHALLENGE_STORE_LOCK:
+        _LOGIN_CHALLENGE_STORE[challenge_id] = {
+            'nonce': nonce,
+            'audience': _LOGIN_AUDIENCE,
+            'created_at': now,
+            'consumed': False,
+        }
+    qr_uri = f'thronos://login?challenge_id={challenge_id}&nonce={nonce}&audience={_LOGIN_AUDIENCE}&ts={int(now)}'
+    return _jsonify(
+        ok=True,
+        challenge=challenge,
+        qr_uri=qr_uri,
+        expires_in=_LOGIN_CHALLENGE_TTL,
+    ), 200
+
+
+@app.route('/api/auth/verify', methods=['POST'])
+def api_auth_verify():
+    data = _request.get_json() or {}
+    challenge_response = data.get('challenge_response') or {}
+    signature_hex = (data.get('signature') or '').strip()
+    public_key_hex = (data.get('public_key') or '').strip()
+
+    if not challenge_response or not signature_hex or not public_key_hex:
+        return _jsonify(ok=False, error='missing_fields',
+                        detail='challenge_response, signature, public_key required'), 400
+
+    challenge_id = challenge_response.get('challenge_id', '')
+    if not challenge_id:
+        return _jsonify(ok=False, error='missing_challenge_id'), 400
+
+    # Validate challenge type — domain separation
+    if challenge_response.get('type') != 'thronos_api_login':
+        return _jsonify(ok=False, error='invalid_type',
+                        detail='Expected type thronos_api_login'), 400
+    if str(challenge_response.get('version', '')) != '1':
+        return _jsonify(ok=False, error='invalid_version'), 400
+
+    # Look up and consume challenge (single-use)
+    with _LOGIN_CHALLENGE_STORE_LOCK:
+        stored = _LOGIN_CHALLENGE_STORE.get(challenge_id)
+        if not stored:
+            return _jsonify(ok=False, error='challenge_not_found',
+                            detail='Challenge expired or does not exist'), 400
+        if stored['consumed']:
+            return _jsonify(ok=False, error='challenge_already_used'), 400
+
+        # Check expiry
+        age = _time_wa.time() - stored['created_at']
+        if age > _LOGIN_CHALLENGE_TTL:
+            del _LOGIN_CHALLENGE_STORE[challenge_id]
+            return _jsonify(ok=False, error='challenge_expired',
+                            detail=f'Challenge expired after {int(age)}s'), 400
+
+        # Validate nonce and audience match
+        if challenge_response.get('nonce') != stored['nonce']:
+            return _jsonify(ok=False, error='nonce_mismatch'), 400
+        if challenge_response.get('audience') != stored['audience']:
+            return _jsonify(ok=False, error='audience_mismatch'), 400
+
+        # Mark consumed before verification to prevent concurrent replay
+        stored['consumed'] = True
+
+    # Verify ECDSA signature over canonical challenge message
+    canonical_msg = _canonical_login_challenge_msg(challenge_response).encode('utf-8')
+    try:
+        from cryptography.hazmat.primitives import hashes as _hashes_lv
+        from cryptography.hazmat.primitives.asymmetric import ec as _ec_lv
+        from cryptography.exceptions import InvalidSignature as _InvalidSigLv
+        pub_bytes = bytes.fromhex(public_key_hex)
+        sig_bytes = bytes.fromhex(signature_hex)
+        pub_obj = _ec_lv.EllipticCurvePublicKey.from_encoded_point(_ec_lv.SECP256K1(), pub_bytes)
+        pub_obj.verify(sig_bytes, canonical_msg, _ec_lv.ECDSA(_hashes_lv.SHA256()))
+    except _InvalidSigLv:
+        return _jsonify(ok=False, error='invalid_signature',
+                        detail='Signature does not match challenge'), 401
+    except Exception as exc:
+        return _jsonify(ok=False, error='invalid_signature',
+                        detail=f'Signature verification failed: {exc}'), 401
+
+    # Derive THR address from public key
+    try:
+        from wallet_v1_address_derivation import derive_thronos_address
+        thr_address = derive_thronos_address(public_key_hex)
+    except Exception as exc:
+        return _jsonify(ok=False, error='address_derivation_failed',
+                        detail=str(exc)), 500
+
+    # Key-address binding verification
+    try:
+        import wallet_v1_production_final as _wv1pf_lv
+        binding_ok, binding_error = _wv1pf_lv.verify_publickey_matches_address(
+            {'from': thr_address, 'publicKey': public_key_hex}
+        )
+        if not binding_ok:
+            return _jsonify(ok=False, error='key_address_mismatch',
+                            detail=binding_error), 401
+    except Exception as exc:
+        return _jsonify(ok=False, error='key_address_mismatch',
+                        detail=f'Address binding failed: {exc}'), 401
+
+    # Get pledge status
+    try:
+        pledge_state = _srv.get_effective_pledge_state(thr_address)
+    except Exception:
+        pledge_state = {'effective_pledge_ok': False, 'pledge_mode': 'unknown'}
+
+    # Determine route based on pledge status
+    effective_pledge_ok = pledge_state.get('effective_pledge_ok', False)
+    pledge_mode = pledge_state.get('pledge_mode', 'none')
+    if effective_pledge_ok:
+        route = '/dashboard'
+    elif pledge_mode == 'none':
+        route = '/pledge'
+    else:
+        route = '/pledge/status'
+
+    # Create session
+    session_token = _secrets_login.token_urlsafe(48)
+    now = _time_wa.time()
+    _prune_login_sessions()
+    _LOGIN_SESSION_STORE[session_token] = {
+        'address': thr_address,
+        'public_key': public_key_hex,
+        'pledge_state': pledge_state,
+        'created_at': now,
+        'expires_at': now + _LOGIN_SESSION_TTL,
+    }
+
+    resp = _make_response(_jsonify(
+        ok=True,
+        address=thr_address,
+        pledge_ok=effective_pledge_ok,
+        pledge_mode=pledge_mode,
+        route=route,
+        session_expires_in=_LOGIN_SESSION_TTL,
+    ))
+    resp.set_cookie(
+        'thr_session',
+        session_token,
+        max_age=_LOGIN_SESSION_TTL,
+        httponly=True,
+        secure=True,
+        samesite='Strict',
+        path='/',
+    )
+    return resp
+
+
+@app.route('/api/auth/session', methods=['GET'])
+def api_auth_session():
+    token = (_request.cookies.get('thr_session') or '').strip()
+    if not token:
+        return _jsonify(ok=False, error='no_session'), 401
+    session = _LOGIN_SESSION_STORE.get(token)
+    if not session:
+        return _jsonify(ok=False, error='session_expired'), 401
+    if session['expires_at'] < _time_wa.time():
+        del _LOGIN_SESSION_STORE[token]
+        return _jsonify(ok=False, error='session_expired'), 401
+    address = session['address']
+    try:
+        pledge_state = _srv.get_effective_pledge_state(address)
+    except Exception:
+        pledge_state = session.get('pledge_state', {})
+    effective_pledge_ok = pledge_state.get('effective_pledge_ok', False)
+    pledge_mode = pledge_state.get('pledge_mode', 'none')
+    if effective_pledge_ok:
+        route = '/dashboard'
+    elif pledge_mode == 'none':
+        route = '/pledge'
+    else:
+        route = '/pledge/status'
+    return _jsonify(
+        ok=True,
+        address=address,
+        pledge_ok=effective_pledge_ok,
+        pledge_mode=pledge_mode,
+        route=route,
+        expires_at=int(session['expires_at']),
+    ), 200
+
+
+@app.route('/api/auth/logout', methods=['POST'])
+def api_auth_logout():
+    token = (_request.cookies.get('thr_session') or '').strip()
+    if token:
+        _LOGIN_SESSION_STORE.pop(token, None)
+    resp = _make_response(_jsonify(ok=True))
+    resp.delete_cookie('thr_session', path='/')
+    return resp
+
+
+@app.route('/api/auth/challenge/status/<challenge_id>', methods=['GET'])
+def api_auth_challenge_status(challenge_id):
+    with _LOGIN_CHALLENGE_STORE_LOCK:
+        stored = _LOGIN_CHALLENGE_STORE.get(challenge_id)
+        if not stored:
+            return _jsonify(ok=False, error='challenge_not_found'), 404
+        age = _time_wa.time() - stored['created_at']
+        if age > _LOGIN_CHALLENGE_TTL:
+            return _jsonify(ok=False, error='challenge_expired'), 410
+        return _jsonify(
+            ok=True,
+            consumed=stored['consumed'],
+            expires_in=max(0, int(_LOGIN_CHALLENGE_TTL - age)),
+        ), 200
 
 
 # ── WalletConnect lightweight relay ────────────────────────────────────────────

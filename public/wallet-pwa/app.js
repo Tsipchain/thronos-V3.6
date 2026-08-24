@@ -2209,7 +2209,73 @@ async function _handleWcUri(uri, address) {
     return;
   }
 
-  alert('Unknown URI format. Expected thrconnect:// or wc://');
+  // thronos://login?challenge_id=...&nonce=...&audience=...&ts=...
+  if (uri.startsWith('thronos://login')) {
+    await _handleLoginQr(uri, address);
+    return;
+  }
+
+  alert('Unknown URI format. Expected thrconnect://, thronos://login, or wc://');
+}
+
+// ─── Login QR handler — thronos://login?challenge_id=...&nonce=...&audience=...&ts=... ──
+async function _handleLoginQr(uri, address) {
+  const params = new URLSearchParams(uri.split('?')[1] || '');
+  const challengeId = params.get('challenge_id');
+  const nonce = params.get('nonce');
+  const audience = params.get('audience');
+  const ts = params.get('ts');
+
+  if (!challengeId || !nonce || !audience) {
+    alert('Invalid login QR — missing challenge parameters.');
+    return;
+  }
+
+  const ws = window.walletSession;
+  if (!ws || !ws.signLoginChallenge) {
+    alert('Unlock wallet with biometric/passkey to approve login.');
+    return;
+  }
+  if (ws.isLocked && ws.isLocked()) {
+    alert('Wallet is locked. Unlock with biometric/passkey first.');
+    return;
+  }
+
+  const challengeResponse = {
+    type: 'thronos_api_login',
+    version: '1',
+    challenge_id: challengeId,
+    nonce: nonce,
+    audience: audience,
+    timestamp: ts || String(Math.floor(Date.now() / 1000)),
+  };
+
+  try {
+    const { signature, public_key } = await ws.signLoginChallenge(challengeResponse);
+
+    const resp = await fetch(`${API_WRITE}/api/auth/verify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        challenge_response: challengeResponse,
+        signature,
+        public_key,
+      }),
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      alert(`Logged in as ${data.address.slice(0, 14)}...\nPledge: ${data.pledge_ok ? 'Active' : 'Not pledged'}\nRedirecting to: ${data.route}`);
+    } else {
+      alert('Login failed: ' + (data.detail || data.error || 'Unknown error'));
+    }
+  } catch (e) {
+    if (e.message === 'wallet_locked') {
+      alert('Wallet is locked. Unlock with biometric/passkey to approve login.');
+    } else {
+      alert('Login signing failed: ' + e.message);
+    }
+  }
 }
 
 function _startWcPoll(address, sessionId) {

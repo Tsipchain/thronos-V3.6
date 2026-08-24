@@ -908,6 +908,26 @@
     }
   }
 
+  async function signLoginChallenge(challengeResponse) {
+    if (isLocked() || !isBound()) throw new Error('wallet_locked');
+    const secp = await _ensureSecpLoaded();
+    if (!secp || !secp.sign) throw new Error('secp256k1_library_missing');
+    if (!unlockedPrivateKeyHex) throw new Error('wallet_locked');
+    const fields = ['audience', 'challenge_id', 'nonce', 'timestamp', 'type', 'version'];
+    const canonical = '{' + fields.map(k => JSON.stringify(k) + ':' + JSON.stringify(String(challengeResponse[k] || ''))).join(',') + '}';
+    try {
+      const digestHex = await sha256Hex(canonical);
+      const sig = await signDigestDerHex(secp, digestHex, unlockedPrivateKeyHex);
+      const pubKey = getPublicKey();
+      return { signature: sig, public_key: pubKey };
+    } catch (err) {
+      if (isSecpCryptoHelperError(err) || String((err && (err.message || err)) || '').includes('Cannot read properties of undefined')) {
+        throw new Error('wallet_crypto_not_ready');
+      }
+      throw err;
+    }
+  }
+
   async function enrollSigningMaterial({address, credentialLookupAddress, pin, authSecret} = {}){
     const activeAddress = normalizeAddress(address || getActiveAddress());
     const lookupAddress = normalizeAddress(credentialLookupAddress || getCredentialLookupAddress(activeAddress));
@@ -1415,7 +1435,7 @@
     getMigrationInfo, isMigrated, isVerifiedMigrationInfo, getCanonicalMigrationAddress, getLegacySourceAddress,
     getWalletOrigin, getWalletIdentityStatus, isWalletV1,
     createWalletV1, getPublicKey, canonicalTxMessage, signTransaction, signInternalTransferIntent,
-    buildWalletActionIntent, signWalletActionIntent,
+    buildWalletActionIntent, signWalletActionIntent, signLoginChallenge,
     migrateLegacyWallet, restoreMigratedWallet, encryptPrivateKeyHex, decryptPrivateKeyHex,
     getCredentialLookupAddress, getSendSeed, setSendSeed, getSendSecret, setSendSecret,
     hasSigningMaterial, hasRuntimeSigningMaterial, getWalletAuthDiagnostics, logWalletAuthDiagnostics,

@@ -263,21 +263,32 @@
 
     <!-- STEP 1: Network & Address Selection -->
     <div class="usdt-step" id="step1">
-        <h3>1️⃣ Connect Your Wallet</h3>
-        <p>Connect your wallet that contains USDT on BNB Chain (BSC).</p>
+        <h3>1️⃣ Enter Your BNB Wallet Address</h3>
+        <p>Enter the BNB Chain wallet address you'll send USDT from.</p>
 
         <div class="info-box">
-            ✓ Supports: MetaMask, Binance Wallet, Rabby Wallet, Trust Wallet, Ledger<br>
             ✓ Network: BNB Chain (Chain ID: 56)<br>
-            ✓ Token: USDT (0x55d398326f99059fF775485246999027B3197955)
+            ✓ Token: USDT (0x55d398326f99059fF775485246999027B3197955)<br>
+            ✓ Enter your 0x... address below
         </div>
 
-        <button onclick="connectWalletBnb()" id="connectWalletBtn">
-            🔗 Connect Wallet to BNB Chain
+        <!-- Web3 Connect Option -->
+        <button onclick="connectWalletBnb()" id="connectWalletBtn" style="background: #0066ff;">
+            🔗 Connect Wallet (MetaMask, Binance Wallet, etc)
+        </button>
+
+        <p style="text-align:center; color:#888; margin:10px 0;">— OR —</p>
+
+        <!-- Manual Address Entry -->
+        <label style="color:#00ff66;">📍 Enter Your BNB Address Manually:</label>
+        <input type="text" id="manualBnbAddress" placeholder="0x... (your wallet address)"
+               style="font-size:0.9em; font-family:monospace;" />
+        <button onclick="useManualAddress()" id="manualAddressBtn" style="background: #00aa66;">
+            ✓ Use This Address
         </button>
 
         <div id="walletStatus" style="margin-top:10px; display:none;">
-            <p style="color:#00ff66;">✓ Connected Wallet:</p>
+            <p style="color:#00ff66;">✓ Wallet Address:</p>
             <input type="text" id="connectedAddress" readonly style="cursor:text;" />
             <button class="copy-btn" onclick="copyToClipboard(document.getElementById('connectedAddress').value);">📋 Copy Address</button>
         </div>
@@ -443,6 +454,29 @@ async function connectWalletBnb() {
         alert('Wallet connection failed: ' + err.message);
         console.error(err);
     }
+}
+
+function useManualAddress() {
+    const manualAddr = document.getElementById('manualBnbAddress').value.trim();
+
+    // Validate BNB address format
+    if (!/^0x[a-fA-F0-9]{40}$/.test(manualAddr)) {
+        alert('Invalid BNB address. Must be 0x followed by 40 hex characters.');
+        return;
+    }
+
+    connectedAddress = manualAddr.toLowerCase();
+
+    // Show connected status
+    document.getElementById('connectedAddress').value = connectedAddress;
+    document.getElementById('walletStatus').style.display = 'block';
+    document.getElementById('connectWalletBtn').style.display = 'none';
+    document.getElementById('manualBnbAddress').style.display = 'none';
+    document.getElementById('manualAddressBtn').style.display = 'none';
+
+    // Move to step 2
+    document.getElementById('step2').style.display = 'block';
+    document.getElementById('step2').scrollIntoView({ behavior: 'smooth' });
 }
 
 async function getQuoteAndRegister() {

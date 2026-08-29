@@ -34900,6 +34900,8 @@ def api_pledge_bnb_check_manual():
         logger.error(f"Manual USDT pledge check failed: {e}", exc_info=True)
         return jsonify(ok=False, error="check_failed", details=str(e)), 500
 
+
+@app.route("/api/pledge/bnb/status", methods=["GET"])
 def api_pledge_bnb_status():
     """
     Check USDT/BNB pledge confirmation status for a given BNB sender address.

@@ -120,38 +120,48 @@ def load_user_registry() -> Dict:
 
 
 def bsc_rpc_call(method: str, params: List = None) -> Optional[Dict]:
-    """Make a JSON-RPC call to Binance Smart Chain node"""
+    """Make a JSON-RPC call to Binance Smart Chain node with fallback RPCs"""
     if not BSC_RPC_URL:
         logger.warning("BSC_RPC_URL not configured, skipping RPC call")
         return None
 
-    try:
-        payload = {
-            "jsonrpc": "2.0",
-            "id": "bnb_watcher",
-            "method": method,
-            "params": params or []
-        }
+    # Parse multiple RPCs separated by comma
+    rpc_urls = [url.strip() for url in BSC_RPC_URL.split(',')]
 
-        response = requests.post(
-            BSC_RPC_URL,
-            json=payload,
-            timeout=30
-        )
+    payload = {
+        "jsonrpc": "2.0",
+        "id": "bnb_watcher",
+        "method": method,
+        "params": params or []
+    }
 
-        if response.status_code == 200:
-            result = response.json()
-            if "error" in result and result["error"]:
-                logger.error(f"RPC error: {result['error']}")
-                return None
-            return result.get("result")
-        else:
-            logger.error(f"RPC call failed: {response.status_code} - {response.text}")
-            return None
+    # Try each RPC in order
+    for i, rpc_url in enumerate(rpc_urls):
+        try:
+            response = requests.post(
+                rpc_url,
+                json=payload,
+                timeout=30
+            )
 
-    except Exception as e:
-        logger.error(f"RPC call exception: {e}")
-        return None
+            if response.status_code == 200:
+                result = response.json()
+                if "error" in result and result["error"]:
+                    error_msg = result["error"].get("message", str(result["error"]))
+                    logger.warning(f"RPC #{i+1} ({rpc_url}): {error_msg}")
+                    continue  # Try next RPC
+                logger.info(f"RPC call succeeded on endpoint #{i+1}")
+                return result.get("result")
+            else:
+                logger.warning(f"RPC #{i+1} ({rpc_url}): HTTP {response.status_code}")
+                continue  # Try next RPC
+
+        except Exception as e:
+            logger.warning(f"RPC #{i+1} ({rpc_url}): {e}")
+            continue  # Try next RPC
+
+    logger.error(f"All {len(rpc_urls)} RPC endpoints failed")
+    return None
 
 
 def _get_bsc_logs_chunked(filter_params: dict, from_block: int, to_block: int) -> Optional[list]:

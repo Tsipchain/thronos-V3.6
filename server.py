@@ -34771,23 +34771,38 @@ def api_pledge_bnb_check_manual():
         from eth_keys import keys
         from eth_utils import keccak, decode_hex, encode_hex
 
-        bsc_rpc = os.getenv("BSC_RPC_URL", "https://bsc-dataseed.binance.org")
+        bsc_rpc_config = os.getenv("BSC_RPC_URL", "https://bsc-dataseed.binance.org")
+        # Parse multiple RPCs separated by comma
+        bsc_rpc_list = [url.strip() for url in bsc_rpc_config.split(',')]
+
         vault_address = (os.getenv("BSC_USDT_PLEDGE_VAULT") or os.getenv("BNB_PLEDGE_VAULT", "")).lower()
         usdt_contract = (os.getenv("BSC_USDT_CONTRACT") or os.getenv("USDT_BNB_CONTRACT", "0x55d398326f99059ff775485246999027b3197955")).lower()
 
         if not vault_address or not usdt_contract:
             return jsonify(ok=False, error="vault_not_configured"), 500
 
+        # Helper to try RPC call with fallback
+        def try_rpc_call(payload, timeout=10):
+            for rpc_url in bsc_rpc_list:
+                try:
+                    res = requests.post(rpc_url, json=payload, timeout=timeout)
+                    if res.ok:
+                        return res
+                except Exception as e:
+                    logger.warning(f"RPC call to {rpc_url} failed: {e}")
+                    continue
+            return None
+
         # Get current block
-        current_block_res = requests.post(bsc_rpc, json={
+        current_block_res = try_rpc_call({
             "jsonrpc": "2.0",
             "method": "eth_blockNumber",
             "params": [],
             "id": 1
         }, timeout=10)
 
-        if not current_block_res.ok:
-            return jsonify(ok=False, error="failed_to_get_block_number"), 500
+        if not current_block_res or not current_block_res.ok:
+            return jsonify(ok=False, error="failed_to_get_block_number", details="All RPC endpoints unavailable"), 500
 
         current_block = int(current_block_res.json().get("result", "0x0"), 16)
         start_block = max(0, current_block - 1000)  # Scan last 1000 blocks (~5 mins on BSC)
@@ -34796,7 +34811,7 @@ def api_pledge_bnb_check_manual():
         # from bnb_address to vault_address in USDT contract
         transfer_sig = "0xddf252ad1be2c89b69c2b068fc378dfc33cfd62c0f1eb7ece0cbf6cda9b8a97"
 
-        logs_res = requests.post(bsc_rpc, json={
+        logs_res = try_rpc_call({
             "jsonrpc": "2.0",
             "method": "eth_getLogs",
             "params": [{
@@ -34812,8 +34827,8 @@ def api_pledge_bnb_check_manual():
             "id": 1
         }, timeout=30)
 
-        if not logs_res.ok:
-            return jsonify(ok=False, error="rpc_error", details=logs_res.text), 500
+        if not logs_res or not logs_res.ok:
+            return jsonify(ok=False, error="rpc_error", details="All RPC endpoints failed"), 500
 
         result = logs_res.json()
         if "result" not in result:

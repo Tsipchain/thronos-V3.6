@@ -168,12 +168,9 @@ def stable_event_id(chain: str, tx_hash: str, log_index) -> str:
 
 # ── EVM JSON-RPC helpers ───────────────────────────────────────────────────────
 
-def _to_hex_padded(n: int) -> str:
-    """Convert integer to 0x-prefixed hex string with even-length digits"""
-    hex_str = format(n, 'x')
-    if len(hex_str) % 2:
-        hex_str = '0' + hex_str
-    return '0x' + hex_str
+def _format_block_number(block: int) -> str:
+    """Format block number as hex (no padding - per JSON-RPC spec)"""
+    return hex(block)
 
 
 def evm_rpc_call(rpc_url: str, method: str, params: list = None) -> Optional[object]:
@@ -229,7 +226,7 @@ def _get_evm_logs_chunked(
     chunk_start = from_block
     while chunk_start <= to_block:
         chunk_end = min(chunk_start + POOL_LOGS_CHUNK_SIZE - 1, to_block)
-        params = {**filter_params, "fromBlock": _to_hex_padded(chunk_start), "toBlock": _to_hex_padded(chunk_end)}
+        params = {**filter_params, "fromBlock": _format_block_number(chunk_start), "toBlock": _format_block_number(chunk_end)}
         result = evm_rpc_call(rpc_url, "eth_getLogs", [params])
         if result is None:
             logger.error("[%s] eth_getLogs failed for chunk %d-%d", chain, chunk_start, chunk_end)

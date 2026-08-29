@@ -19894,6 +19894,12 @@ async def api_pledge_submit(request: Request, db: Annotated[Session, Depends(get
 def pledge_form():
     return render_template("pledge_form.html")
 
+
+@app.route("/pledge_usdt")
+def pledge_usdt_form():
+    return render_template("pledge_usdt.html")
+
+
 @app.route("/pledge_submit", methods=["POST"])
 def pledge_submit():
     data = request.get_json() or {}
@@ -33921,11 +33927,11 @@ def api_pledge_bnb_check_manual():
 
         result = logs_res.json()
         if "result" not in result:
-            return jsonify(ok=False, error="no_transfers_found", pending=True), 200
+            return jsonify(ok=False, error="payment_not_found", pending=True), 200
 
         transfers = result.get("result", [])
         if not transfers:
-            return jsonify(ok=False, error="no_transfers_found", pending=True, scanned_blocks=f"{start_block}-{current_block}"), 200
+            return jsonify(ok=False, error="payment_not_found", pending=True, scanned_blocks=f"{start_block}-{current_block}"), 200
 
         # Parse transfer amount from log data
         # data field contains uint256 value (32 bytes)
@@ -33946,14 +33952,22 @@ def api_pledge_bnb_check_manual():
                 )
 
                 if success:
+                    # Retrieve send_seed from pledge record
+                    pledges = load_json(PLEDGE_CHAIN, [])
+                    pledge = next(
+                        (p for p in pledges if p.get("bnb_address") == bnb_address and p.get("pledge_type") == "usdt_bnb"),
+                        None
+                    )
+                    send_seed = pledge.get("send_seed") if pledge else None
+
                     return jsonify(
                         ok=True,
                         status="verified",
                         message="Payment confirmed! THR credited and pool seeded.",
                         amount_usdt=amount_usdt,
+                        thr_amount=amount_usdt * get_usdt_thr_rate_dynamic(),
                         tx_hash=tx_hash,
-                        thr_credited=result_data.get("thr_amount", 0),
-                        send_secret=result_data.get("send_seed")
+                        send_secret=send_seed
                     ), 200
                 else:
                     return jsonify(

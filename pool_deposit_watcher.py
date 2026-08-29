@@ -169,28 +169,41 @@ def stable_event_id(chain: str, tx_hash: str, log_index) -> str:
 # ── EVM JSON-RPC helpers ───────────────────────────────────────────────────────
 
 def evm_rpc_call(rpc_url: str, method: str, params: list = None) -> Optional[object]:
-    """Make a single JSON-RPC 2.0 call; return result or None on error."""
+    """Make a JSON-RPC 2.0 call with fallback to multiple RPC endpoints.
+
+    Supports comma-separated URLs: attempts each in sequence if prior ones fail.
+    """
     if not rpc_url:
         return None
-    try:
-        payload = {
-            "jsonrpc": "2.0",
-            "id":      "pool_watcher",
-            "method":  method,
-            "params":  params or [],
-        }
-        resp = requests.post(rpc_url, json=payload, timeout=30)
-        if resp.status_code == 200:
-            body = resp.json()
-            if body.get("error"):
-                logger.error("RPC error [%s %s]: %s", rpc_url[:40], method, body["error"])
-                return None
-            return body.get("result")
-        logger.error("RPC HTTP %s from %s (%s)", resp.status_code, rpc_url[:40], method)
-        return None
-    except Exception as exc:
-        logger.error("RPC exception [%s %s]: %s", rpc_url[:40], method, exc)
-        return None
+
+    # Support comma-separated list of URLs (primary,fallback1,fallback2)
+    rpc_urls = [url.strip() for url in rpc_url.split(',')]
+
+    payload = {
+        "jsonrpc": "2.0",
+        "id":      "pool_watcher",
+        "method":  method,
+        "params":  params or [],
+    }
+
+    # Try each RPC endpoint in order
+    for i, url in enumerate(rpc_urls, 1):
+        try:
+            resp = requests.post(url, json=payload, timeout=30)
+            if resp.status_code == 200:
+                body = resp.json()
+                if body.get("error"):
+                    error_msg = body.get("error", {}).get("message", str(body.get("error")))
+                    logger.warning("RPC #%d (%s): %s", i, url[:40], error_msg)
+                    continue
+                logger.debug("RPC #%d succeeded (%s)", i, url[:40])
+                return body.get("result")
+            logger.warning("RPC #%d (%s): HTTP %s", i, url[:40], resp.status_code)
+        except Exception as exc:
+            logger.warning("RPC #%d (%s): %s", i, url[:40], str(exc)[:100])
+
+    logger.error("All %d RPC endpoints failed for %s", len(rpc_urls), method)
+    return None
 
 
 def _get_evm_logs_chunked(

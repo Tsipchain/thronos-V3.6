@@ -169,8 +169,8 @@ def stable_event_id(chain: str, tx_hash: str, log_index) -> str:
 # ── EVM JSON-RPC helpers ───────────────────────────────────────────────────────
 
 def _format_block_number(block: int) -> str:
-    """Format block number as 256-bit hex (0x + 64 hex digits) for strict RPC compliance"""
-    return "0x" + format(block, '064x')
+    """Format block number as hex (no padding - per JSON-RPC spec)"""
+    return hex(block)
 
 
 def evm_rpc_call(rpc_url: str, method: str, params: list = None) -> Optional[object]:

@@ -168,6 +168,11 @@ def stable_event_id(chain: str, tx_hash: str, log_index) -> str:
 
 # ── EVM JSON-RPC helpers ───────────────────────────────────────────────────────
 
+def _format_block_number(block: int) -> str:
+    """Format block number as 256-bit hex (0x + 64 hex digits) for strict RPC compliance"""
+    return "0x" + format(block, '064x')
+
+
 def evm_rpc_call(rpc_url: str, method: str, params: list = None) -> Optional[object]:
     """Make a JSON-RPC 2.0 call with fallback to multiple RPC endpoints.
 
@@ -221,7 +226,7 @@ def _get_evm_logs_chunked(
     chunk_start = from_block
     while chunk_start <= to_block:
         chunk_end = min(chunk_start + POOL_LOGS_CHUNK_SIZE - 1, to_block)
-        params = {**filter_params, "fromBlock": hex(chunk_start), "toBlock": hex(chunk_end)}
+        params = {**filter_params, "fromBlock": _format_block_number(chunk_start), "toBlock": _format_block_number(chunk_end)}
         result = evm_rpc_call(rpc_url, "eth_getLogs", [params])
         if result is None:
             logger.error("[%s] eth_getLogs failed for chunk %d-%d", chain, chunk_start, chunk_end)

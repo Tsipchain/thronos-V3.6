@@ -119,6 +119,11 @@ def load_user_registry() -> Dict:
         return {}
 
 
+def _format_block_number(block: int) -> str:
+    """Format block number as 256-bit hex (0x + 64 hex digits) for strict RPC compliance"""
+    return "0x" + format(block, '064x')
+
+
 def bsc_rpc_call(method: str, params: List = None) -> Optional[Dict]:
     """Make a JSON-RPC call to Binance Smart Chain node with fallback RPCs"""
     if not BSC_RPC_URL:
@@ -181,7 +186,7 @@ def _get_bsc_logs_chunked(filter_params: dict, from_block: int, to_block: int) -
     chunk_start = from_block
     while chunk_start <= to_block:
         chunk_end = min(chunk_start + BSC_LOGS_CHUNK_SIZE - 1, to_block)
-        params = {**filter_params, "fromBlock": hex(chunk_start), "toBlock": hex(chunk_end)}
+        params = {**filter_params, "fromBlock": _format_block_number(chunk_start), "toBlock": _format_block_number(chunk_end)}
         result = bsc_rpc_call("eth_getLogs", [params])
         if result is None:
             logger.error("eth_getLogs failed for chunk %d-%d", chunk_start, chunk_end)

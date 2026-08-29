@@ -1381,6 +1381,12 @@ async function showWallet() {
         </div>
       </div>
 
+      <!-- B2B partner badge (rendered async when address is a verified partner) -->
+      <div id="b2bPartnerBadge" style="display:none;background:linear-gradient(90deg,rgba(255,180,60,0.10),rgba(0,255,102,0.06));border:1px solid #ffb43c66;border-radius:8px;padding:6px 10px;margin-bottom:8px;font-size:.75rem;color:#ffcf78;">
+        🏪 <b id="b2bPartnerName"></b>
+        <span id="b2bPartnerType" style="color:#8af;margin-left:6px;font-size:.7rem"></span>
+      </div>
+
       <!-- Network selector -->
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
         <span style="font-size:.7rem;text-transform:uppercase;letter-spacing:1px;color:var(--muted)">Network</span>
@@ -1493,6 +1499,18 @@ async function showWallet() {
     if (copyBtn) copyBtn.dataset.fullAddr = full || '';
   };
   setAddrBarValue(address);
+
+  // B2B partner badge — fetch async, show only if the wallet is a verified partner
+  fetch(`/api/b2b/partner/${encodeURIComponent(address)}`).then(r => r.json()).then(d => {
+    if (d?.ok && d?.verified && d?.partner) {
+      const badge = document.getElementById('b2bPartnerBadge');
+      const name  = document.getElementById('b2bPartnerName');
+      const type  = document.getElementById('b2bPartnerType');
+      if (badge) badge.style.display = '';
+      if (name)  name.textContent = d.partner.business_name || '';
+      if (type)  type.textContent = `(${d.partner.partner_type || ''})`;
+    }
+  }).catch(() => {});
 
   // Re-bind copy/tap handlers to read the currently-displayed network address
   document.getElementById('addrLine').addEventListener('click', async () => {

@@ -1,0 +1,635 @@
+{% extends "base.html" %}
+
+{% block title %}USDT Pledge - Thronos{% endblock %}
+
+{% block styles %}
+<style>
+    .usdt-container {
+        width: 100%;
+        max-width: 700px;
+        margin: 30px auto;
+        padding: 20px;
+        background: #0a1410;
+        border: 1px solid #00ff66;
+        border-radius: 8px;
+        font-family: monospace;
+    }
+
+    .usdt-step {
+        margin-bottom: 25px;
+        padding: 15px;
+        background: #111;
+        border-left: 4px solid #00ff66;
+        border-radius: 4px;
+    }
+
+    .usdt-step h3 {
+        color: #00ff66;
+        margin-top: 0;
+        font-size: 1.1em;
+    }
+
+    .usdt-step p {
+        color: #ccc;
+        font-size: 0.95em;
+        line-height: 1.6;
+        margin: 8px 0;
+    }
+
+    .info-box {
+        background: #1a2a1a;
+        border: 1px dashed #00ff66;
+        padding: 12px;
+        border-radius: 4px;
+        margin: 10px 0;
+        font-size: 0.9em;
+    }
+
+    .vault-address {
+        background: #000;
+        padding: 12px;
+        border: 1px solid #00cc55;
+        border-radius: 4px;
+        font-family: monospace;
+        font-size: 0.85em;
+        word-break: break-all;
+        color: #00cc55;
+        margin: 10px 0;
+        user-select: all;
+    }
+
+    .thr-address {
+        background: #001a00;
+        padding: 12px;
+        border: 1px solid #00ff66;
+        border-radius: 4px;
+        font-family: monospace;
+        font-size: 0.9em;
+        word-break: break-all;
+        color: #00ff66;
+        margin: 10px 0;
+    }
+
+    input, textarea {
+        width: 100%;
+        padding: 10px;
+        margin: 8px 0;
+        background: #000;
+        border: 1px solid #00ff66;
+        color: #00ff66;
+        font-family: monospace;
+        font-size: 0.9em;
+        box-sizing: border-box;
+        border-radius: 4px;
+    }
+
+    button {
+        background: #00ff66;
+        color: #000;
+        border: none;
+        padding: 12px 20px;
+        border-radius: 4px;
+        font-weight: bold;
+        cursor: pointer;
+        font-size: 1em;
+        margin: 10px 0;
+        width: 100%;
+    }
+
+    button:hover {
+        background: #00cc55;
+    }
+
+    button:disabled {
+        background: #666;
+        cursor: not-allowed;
+    }
+
+    .button-secondary {
+        background: #333;
+        color: #ccc;
+        margin-top: 8px;
+    }
+
+    .button-secondary:hover {
+        background: #555;
+    }
+
+    .success-box {
+        background: #1a4a1a;
+        border: 1px solid #00ff66;
+        padding: 15px;
+        border-radius: 4px;
+        color: #00ff66;
+        margin: 15px 0;
+    }
+
+    .error-box {
+        background: #4a1a1a;
+        border: 1px solid #ff5555;
+        padding: 15px;
+        border-radius: 4px;
+        color: #ff5555;
+        margin: 15px 0;
+    }
+
+    .warning-box {
+        background: #4a3a1a;
+        border: 1px solid #ffaa00;
+        padding: 15px;
+        border-radius: 4px;
+        color: #ffaa00;
+        margin: 15px 0;
+    }
+
+    .status-pending {
+        color: #ffaa00;
+    }
+
+    .status-confirmed {
+        color: #00ff66;
+    }
+
+    .status-error {
+        color: #ff5555;
+    }
+
+    .loading {
+        display: inline-block;
+        animation: spin 1s linear infinite;
+    }
+
+    @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+    }
+
+    .chain-selector {
+        display: flex;
+        gap: 10px;
+        margin: 10px 0;
+    }
+
+    .chain-button {
+        flex: 1;
+        padding: 10px;
+        background: #333;
+        color: #ccc;
+        border: 1px solid #666;
+        border-radius: 4px;
+        cursor: pointer;
+        font-weight: bold;
+    }
+
+    .chain-button.active {
+        background: #00ff66;
+        color: #000;
+        border-color: #00ff66;
+    }
+
+    label {
+        display: block;
+        color: #00ff66;
+        font-weight: bold;
+        margin-top: 15px;
+        margin-bottom: 5px;
+    }
+
+    .qr-code {
+        text-align: center;
+        margin: 15px 0;
+    }
+
+    .qr-code img {
+        max-width: 200px;
+        border: 1px solid #00ff66;
+        padding: 5px;
+        cursor: pointer;
+    }
+
+    .copy-btn {
+        background: #1a3a1a;
+        color: #00ff66;
+        border: 1px solid #00ff66;
+        padding: 8px 12px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 0.9em;
+        width: auto;
+        margin-top: 5px;
+    }
+
+    .copy-btn:hover {
+        background: #00ff66;
+        color: #000;
+    }
+
+    .nav-bar {
+        margin-bottom: 20px;
+        padding-bottom: 10px;
+        border-bottom: 1px solid #00ff66;
+    }
+
+    .nav-bar a {
+        color: #00ff66;
+        text-decoration: none;
+        margin-right: 15px;
+    }
+
+    .nav-bar a:hover {
+        text-decoration: underline;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="usdt-container">
+    <div class="nav-bar">
+        <a href="/">🏠 Home</a>
+        <a href="/pledge">🔥 BTC Pledge</a>
+        <a href="/pledge_usdt" style="color:#56ff9a; border-bottom: 2px solid #56ff9a; padding-bottom: 3px;">💵 USDT Pledge</a>
+        <a href="/pools">💧 Pools</a>
+        <a href="/wallet">👛 Wallet</a>
+    </div>
+
+    <h1 style="color:#00ff66; text-align:center; margin-top:0;">💵 USDT/BNB Chain Pledge</h1>
+
+    <div id="pledgeNotice" style="display:none;">
+        <div class="warning-box">
+            ⚠️ <strong>Registration in Progress...</strong><br>
+            Please wait while we process your pledge.
+        </div>
+    </div>
+
+    <!-- STEP 1: Network & Address Selection -->
+    <div class="usdt-step" id="step1">
+        <h3>1️⃣ Connect Your Wallet</h3>
+        <p>Connect your wallet that contains USDT on BNB Chain (BSC).</p>
+
+        <div class="info-box">
+            ✓ Supports: MetaMask, Binance Wallet, Rabby Wallet, Trust Wallet, Ledger<br>
+            ✓ Network: BNB Chain (Chain ID: 56)<br>
+            ✓ Token: USDT (0x55d398326f99059fF775485246999027B3197955)
+        </div>
+
+        <button onclick="connectWalletBnb()" id="connectWalletBtn">
+            🔗 Connect Wallet to BNB Chain
+        </button>
+
+        <div id="walletStatus" style="margin-top:10px; display:none;">
+            <p style="color:#00ff66;">✓ Connected Wallet:</p>
+            <input type="text" id="connectedAddress" readonly style="cursor:text;" />
+            <button class="copy-btn" onclick="copyToClipboard(document.getElementById('connectedAddress').value);">📋 Copy Address</button>
+        </div>
+    </div>
+
+    <!-- STEP 2: Get Quote & Register -->
+    <div class="usdt-step" id="step2" style="display:none;">
+        <h3>2️⃣ Register Your Pledge</h3>
+        <p>Register your BNB wallet address to receive a unique THR address.</p>
+
+        <div id="quoteInfo" style="display:none; margin:15px 0;">
+            <p style="color:#00ff66; margin:5px 0;"><strong>Current Pledge Info:</strong></p>
+            <div class="info-box">
+                Minimum USDT: <strong id="minUSDT">10</strong> USDT<br>
+                THR Rate: <strong id="thrRate">1000</strong> THR per USDT<br>
+                You'd get: <strong id="thrForMin">10000</strong> THR for minimum pledge<br>
+                Current pledges: <strong id="pledgeCount">0</strong>
+            </div>
+        </div>
+
+        <button onclick="getQuoteAndRegister()" id="registerBtn">
+            ✓ Register & Get THR Address
+        </button>
+
+        <div id="registrationStatus" style="margin-top:10px; display:none;">
+            <p style="color:#00ff66;">✓ Your Thronos Address:</p>
+            <div class="thr-address" id="generatedThrAddress">THR...</div>
+            <button class="copy-btn" onclick="copyToClipboard(document.getElementById('generatedThrAddress').textContent);">📋 Copy THR Address</button>
+        </div>
+    </div>
+
+    <!-- STEP 3: Send USDT -->
+    <div class="usdt-step" id="step3" style="display:none;">
+        <h3>3️⃣ Send USDT to Vault</h3>
+        <p>Send USDT from your connected wallet to the pledge vault address.</p>
+
+        <div class="info-box">
+            📝 <strong>Amount to send:</strong> Minimum <span id="minUSDTDisplay">10</span> USDT (any amount works, but min is required)<br>
+            📝 <strong>To address:</strong> Copy the vault address below<br>
+            📝 <strong>From address:</strong> <span id="sendFromAddr">Your connected wallet</span><br>
+            ⚠️ <strong>Must send from the same wallet you registered!</strong>
+        </div>
+
+        <label>📍 Pledge Vault Address (copy this exactly):</label>
+        <div class="vault-address" id="vaultAddress" onclick="copyToClipboard(this.textContent);" title="Click to copy">
+            Loading...
+        </div>
+        <button class="copy-btn" onclick="copyToClipboard(document.getElementById('vaultAddress').textContent);">📋 Copy Vault Address</button>
+
+        <div class="qr-code" id="vaultQR" style="margin:15px 0;">
+            <p style="font-size:0.9em; color:#ccc;">Scan to copy vault address:</p>
+            <img id="vaultQRImg" src="" alt="Vault Address QR" title="Click to copy address" style="display:none;" onclick="copyToClipboard(document.getElementById('vaultAddress').textContent);" />
+        </div>
+
+        <div class="info-box" style="background:#2a1a00; border-color:#ff9933;">
+            <strong style="color:#ff9933;">🔄 After sending USDT:</strong><br>
+            The system may take 1-2 minutes to detect your payment.<br>
+            If it doesn't confirm automatically, use the "Check Payment" button below.
+        </div>
+
+        <label>Token contract (for verification in wallet):</label>
+        <input type="text" value="0x55d398326f99059fF775485246999027B3197955" readonly style="font-size:0.8em;" />
+    </div>
+
+    <!-- STEP 4: Verify Payment -->
+    <div class="usdt-step" id="step4" style="display:none;">
+        <h3>4️⃣ Verify Payment</h3>
+        <p>Check if your USDT payment has been detected by the system.</p>
+
+        <div id="paymentStatus" style="display:none; margin:15px 0;">
+            <p id="statusMessage" style="margin:5px 0;"></p>
+        </div>
+
+        <button onclick="checkPayment()" id="checkPaymentBtn">
+            🔍 Check Payment Status
+        </button>
+
+        <div id="checkResult" style="display:none; margin-top:15px;">
+            <!-- Result will be shown here -->
+        </div>
+
+        <button class="button-secondary" onclick="resetFlow();" style="display:none;" id="startOverBtn">
+            🔄 Start Over with Different Wallet
+        </button>
+    </div>
+
+    <!-- Help Section -->
+    <div class="usdt-step" style="border-left-color:#8888ff; background:#0a0a1a;">
+        <h3 style="color:#8888ff;">❓ Need Help?</h3>
+        <p><strong>Payment not confirming?</strong></p>
+        <ul style="color:#ccc; margin:10px 0;">
+            <li>Check that you sent USDT (not BNB or other tokens)</li>
+            <li>Verify you sent from your registered wallet address</li>
+            <li>Ensure you sent at least <span id="minUSDTHelp">10</span> USDT</li>
+            <li>Wait 1-2 minutes for network confirmation</li>
+            <li>Click "Check Payment Status" to manually verify</li>
+        </ul>
+        <p><strong>Network Details:</strong></p>
+        <ul style="color:#ccc; margin:10px 0;">
+            <li>Blockchain: BNB Chain (BSC)</li>
+            <li>Chain ID: 56</li>
+            <li>Token: USDT</li>
+            <li>Decimals: 18</li>
+        </ul>
+    </div>
+</div>
+
+<script>
+let walletProvider = null;
+let connectedAddress = null;
+let generatedThrAddress = null;
+let vaultAddress = null;
+let minUsdtPledge = 10;
+let usdtThrRate = 1000;
+
+async function connectWalletBnb() {
+    try {
+        if (!window.ethereum) {
+            alert('No wallet detected. Please install MetaMask or another Web3 wallet.');
+            return;
+        }
+
+        // Request account access
+        const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+        if (!accounts || accounts.length === 0) {
+            alert('No wallet accounts found.');
+            return;
+        }
+
+        connectedAddress = accounts[0].toLowerCase();
+
+        // Check network is BNB Chain
+        try {
+            const chainId = await window.ethereum.request({ method: 'eth_chainId' });
+            if (chainId !== '0x38') { // 0x38 = 56 (BNB Chain)
+                // Try to switch network
+                try {
+                    await window.ethereum.request({
+                        method: 'wallet_switchEthereumChain',
+                        params: [{ chainId: '0x38' }],
+                    });
+                } catch (switchError) {
+                    if (switchError.code === 4902) {
+                        alert('BNB Chain not added to wallet. Please add it manually.');
+                    }
+                    return;
+                }
+            }
+        } catch (err) {
+            console.log('Chain check error:', err);
+        }
+
+        // Show connected status
+        document.getElementById('connectedAddress').value = connectedAddress;
+        document.getElementById('walletStatus').style.display = 'block';
+        document.getElementById('connectWalletBtn').style.display = 'none';
+
+        // Move to step 2
+        document.getElementById('step2').style.display = 'block';
+        document.getElementById('step2').scrollIntoView({ behavior: 'smooth' });
+
+    } catch (err) {
+        alert('Wallet connection failed: ' + err.message);
+        console.error(err);
+    }
+}
+
+async function getQuoteAndRegister() {
+    if (!connectedAddress) {
+        alert('Please connect wallet first.');
+        return;
+    }
+
+    try {
+        document.getElementById('registerBtn').disabled = true;
+        document.getElementById('registerBtn').textContent = '⏳ Registering...';
+
+        // Get quote
+        const quoteRes = await fetch('/api/pledge/bnb/quote');
+        if (!quoteRes.ok) throw new Error('Failed to fetch quote');
+        const quoteData = await quoteRes.json();
+
+        if (!quoteData.ok) throw new Error(quoteData.error || 'Quote failed');
+
+        minUsdtPledge = quoteData.min_usdt || 10;
+        usdtThrRate = quoteData.usdt_thr_rate || 1000;
+        vaultAddress = quoteData.vault_address;
+
+        // Update UI with quote info
+        document.getElementById('minUSDT').textContent = minUsdtPledge;
+        document.getElementById('minUSDTDisplay').textContent = minUsdtPledge;
+        document.getElementById('minUSDTHelp').textContent = minUsdtPledge;
+        document.getElementById('thrRate').textContent = usdtThrRate.toFixed(2);
+        document.getElementById('thrForMin').textContent = (minUsdtPledge * usdtThrRate).toFixed(0);
+        document.getElementById('pledgeCount').textContent = quoteData.pledge_count || '0';
+        document.getElementById('quoteInfo').style.display = 'block';
+
+        // Register address
+        const regRes = await fetch('/api/pledge/bnb/register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                bnb_address: connectedAddress,
+            })
+        });
+
+        if (!regRes.ok) {
+            const errData = await regRes.json();
+            throw new Error(errData.error || 'Registration failed');
+        }
+
+        const regData = await regRes.json();
+        if (!regData.ok) throw new Error(regData.error || 'Registration failed');
+
+        generatedThrAddress = regData.thr_address;
+
+        // Show registration success
+        document.getElementById('generatedThrAddress').textContent = generatedThrAddress;
+        document.getElementById('registrationStatus').style.display = 'block';
+
+        // Update Step 3 with address
+        document.getElementById('sendFromAddr').textContent = connectedAddress.substring(0, 10) + '...';
+        document.getElementById('vaultAddress').textContent = vaultAddress;
+        document.getElementById('vaultQRImg').src = `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(vaultAddress)}`;
+        document.getElementById('vaultQRImg').style.display = 'block';
+
+        // Move to step 3
+        setTimeout(() => {
+            document.getElementById('step3').style.display = 'block';
+            document.getElementById('step3').scrollIntoView({ behavior: 'smooth' });
+        }, 500);
+
+        document.getElementById('registerBtn').disabled = false;
+        document.getElementById('registerBtn').textContent = '✓ Address Registered!';
+
+    } catch (err) {
+        alert('Registration failed: ' + err.message);
+        console.error(err);
+        document.getElementById('registerBtn').disabled = false;
+        document.getElementById('registerBtn').textContent = '✓ Register & Get THR Address';
+    }
+}
+
+async function checkPayment() {
+    if (!connectedAddress || !generatedThrAddress) {
+        alert('Please register first.');
+        return;
+    }
+
+    try {
+        document.getElementById('checkPaymentBtn').disabled = true;
+        document.getElementById('checkPaymentBtn').textContent = '⏳ Checking...';
+
+        const checkRes = await fetch('/api/pledge/bnb/check-manual', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                bnb_address: connectedAddress
+            })
+        });
+
+        const checkData = await checkRes.json();
+        const resultDiv = document.getElementById('checkResult');
+
+        if (checkData.ok) {
+            // Payment confirmed!
+            resultDiv.innerHTML = `
+                <div class="success-box">
+                    <h4 style="margin-top:0;">✅ Payment Confirmed!</h4>
+                    <p><strong>Transaction:</strong><br>
+                    <code style="font-size:0.85em; word-break:break-all;">${checkData.tx_hash}</code></p>
+                    <p><strong>Amount Received:</strong> ${checkData.amount_usdt} USDT</p>
+                    <p><strong>THR Credited:</strong> ${checkData.thr_amount || (checkData.amount_usdt * usdtThrRate).toFixed(6)} THR</p>
+                    <p style="color:#00ff66; font-weight:bold; margin-top:15px;">Your send_secret has been generated.</p>
+                    <p style="font-size:0.9em;">Your wallet will be activated shortly. Check your wallet page to complete setup.</p>
+                </div>
+            `;
+            resultDiv.style.display = 'block';
+            document.getElementById('step4').scrollIntoView({ behavior: 'smooth' });
+        } else if (checkData.error === 'payment_not_found') {
+            resultDiv.innerHTML = `
+                <div class="warning-box">
+                    ⏳ <strong>Payment Not Confirmed Yet</strong><br>
+                    We haven't detected your USDT payment from ${connectedAddress.substring(0, 10)}... to the vault yet.<br>
+                    <br>
+                    <strong>What to check:</strong>
+                    <ul>
+                    <li>✓ Did you send USDT (not BNB or other tokens)?</li>
+                    <li>✓ Did you send at least ${minUsdtPledge} USDT?</li>
+                    <li>✓ Did you send from the wallet you registered?</li>
+                    <li>✓ Is the transaction confirmed on BSC?</li>
+                    </ul>
+                    <br>
+                    <strong>Next steps:</strong>
+                    <ul>
+                    <li>Wait another 2-3 minutes and try again</li>
+                    <li>Check your wallet transaction history on <a href="https://bscscan.com/" target="_blank" style="color:#00ff66;">BSCScan</a></li>
+                    <li>Try checking again in 1 minute</li>
+                    </ul>
+                </div>
+            `;
+            resultDiv.style.display = 'block';
+        } else {
+            resultDiv.innerHTML = `
+                <div class="error-box">
+                    ❌ <strong>Error:</strong> ${checkData.error || 'Unknown error'}<br>
+                    ${checkData.message || ''}
+                </div>
+            `;
+            resultDiv.style.display = 'block';
+        }
+
+        document.getElementById('checkPaymentBtn').disabled = false;
+        document.getElementById('checkPaymentBtn').textContent = '🔍 Check Payment Status';
+
+    } catch (err) {
+        alert('Check failed: ' + err.message);
+        console.error(err);
+        document.getElementById('checkPaymentBtn').disabled = false;
+        document.getElementById('checkPaymentBtn').textContent = '🔍 Check Payment Status';
+    }
+}
+
+function copyToClipboard(text) {
+    navigator.clipboard.writeText(text).then(() => {
+        // Briefly change button/element text to show feedback
+        const btn = event.target;
+        if (btn.tagName === 'BUTTON') {
+            const original = btn.textContent;
+            btn.textContent = '✓ Copied!';
+            setTimeout(() => { btn.textContent = original; }, 1500);
+        }
+    }).catch(err => alert('Copy failed: ' + err));
+}
+
+function resetFlow() {
+    location.reload();
+}
+
+// Check if user already has a connected wallet on page load
+if (typeof window.ethereum !== 'undefined') {
+    window.ethereum.request({ method: 'eth_accounts' })
+        .then(accounts => {
+            if (accounts.length > 0) {
+                connectedAddress = accounts[0].toLowerCase();
+                document.getElementById('connectedAddress').value = connectedAddress;
+                document.getElementById('walletStatus').style.display = 'block';
+                document.getElementById('connectWalletBtn').style.display = 'none';
+                document.getElementById('step2').style.display = 'block';
+            }
+        })
+        .catch(err => console.log('Wallet check failed:', err));
+}
+</script>
+{% endblock %}

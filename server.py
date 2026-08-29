@@ -20682,6 +20682,12 @@ async def api_pledge_submit(request: Request, db: Annotated[Session, Depends(get
 def pledge_form():
     return render_template("pledge_form.html")
 
+
+@app.route("/pledge_usdt")
+def pledge_usdt_form():
+    return render_template("pledge_usdt.html")
+
+
 @app.route("/pledge_submit", methods=["POST"])
 def pledge_submit():
     data = request.get_json() or {}
@@ -34729,7 +34735,156 @@ def api_usdt_pledge():
         return jsonify(ok=False, error=error), 400
 
 
-@app.route("/api/pledge/bnb/status", methods=["GET"])
+@app.route("/api/pledge/bnb/check-manual", methods=["POST"])
+def api_pledge_bnb_check_manual():
+    """
+    Manual endpoint to check for USDT payment on BSC without waiting for watcher.
+    User provides their BNB sending address and we scan recent blocks for USDT transfers.
+
+    POST body:
+    {
+        "bnb_address": "0x...",
+        "thr_address": "THR..."  (optional, for verification)
+    }
+    """
+    data = request.get_json() or {}
+    bnb_address = (data.get("bnb_address") or "").strip().lower()
+    thr_address = (data.get("thr_address") or "").strip()
+
+    if not re.match(r"^0x[a-f0-9]{40}$", bnb_address):
+        return jsonify(ok=False, error="invalid_bnb_address"), 400
+
+    # Check if address is registered
+    registry_file = os.path.join(DATA_DIR, "bnb_user_registry.json")
+    registry = load_json(registry_file, {})
+
+    if bnb_address not in registry:
+        return jsonify(ok=False, error="bnb_address_not_registered", message="Please register your BNB address first"), 404
+
+    registered_thr = registry[bnb_address].get("thr_address")
+    if thr_address and thr_address != registered_thr:
+        return jsonify(ok=False, error="thr_address_mismatch"), 400
+
+    # Scan recent BSC blocks for USDT transfers to vault
+    try:
+        import requests
+        from eth_keys import keys
+        from eth_utils import keccak, decode_hex, encode_hex
+
+        bsc_rpc = os.getenv("BSC_RPC_URL", "https://bsc-dataseed.binance.org")
+        vault_address = (os.getenv("BSC_USDT_PLEDGE_VAULT") or os.getenv("BNB_PLEDGE_VAULT", "")).lower()
+        usdt_contract = (os.getenv("BSC_USDT_CONTRACT") or os.getenv("USDT_BNB_CONTRACT", "0x55d398326f99059ff775485246999027b3197955")).lower()
+
+        if not vault_address or not usdt_contract:
+            return jsonify(ok=False, error="vault_not_configured"), 500
+
+        # Get current block
+        current_block_res = requests.post(bsc_rpc, json={
+            "jsonrpc": "2.0",
+            "method": "eth_blockNumber",
+            "params": [],
+            "id": 1
+        }, timeout=10)
+
+        if not current_block_res.ok:
+            return jsonify(ok=False, error="failed_to_get_block_number"), 500
+
+        current_block = int(current_block_res.json().get("result", "0x0"), 16)
+        start_block = max(0, current_block - 1000)  # Scan last 1000 blocks (~5 mins on BSC)
+
+        # Look for Transfer events: Transfer(address indexed from, address indexed to, uint256 value)
+        # from bnb_address to vault_address in USDT contract
+        transfer_sig = "0xddf252ad1be2c89b69c2b068fc378dfc33cfd62c0f1eb7ece0cbf6cda9b8a97"
+
+        logs_res = requests.post(bsc_rpc, json={
+            "jsonrpc": "2.0",
+            "method": "eth_getLogs",
+            "params": [{
+                "address": usdt_contract,
+                "topics": [
+                    transfer_sig,
+                    "0x" + bnb_address.replace("0x", "").zfill(64),  # from (padded)
+                    "0x" + vault_address.replace("0x", "").zfill(64)   # to (padded)
+                ],
+                "fromBlock": hex(start_block),
+                "toBlock": "latest"
+            }],
+            "id": 1
+        }, timeout=30)
+
+        if not logs_res.ok:
+            return jsonify(ok=False, error="rpc_error", details=logs_res.text), 500
+
+        result = logs_res.json()
+        if "result" not in result:
+            return jsonify(ok=False, error="payment_not_found", pending=True), 200
+
+        transfers = result.get("result", [])
+        if not transfers:
+            return jsonify(ok=False, error="payment_not_found", pending=True, scanned_blocks=f"{start_block}-{current_block}"), 200
+
+        # Parse transfer amount from log data
+        # data field contains uint256 value (32 bytes)
+        transfer = transfers[0]  # Get most recent
+        data_hex = transfer.get("data", "0x")[2:]  # Remove 0x
+
+        try:
+            amount_wei = int(data_hex, 16) if data_hex else 0
+            amount_usdt = amount_wei / 1e18  # USDT has 18 decimals
+            tx_hash = transfer.get("transactionHash")
+
+            # If transfer found and amount >= MIN_USDT_PLEDGE, auto-confirm
+            if amount_usdt >= float(os.getenv("MIN_USDT_PLEDGE", "10")):
+                # Call the watcher endpoint to credit THR
+                success, result_data, error = process_usdt_pledge_credit(
+                    registered_thr, bnb_address, amount_usdt, tx_hash,
+                    source="manual-check"
+                )
+
+                if success:
+                    # Retrieve send_seed from pledge record
+                    pledges = load_json(PLEDGE_CHAIN, [])
+                    pledge = next(
+                        (p for p in pledges if p.get("bnb_address") == bnb_address and p.get("pledge_type") == "usdt_bnb"),
+                        None
+                    )
+                    send_seed = pledge.get("send_seed") if pledge else None
+
+                    return jsonify(
+                        ok=True,
+                        status="verified",
+                        message="Payment confirmed! THR credited and pool seeded.",
+                        amount_usdt=amount_usdt,
+                        thr_amount=amount_usdt * get_usdt_thr_rate_dynamic(),
+                        tx_hash=tx_hash,
+                        send_secret=send_seed
+                    ), 200
+                else:
+                    return jsonify(
+                        ok=False,
+                        error="confirmation_failed",
+                        details=error,
+                        found_transfer=True,
+                        amount_usdt=amount_usdt
+                    ), 400
+            else:
+                return jsonify(
+                    ok=False,
+                    error="insufficient_amount",
+                    found_transfer=True,
+                    amount_found=amount_usdt,
+                    minimum_required=float(os.getenv("MIN_USDT_PLEDGE", "10")),
+                    tx_hash=tx_hash
+                ), 400
+
+        except Exception as parse_err:
+            logger.error(f"Failed to parse transfer amount: {parse_err}")
+            return jsonify(ok=False, error="parse_error", details=str(parse_err)), 500
+
+    except Exception as e:
+        logger.error(f"Manual USDT pledge check failed: {e}", exc_info=True)
+        return jsonify(ok=False, error="check_failed", details=str(e)), 500
+
 def api_pledge_bnb_status():
     """
     Check USDT/BNB pledge confirmation status for a given BNB sender address.

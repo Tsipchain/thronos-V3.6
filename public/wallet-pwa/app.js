@@ -2209,7 +2209,73 @@ async function _handleWcUri(uri, address) {
     return;
   }
 
-  alert('Unknown URI format. Expected thrconnect:// or wc://');
+  // thronos://login?challenge_id=...&nonce=...&audience=...&ts=...
+  if (uri.startsWith('thronos://login')) {
+    await _handleLoginQr(uri, address);
+    return;
+  }
+
+  alert('Unknown URI format. Expected thrconnect://, thronos://login, or wc://');
+}
+
+// ─── Login QR handler — thronos://login?challenge_id=...&nonce=...&audience=...&ts=... ──
+async function _handleLoginQr(uri, address) {
+  const params = new URLSearchParams(uri.split('?')[1] || '');
+  const challengeId = params.get('challenge_id');
+  const nonce = params.get('nonce');
+  const audience = params.get('audience');
+  const ts = params.get('ts');
+
+  if (!challengeId || !nonce || !audience) {
+    alert('Invalid login QR — missing challenge parameters.');
+    return;
+  }
+
+  const ws = window.walletSession;
+  if (!ws || !ws.signLoginChallenge) {
+    alert('Unlock wallet with biometric/passkey to approve login.');
+    return;
+  }
+  if (ws.isLocked && ws.isLocked()) {
+    alert('Wallet is locked. Unlock with biometric/passkey first.');
+    return;
+  }
+
+  const challengeResponse = {
+    type: 'thronos_api_login',
+    version: '1',
+    challenge_id: challengeId,
+    nonce: nonce,
+    audience: audience,
+    timestamp: ts || String(Math.floor(Date.now() / 1000)),
+  };
+
+  try {
+    const { signature, public_key } = await ws.signLoginChallenge(challengeResponse);
+
+    const resp = await fetch(`${API_WRITE}/api/auth/verify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        challenge_response: challengeResponse,
+        signature,
+        public_key,
+      }),
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      alert(`Logged in as ${data.address.slice(0, 14)}...\nPledge: ${data.pledge_ok ? 'Active' : 'Not pledged'}\nRedirecting to: ${data.route}`);
+    } else {
+      alert('Login failed: ' + (data.detail || data.error || 'Unknown error'));
+    }
+  } catch (e) {
+    if (e.message === 'wallet_locked') {
+      alert('Wallet is locked. Unlock with biometric/passkey to approve login.');
+    } else {
+      alert('Login signing failed: ' + e.message);
+    }
+  }
 }
 
 function _startWcPoll(address, sessionId) {
@@ -3529,9 +3595,10 @@ const HISTORY_FILTERS = [
   { key: 'all', label: 'All' },
   { key: 'thr_transfer', label: 'THR' },
   { key: 'token_transfer', label: 'Tokens' },
+  { key: 'deposits', label: '📥 Deposits' },
   { key: 'swap', label: 'Swaps' },
   { key: 'liquidity', label: '💧 Liquidity' },
-  { key: 'evm_sends', label: '📤 EVM Sends' },
+  { key: 'evm_sends', label: '🔄 EVM Transfers' },
   { key: 'mining_reward', label: 'Mining' },
   { key: 'pledge', label: 'Pledges' },
   { key: 'crosschain', label: 'Cross-Chain' },
@@ -3544,6 +3611,17 @@ const HISTORY_FILTERS = [
 // Event types that belong to "pledge" filter category
 const _PLEDGE_EVENT_TYPES = new Set([
   'pledge', 'pledge_usdt_bnb_confirmed',
+]);
+
+// Event types that belong to "deposits" filter category
+const _DEPOSIT_FILTER_TYPES = new Set([
+  'pool_external_deposit_detected',
+  'pool_add_liquidity_external_tx_confirmed',
+  'crosschain_deposit_detected',
+  'crosschain_deposit_confirmed',
+  'bridge_deposit_detected',
+  'token_receive',
+  'evm_token_receive',
 ]);
 
 // Event types that belong to "liquidity" filter category
@@ -3566,6 +3644,8 @@ const _CROSSCHAIN_FILTER_TYPES = new Set([
   'crosschain_transfer_received',
   'crosschain_transfer_sent',
   'crosschain_withdraw',
+  'crosschain_withdrawal_requested',
+  'crosschain_withdrawal_fee_charged',
   'bridge_deposit_detected',
   'bridge',
 ]);
@@ -3625,7 +3705,11 @@ const _EVENT_TYPE_LABELS = {
   pledge:                                   '🔒 Pledge',
   token_receive:                            '📥 Received',
   token_send:                               '📤 Sent',
+  evm_token_receive:                        '📥 EVM Deposit',
+  crosschain_deposit_confirmed:             '✅ Cross-chain deposit confirmed',
   crosschain_withdraw:                      '🔄 Cross-chain withdrawal',
+  crosschain_withdrawal_requested:          '📤 Withdrawal requested',
+  crosschain_withdrawal_fee_charged:        '🔥 Withdrawal fee',
   gateway_payout:                           '💰 Gateway payout',
   bridge:                                   '⚡ Bridge',
 };
@@ -3754,6 +3838,11 @@ async function showHistory(address) {
       const et = tx => tx.event_type || tx.kind || tx.type || tx.category || '';
       if (activeFilter === 'pledge') {
         filtered = allTx.filter(tx => _PLEDGE_EVENT_TYPES.has(et(tx)));
+      } else if (activeFilter === 'deposits') {
+        filtered = allTx.filter(tx =>
+          _DEPOSIT_FILTER_TYPES.has(et(tx)) ||
+          (tx.direction === 'in' && !_PLEDGE_EVENT_TYPES.has(et(tx)))
+        );
       } else if (activeFilter === 'liquidity') {
         filtered = allTx.filter(tx =>
           _LIQUIDITY_FILTER_TYPES.has(et(tx)) ||
@@ -3906,7 +3995,9 @@ async function showPools() {
           const modeLabel = mode === 'live' ? 'LIVE' : mode;
           // Real-pool stats (APY, last swap, 24h vol, fee) — parity with JAM/THR display
           const apyPct    = Number(p.apy_pct || 0).toFixed(1);
+          const baseApy   = Number(p.base_apy || 0).toFixed(1);
           const apyColor  = Number(p.apy_pct || 0) > 0 ? '#00ff66' : '#666';
+          const baseApyColor = Number(p.base_apy || 0) > 0 ? '#b08cf8' : '#666';
           const lastPrice = Number(p.last_swap_price || 0);
           const lastPriceStr = lastPrice > 0 ? `1 THR ≈ ${lastPrice.toFixed(4)} ${p.external_asset}` : '—';
           const vol24    = Number(p.volume_24h_usd || 0);
@@ -3916,7 +4007,8 @@ async function showPools() {
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
               <div style="font-size:.95rem;font-weight:700;color:#00c8ff">${p.pair}</div>
               <div style="display:flex;align-items:center;gap:8px">
-                <div style="font-size:.85rem;color:${apyColor};font-weight:700">APY ${apyPct}%</div>
+                <div style="font-size:.85rem;color:${apyColor};font-weight:700" title="Dynamic APY from trading fees">APY ${apyPct}%</div>
+                ${Number(p.base_apy || 0) > 0 ? `<div style="font-size:.7rem;color:${baseApyColor};font-weight:600" title="Standard base APY">+${baseApy}%</div>` : ''}
                 <div style="font-size:.65rem;color:${modeColor};font-weight:600">${modeLabel}</div>
               </div>
             </div>
@@ -4069,7 +4161,6 @@ async function showWithdraw(address) {
 
   let poolInfo   = null;
   let chainsInfo = null;    // { chains: [{id, label, tokens}], max_withdraw_usdt }
-  let sendSecret = null;    // pledge ownership proof
   let submitting = false;
 
   // ── helpers ──────────────────────────────────────────────────────────────
@@ -4099,8 +4190,6 @@ async function showWithdraw(address) {
     const curToken      = state.token  || 'USDT';
     const curChain      = state.chain  || (chainsInfo?.chains?.[0]?.id ?? 'bsc');
     const hasChainsConfigured = chainsInfo?.chains?.length > 0;
-    // Old users who imported wallet may not have secret cached — show manual entry
-    const showSecretInput = !sendSecret;
 
     render(`
       <div class="screen">
@@ -4130,20 +4219,14 @@ async function showWithdraw(address) {
           <div class="card" style="padding:12px">
             <div style="font-size:.65rem;text-transform:uppercase;letter-spacing:1px;color:#b08cf8;margin-bottom:10px">Withdraw to External Wallet</div>
 
-            <!-- Old-user / imported-wallet secret entry -->
-            ${showSecretInput ? `
-              <div style="background:#1a0d30;border:1px solid #b08cf840;border-radius:8px;padding:10px;margin-bottom:10px">
-                <div style="font-size:.75rem;color:#b08cf8;font-weight:600;margin-bottom:6px">🔑 Pledge Secret</div>
-                <div style="font-size:.72rem;color:var(--muted);margin-bottom:6px">
-                  If you created your wallet via a BTC or USDT pledge, enter your <b>send secret</b> here.<br>
-                  New users: complete a pledge first.
-                </div>
-                <input id="wdSecret" class="input" placeholder="Pledge send secret (hex)…" autocomplete="off"
-                  style="font-family:monospace;font-size:.72rem;margin-bottom:0">
+            <!-- V1: wallet session must be unlocked (PIN / biometric / passkey) -->
+            ${window.walletSession && !window.walletSession.isLocked?.() ? `
+              <div style="background:#0a1a0a;border:1px solid #00ff6640;border-radius:8px;padding:7px 10px;margin-bottom:10px;font-size:.75rem;color:#00ff66">
+                ✓ Wallet unlocked — withdrawal will be signed
               </div>
             ` : `
-              <div style="background:#0a1a0a;border:1px solid #00ff6640;border-radius:8px;padding:7px 10px;margin-bottom:10px;font-size:.75rem;color:#00ff66">
-                ✓ Pledge credentials loaded
+              <div style="background:#1a0d30;border:1px solid #b08cf840;border-radius:8px;padding:7px 10px;margin-bottom:10px;font-size:.75rem;color:#ffb81c">
+                🔐 Unlock wallet with PIN or biometric to withdraw
               </div>
             `}
 
@@ -4177,7 +4260,7 @@ async function showWithdraw(address) {
               Withdraw
             </button>
             <div style="font-size:.67rem;color:var(--muted);margin-top:6px;text-align:center">
-              1% fee · 0.5% in THR burned · 0.5% in-kind · ~5 min
+              Flat 0.20 USDT/USDC fee · ~5 min
             </div>
           </div>
         `}
@@ -4201,12 +4284,13 @@ async function showWithdraw(address) {
       const feeRow  = document.getElementById('wdFeeRow');
       if (!feeRow) return;
       if (!amount || amount <= 0) { feeRow.textContent = ''; return; }
-      const feeTotalUsd  = amount * 0.01;
-      const feeInKind    = (feeTotalUsd * 0.5).toFixed(4);
-      const thrPrice     = poolInfo?.thr_price_usd || 10;
-      const feeThr       = ((feeTotalUsd * 0.5) / thrPrice).toFixed(6);
-      const net          = (amount - feeTotalUsd * 0.5).toFixed(4);
-      feeRow.innerHTML   = `You receive <b style="color:#00ff66">${net} ${token}</b> · Fee: ${feeInKind} ${token} + ${feeThr} THR`;
+      const flatFee = 0.20;
+      if (amount <= flatFee) {
+        feeRow.innerHTML = `<span style="color:#ff6b6b">Amount must exceed ${flatFee} ${token} fee</span>`;
+        return;
+      }
+      const net = (amount - flatFee).toFixed(4);
+      feeRow.innerHTML = `You receive <b style="color:#00ff66">${net} ${token}</b> · Fee: 0.20 ${token}`;
     };
     document.getElementById('wdAmount')?.addEventListener('input', updateFeeRow);
 
@@ -4218,10 +4302,6 @@ async function showWithdraw(address) {
     document.getElementById('wdSubmitBtn')?.addEventListener('click', async () => {
       if (submitting) return;
 
-      // Resolve send_secret: cached or manually entered
-      const secret = sendSecret || (document.getElementById('wdSecret')?.value || '').trim();
-      if (!secret) return renderPage('Enter your pledge send secret to unlock withdrawals.', { token: curToken, chain: curChain });
-
       const amount    = parseFloat(document.getElementById('wdAmount')?.value || 0);
       const token     = document.getElementById('wdToken')?.value || 'USDT';
       const destChain = document.getElementById('wdChain')?.value || curChain;
@@ -4229,64 +4309,40 @@ async function showWithdraw(address) {
       const maxWd     = parseFloat(max_wd);
 
       if (!amount || amount <= 0) return renderPage('Enter a valid amount.', { token, chain: destChain });
+      if (amount <= 0.20) return renderPage('Amount must exceed 0.20 fee.', { token, chain: destChain });
       if (amount > maxWd) return renderPage(`Max withdrawal is $${max_wd}.`, { token, chain: destChain });
       if (!/^0x[0-9a-f]{40}$/i.test(destAddr)) return renderPage('Enter a valid EVM wallet address (0x…).', { token, chain: destChain });
 
-      // ── Biometric / passkey confirmation — same user-presence pattern as
-      // PR #745 (external EVM send) and PR #747 (pool deposit). Required
-      // right before the final withdrawal submission, even if the wallet is
-      // already unlocked. Server-side signing still needs the pledge secret,
-      // but the biometric proves the human is physically present at submit.
-      const fid = LS.getObj(`thr_fid_${address}`);
-      if (fid?.credId) {
-        document.getElementById('wdSubmitBtn').textContent = 'Confirm with biometric…';
-        try {
-          await assertWebAuthn(fid.credId);
-        } catch (biomErr) {
-          document.getElementById('wdSubmitBtn').textContent = 'Withdraw';
-          document.getElementById('wdSubmitBtn').disabled = false;
-          return renderPage('Biometric confirmation cancelled — withdrawal aborted.', { token, chain: destChain });
-        }
-      } else {
-        const confirmed = confirm(
-          `Confirm withdrawal:\n\n` +
-          `Amount: ${amount} ${token}\n` +
-          `To: ${destAddr}\n` +
-          `Chain: ${destChain.toUpperCase()}\n\n` +
-          `No biometric registered on this device — proceeding uses your pledge secret. Continue?`
-        );
-        if (!confirmed) {
-          document.getElementById('wdSubmitBtn').textContent = 'Withdraw';
-          document.getElementById('wdSubmitBtn').disabled = false;
-          return renderPage('Withdrawal cancelled by user.', { token, chain: destChain });
-        }
+      const ws = window.walletSession;
+      if (!ws || !ws.buildWalletActionIntent || !ws.signWalletActionIntent) {
+        return renderPage('Unlock wallet with PIN or biometric to withdraw.', { token, chain: destChain });
+      }
+      if (ws.isLocked && ws.isLocked()) {
+        return renderPage('Wallet is locked. Unlock with PIN or biometric first.', { token, chain: destChain });
       }
 
       submitting = true;
-      document.getElementById('wdSubmitBtn').textContent = 'Processing…';
+      document.getElementById('wdSubmitBtn').textContent = 'Signing…';
       document.getElementById('wdSubmitBtn').disabled = true;
 
       try {
-        const resp = await fetch(`${API_BASE}/api/v1/withdraw`, {
+        const payload = { amount: String(amount), token, dest_chain: destChain, dest_address: destAddr };
+        const intent = await ws.buildWalletActionIntent(
+          'crosschain_withdraw',
+          { from_thr: address, wallet_id: address, chain: destChain, asset: token, amount: String(amount), recipient: destAddr },
+          payload
+        );
+        const { signature, public_key } = await ws.signWalletActionIntent(intent);
+
+        document.getElementById('wdSubmitBtn').textContent = 'Processing…';
+
+        const resp = await fetch(`${API_WRITE}/api/wallet/v1/withdraw`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            address:      address,
-            send_secret:  secret,
-            amount,
-            token,
-            dest_chain:   destChain,
-            dest_address: destAddr,
-          }),
+          body: JSON.stringify({ intent, signature, public_key, payload }),
         }).then(r => r.json());
 
         if (resp.ok) {
-          // Cache secret in account metadata for future withdrawals (old-user path)
-          if (!sendSecret && secret) {
-            const acc = getAccount(address);
-            if (acc) upsertAccount(address, acc.kit, acc.label, secret);
-          }
-          // Success screen
           render(`
             <div class="screen">
               <div class="header">
@@ -4298,21 +4354,20 @@ async function showWithdraw(address) {
                 <div style="font-size:2rem;margin-bottom:10px">✅</div>
                 <div style="font-size:1rem;font-weight:700;color:#00ff66;margin-bottom:6px">Pending</div>
                 <div style="font-size:.78rem;color:var(--muted);margin-bottom:14px">
-                  ID: <span style="color:#b08cf8;font-family:monospace">${resp.withdrawal_id}</span>
+                  ID: <span style="color:#b08cf8;font-family:monospace">${resp.withdraw_id}</span>
                 </div>
                 <div style="display:grid;gap:5px;font-size:.8rem;text-align:left;background:#0d0a1a;border-radius:8px;padding:12px;margin-bottom:14px">
                   ${[
                     ['Token',           resp.token],
                     ['Requested',       `${resp.amount} ${resp.token}`],
                     ['You receive',     `${resp.amount_net} ${resp.token}`],
-                    ['THR fee',         `${resp.fee_thr} THR`],
-                    ['THR price (oracle)', `$${Number(resp.oracle_price_usd || 0).toFixed(4)}`],
+                    ['Fee',             `${resp.flat_fee} ${resp.token}`],
                     ['Chain',           resp.dest_chain_label || resp.dest_chain],
                     ['External wallet', `${destAddr.slice(0,10)}…${destAddr.slice(-6)}`],
                   ].map(([k,v]) => `
                     <div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid #ffffff08">
                       <span style="color:var(--muted)">${k}</span>
-                      <span style="color:${k==='You receive'?'#00ff66':k==='THR fee'?'#b08cf8':'#fff'};font-weight:${k==='You receive'?700:400}">${escHtml(String(v))}</span>
+                      <span style="color:${k==='You receive'?'#00ff66':k==='Fee'?'#b08cf8':'#fff'};font-weight:${k==='You receive'?700:400}">${escHtml(String(v))}</span>
                     </div>`).join('')}
                 </div>
                 <div style="color:var(--muted);font-size:.75rem">~${resp.estimated_minutes || 5} min delivery</div>
@@ -4323,18 +4378,19 @@ async function showWithdraw(address) {
         } else {
           submitting = false;
           const errMsg = {
-            invalid_credentials:       'Invalid pledge secret. Check your send secret and try again.',
-            chain_not_configured:      `Chain not available. Available: ${resp.available?.join(', ') || '—'}`,
-            token_not_supported_on_chain: `${resp.token || 'Token'} is not supported on that chain.`,
-            insufficient_pool_liquidity: `Pool liquidity too low. Available: $${resp.available_usdt?.toFixed(2)}`,
-            insufficient_thr_for_fee:  `Need ${resp.required_thr} THR for fee (have ${resp.thr_balance}).`,
-            exceeds_max_withdrawal:    `Max withdrawal is $${resp.max_withdrawal}.`,
+            signed_wallet_action_required: 'Wallet signing required. Unlock with PIN or biometric.',
+            payload_hash_mismatch:         'Signing error — please try again.',
+            chain_not_configured:          `Chain not available. Available: ${(resp.available || []).join(', ') || '—'}`,
+            token_not_supported_on_chain:  `${resp.token || 'Token'} is not supported on that chain.`,
+            insufficient_pool_liquidity:   `Pool liquidity too low. Available: $${resp.available_usdt?.toFixed(2)}`,
+            amount_too_small:              `Amount must exceed the 0.20 ${token} fee.`,
+            exceeds_max_withdrawal:        `Max withdrawal is $${resp.max_withdrawal}.`,
           }[resp.error] || resp.error || 'Withdrawal failed. Please try again.';
           renderPage(errMsg, { token, chain: destChain });
         }
       } catch (e) {
         submitting = false;
-        renderPage('Network error. Please try again.', { token: curToken, chain: curChain });
+        renderPage(e.message || 'Network error. Please try again.', { token: curToken, chain: curChain });
       }
     });
   };
@@ -4348,17 +4404,12 @@ async function showWithdraw(address) {
     ]);
     poolInfo   = pi?.ok ? pi : null;
     chainsInfo = ci?.ok ? ci : null;
-    // Load secret from account metadata (new-user path after pledge migration)
-    const acc = getAccount(address);
-    if (acc?.pledge_send_secret) sendSecret = acc.pledge_send_secret;
   } catch {}
   renderPage(null);
 }
 
 async function showAddLiquidity(poolId, tokenA, tokenB, poolMeta) {
   const address = getActiveAddr();
-  const acc = getAccount(address);
-  const authSecret = acc?.pledge_send_secret || '';
 
   // Cross-chain: THR + USDT/USDC handled by pending-intent endpoint
   const isCrossChain = tokenA === 'THR' && (tokenB === 'USDT' || tokenB === 'USDC');
@@ -4437,10 +4488,6 @@ async function showAddLiquidity(poolId, tokenA, tokenB, poolMeta) {
       <div id="liqQuote" style="font-size:.78rem;color:#b08cf8;margin-bottom:10px;min-height:18px;padding:0 2px"></div>
       ${isCrossChain ? `<div style="font-size:.75rem;color:#ffb81c;margin-bottom:10px;padding:8px;background:#ffb81c10;border-radius:6px;border:1px solid #ffb81c30">⚠️ Gas required on external chain to send ${tokenB} to vault.</div>` : ''}
 
-      ${!authSecret && isCrossChain ? `
-      <label style="font-size:.82rem;color:var(--muted)">Auth Secret (send_secret from pledge)</label>
-      <input type="password" id="liqAuth" class="input" placeholder="Enter your auth secret" style="margin-bottom:10px">
-      ` : ''}
 
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
         <button id="liqCancel" class="btn btn--ghost" style="padding:12px">Cancel</button>
@@ -4522,16 +4569,26 @@ async function showAddLiquidity(poolId, tokenA, tokenB, poolMeta) {
         const tokenContract = selOpt?.dataset?.contract || '';
         const decimals = parseInt(selOpt?.dataset?.decimals || '18', 10);
         const evmAddress = (overlay.querySelector('#liqEvm')?.value || '').trim();
-        const secret = authSecret || (overlay.querySelector('#liqAuth')?.value || '').trim();
 
         if (!chain) { throw new Error('Select an external chain'); }
         if (!evmAddress) { throw new Error(`Enter your EVM address holding ${tokenB}`); }
-        if (!secret) { throw new Error('Auth secret required'); }
+
+        const ws = window.walletSession;
+        if (!ws || !ws.buildWalletActionIntent) throw new Error('Unlock wallet with PIN or biometric to approve this action.');
+        if (ws.isLocked && ws.isLocked()) throw new Error('Unlock wallet with PIN or biometric to approve this action.');
+
+        const liqPayload = { pool_id: poolId, amount_a: amtA, amount_b: amtB, chain, token_contract: tokenContract, decimals, provider_thr: address, evm_address: evmAddress };
+        const liqIntent = await ws.buildWalletActionIntent(
+          'crosschain_add_liquidity',
+          { from_thr: address, wallet_id: address, chain, asset: poolId, amount: String(amtA) },
+          liqPayload
+        );
+        const { signature, public_key } = await ws.signWalletActionIntent(liqIntent);
 
         const r = await fetch(`${API_WRITE}/api/v1/pools/add-liquidity`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ pool_id: poolId, amount_a: amtA, amount_b: amtB, chain, token_contract: tokenContract, decimals, provider_thr: address, evm_address: evmAddress, auth_secret: secret }),
+          body: JSON.stringify({ intent: liqIntent, signature, public_key, payload: liqPayload }),
         });
         const d = await r.json().catch(() => ({}));
         if (r.ok && d.ok) {
@@ -4542,7 +4599,6 @@ async function showAddLiquidity(poolId, tokenA, tokenB, poolMeta) {
           okEl.style.display = '';
           setTimeout(() => overlay.remove(), 10000);
         } else {
-          // Provide helpful ratio_mismatch message
           if (d.error === 'ratio_mismatch') {
             throw new Error(`${d.message || 'Ratio mismatch'}`);
           }

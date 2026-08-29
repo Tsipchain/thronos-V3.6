@@ -27,5 +27,7 @@ node_modules/
 **/*credentials*.json
 **/*secrets*.json
 **/*auth*.json
+**/vehicle_key.json
+**/private_key*.json
 .env
 .env.local

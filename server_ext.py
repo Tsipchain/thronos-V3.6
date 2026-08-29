@@ -46,7 +46,7 @@ except Exception as exc:  # pragma: no cover
 # Lets pledge/HMAC users find their old THR address via send_secret only,
 # then migrate to a V1 wallet and set up PIN + passkey.
 import hashlib as _hashlib
-from flask import jsonify as _jsonify, request as _request
+from flask import jsonify as _jsonify, request as _request, make_response as _make_response
 
 import server as _srv
 
@@ -338,6 +338,7 @@ import time as _time_wa
 _WALLET_ACTION_ALLOWED_ACTIONS = frozenset({
     'internal_transfer', 'external_send_record',
     'pool_deposit_intent', 'pool_withdraw_intent',
+    'crosschain_withdraw', 'crosschain_add_liquidity',
     'swap', 'bridge', 'pledge', 'token_create',
     'nft_mint', 'nft_buy',
 })
@@ -465,6 +466,269 @@ def _verify_wallet_action_intent(intent: dict, signature_hex: str, public_key_he
     save_json(nonces_file, nonces_store)
 
     return True, '', ''
+
+
+# ── THRONOS_API_LOGIN_V1 — QR Wallet Login ───────────────────────────────────
+# Domain-separated from wallet actions: type='thronos_api_login', NOT 'thronos_wallet_action'.
+# Flow: server issues challenge → QR displayed → PWA scans → signs challenge → server verifies → session.
+
+import secrets as _secrets_login
+import hashlib as _hashlib_login
+import os as _os_login
+import threading as _threading_wa
+
+_LOGIN_CHALLENGE_TTL = 120  # seconds (user spec: 60-120s)
+_LOGIN_SESSION_TTL = 3600   # 1 hour
+_LOGIN_CHALLENGE_STORE_LOCK = _threading_wa.Lock()
+_LOGIN_CHALLENGE_STORE: dict = {}  # { challenge_id: { nonce, audience, created_at, consumed } }
+_LOGIN_SESSION_STORE: dict = {}    # { session_token: { address, pledge_state, created_at, expires_at } }
+
+_LOGIN_AUDIENCE = _os_login.getenv('LOGIN_AUDIENCE', 'api.thronoschain.org')
+
+
+def _prune_login_challenges():
+    now = _time_wa.time()
+    with _LOGIN_CHALLENGE_STORE_LOCK:
+        expired = [k for k, v in _LOGIN_CHALLENGE_STORE.items()
+                   if now - v['created_at'] > _LOGIN_CHALLENGE_TTL + 30]
+        for k in expired:
+            del _LOGIN_CHALLENGE_STORE[k]
+
+
+def _prune_login_sessions():
+    now = _time_wa.time()
+    expired = [k for k, v in _LOGIN_SESSION_STORE.items() if v['expires_at'] < now]
+    for k in expired:
+        del _LOGIN_SESSION_STORE[k]
+
+
+def _canonical_login_challenge_msg(challenge: dict) -> str:
+    fields = ('audience', 'challenge_id', 'nonce', 'timestamp', 'type', 'version')
+    parts = [f'"{k}":{_json_wa.dumps(str(challenge.get(k, "")))}' for k in fields]
+    return '{' + ','.join(parts) + '}'
+
+
+@app.route('/api/auth/challenge', methods=['POST'])
+def api_auth_challenge():
+    _prune_login_challenges()
+    challenge_id = _secrets_login.token_urlsafe(32)
+    nonce = _secrets_login.token_hex(16)
+    now = _time_wa.time()
+    challenge = {
+        'type': 'thronos_api_login',
+        'version': '1',
+        'challenge_id': challenge_id,
+        'nonce': nonce,
+        'audience': _LOGIN_AUDIENCE,
+        'timestamp': str(int(now)),
+    }
+    with _LOGIN_CHALLENGE_STORE_LOCK:
+        _LOGIN_CHALLENGE_STORE[challenge_id] = {
+            'nonce': nonce,
+            'audience': _LOGIN_AUDIENCE,
+            'created_at': now,
+            'consumed': False,
+        }
+    qr_uri = f'thronos://login?challenge_id={challenge_id}&nonce={nonce}&audience={_LOGIN_AUDIENCE}&ts={int(now)}'
+    return _jsonify(
+        ok=True,
+        challenge=challenge,
+        qr_uri=qr_uri,
+        expires_in=_LOGIN_CHALLENGE_TTL,
+    ), 200
+
+
+@app.route('/api/auth/verify', methods=['POST'])
+def api_auth_verify():
+    data = _request.get_json() or {}
+    challenge_response = data.get('challenge_response') or {}
+    signature_hex = (data.get('signature') or '').strip()
+    public_key_hex = (data.get('public_key') or '').strip()
+
+    if not challenge_response or not signature_hex or not public_key_hex:
+        return _jsonify(ok=False, error='missing_fields',
+                        detail='challenge_response, signature, public_key required'), 400
+
+    challenge_id = challenge_response.get('challenge_id', '')
+    if not challenge_id:
+        return _jsonify(ok=False, error='missing_challenge_id'), 400
+
+    # Validate challenge type — domain separation
+    if challenge_response.get('type') != 'thronos_api_login':
+        return _jsonify(ok=False, error='invalid_type',
+                        detail='Expected type thronos_api_login'), 400
+    if str(challenge_response.get('version', '')) != '1':
+        return _jsonify(ok=False, error='invalid_version'), 400
+
+    # Look up and consume challenge (single-use)
+    with _LOGIN_CHALLENGE_STORE_LOCK:
+        stored = _LOGIN_CHALLENGE_STORE.get(challenge_id)
+        if not stored:
+            return _jsonify(ok=False, error='challenge_not_found',
+                            detail='Challenge expired or does not exist'), 400
+        if stored['consumed']:
+            return _jsonify(ok=False, error='challenge_already_used'), 400
+
+        # Check expiry
+        age = _time_wa.time() - stored['created_at']
+        if age > _LOGIN_CHALLENGE_TTL:
+            del _LOGIN_CHALLENGE_STORE[challenge_id]
+            return _jsonify(ok=False, error='challenge_expired',
+                            detail=f'Challenge expired after {int(age)}s'), 400
+
+        # Validate nonce and audience match
+        if challenge_response.get('nonce') != stored['nonce']:
+            return _jsonify(ok=False, error='nonce_mismatch'), 400
+        if challenge_response.get('audience') != stored['audience']:
+            return _jsonify(ok=False, error='audience_mismatch'), 400
+
+        # Mark consumed before verification to prevent concurrent replay
+        stored['consumed'] = True
+
+    # Verify ECDSA signature over canonical challenge message
+    canonical_msg = _canonical_login_challenge_msg(challenge_response).encode('utf-8')
+    try:
+        from cryptography.hazmat.primitives import hashes as _hashes_lv
+        from cryptography.hazmat.primitives.asymmetric import ec as _ec_lv
+        from cryptography.exceptions import InvalidSignature as _InvalidSigLv
+        pub_bytes = bytes.fromhex(public_key_hex)
+        sig_bytes = bytes.fromhex(signature_hex)
+        pub_obj = _ec_lv.EllipticCurvePublicKey.from_encoded_point(_ec_lv.SECP256K1(), pub_bytes)
+        pub_obj.verify(sig_bytes, canonical_msg, _ec_lv.ECDSA(_hashes_lv.SHA256()))
+    except _InvalidSigLv:
+        return _jsonify(ok=False, error='invalid_signature',
+                        detail='Signature does not match challenge'), 401
+    except Exception as exc:
+        return _jsonify(ok=False, error='invalid_signature',
+                        detail=f'Signature verification failed: {exc}'), 401
+
+    # Derive THR address from public key
+    try:
+        from wallet_v1_address_derivation import derive_thronos_address
+        thr_address = derive_thronos_address(public_key_hex)
+    except Exception as exc:
+        return _jsonify(ok=False, error='address_derivation_failed',
+                        detail=str(exc)), 500
+
+    # Key-address binding verification
+    try:
+        import wallet_v1_production_final as _wv1pf_lv
+        binding_ok, binding_error = _wv1pf_lv.verify_publickey_matches_address(
+            {'from': thr_address, 'publicKey': public_key_hex}
+        )
+        if not binding_ok:
+            return _jsonify(ok=False, error='key_address_mismatch',
+                            detail=binding_error), 401
+    except Exception as exc:
+        return _jsonify(ok=False, error='key_address_mismatch',
+                        detail=f'Address binding failed: {exc}'), 401
+
+    # Get pledge status
+    try:
+        pledge_state = _srv.get_effective_pledge_state(thr_address)
+    except Exception:
+        pledge_state = {'effective_pledge_ok': False, 'pledge_mode': 'unknown'}
+
+    # Determine route based on pledge status
+    effective_pledge_ok = pledge_state.get('effective_pledge_ok', False)
+    pledge_mode = pledge_state.get('pledge_mode', 'none')
+    if effective_pledge_ok:
+        route = '/dashboard'
+    elif pledge_mode == 'none':
+        route = '/pledge'
+    else:
+        route = '/pledge/status'
+
+    # Create session
+    session_token = _secrets_login.token_urlsafe(48)
+    now = _time_wa.time()
+    _prune_login_sessions()
+    _LOGIN_SESSION_STORE[session_token] = {
+        'address': thr_address,
+        'public_key': public_key_hex,
+        'pledge_state': pledge_state,
+        'created_at': now,
+        'expires_at': now + _LOGIN_SESSION_TTL,
+    }
+
+    resp = _make_response(_jsonify(
+        ok=True,
+        address=thr_address,
+        pledge_ok=effective_pledge_ok,
+        pledge_mode=pledge_mode,
+        route=route,
+        session_expires_in=_LOGIN_SESSION_TTL,
+    ))
+    resp.set_cookie(
+        'thr_session',
+        session_token,
+        max_age=_LOGIN_SESSION_TTL,
+        httponly=True,
+        secure=True,
+        samesite='Strict',
+        path='/',
+    )
+    return resp
+
+
+@app.route('/api/auth/session', methods=['GET'])
+def api_auth_session():
+    token = (_request.cookies.get('thr_session') or '').strip()
+    if not token:
+        return _jsonify(ok=False, error='no_session'), 401
+    session = _LOGIN_SESSION_STORE.get(token)
+    if not session:
+        return _jsonify(ok=False, error='session_expired'), 401
+    if session['expires_at'] < _time_wa.time():
+        del _LOGIN_SESSION_STORE[token]
+        return _jsonify(ok=False, error='session_expired'), 401
+    address = session['address']
+    try:
+        pledge_state = _srv.get_effective_pledge_state(address)
+    except Exception:
+        pledge_state = session.get('pledge_state', {})
+    effective_pledge_ok = pledge_state.get('effective_pledge_ok', False)
+    pledge_mode = pledge_state.get('pledge_mode', 'none')
+    if effective_pledge_ok:
+        route = '/dashboard'
+    elif pledge_mode == 'none':
+        route = '/pledge'
+    else:
+        route = '/pledge/status'
+    return _jsonify(
+        ok=True,
+        address=address,
+        pledge_ok=effective_pledge_ok,
+        pledge_mode=pledge_mode,
+        route=route,
+        expires_at=int(session['expires_at']),
+    ), 200
+
+
+@app.route('/api/auth/logout', methods=['POST'])
+def api_auth_logout():
+    token = (_request.cookies.get('thr_session') or '').strip()
+    if token:
+        _LOGIN_SESSION_STORE.pop(token, None)
+    resp = _make_response(_jsonify(ok=True))
+    resp.delete_cookie('thr_session', path='/')
+    return resp
+
+
+@app.route('/api/auth/challenge/status/<challenge_id>', methods=['GET'])
+def api_auth_challenge_status(challenge_id):
+    with _LOGIN_CHALLENGE_STORE_LOCK:
+        stored = _LOGIN_CHALLENGE_STORE.get(challenge_id)
+        if not stored:
+            return _jsonify(ok=False, error='challenge_not_found'), 404
+        age = _time_wa.time() - stored['created_at']
+        if age > _LOGIN_CHALLENGE_TTL:
+            return _jsonify(ok=False, error='challenge_expired'), 410
+        return _jsonify(
+            ok=True,
+            consumed=stored['consumed'],
+            expires_in=max(0, int(_LOGIN_CHALLENGE_TTL - age)),
+        ), 200
 
 
 # ── WalletConnect lightweight relay ────────────────────────────────────────────
@@ -675,6 +939,47 @@ def wc_get_result(request_id):
     return _jsonify(ok=True, **result), 200
 
 
+@app.route('/api/hub/connect', methods=['POST', 'OPTIONS'])
+def hub_connector_create():
+    """
+    Hub connector: any service at api.thronoschain.org (or another allowed origin)
+    can create a thrconnect session. Returns session_id, thrconnect URI, and QR URL.
+    This is the same pairing flow as ThronosBuilder but exposed under /api/hub/connect
+    so external hubs and services can use it without being the builder.
+    """
+    if _request.method == 'OPTIONS':
+        return '', 200
+    import uuid as _uuid, time as _time
+    data = _request.get_json() or {}
+    dapp = str(data.get('dapp') or data.get('service') or 'ThronosHub')[:64]
+    callback_url = str(data.get('callback_url') or '')[:256]
+    session_id = str(_uuid.uuid4())
+    relay_base = _request.host_url.rstrip('/')
+    uri = f"thrconnect://{session_id}?relay={relay_base}&dapp={dapp}"
+    with _wc_store_lock:
+        _wc_pairing_sessions[session_id] = {
+            'status': 'waiting',
+            'address': None,
+            'dapp': dapp,
+            'callback_url': callback_url,
+            'created_at': _time.time(),
+            'paired_at': None,
+        }
+    qr_url = f"https://api.qrserver.com/v1/create-qr-code/?data={_quote(uri)}&size=220x220&color=ffffff&bgcolor=0d0a1a&margin=8"
+    app.logger.info('[HUB] Connector session created id=%s dapp=%s', session_id[:8], dapp)
+    return _jsonify(ok=True, session_id=session_id, uri=uri, qr_url=qr_url), 200
+
+
+@app.route('/api/hub/connect/<session_id>', methods=['GET'])
+def hub_connector_poll(session_id):
+    """Poll hub connector session status — returns connected address when paired."""
+    with _wc_store_lock:
+        session = dict(_wc_pairing_sessions.get(session_id) or {})
+    if not session:
+        return _jsonify(ok=False, error='session_not_found'), 404
+    return _jsonify(ok=True, **session), 200
+
+
 @app.route('/api/wallet/v1/transfer', methods=['POST'])
 def wallet_v1_transfer():
     """
@@ -723,6 +1028,224 @@ def wallet_v1_transfer():
     except Exception as _e:
         app.logger.error('[V1Transfer] transfer_error: %s', _e)
         return _jsonify(ok=False, error='transfer_failed', detail=str(_e)), 500
+
+
+_withdraw_lock = _threading.Lock()
+
+
+@app.route('/api/wallet/v1/withdraw', methods=['POST'])
+def wallet_v1_withdraw():
+    """
+    PWA cross-chain withdrawal — requires signed action intent (no send_secret).
+
+    Required fields:
+      intent      – action='crosschain_withdraw'
+      signature, public_key
+      payload     – { amount, token, dest_chain, dest_address }
+
+    Flat fee: 0.20 USDT/USDC deducted from withdrawal amount.
+    """
+    import server as _srv
+    import re as _re
+    import time as _time_mod
+    import secrets as _secrets_mod
+
+    data = _request.get_json() or {}
+    intent_raw = data.get('intent')
+    signature  = (data.get('signature')  or '').strip()
+    public_key = (data.get('public_key') or '').strip()
+
+    if not (intent_raw and signature and public_key):
+        return _jsonify(ok=False, error='signed_wallet_action_required',
+                        detail='intent, signature, and public_key are required'), 401
+
+    intent = intent_raw if isinstance(intent_raw, dict) else {}
+    ok, err_code, err_detail = _verify_wallet_action_intent(intent, signature, public_key)
+    if not ok:
+        return _jsonify(ok=False, error=err_code, detail=err_detail), 400
+    payload = data.get('payload') or {}
+    if not _verify_action_payload_hash(intent.get('payload_hash', ''), payload):
+        return _jsonify(ok=False, error='payload_hash_mismatch',
+                        detail='payload does not match signed intent'), 400
+
+    thr_address  = str(intent.get('from_thr', '')).strip().upper()
+    amount       = float(payload.get('amount', 0) or 0)
+    token        = str(payload.get('token') or 'USDT').strip().upper()
+    dest_chain   = str(payload.get('dest_chain') or 'bsc').strip().lower()
+    dest_address = str(payload.get('dest_address') or '').strip().lower()
+
+    # Validation
+    if not _srv.validate_thr_address(thr_address):
+        return _jsonify(ok=False, error='invalid_thr_address'), 400
+    if token not in _srv.WITHDRAW_SUPPORTED_TOKENS:
+        return _jsonify(ok=False, error='unsupported_token',
+                        supported=list(_srv.WITHDRAW_SUPPORTED_TOKENS)), 400
+    if not _re.match(r'^0x[a-f0-9]{40}$', dest_address):
+        return _jsonify(ok=False, error='invalid_dest_address'), 400
+    if amount <= 0:
+        return _jsonify(ok=False, error='amount_must_be_positive'), 400
+    if amount > _srv.MAX_USDT_WITHDRAW:
+        return _jsonify(ok=False, error='exceeds_max_withdrawal',
+                        max_withdrawal=_srv.MAX_USDT_WITHDRAW, token=token), 400
+
+    # Chain config
+    available_chains = _srv.get_available_withdraw_chains()
+    if dest_chain not in _srv.WITHDRAW_CHAIN_CONFIG:
+        return _jsonify(ok=False, error='unknown_chain',
+                        available=list(available_chains.keys())), 400
+    if dest_chain not in available_chains:
+        return _jsonify(ok=False, error='chain_not_configured',
+                        detail=f'{dest_chain} is not enabled',
+                        available=list(available_chains.keys())), 503
+    chain_cfg = _srv.WITHDRAW_CHAIN_CONFIG[dest_chain]
+    if token not in chain_cfg.get('tokens', []):
+        return _jsonify(ok=False, error='token_not_supported_on_chain',
+                        chain=dest_chain, supported_tokens=chain_cfg['tokens']), 400
+
+    # Flat fee: 0.20 USDT/USDC
+    flat_fee = 0.20
+    if amount <= flat_fee:
+        return _jsonify(ok=False, error='amount_too_small',
+                        detail=f'Amount must exceed flat fee of {flat_fee} {token}'), 400
+    amount_net = round(amount - flat_fee, 6)
+
+    # ── FUNDS-SAFETY GATE ─────────────────────────────────────────────
+    # Serialise balance-check → debit → pool-debit → queue-append so
+    # two concurrent signed intents cannot double-spend the same balance.
+    with _withdraw_lock:
+        # 1. Per-wallet balance ownership
+        wallet_bal, bal_source = _srv._get_or_bootstrap_internal_asset_balance(
+            thr_address, token, dest_chain
+        )
+        if wallet_bal < amount:
+            return _jsonify(ok=False, error='insufficient_balance',
+                            balance=round(wallet_bal, 6),
+                            required=round(amount, 6),
+                            token=token, chain=dest_chain,
+                            balance_source=bal_source), 400
+
+        # 2. Pool liquidity — token-specific (USDT→THR/USDT, USDC→THR/USDC)
+        pools = _srv.load_pools()
+        pool = next(
+            (p for p in pools
+             if {(p.get('token_a') or '').upper(),
+                 (p.get('token_b') or '').upper()} == {'THR', token}),
+            None,
+        )
+        if not pool:
+            return _jsonify(ok=False, error='pool_not_initialized',
+                            token=token), 503
+
+        _rk = 'reserves_b' if (pool.get('token_b') or '').upper() == token else 'reserves_a'
+        stablecoin_reserve = float(pool.get(_rk, 0))
+        max_allowed = round(stablecoin_reserve * 0.9, 6)
+        if amount > max_allowed:
+            return _jsonify(ok=False, error='insufficient_pool_liquidity',
+                            available=max_allowed, token=token), 400
+
+        # 3. Atomically debit wallet balance BEFORE touching pool
+        new_wallet_bal = round(wallet_bal - amount, 6)
+        _srv._set_internal_asset_balance(thr_address, token, dest_chain, new_wallet_bal)
+
+        # 4. Deduct net from pool (flat fee stays as reserve)
+        pool[_rk] = round(stablecoin_reserve - amount_net, 6)
+        try:
+            _srv.save_pools(pools)
+        except Exception as _pool_exc:
+            _srv._set_internal_asset_balance(thr_address, token, dest_chain, wallet_bal)
+            app.logger.error('[V1Withdraw] pool save failed, balance rolled back: %s', _pool_exc)
+            return _jsonify(ok=False, error='internal_error',
+                            detail='pool save failed, no funds deducted'), 500
+
+        # 5. Queue the withdrawal — rollback balance + pool on failure
+        withdraw_id = f"WD-{int(_time_mod.time())}-{_secrets_mod.token_hex(4).upper()}"
+        ts = _time_mod.strftime('%Y-%m-%d %H:%M:%S UTC', _time_mod.gmtime())
+        current_ts = _time_mod.time()
+        payout_wallet = chain_cfg.get('payout_wallet', '')
+        intent_nonce = str(intent.get('nonce', ''))
+        queue_entry = {
+            'id':                withdraw_id,
+            'thr_address':       thr_address,
+            'dest_chain':        dest_chain,
+            'dest_chain_label':  chain_cfg.get('label', dest_chain),
+            'dest_address':      dest_address,
+            'token':             token,
+            'amount':            amount,
+            'amount_net':        amount_net,
+            'flat_fee':          flat_fee,
+            'fee_mode':          'FLAT_FEE',
+            'payout_wallet':     payout_wallet,
+            'status':            'queued',
+            'created_at':        ts,
+            'intent_nonce':      intent_nonce,
+            'balance_before':    wallet_bal,
+            'balance_after':     new_wallet_bal,
+        }
+        try:
+            queue = _srv.load_json(_srv.WITHDRAW_QUEUE_FILE, [])
+            queue.append(queue_entry)
+            _srv.save_json(_srv.WITHDRAW_QUEUE_FILE, queue)
+        except Exception as _q_exc:
+            _srv._set_internal_asset_balance(thr_address, token, dest_chain, wallet_bal)
+            pool[_rk] = stablecoin_reserve
+            _srv.save_pools(pools)
+            app.logger.error('[V1Withdraw] queue save failed, balance+pool rolled back: %s', _q_exc)
+            return _jsonify(ok=False, error='internal_error',
+                            detail='queue save failed, no funds deducted'), 500
+
+    # Record wallet history event
+    _srv.add_wallet_history_event(
+        thr_address=thr_address,
+        event_type='crosschain_withdrawal_requested',
+        chain=dest_chain,
+        asset=token,
+        amount=amount,
+        status='queued',
+        direction='out',
+        internal_txid=withdraw_id,
+        network_label=chain_cfg.get('label', dest_chain),
+        external_to=dest_address,
+        timestamp=current_ts,
+    )
+
+    # Chain ledger record
+    chain_data = _srv.load_json(_srv.CHAIN_FILE, [])
+    tx_record = {
+        'type':              'crosschain_withdrawal_requested',
+        'tx_id':             withdraw_id,
+        'from':              thr_address,
+        'to':                dest_address,
+        'token':             token,
+        'amount':            amount,
+        'amount_net':        amount_net,
+        'dest_chain':        dest_chain,
+        'flat_fee':          flat_fee,
+        'fee_mode':          'FLAT_FEE',
+        'payout_wallet':     payout_wallet,
+        'status':            'queued',
+        'timestamp':         ts,
+    }
+    chain_data.append(tx_record)
+    _srv.save_json(_srv.CHAIN_FILE, chain_data)
+    _srv.update_last_block(tx_record, is_block=False)
+
+    app.logger.info('[V1Withdraw] %s -> %s on %s | amount=%s net=%s fee=%s id=%s',
+                    thr_address, dest_address, dest_chain, amount, amount_net, flat_fee, withdraw_id)
+
+    return _jsonify(
+        ok=True,
+        withdraw_id=withdraw_id,
+        token=token,
+        amount=amount,
+        amount_net=amount_net,
+        flat_fee=flat_fee,
+        fee_mode='FLAT_FEE',
+        dest_chain=dest_chain,
+        dest_chain_label=chain_cfg.get('label', dest_chain),
+        dest_address=dest_address,
+        estimated_minutes=5,
+        status='queued',
+    ), 200
 
 
 @app.route('/api/wallet/v1/swap', methods=['POST'])

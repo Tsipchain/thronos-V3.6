@@ -58,7 +58,7 @@ import fcntl
 import requests
 import redis
 from urllib.parse import urlparse
-from flask import Flask, request, jsonify, send_from_directory, render_template, url_for, send_file, Response, make_response, redirect
+from flask import Flask, request, jsonify, send_from_directory, render_template, render_template_string, url_for, send_file, Response, make_response, redirect
 
 try:
     from flask_cors import CORS
@@ -9977,6 +9977,182 @@ def api_v2_wallet_history():
     }), 200
 
 
+@app.route("/login")
+def login_page():
+    """Login with Thronos Wallet — QR code login page."""
+    server_url = request.host_url.rstrip("/")
+    return render_template_string(_LOGIN_PAGE_HTML, server_url=server_url)
+
+
+_LOGIN_PAGE_HTML = r'''<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Login — Thronos Wallet</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#0a0e17;--card:#111827;--accent:#00c8ff;--accent2:#00ff66;--text:#e2e8f0;--muted:#94a3b8;--border:#1e293b;--danger:#ff6b6b}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center}
+.login-card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:40px;max-width:420px;width:90vw;text-align:center}
+.logo{font-size:2rem;font-weight:700;margin-bottom:8px;background:linear-gradient(135deg,var(--accent),var(--accent2));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.subtitle{color:var(--muted);font-size:.9rem;margin-bottom:28px}
+#qrContainer{margin:24px auto;width:240px;height:240px;background:#fff;border-radius:12px;display:flex;align-items:center;justify-content:center;position:relative}
+#qrContainer img{width:220px;height:220px;image-rendering:pixelated}
+#qrContainer canvas{width:220px;height:220px}
+.spinner{width:40px;height:40px;border:3px solid #ddd;border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.instruction{color:var(--muted);font-size:.85rem;margin-top:16px;line-height:1.5}
+.instruction b{color:var(--text)}
+#statusText{margin-top:16px;font-size:.9rem;min-height:24px}
+.status-waiting{color:var(--accent)}
+.status-success{color:var(--accent2)}
+.status-error{color:var(--danger)}
+#refreshBtn{margin-top:16px;padding:10px 28px;background:transparent;border:1px solid var(--accent);color:var(--accent);border-radius:8px;cursor:pointer;font-size:.85rem;display:none}
+#refreshBtn:hover{background:rgba(0,200,255,.1)}
+.timer{color:var(--muted);font-size:.75rem;margin-top:8px}
+.footer{margin-top:24px;padding-top:16px;border-top:1px solid var(--border);color:var(--muted);font-size:.75rem}
+.footer a{color:var(--accent);text-decoration:none}
+</style>
+</head>
+<body>
+<div class="login-card">
+  <div class="logo">Thronos</div>
+  <div class="subtitle">Login with your Thronos Wallet</div>
+  <div id="qrContainer"><div class="spinner"></div></div>
+  <div class="instruction">
+    Open your <b>Thronos Wallet</b> app<br>
+    Tap <b>Scan QR</b> and point at the code above
+  </div>
+  <div id="statusText" class="status-waiting">Generating challenge...</div>
+  <div id="timerText" class="timer"></div>
+  <button id="refreshBtn" onclick="newChallenge()">Generate New QR</button>
+  <div class="footer">
+    Don't have a wallet? <a href="/wallet-pwa/">Create one</a>
+  </div>
+</div>
+<script>
+(function(){
+  const API = '{{ server_url }}';
+  const qrContainer = document.getElementById('qrContainer');
+  const statusText = document.getElementById('statusText');
+  const timerText = document.getElementById('timerText');
+  const refreshBtn = document.getElementById('refreshBtn');
+  let challengeId = null;
+  let pollTimer = null;
+  let countdownTimer = null;
+  let expiresAt = 0;
+
+  async function newChallenge() {
+    qrContainer.innerHTML = '<div class="spinner"></div>';
+    statusText.textContent = 'Generating challenge...';
+    statusText.className = 'status-waiting';
+    timerText.textContent = '';
+    refreshBtn.style.display = 'none';
+    if (pollTimer) clearInterval(pollTimer);
+    if (countdownTimer) clearInterval(countdownTimer);
+    try {
+      const resp = await fetch(API + '/api/auth/challenge', { method: 'POST', credentials: 'include' });
+      const data = await resp.json();
+      if (!data.ok) { showError(data.error || 'Failed to create challenge'); return; }
+      challengeId = data.challenge.challenge_id;
+      expiresAt = Date.now() + (data.expires_in * 1000);
+      const qrUri = data.qr_uri;
+      const img = document.createElement('img');
+      img.src = API + '/api/qr?address=' + encodeURIComponent(qrUri) + '&format=json';
+      // Use the JSON endpoint for base64
+      const qrResp = await fetch(API + '/api/qr?address=' + encodeURIComponent(qrUri) + '&json=1');
+      const qrData = await qrResp.json();
+      if (qrData.ok && qrData.data_url) {
+        img.src = qrData.data_url;
+      } else {
+        img.src = API + '/api/qr?address=' + encodeURIComponent(qrUri);
+      }
+      img.alt = 'Login QR';
+      qrContainer.innerHTML = '';
+      qrContainer.appendChild(img);
+      statusText.textContent = 'Scan with your Thronos Wallet';
+      statusText.className = 'status-waiting';
+      startPolling();
+      startCountdown();
+    } catch(e) {
+      showError('Network error: ' + e.message);
+    }
+  }
+
+  function startCountdown() {
+    countdownTimer = setInterval(function() {
+      const remaining = Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000));
+      if (remaining <= 0) {
+        clearInterval(countdownTimer);
+        clearInterval(pollTimer);
+        timerText.textContent = '';
+        statusText.textContent = 'QR expired';
+        statusText.className = 'status-error';
+        refreshBtn.style.display = 'inline-block';
+        return;
+      }
+      timerText.textContent = 'Expires in ' + remaining + 's';
+    }, 1000);
+  }
+
+  function startPolling() {
+    pollTimer = setInterval(async function() {
+      if (!challengeId) return;
+      try {
+        const resp = await fetch(API + '/api/auth/challenge/status/' + challengeId, { credentials: 'include' });
+        const data = await resp.json();
+        if (data.ok && data.consumed) {
+          clearInterval(pollTimer);
+          clearInterval(countdownTimer);
+          statusText.textContent = 'Wallet verified! Checking session...';
+          statusText.className = 'status-success';
+          timerText.textContent = '';
+          checkSession();
+        } else if (!data.ok && data.error === 'challenge_expired') {
+          clearInterval(pollTimer);
+          clearInterval(countdownTimer);
+          timerText.textContent = '';
+          statusText.textContent = 'QR expired';
+          statusText.className = 'status-error';
+          refreshBtn.style.display = 'inline-block';
+        }
+      } catch(_) {}
+    }, 2000);
+  }
+
+  async function checkSession() {
+    try {
+      const resp = await fetch(API + '/api/auth/session', { credentials: 'include' });
+      const data = await resp.json();
+      if (data.ok) {
+        statusText.textContent = 'Logged in as ' + data.address.slice(0, 10) + '...';
+        statusText.className = 'status-success';
+        setTimeout(function() { window.location.href = data.route || '/dashboard'; }, 1200);
+      } else {
+        statusText.textContent = 'Session not ready — scan again';
+        statusText.className = 'status-error';
+        refreshBtn.style.display = 'inline-block';
+      }
+    } catch(e) {
+      statusText.textContent = 'Error checking session';
+      statusText.className = 'status-error';
+    }
+  }
+
+  function showError(msg) {
+    statusText.textContent = msg;
+    statusText.className = 'status-error';
+    refreshBtn.style.display = 'inline-block';
+  }
+
+  newChallenge();
+})();
+</script>
+</body>
+</html>'''
+
+
 @app.route("/api/wallet/qr/<thr_addr>")
 def wallet_qr_code(thr_addr):
     """Generate QR code image for the given THR address."""
@@ -15080,11 +15256,16 @@ def _is_admin_authenticated() -> bool:
 
 def _admin_token_from_request(payload: dict | None = None) -> str:
     payload = payload if isinstance(payload, dict) else {}
-    return (
+    token = (
         (request.headers.get("X-Admin-Secret") or "").strip()
         or (request.args.get("secret") or "").strip()
         or str(payload.get("secret") or "").strip()
     )
+    if not token:
+        auth = (request.headers.get("Authorization") or "").strip()
+        if auth.startswith("Bearer "):
+            token = auth[7:].strip()
+    return token
 
 
 def require_admin(payload: dict | None = None):
@@ -15465,6 +15646,613 @@ def api_admin_pytheia_control():
 
 
 # ─── END PYTHEIA CONTROL PLANE (ADMIN) ─────────────────────────────────────
+
+
+# ─── SigBalBot Context Bridge Status ───────────────────────────────────────
+
+@app.route("/api/admin/sigbalbot/status", methods=["GET"])
+def api_admin_sigbalbot_status():
+    denied = require_admin()
+    if denied:
+        return denied
+    try:
+        from sigbalbot_context_bridge import SigBalBotContextBridge
+        bridge = SigBalBotContextBridge()
+        return jsonify({"ok": True, "bridge": bridge.get_status()}), 200
+    except ImportError:
+        return jsonify({"ok": False, "error": "sigbalbot_context_bridge module not available"}), 404
+
+@app.route("/api/admin/sigbalbot/milestone", methods=["GET"])
+def api_admin_sigbalbot_milestone():
+    denied = require_admin()
+    if denied:
+        return denied
+    try:
+        from sigbalbot_milestone_airdrop import SigBalBotMilestoneAirdrop
+        airdrop = SigBalBotMilestoneAirdrop()
+        return jsonify({"ok": True, "milestone": airdrop.get_status()}), 200
+    except ImportError:
+        return jsonify({"ok": False, "error": "sigbalbot_milestone_airdrop module not available"}), 404
+
+
+@app.route("/api/sigbalbot/milestone/progress", methods=["GET"])
+def api_sigbalbot_milestone_progress():
+    try:
+        from sigbalbot_milestone_airdrop import SigBalBotMilestoneAirdrop
+        airdrop = SigBalBotMilestoneAirdrop()
+        return jsonify({"ok": True, "progress": airdrop.get_progress()}), 200
+    except ImportError:
+        return jsonify({"ok": False, "error": "milestone tracking not available"}), 404
+
+
+@app.route("/api/admin/sigbalbot/milestone/allocations", methods=["GET"])
+def api_admin_sigbalbot_allocations():
+    denied = require_admin()
+    if denied:
+        return denied
+    try:
+        from sigbalbot_milestone_airdrop import SigBalBotMilestoneAirdrop
+        airdrop = SigBalBotMilestoneAirdrop()
+        status_filter = request.args.get("status")
+        return jsonify({
+            "ok": True,
+            "allocations": airdrop.list_allocations(status_filter=status_filter),
+        }), 200
+    except ImportError:
+        return jsonify({"ok": False, "error": "sigbalbot_milestone_airdrop module not available"}), 404
+
+
+@app.route("/api/admin/sigbalbot/milestone/approve/<batch_id>", methods=["POST"])
+def api_admin_sigbalbot_approve(batch_id):
+    denied = require_admin()
+    if denied:
+        return denied
+    try:
+        from sigbalbot_milestone_airdrop import SigBalBotMilestoneAirdrop
+        airdrop = SigBalBotMilestoneAirdrop()
+        result = airdrop.approve_allocation(batch_id)
+        if "error" in result:
+            return jsonify({"ok": False, **result}), 400
+        return jsonify({"ok": True, **result}), 200
+    except ImportError:
+        return jsonify({"ok": False, "error": "sigbalbot_milestone_airdrop module not available"}), 404
+
+
+@app.route("/api/admin/sigbalbot/milestone/execute/<batch_id>", methods=["POST"])
+def api_admin_sigbalbot_execute(batch_id):
+    denied = require_admin()
+    if denied:
+        return denied
+    try:
+        from sigbalbot_milestone_airdrop import SigBalBotMilestoneAirdrop
+        data = request.get_json(silent=True) or {}
+        dry_run = bool(data.get("dry_run", False))
+        airdrop = SigBalBotMilestoneAirdrop(dry_run=dry_run)
+        result = airdrop.execute_approved_allocation(batch_id)
+        if "error" in result:
+            return jsonify({"ok": False, **result}), 400
+        return jsonify({"ok": True, **result}), 200
+    except ImportError:
+        return jsonify({"ok": False, "error": "sigbalbot_milestone_airdrop module not available"}), 404
+
+
+# ─── Admin Trade Feed & Wallet Management ─────────────────────────────────
+
+ADMIN_TRADE_FEED_FILE = os.path.join(DATA_DIR, "admin_trade_feed.json")
+ADMIN_CONFIG_FILE = os.path.join(DATA_DIR, "admin_sentinel_config.json")
+
+
+@app.route("/api/admin/sentinel/wallet", methods=["GET"])
+def api_admin_sentinel_wallet_get():
+    denied = require_admin()
+    if denied:
+        return denied
+    config = load_json(ADMIN_CONFIG_FILE, {})
+    return jsonify({
+        "ok": True,
+        "wallet_address": config.get("wallet_address"),
+        "auto_distribute_enabled": config.get("auto_distribute_enabled", False),
+        "auto_distribute_delay_hours": config.get("auto_distribute_delay_hours", 24),
+    }), 200
+
+
+@app.route("/api/admin/sentinel/wallet", methods=["POST"])
+def api_admin_sentinel_wallet_set():
+    denied = require_admin()
+    if denied:
+        return denied
+    data = request.get_json(silent=True) or {}
+    wallet = (data.get("wallet_address") or "").strip()
+    if not wallet:
+        return jsonify({"ok": False, "error": "wallet_address required"}), 400
+
+    config = load_json(ADMIN_CONFIG_FILE, {})
+    config["wallet_address"] = wallet
+    config["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    save_json(ADMIN_CONFIG_FILE, config)
+
+    return jsonify({"ok": True, "wallet_address": wallet}), 200
+
+
+@app.route("/api/admin/sentinel/auto-distribute", methods=["POST"])
+def api_admin_sentinel_auto_distribute():
+    denied = require_admin()
+    if denied:
+        return denied
+    data = request.get_json(silent=True) or {}
+    enabled = bool(data.get("enabled", False))
+    delay_hours = int(data.get("delay_hours", 24))
+
+    config = load_json(ADMIN_CONFIG_FILE, {})
+    config["auto_distribute_enabled"] = enabled
+    config["auto_distribute_delay_hours"] = max(1, min(168, delay_hours))
+    config["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    save_json(ADMIN_CONFIG_FILE, config)
+
+    return jsonify({
+        "ok": True,
+        "auto_distribute_enabled": config["auto_distribute_enabled"],
+        "auto_distribute_delay_hours": config["auto_distribute_delay_hours"],
+    }), 200
+
+
+@app.route("/api/admin/trades/feed", methods=["POST"])
+def api_admin_trades_feed():
+    denied = require_admin()
+    if denied:
+        return denied
+    data = request.get_json(silent=True) or {}
+    required = ["symbol", "side", "entry_price"]
+    missing = [f for f in required if not data.get(f)]
+    if missing:
+        return jsonify({"ok": False, "error": f"missing fields: {missing}"}), 400
+
+    feed = load_json(ADMIN_TRADE_FEED_FILE, [])
+    if not isinstance(feed, list):
+        feed = []
+
+    trade = {
+        "id": f"trade-{int(time.time())}-{secrets.token_hex(3)}",
+        "symbol": data["symbol"].upper(),
+        "side": data["side"].upper(),
+        "entry_price": float(data["entry_price"]),
+        "exit_price": float(data["exit_price"]) if data.get("exit_price") else None,
+        "stop_loss": float(data["stop_loss"]) if data.get("stop_loss") else None,
+        "take_profit": float(data["take_profit"]) if data.get("take_profit") else None,
+        "timeframe": data.get("timeframe", "4h"),
+        "notes": data.get("notes", ""),
+        "status": data.get("status", "open"),
+        "result": data.get("result"),
+        "pnl_pct": float(data["pnl_pct"]) if data.get("pnl_pct") else None,
+        "created_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+    }
+    feed.append(trade)
+    save_json(ADMIN_TRADE_FEED_FILE, feed)
+
+    logger.info("[ADMIN-TRADE] Trade fed: %s %s %s @ %s",
+                trade["side"], trade["symbol"], trade["status"], trade["entry_price"])
+
+    return jsonify({"ok": True, "trade": trade}), 201
+
+
+@app.route("/api/admin/trades", methods=["GET"])
+def api_admin_trades_list():
+    denied = require_admin()
+    if denied:
+        return denied
+    feed = load_json(ADMIN_TRADE_FEED_FILE, [])
+    if not isinstance(feed, list):
+        feed = []
+    limit = int(request.args.get("limit", 50))
+    return jsonify({"ok": True, "trades": feed[-limit:], "total": len(feed)}), 200
+
+
+@app.route("/api/admin/subscribers/wallets", methods=["GET"])
+def api_admin_subscribers_wallets():
+    denied = require_admin()
+    if denied:
+        return denied
+    subs = load_json(os.path.join(DATA_DIR, "sentinel_subscriptions.json"), {})
+    now_ts = int(time.time())
+    result = []
+    for addr, sub in subs.items():
+        if not isinstance(sub, dict):
+            continue
+        result.append({
+            "address": addr,
+            "tier": sub.get("tier", "starter"),
+            "rewards_multiplier": sub.get("rewards_multiplier", 1.0),
+            "subscribed_at": sub.get("subscribed_at"),
+            "expires_at": sub.get("expires_at"),
+            "active": sub.get("expires_at", 0) > now_ts,
+            "verified": sub.get("verified", False),
+        })
+    return jsonify({"ok": True, "subscribers": result, "total": len(result)}), 200
+
+
+@app.route("/api/admin/subscribers/wallets/<address>/verify", methods=["POST"])
+def api_admin_subscribers_verify(address):
+    denied = require_admin()
+    if denied:
+        return denied
+    subs_file = os.path.join(DATA_DIR, "sentinel_subscriptions.json")
+    subs = load_json(subs_file, {})
+    if address not in subs:
+        return jsonify({"ok": False, "error": "subscriber not found"}), 404
+    subs[address]["verified"] = True
+    subs[address]["verified_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    save_json(subs_file, subs)
+    return jsonify({"ok": True, "address": address, "verified": True}), 200
+
+
+# ── Milestone auto-distribution scheduler job ──────────────────────────────
+
+def _check_auto_distribute():
+    """Scheduler job: auto-execute approved allocations after delay period."""
+    try:
+        config = load_json(ADMIN_CONFIG_FILE, {})
+        if not config.get("auto_distribute_enabled", False):
+            return
+
+        delay_hours = config.get("auto_distribute_delay_hours", 24)
+        from sigbalbot_milestone_airdrop import SigBalBotMilestoneAirdrop
+        airdrop = SigBalBotMilestoneAirdrop()
+
+        for batch_id, alloc in airdrop.allocations.items():
+            if alloc.get("status") != "approved":
+                continue
+            approved_at = alloc.get("approved_at", "")
+            if not approved_at:
+                continue
+            try:
+                approved_ts = time.mktime(time.strptime(approved_at, "%Y-%m-%d %H:%M:%S UTC"))
+            except (ValueError, OverflowError):
+                continue
+            if time.time() - approved_ts >= delay_hours * 3600:
+                logger.info("[AUTO-DISTRIBUTE] Executing batch %s (approved %s, delay=%dh)",
+                           batch_id, approved_at, delay_hours)
+                result = airdrop.execute_approved_allocation(batch_id)
+                logger.info("[AUTO-DISTRIBUTE] Result: confirmed=%d, failed=%d, total=%.6f THR",
+                           result.get("confirmed", 0), result.get("failed", 0),
+                           result.get("total_distributed", 0.0))
+    except Exception as exc:
+        logger.warning("[AUTO-DISTRIBUTE] Error: %s", str(exc)[:200])
+
+
+# ─── Admin PWA Serve ───────────────────────────────────────────────────────
+
+@app.route("/admin-pwa")
+@app.route("/admin-pwa/")
+def serve_admin_pwa():
+    return send_from_directory(os.path.join(BASE_DIR, "static", "admin-pwa"), "index.html")
+
+
+@app.route("/admin-pwa/<path:filename>")
+def serve_admin_pwa_assets(filename):
+    return send_from_directory(os.path.join(BASE_DIR, "static", "admin-pwa"), filename)
+
+
+# ─── Mobile Sentinel API (wallet-app integration) ─────────────────────────
+
+MOBILE_SIGNALS_FILE = os.path.join(DATA_DIR, "mobile_sentinel_signals.json")
+
+
+def _require_wallet_auth():
+    """Validate wallet address from request JSON or query param."""
+    wallet = None
+    if request.method == "POST":
+        data = request.get_json(silent=True) or {}
+        wallet = (data.get("wallet_address") or "").strip()
+    else:
+        wallet = (request.args.get("wallet") or "").strip()
+    if not wallet or not wallet.startswith("THR") or len(wallet) < 10:
+        return None, jsonify({"ok": False, "error": "valid THR wallet_address required"}), 401
+    return wallet, None, None
+
+
+@app.route("/api/mobile/sentinel/signals", methods=["GET"])
+def api_mobile_sentinel_signals():
+    """Recent trading signals for the wallet app.
+
+    Query params: wallet (THR address), limit (default 20)
+    Returns signals visible to this subscriber's tier.
+    """
+    wallet = (request.args.get("wallet") or "").strip()
+    if not wallet or not wallet.startswith("THR"):
+        return jsonify({"ok": False, "error": "wallet param required"}), 401
+
+    subs = load_json(SENTINEL_SUBSCRIPTIONS_FILE, {})
+    sub = subs.get(wallet)
+    now_ts = int(time.time())
+    if not sub or sub.get("expires_at", 0) <= now_ts:
+        return jsonify({"ok": False, "error": "no active subscription", "subscribe_url": "/api/sentinel/packages"}), 403
+
+    tier = sub.get("tier", "starter")
+    limit = min(int(request.args.get("limit", 20)), 100)
+
+    feed = load_json(ADMIN_TRADE_FEED_FILE, [])
+    if not isinstance(feed, list):
+        feed = []
+
+    signals = []
+    for trade in reversed(feed[-200:]):
+        sig = {
+            "id": trade.get("id"),
+            "symbol": trade.get("symbol"),
+            "side": trade.get("side"),
+            "entry_price": trade.get("entry_price"),
+            "stop_loss": trade.get("stop_loss"),
+            "take_profit": trade.get("take_profit"),
+            "timeframe": trade.get("timeframe", "4h"),
+            "status": trade.get("status", "open"),
+            "created_at": trade.get("created_at"),
+        }
+        if tier in ("elite", "whale"):
+            sig["notes"] = trade.get("notes", "")
+            sig["pnl_pct"] = trade.get("pnl_pct")
+            sig["exit_price"] = trade.get("exit_price")
+        signals.append(sig)
+        if len(signals) >= limit:
+            break
+
+    return jsonify({"ok": True, "signals": signals, "tier": tier, "total": len(feed)}), 200
+
+
+@app.route("/api/mobile/sentinel/subscription", methods=["GET"])
+def api_mobile_sentinel_subscription():
+    """Subscription status for a wallet."""
+    wallet = (request.args.get("wallet") or "").strip()
+    if not wallet or not wallet.startswith("THR"):
+        return jsonify({"ok": False, "error": "wallet param required"}), 401
+
+    subs = load_json(SENTINEL_SUBSCRIPTIONS_FILE, {})
+    sub = subs.get(wallet)
+    now_ts = int(time.time())
+
+    if not sub:
+        return jsonify({
+            "ok": True,
+            "subscribed": False,
+            "packages": SENTINEL_PACKAGES,
+        }), 200
+
+    active = sub.get("expires_at", 0) > now_ts
+    rewards_file = os.path.join(DATA_DIR, "sentinel_rewards.json")
+    rewards = load_json(rewards_file, {})
+    wallet_rewards = rewards.get(wallet, {})
+
+    return jsonify({
+        "ok": True,
+        "subscribed": True,
+        "active": active,
+        "tier": sub.get("tier"),
+        "expires_at": sub.get("expires_at"),
+        "rewards_multiplier": sub.get("rewards_multiplier", 1.0),
+        "subscribed_at": sub.get("subscribed_at"),
+        "rewards_earned": wallet_rewards.get("total_earned", 0),
+        "rewards_pending": wallet_rewards.get("pending", 0),
+        "verified": sub.get("verified", False),
+    }), 200
+
+
+@app.route("/api/mobile/sentinel/packages", methods=["GET"])
+def api_mobile_sentinel_packages():
+    """List available subscription packages for the wallet app."""
+    return jsonify({"ok": True, "packages": SENTINEL_PACKAGES}), 200
+
+
+@app.route("/api/mobile/sentinel/subscribe", methods=["POST"])
+def api_mobile_sentinel_subscribe():
+    """Subscribe from wallet app — validates wallet, deducts THR, activates.
+
+    Delegates to the existing subscribe endpoint logic but accepts
+    wallet-app JSON format: {wallet_address, package_id}
+    """
+    data = request.get_json(silent=True) or {}
+    wallet = (data.get("wallet_address") or "").strip()
+    package_id = (data.get("package_id") or "").strip().lower()
+
+    if not wallet or not wallet.startswith("THR") or len(wallet) < 10:
+        return jsonify({"ok": False, "error": "valid wallet_address required"}), 400
+    if package_id not in SENTINEL_PACKAGES:
+        return jsonify({"ok": False, "error": f"invalid package: {package_id}",
+                        "valid": list(SENTINEL_PACKAGES.keys())}), 400
+
+    pkg = SENTINEL_PACKAGES[package_id]
+    price_thr = pkg["price_thr"]
+
+    balance = get_thr_balance(wallet)
+    if balance < price_thr:
+        return jsonify({
+            "ok": False,
+            "error": "insufficient THR balance",
+            "required": price_thr,
+            "balance": balance,
+        }), 400
+
+    ledger = load_json(LEDGER_FILE, {})
+    matched_key = None
+    for k in ledger:
+        if k.upper() == wallet.upper():
+            matched_key = k
+            break
+    if matched_key is None:
+        return jsonify({"ok": False, "error": "wallet not found in ledger"}), 404
+
+    ledger[matched_key] = round(ledger[matched_key] - price_thr, 6)
+    save_json(LEDGER_FILE, ledger)
+
+    fee_split = _sentinel_split_fee(price_thr)
+
+    subs = load_json(SENTINEL_SUBSCRIPTIONS_FILE, {})
+    now_ts = int(time.time())
+    duration = pkg["duration_days"] * 86400
+
+    existing = subs.get(wallet)
+    if existing and existing.get("expires_at", 0) > now_ts:
+        expires_at = existing["expires_at"] + duration
+    else:
+        expires_at = now_ts + duration
+
+    blockchain_ref = hashlib.sha256(f"{wallet}:{now_ts}:{package_id}".encode()).hexdigest()[:48]
+
+    subs[wallet] = {
+        "tier": package_id,
+        "subscribed_at": now_ts,
+        "expires_at": expires_at,
+        "amount_paid": price_thr,
+        "token": "THR",
+        "payment_chain": "thronos",
+        "payment_tx_hash": "",
+        "blockchain_ref": blockchain_ref,
+        "rewards_multiplier": pkg["rewards_multiplier"],
+        "auto_renew": False,
+        "treasury_address": SENTINEL_TREASURY_ADDRESSES.get("thronos", ""),
+    }
+    save_json(SENTINEL_SUBSCRIPTIONS_FILE, subs)
+
+    logger.info("[MOBILE-SUBSCRIBE] %s subscribed to %s (%.2f THR)", wallet, package_id, price_thr)
+
+    return jsonify({
+        "ok": True,
+        "tier": package_id,
+        "expires_at": expires_at,
+        "amount_charged": price_thr,
+        "blockchain_ref": blockchain_ref,
+    }), 201
+
+
+@app.route("/api/mobile/sentinel/milestones", methods=["GET"])
+def api_mobile_sentinel_milestones():
+    """Milestone progress and reward status for a wallet subscriber."""
+    wallet = (request.args.get("wallet") or "").strip()
+    if not wallet or not wallet.startswith("THR"):
+        return jsonify({"ok": False, "error": "wallet param required"}), 401
+
+    subs = load_json(SENTINEL_SUBSCRIPTIONS_FILE, {})
+    sub = subs.get(wallet)
+    if not sub:
+        return jsonify({"ok": False, "error": "not subscribed"}), 403
+
+    try:
+        from sigbalbot_milestone_airdrop import SigBalBotMilestoneAirdrop
+        airdrop = SigBalBotMilestoneAirdrop()
+        progress = airdrop.get_progress()
+        status = airdrop.get_status()
+
+        wallet_allocations = []
+        for batch_id, alloc in airdrop.allocations.items():
+            for payout in alloc.get("payouts", []):
+                if payout.get("address", "").upper() == wallet.upper():
+                    wallet_allocations.append({
+                        "batch_id": batch_id,
+                        "milestone": alloc.get("milestone_number"),
+                        "status": payout.get("status"),
+                        "amount": payout.get("amount"),
+                        "tx_id": payout.get("tx_id"),
+                    })
+
+        return jsonify({
+            "ok": True,
+            "milestone_progress": progress,
+            "total_wins": status.get("total_wins", 0),
+            "milestones_reached": status.get("milestones_reached", 0),
+            "wallet_rewards": wallet_allocations,
+        }), 200
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)[:200]}), 500
+
+
+@app.route("/api/mobile/wallet/link", methods=["POST"])
+def api_mobile_wallet_link():
+    """Link a wallet address to a Sentinel subscription for signal delivery.
+
+    Called from the wallet app after wallet creation/import to register
+    the address for signal delivery and milestone rewards.
+    """
+    data = request.get_json(silent=True) or {}
+    wallet = (data.get("wallet_address") or "").strip()
+    device_id = (data.get("device_id") or "").strip()
+
+    if not wallet or not wallet.startswith("THR") or len(wallet) < 10:
+        return jsonify({"ok": False, "error": "valid wallet_address required"}), 400
+
+    profiles_file = os.path.join(DATA_DIR, "user_profiles.json")
+    profiles = load_json(profiles_file, {})
+
+    profile = profiles.get(wallet, {})
+    profile["thr_address"] = wallet
+    profile["linked_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    if device_id:
+        profile["device_id"] = device_id
+    profile["source"] = "mobile_app"
+    profiles[wallet] = profile
+    save_json(profiles_file, profiles)
+
+    subs = load_json(SENTINEL_SUBSCRIPTIONS_FILE, {})
+    has_subscription = wallet in subs
+    active = has_subscription and subs[wallet].get("expires_at", 0) > int(time.time())
+
+    return jsonify({
+        "ok": True,
+        "wallet_address": wallet,
+        "linked": True,
+        "has_subscription": has_subscription,
+        "subscription_active": active,
+        "tier": subs[wallet].get("tier") if has_subscription else None,
+    }), 200
+
+
+# ─── Wallet Snapshot API (for SigBalBot relay to Sentinel) ─────────────────
+
+@app.route("/api/sigbalbot/wallet-snapshots", methods=["GET"])
+def api_sigbalbot_wallet_snapshots():
+    """Wallet snapshot endpoint for SigBalBot context relay.
+
+    Returns active subscriber wallet snapshots that SigBalBot includes
+    in its context endpoint response for Sentinel consumption.
+    Auth: same admin check — only SigBalBot's server-to-server calls.
+    """
+    denied = require_admin()
+    if denied:
+        return denied
+
+    subs = load_json(SENTINEL_SUBSCRIPTIONS_FILE, {})
+    now_ts = int(time.time())
+    snapshots = []
+
+    for addr, sub in subs.items():
+        if not isinstance(sub, dict):
+            continue
+        expires = sub.get("expires_at", 0)
+        active = expires > now_ts
+        if not active:
+            continue
+
+        balance = get_thr_balance(addr)
+
+        snapshots.append({
+            "address": addr,
+            "tier": sub.get("tier", "starter"),
+            "rewards_multiplier": sub.get("rewards_multiplier", 1.0),
+            "active": True,
+            "verified": sub.get("verified", False),
+            "expires_at": expires,
+            "thr_balance": balance,
+            "subscribed_at": sub.get("subscribed_at"),
+            "snapshot_at": now_ts,
+        })
+
+    return jsonify({
+        "ok": True,
+        "wallet_snapshots": snapshots,
+        "total_active": len(snapshots),
+        "generated_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+    }), 200
+
+
+# ─── END SigBalBot Context Bridge ──────────────────────────────────────────
+
 
 @app.route("/api/admin/ai/chat", methods=["POST"])
 def api_admin_ai_chat():
@@ -23768,7 +24556,9 @@ def _collect_normalized_history_from_wallet_history(
     aliases: set, limit_overfetch: int
 ) -> tuple[list, dict]:
     """
-    Scan wallet_history.json for all events whose thr_address is in aliases.
+    Scan wallet_history.json for all events whose thr_address, external_from,
+    or external_to is in aliases.  This ensures incoming transfers and
+    cross-chain deposits appear for the recipient, not just the sender.
     Returns (events, source_counts).
     """
     source_counts: dict = {}
@@ -23780,7 +24570,11 @@ def _collect_normalized_history_from_wallet_history(
             if not isinstance(e, dict):
                 continue
             ta = (e.get("thr_address") or "").strip()
-            if ta in aliases or ta.upper() in aliases:
+            ef = (e.get("external_from") or "").strip()
+            et = (e.get("external_to") or "").strip()
+            if (ta in aliases or ta.upper() in aliases
+                    or ef in aliases or ef.upper() in aliases
+                    or et in aliases or et.upper() in aliases):
                 ev = dict(e)
                 ev.setdefault("_source", "wallet_history")
                 events.append(ev)
@@ -24035,10 +24829,12 @@ _POOL_CONFIGS: dict = {
     "bsc-usdt": {
         "pool_id": "bsc-usdt", "pair": "THR-USDT", "chain": "bsc",
         "external_asset": "USDT", "internal_asset": "THR", "internal_fee_asset": "THR",
+        "base_apy": 5.0,
     },
     "base-usdc": {
         "pool_id": "base-usdc", "pair": "THR-USDC", "chain": "base",
         "external_asset": "USDC", "internal_asset": "THR", "internal_fee_asset": "THR",
+        "base_apy": 5.0,
     },
 }
 _AMM_WORKER_NAME = "pythia_amm_worker"
@@ -24589,10 +25385,13 @@ def _pool_stats(pool: dict, cfg: dict) -> dict:
     fees_24h = volume_24h_ext * (fee_bps / 10000.0)
     apy_pct  = ((fees_24h * 365.0) / tvl_usd * 100.0) if tvl_usd > 0 else 0.0
 
+    base_apy = float(cfg.get("base_apy") or 0)
+
     return {
         "last_swap_price": round(last_swap_price, 8) if last_swap_price else 0.0,
         "volume_24h_usd":  round(volume_24h_ext, 6),
         "apy_pct":         round(apy_pct, 3),
+        "base_apy":        round(base_apy, 2),
         "fee_bps":         fee_bps,
     }
 
@@ -25520,6 +26319,23 @@ def api_admin_pools_watcher_credit_external():
         except Exception as intent_err:
             logger.warning("[pool_watcher] intent match failed: %s", intent_err)
 
+        # If no intent matched, try to resolve the depositor's THR address from
+        # their EVM address so we can still emit a wallet history event.
+        depositor_resolved = ""
+        if not credited_address and from_addr:
+            try:
+                wallet_info = _lookup_thronos_wallet(from_addr)
+                if wallet_info and wallet_info.get("thr_address"):
+                    depositor_resolved = wallet_info["thr_address"].strip().upper()
+                else:
+                    bnb_reg_file = os.path.join(DATA_DIR, "bnb_user_registry.json")
+                    bnb_reg = load_json(bnb_reg_file, {})
+                    hit = bnb_reg.get(from_addr.lower())
+                    if hit and isinstance(hit, dict):
+                        depositor_resolved = (hit.get("thr_address") or "").strip().upper()
+            except Exception as resolve_err:
+                logger.debug("[pool_watcher] depositor resolve failed: %s", resolve_err)
+
         # If matched, credit LP shares to the depositor's position and emit history
         if credited_address and credited_address.startswith("THR"):
             try:
@@ -25560,6 +26376,28 @@ def api_admin_pools_watcher_credit_external():
                             amount, credited_address, pool_id, tx_hash[:20])
             except Exception as pos_err:
                 logger.warning("[pool_watcher] LP share credit failed: %s", pos_err)
+        elif depositor_resolved and depositor_resolved.startswith("THR"):
+            try:
+                add_wallet_history_event(
+                    thr_address=depositor_resolved,
+                    event_type="pool_external_deposit_detected",
+                    chain=chain,
+                    asset=asset,
+                    amount=amount,
+                    status="confirmed",
+                    direction="in",
+                    internal_txid=event_id,
+                    external_txid=tx_hash,
+                    external_from=from_addr,
+                    external_to=to_addr,
+                    pool_id=pool_id,
+                    pair=cfg.get("pair", ""),
+                    note=f"External deposit detected via pool_deposit_watcher (no intent matched, resolved from EVM address)",
+                )
+                logger.info("[pool_watcher] deposit history recorded for %s in pool %s (tx=%s, no intent)",
+                            depositor_resolved, pool_id, tx_hash[:20])
+            except Exception as hist_err:
+                logger.warning("[pool_watcher] deposit history write failed: %s", hist_err)
 
         logger.info("[pool_watcher] credited %.6f %s → %s external_reserve | tx=%s log=%d",
                     amount, asset, pool_id, tx_hash[:20], log_index)
@@ -27149,6 +27987,7 @@ _PERSONAL_IN_EVENTS = frozenset({
 # Personal out-events that decrease wallet's internal asset balance
 _PERSONAL_OUT_EVENTS = frozenset({
     "internal_asset_transfer",
+    "crosschain_withdrawal_requested",
 })
 _CHAIN_ALIASES = {"bnb": "bsc", "binance": "bsc", "ethereum": "eth"}
 
@@ -30140,6 +30979,9 @@ def api_wallet_evm_tx_record():
         # (PWA/Mobile/Web read from that endpoint). Display-only — status stays
         # unverified until the on-chain watcher confirms.
         try:
+            _evm_network_label = {"bsc": "BNB Chain", "base": "Base",
+                                  "arbitrum": "Arbitrum One", "eth": "Ethereum"}.get(chain_norm, chain_norm.upper())
+            _evm_token_std = "ERC20" if chain_norm in ("eth", "arbitrum", "base") else "BEP20"
             add_wallet_history_event(
                 thr_address=address,
                 event_type="evm_token_send",
@@ -30151,12 +30993,36 @@ def api_wallet_evm_tx_record():
                 external_txid=tx_hash,
                 external_from=address,
                 external_to=to_addr,
-                token_standard="ERC20" if chain_norm in ("eth", "arbitrum", "base") else "BEP20",
-                network_label={"bsc": "BNB Chain", "base": "Base",
-                               "arbitrum": "Arbitrum One", "eth": "Ethereum"}.get(chain_norm, chain_norm.upper()),
+                token_standard=_evm_token_std,
+                network_label=_evm_network_label,
                 timestamp=now_ts,
                 note="client_reported_external_send",
             )
+            if to_addr and to_addr.upper() != address.upper():
+                _hist = load_json(WALLET_HISTORY_FILE, [])
+                _dup = any(
+                    e.get("event_type") == "evm_token_receive"
+                    and e.get("external_txid") == tx_hash
+                    and e.get("thr_address", "").upper() == to_addr.upper()
+                    for e in _hist
+                ) if tx_hash else False
+                if not _dup:
+                    add_wallet_history_event(
+                        thr_address=to_addr,
+                        event_type="evm_token_receive",
+                        chain=chain_norm,
+                        asset=asset,
+                        amount=amount,
+                        status="unverified_local_submission",
+                        direction="in",
+                        external_txid=tx_hash,
+                        external_from=address,
+                        external_to=to_addr,
+                        token_standard=_evm_token_std,
+                        network_label=_evm_network_label,
+                        timestamp=now_ts,
+                        note="client_reported_external_receive",
+                    )
         except Exception as history_err:
             logger.warning("[evm-tx/record] wallet history append failed: %s", history_err)
 
@@ -33139,6 +34005,30 @@ if NODE_ROLE == "master" and SCHEDULER_ENABLED and ENABLE_CHAIN:
                          id="pythia_amm_monitor")
         print("[SCHEDULER] Pythia AMM monitoring scheduled (every 5 min)")
 
+    # SigBalBot Context Bridge – polls SigBalBot for Sentinel-confirmed signals
+    try:
+        from sigbalbot_context_bridge import SigBalBotContextBridge, SIGBALBOT_POLL_INTERVAL
+        _sigbalbot_bridge = SigBalBotContextBridge()
+        if _sigbalbot_bridge.is_configured():
+            scheduler.add_job(_with_app_context(_sigbalbot_bridge.run_cycle), "interval",
+                             seconds=SIGBALBOT_POLL_INTERVAL,
+                             coalesce=True, max_instances=1, id="sigbalbot_context_bridge")
+            print(f"[SCHEDULER] SigBalBot context bridge scheduled (every {SIGBALBOT_POLL_INTERVAL}s)")
+        else:
+            print("[SCHEDULER] SigBalBot context bridge not configured (missing SIGBALBOT_WEBHOOK_URL or SIGBALBOT_API_KEY)")
+    except ImportError as e:
+        _sigbalbot_bridge = None
+        print(f"[SCHEDULER] SigBalBot context bridge unavailable: {e}")
+    except Exception as e:
+        _sigbalbot_bridge = None
+        print(f"[SCHEDULER] SigBalBot context bridge init error: {e}")
+
+    # Milestone auto-distribution – checks hourly for approved allocations past delay
+    scheduler.add_job(_with_app_context(_check_auto_distribute), "interval",
+                     seconds=3600, coalesce=True, max_instances=1,
+                     id="milestone_auto_distribute")
+    print("[SCHEDULER] Milestone auto-distribute checker scheduled (hourly)")
+
     scheduler.start()
     _active_schedulers.append(scheduler)
     print(f"[SCHEDULER] All master jobs started (including telemetry cache, AI rewards, BTC pledge watcher, PYTHEIA)")
@@ -34413,10 +35303,23 @@ def add_wallet_history_event(
 
 
 def get_wallet_history(thr_address: str, limit: int = 100) -> list:
-    """Get transaction history for a wallet (most recent first)."""
+    """Get transaction history for a wallet (most recent first).
+
+    Matches on thr_address (initiator) as well as external_from / external_to
+    so that incoming transfers, cross-chain deposits, and EVM receives are
+    visible to the recipient wallet — not just the sender.
+    """
     try:
         history = load_json(WALLET_HISTORY_FILE, [])
-        wallet_events = [e for e in history if isinstance(e, dict) and e.get("thr_address") == thr_address]
+        addr_upper = thr_address.upper()
+        wallet_events = []
+        for e in history:
+            if not isinstance(e, dict):
+                continue
+            if (e.get("thr_address", "").upper() == addr_upper
+                    or e.get("external_from", "").upper() == addr_upper
+                    or e.get("external_to", "").upper() == addr_upper):
+                wallet_events.append(e)
         # Sort by timestamp descending (most recent first)
         wallet_events.sort(key=lambda e: e.get("timestamp", 0), reverse=True)
         return wallet_events[:limit]
@@ -40880,20 +41783,39 @@ def api_v1_pools_add_liquidity_crosschain():
     """
     data = request.get_json() or {}
 
-    pool_id = (data.get("pool_id") or "").strip()
-    chain = (data.get("chain") or "").lower().strip()
-    token_contract = (data.get("token_contract") or "").strip()
-    evm_address = (data.get("evm_address") or "").strip()
-    decimals_raw = data.get("decimals", 18)
-    auth_secret = (data.get("auth_secret") or "").strip()
-    provider = (data.get("provider_thr") or data.get("from") or "").strip()
+    # V1 signed intent path — extract fields from payload if present
+    intent_raw = data.get("intent")
+    v1_signature = (data.get("signature") or "").strip()
+    v1_public_key = (data.get("public_key") or "").strip()
+    v1_payload = data.get("payload") or {}
+    use_v1_intent = bool(intent_raw and v1_signature and v1_public_key)
 
-    try:
-        amt_a = float(data.get("amount_a", 0))
-        amt_b = float(data.get("amount_b", 0))
-        decimals = int(decimals_raw)
-    except (TypeError, ValueError):
-        return jsonify(ok=False, error="invalid_amounts"), 400
+    if use_v1_intent:
+        pool_id = (v1_payload.get("pool_id") or "").strip()
+        chain = (v1_payload.get("chain") or "").lower().strip()
+        token_contract = (v1_payload.get("token_contract") or "").strip()
+        evm_address = (v1_payload.get("evm_address") or "").strip()
+        decimals_raw = v1_payload.get("decimals", 18)
+        provider = (v1_payload.get("provider_thr") or "").strip()
+        try:
+            amt_a = float(v1_payload.get("amount_a", 0))
+            amt_b = float(v1_payload.get("amount_b", 0))
+            decimals = int(decimals_raw)
+        except (TypeError, ValueError):
+            return jsonify(ok=False, error="invalid_amounts"), 400
+    else:
+        pool_id = (data.get("pool_id") or "").strip()
+        chain = (data.get("chain") or "").lower().strip()
+        token_contract = (data.get("token_contract") or "").strip()
+        evm_address = (data.get("evm_address") or "").strip()
+        decimals_raw = data.get("decimals", 18)
+        provider = (data.get("provider_thr") or data.get("from") or "").strip()
+        try:
+            amt_a = float(data.get("amount_a", 0))
+            amt_b = float(data.get("amount_b", 0))
+            decimals = int(decimals_raw)
+        except (TypeError, ValueError):
+            return jsonify(ok=False, error="invalid_amounts"), 400
 
     if not pool_id or amt_a <= 0 or amt_b <= 0:
         return jsonify(ok=False, error="missing_fields",
@@ -40926,14 +41848,32 @@ def api_v1_pools_add_liquidity_crosschain():
     token_standard = token_meta["token_standard"]
     network_label = token_meta["network_label"]
 
-    # V1 wallet access gate: covers new pledge users, old/migration users, whitelisted users
-    _access_err, _access_msg = _validate_pool_access(provider, auth_secret)
-    if _access_err != "ok":
-        logger.warning("[add_liquidity_intent] pool_access_denied provider=%s err=%s",
-                       provider[:10] if provider else "", _access_err)
-        return jsonify(ok=False, error=_access_err, message=_access_msg), (
-            401 if _access_err == "invalid_auth_secret" else 403
-        )
+    # Auth gate: V1 signed intent or legacy auth_secret
+    if use_v1_intent:
+        try:
+            from server_ext import _verify_wallet_action_intent, _verify_action_payload_hash
+            intent = intent_raw if isinstance(intent_raw, dict) else {}
+            ok_v1, err_code, err_detail = _verify_wallet_action_intent(intent, v1_signature, v1_public_key)
+            if not ok_v1:
+                return jsonify(ok=False, error=err_code, detail=err_detail), 400
+            if not _verify_action_payload_hash(intent.get("payload_hash", ""), v1_payload):
+                return jsonify(ok=False, error="payload_hash_mismatch",
+                               detail="payload does not match signed intent"), 400
+            if intent.get("from_thr", "").upper() != provider.upper():
+                return jsonify(ok=False, error="intent_provider_mismatch",
+                               detail="Intent from_thr does not match provider"), 400
+        except ImportError:
+            return jsonify(ok=False, error="v1_signing_unavailable",
+                           message="V1 wallet signing not available on this node"), 503
+    else:
+        auth_secret = (data.get("auth_secret") or "").strip()
+        _access_err, _access_msg = _validate_pool_access(provider, auth_secret)
+        if _access_err != "ok":
+            logger.warning("[add_liquidity_intent] pool_access_denied provider=%s err=%s",
+                           provider[:10] if provider else "", _access_err)
+            return jsonify(ok=False, error=_access_err, message=_access_msg), (
+                401 if _access_err == "invalid_auth_secret" else 403
+            )
 
     # Load pool
     pools = load_pools()
@@ -47263,6 +48203,28 @@ def api_wallet_v1_music_capability():
     except Exception as e:
         logger.error(f"[MusicCapability] Error: {e}")
         return jsonify(ok=False, error="internal_error"), 500
+
+
+# ─── CONTRACT_ANCHOR_V1: Contract Proof Anchoring ────────────────────────────
+# Anchors OPS agreement proofs to the canonical chain as real transactions.
+# Uses existing chain write path (load_json/save_json on CHAIN_FILE).
+CONTRACT_PROOF_LEDGER_FILE = os.path.join(DATA_DIR, "contract_proof_ledger.json")
+_CONTRACT_PROOF_API_KEY = os.getenv("THRONOS_CONTRACT_PROOF_API_KEY", "").strip()
+
+from contract_proof import register_contract_proof_routes as _register_cp_routes
+
+_register_cp_routes(
+    app=app,
+    data_dir=DATA_DIR,
+    chain_file=CHAIN_FILE,
+    is_master_fn=is_master,
+    load_json_fn=load_json,
+    save_json_fn=save_json,
+    persist_normalized_tx_fn=persist_normalized_tx,
+    update_last_block_fn=update_last_block,
+    contract_proof_api_key=_CONTRACT_PROOF_API_KEY,
+)
+print("✓ CONTRACT_ANCHOR_V1 contract proof routes loaded")
 
 
 # ─── Startup hooks ────────────────────────────────────────────────────────────

@@ -135,6 +135,25 @@ nodes:
       - auto-trading
       - trade-history
 
+  - id: external-sigbalbot
+    name: "SigBalBot – Telegram Signal Bot"
+    role: signal-provider
+    platform: railway
+    url: "https://sigbalbot.up.railway.app"
+    health: "/health"
+    tier: medium
+    owner: partner
+    repo: "professor434/sigbalbot"
+    responsibilities:
+      - telegram-signal-delivery
+      - bidirectional-context-api
+      - watchlist-management
+      - native-signal-generation
+    integration:
+      - context-bridge-in-node1 (sigbalbot_context_bridge.py)
+      - context-poller-in-sentinel (sigbalbot_context_poller.py)
+      - milestone-airdrop (sigbalbot_milestone_airdrop.py)
+
   - id: node8-payment-gateway
     name: "Thronos Payment Gateway"
     role: gateway

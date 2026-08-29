@@ -164,6 +164,14 @@ def bsc_rpc_call(method: str, params: List = None) -> Optional[Dict]:
     return None
 
 
+def _to_hex_padded(n: int) -> str:
+    """Convert integer to 0x-prefixed hex string with even-length digits"""
+    hex_str = format(n, 'x')
+    if len(hex_str) % 2:
+        hex_str = '0' + hex_str
+    return '0x' + hex_str
+
+
 def _get_bsc_logs_chunked(filter_params: dict, from_block: int, to_block: int) -> Optional[list]:
     """
     Call eth_getLogs in ≤BSC_LOGS_CHUNK_SIZE block chunks to avoid -32005 limit errors.
@@ -173,7 +181,7 @@ def _get_bsc_logs_chunked(filter_params: dict, from_block: int, to_block: int) -
     chunk_start = from_block
     while chunk_start <= to_block:
         chunk_end = min(chunk_start + BSC_LOGS_CHUNK_SIZE - 1, to_block)
-        params = {**filter_params, "fromBlock": hex(chunk_start), "toBlock": hex(chunk_end)}
+        params = {**filter_params, "fromBlock": _to_hex_padded(chunk_start), "toBlock": _to_hex_padded(chunk_end)}
         result = bsc_rpc_call("eth_getLogs", [params])
         if result is None:
             logger.error("eth_getLogs failed for chunk %d-%d", chunk_start, chunk_end)

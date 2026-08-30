@@ -34768,8 +34768,6 @@ def api_pledge_bnb_check_manual():
     # Scan recent BSC blocks for USDT transfers to vault
     try:
         import requests
-        from eth_keys import keys
-        from eth_utils import keccak, decode_hex, encode_hex
 
         bsc_rpc_config = os.getenv("BSC_RPC_URL", "https://bsc-dataseed.binance.org")
         # Parse multiple RPCs separated by comma

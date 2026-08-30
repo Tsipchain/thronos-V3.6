@@ -2000,7 +2000,7 @@ def _load_ledger_from_sqlite(ledger_type: str) -> dict:
             "SELECT address, balance FROM balances WHERE ledger_type = ?",
             (ledger_type,),
         ).fetchall()
-    return {row["address"]: row["balance"] for row in rows}
+    return {row[0]: row[1] for row in rows}
 
 
 def _write_ledger_to_sqlite(ledger_type: str, ledger: dict) -> None:
@@ -34591,7 +34591,11 @@ def process_usdt_pledge_credit(thr_address, bnb_address, usdt_amount, bnb_txid, 
                 save_json(PLEDGE_CHAIN, pledges)
 
         # Credit THR to the user's wallet
-        ledger = load_json(LEDGER_FILE, {})
+        try:
+            ledger = load_json(LEDGER_FILE, {})
+        except Exception as ledger_err:
+            logger.error("[usdt_pledge] load_json LEDGER_FILE failed: %s", ledger_err, exc_info=True)
+            raise RuntimeError(f"ledger_load_failed: {ledger_err}") from ledger_err
         current_balance = float(ledger.get(thr_address, 0.0))
         new_balance = round(current_balance + thr_amount, 6)
         ledger[thr_address] = new_balance

@@ -34885,9 +34885,8 @@ def api_pledge_bnb_check_manual():
 def api_pledge_bnb_status():
     """
     Check USDT/BNB pledge confirmation status for a given BNB sender address.
-    Returns send_secret only after the watcher has confirmed payment
-    (i.e. /api/usdt/pledge has been called and pledge record exists with
-    pending_confirmation=False).
+    If address is registered but no pledge exists, does an on-demand BSC scan
+    to find and process the USDT transfer automatically.
     """
     bnb_address = (request.args.get("bnb") or "").strip().lower()
     if not re.match(r"^0x[a-f0-9]{40}$", bnb_address):
@@ -34900,18 +34899,47 @@ def api_pledge_bnb_status():
     )
 
     if not entry:
-        # Check registry — address is registered but watcher hasn't confirmed yet
         registry_file = os.path.join(DATA_DIR, "bnb_user_registry.json")
         registry = load_json(registry_file, {})
-        if bnb_address in registry:
-            return jsonify(
-                ok=True,
-                status="pending_payment",
-                thr_address=registry[bnb_address].get("thr_address"),
-                send_secret=None,
-                pending_confirmation=True,
-            ), 200
-        return jsonify(ok=False, error="not_found"), 404
+        if bnb_address not in registry:
+            return jsonify(ok=False, error="not_found"), 404
+
+        registered_thr = registry[bnb_address].get("thr_address")
+
+        # On-demand BSC scan: look for USDT transfers from this address to vault
+        scan_result = _scan_bnb_for_usdt_transfer(bnb_address)
+        if scan_result and scan_result.get("amount", 0) >= float(os.getenv("MIN_USDT_PLEDGE", "10")):
+            success, result_data, err = process_usdt_pledge_credit(
+                registered_thr, bnb_address, scan_result["amount"],
+                scan_result["tx_hash"], source="on-demand-check"
+            )
+            if success:
+                pledges = load_json(PLEDGE_CHAIN, [])
+                entry = next(
+                    (p for p in pledges if p.get("bnb_address") == bnb_address and p.get("pledge_type") == "usdt_bnb"),
+                    None
+                )
+                send_secret = entry.get("send_seed") if entry else None
+                return jsonify(
+                    ok=True,
+                    status="verified",
+                    thr_address=registered_thr,
+                    pledge_hash=entry.get("pledge_hash") if entry else None,
+                    pdf_filename=entry.get("pdf_filename") if entry else None,
+                    send_secret=send_secret,
+                    pending_confirmation=False,
+                    amount_usdt=scan_result["amount"],
+                ), 200
+            else:
+                logger.warning("[pledge/status] on-demand credit failed for %s: %s", bnb_address, err)
+
+        return jsonify(
+            ok=True,
+            status="pending_payment",
+            thr_address=registered_thr,
+            send_secret=None,
+            pending_confirmation=True,
+        ), 200
 
     send_secret = None
     if not entry.get("pending_confirmation", True):
@@ -34927,6 +34955,70 @@ def api_pledge_bnb_status():
         send_secret=send_secret,
         pending_confirmation=entry.get("pending_confirmation", True),
     ), 200
+
+
+def _scan_bnb_for_usdt_transfer(bnb_address: str) -> dict | None:
+    """
+    Scan BSC for USDT transfers from bnb_address to the pledge vault.
+    Returns {amount, tx_hash} for the first matching transfer, or None.
+    Single targeted eth_getLogs call — low RPC cost.
+    """
+    import requests as req_lib
+
+    bsc_rpc_config = os.getenv("BSC_RPC_URL", "https://bsc-dataseed.binance.org")
+    bsc_rpc_list = [url.strip() for url in bsc_rpc_config.split(',')]
+
+    vault_address = (os.getenv("BSC_USDT_PLEDGE_VAULT") or os.getenv("BNB_PLEDGE_VAULT", "")).lower()
+    usdt_contract = (os.getenv("BSC_USDT_CONTRACT") or os.getenv("USDT_BNB_CONTRACT", "0x55d398326f99059ff775485246999027b3197955")).lower()
+
+    if not vault_address or not usdt_contract:
+        return None
+
+    transfer_topic = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+    from_padded = "0x" + bnb_address.replace("0x", "").zfill(64)
+    to_padded = "0x" + vault_address.replace("0x", "").zfill(64)
+
+    for rpc_url in bsc_rpc_list:
+        try:
+            # Get current block number
+            blk_res = req_lib.post(rpc_url, json={
+                "jsonrpc": "2.0", "method": "eth_blockNumber", "params": [], "id": 1
+            }, timeout=10)
+            if not blk_res.ok:
+                continue
+            current_block = int(blk_res.json().get("result", "0x0"), 16)
+            start_block = max(0, current_block - 200000)
+
+            logs_res = req_lib.post(rpc_url, json={
+                "jsonrpc": "2.0",
+                "method": "eth_getLogs",
+                "params": [{
+                    "address": usdt_contract,
+                    "topics": [transfer_topic, from_padded, to_padded],
+                    "fromBlock": hex(start_block),
+                    "toBlock": "latest"
+                }],
+                "id": 2
+            }, timeout=20)
+            if not logs_res.ok:
+                continue
+
+            result = logs_res.json()
+            transfers = result.get("result", [])
+            if not isinstance(transfers, list) or not transfers:
+                continue
+
+            # Return the most recent transfer
+            t = transfers[-1]
+            data_hex = t.get("data", "0x")[2:]
+            amount = int(data_hex, 16) / 1e18 if data_hex else 0
+            return {"amount": amount, "tx_hash": t.get("transactionHash", "")}
+
+        except Exception as e:
+            logger.warning("[pledge/status] BSC scan on %s failed: %s", rpc_url, e)
+            continue
+
+    return None
 
 
 # ─── THR/USDT Pool Info ──────────────────────────────────────────────────────

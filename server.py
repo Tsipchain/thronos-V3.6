@@ -33956,24 +33956,28 @@ if NODE_ROLE == "master" and SCHEDULER_ENABLED and ENABLE_CHAIN:
         print(f"[SCHEDULER] BTC pledge watcher unavailable: {e}")
 
     # BNB/USDT Pledge Watcher – polls BSC for USDT vault deposits via eth_getLogs
+    # Interval configurable via BNB_WATCHER_INTERVAL_MINUTES (default 30).
+    # On-demand checks use /api/pledge/bnb/check-manual with tx_hash instead.
+    _bnb_watcher_interval = int(_strip_env_quotes(os.getenv("BNB_WATCHER_INTERVAL_MINUTES", "30")))
     try:
         from bnb_pledge_watcher import watch_bnb_pledges
-        scheduler.add_job(_with_app_context(watch_bnb_pledges), "interval", minutes=5,
+        scheduler.add_job(_with_app_context(watch_bnb_pledges), "interval", minutes=_bnb_watcher_interval,
                          coalesce=True, max_instances=1, id="bnb_pledge_watcher")
-        print("[SCHEDULER] BNB/USDT pledge watcher scheduled (every 5 min)")
+        print(f"[SCHEDULER] BNB/USDT pledge watcher scheduled (every {_bnb_watcher_interval} min)")
         _BNB_WATCHER_AVAILABLE = True
     except ImportError as e:
         print(f"[SCHEDULER] BNB/USDT pledge watcher unavailable: {e}")
         _BNB_WATCHER_AVAILABLE = False
 
     # Pool Deposit Watcher – polls BSC/Base vault addresses for real ERC-20 deposits
-    # Separate from pledge watcher; credits pool_liquidity_ledger external_reserve.
+    # Interval configurable via POOL_WATCHER_INTERVAL_MINUTES (default 30).
     # Requires POOL_WATCHER_ENABLED=1 to activate scanning.
+    _pool_watcher_interval = int(_strip_env_quotes(os.getenv("POOL_WATCHER_INTERVAL_MINUTES", "30")))
     try:
         from pool_deposit_watcher import scan_pool_deposits
-        scheduler.add_job(_with_app_context(scan_pool_deposits), "interval", minutes=5,
+        scheduler.add_job(_with_app_context(scan_pool_deposits), "interval", minutes=_pool_watcher_interval,
                          coalesce=True, max_instances=1, id="pool_deposit_watcher")
-        print("[SCHEDULER] Pool deposit watcher scheduled (every 5 min)")
+        print(f"[SCHEDULER] Pool deposit watcher scheduled (every {_pool_watcher_interval} min)")
         _POOL_WATCHER_AVAILABLE = True
     except ImportError as e:
         print(f"[SCHEDULER] Pool deposit watcher unavailable: {e}")
@@ -34738,21 +34742,23 @@ def api_usdt_pledge():
 @app.route("/api/pledge/bnb/check-manual", methods=["POST"])
 def api_pledge_bnb_check_manual():
     """
-    Manual endpoint to check for USDT payment on BSC without waiting for watcher.
-    User provides their BNB sending address and we scan recent blocks for USDT transfers.
+    Manual endpoint to verify a USDT payment on BSC using the transaction hash.
+    Looks up the specific tx receipt — no block scanning, no rate limiting issues.
 
     POST body:
     {
         "bnb_address": "0x...",
-        "thr_address": "THR..."  (optional, for verification)
+        "tx_hash": "0x..."  (BSC transaction hash)
     }
     """
     data = request.get_json() or {}
     bnb_address = (data.get("bnb_address") or "").strip().lower()
-    thr_address = (data.get("thr_address") or "").strip()
+    tx_hash = (data.get("tx_hash") or "").strip().lower()
 
     if not re.match(r"^0x[a-f0-9]{40}$", bnb_address):
         return jsonify(ok=False, error="invalid_bnb_address"), 400
+    if not re.match(r"^0x[a-f0-9]{64}$", tx_hash):
+        return jsonify(ok=False, error="invalid_tx_hash", message="Provide a valid BSC transaction hash"), 400
 
     # Check if address is registered
     registry_file = os.path.join(DATA_DIR, "bnb_user_registry.json")
@@ -34762,15 +34768,11 @@ def api_pledge_bnb_check_manual():
         return jsonify(ok=False, error="bnb_address_not_registered", message="Please register your BNB address first"), 404
 
     registered_thr = registry[bnb_address].get("thr_address")
-    if thr_address and thr_address != registered_thr:
-        return jsonify(ok=False, error="thr_address_mismatch"), 400
 
-    # Scan recent BSC blocks for USDT transfers to vault
     try:
-        import requests
+        import requests as req_lib
 
         bsc_rpc_config = os.getenv("BSC_RPC_URL", "https://bsc-dataseed.binance.org")
-        # Parse multiple RPCs separated by comma
         bsc_rpc_list = [url.strip() for url in bsc_rpc_config.split(',')]
 
         vault_address = (os.getenv("BSC_USDT_PLEDGE_VAULT") or os.getenv("BNB_PLEDGE_VAULT", "")).lower()
@@ -34779,120 +34781,96 @@ def api_pledge_bnb_check_manual():
         if not vault_address or not usdt_contract:
             return jsonify(ok=False, error="vault_not_configured"), 500
 
-        # Helper to try RPC call with fallback
-        def try_rpc_call(payload, timeout=10):
-            for rpc_url in bsc_rpc_list:
-                try:
-                    res = requests.post(rpc_url, json=payload, timeout=timeout)
-                    if res.ok:
-                        return res
-                except Exception as e:
-                    logger.warning(f"RPC call to {rpc_url} failed: {e}")
-                    continue
-            return None
+        # Look up the specific transaction receipt by hash
+        receipt = None
+        last_err = None
+        for rpc_url in bsc_rpc_list:
+            try:
+                res = req_lib.post(rpc_url, json={
+                    "jsonrpc": "2.0",
+                    "method": "eth_getTransactionReceipt",
+                    "params": [tx_hash],
+                    "id": 1
+                }, timeout=15)
+                if res.ok:
+                    rdata = res.json()
+                    if rdata.get("result"):
+                        receipt = rdata["result"]
+                        break
+            except Exception as e:
+                last_err = str(e)
+                continue
 
-        # Get current block
-        current_block_res = try_rpc_call({
-            "jsonrpc": "2.0",
-            "method": "eth_blockNumber",
-            "params": [],
-            "id": 1
-        }, timeout=10)
+        if not receipt:
+            return jsonify(ok=False, error="tx_not_found", message="Transaction not found on BSC", details=last_err), 404
 
-        if not current_block_res or not current_block_res.ok:
-            return jsonify(ok=False, error="failed_to_get_block_number", details="All RPC endpoints unavailable"), 500
+        if receipt.get("status") != "0x1":
+            return jsonify(ok=False, error="tx_failed", message="Transaction failed on-chain"), 400
 
-        current_block = int(current_block_res.json().get("result", "0x0"), 16)
-        start_block = max(0, current_block - 100000)  # Scan last ~100k blocks (~3.5 days on BSC)
+        # ERC20 Transfer topic
+        transfer_topic = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 
-        # Look for Transfer events: Transfer(address indexed from, address indexed to, uint256 value)
-        # from bnb_address to vault_address in USDT contract
-        transfer_sig = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+        # Find the USDT Transfer log: from sender to vault
+        found_amount = 0
+        for log_entry in receipt.get("logs", []):
+            log_addr = (log_entry.get("address") or "").lower()
+            topics = log_entry.get("topics", [])
+            if len(topics) < 3:
+                continue
+            if log_addr != usdt_contract:
+                continue
+            if topics[0].lower() != transfer_topic:
+                continue
 
-        logs_res = try_rpc_call({
-            "jsonrpc": "2.0",
-            "method": "eth_getLogs",
-            "params": [{
-                "address": usdt_contract,
-                "topics": [
-                    transfer_sig,
-                    "0x" + bnb_address.replace("0x", "").zfill(64),  # from (padded)
-                    "0x" + vault_address.replace("0x", "").zfill(64)   # to (padded)
-                ],
-                "fromBlock": hex(start_block),
-                "toBlock": "latest"
-            }],
-            "id": 1
-        }, timeout=30)
+            log_from = "0x" + topics[1][-40:].lower()
+            log_to = "0x" + topics[2][-40:].lower()
 
-        if not logs_res or not logs_res.ok:
-            return jsonify(ok=False, error="rpc_error", details="All RPC endpoints failed"), 500
+            if log_from == bnb_address and log_to == vault_address:
+                data_hex = log_entry.get("data", "0x")[2:]
+                if data_hex:
+                    found_amount = int(data_hex, 16) / 1e18
+                break
 
-        result = logs_res.json()
-        if "result" not in result:
-            return jsonify(ok=False, error="payment_not_found", pending=True), 200
+        if found_amount <= 0:
+            return jsonify(ok=False, error="no_usdt_transfer",
+                           message="No USDT transfer from your address to the vault found in this transaction"), 400
 
-        transfers = result.get("result", [])
-        if not transfers:
-            return jsonify(ok=False, error="payment_not_found", pending=True, scanned_blocks=f"{start_block}-{current_block}"), 200
+        if found_amount < float(os.getenv("MIN_USDT_PLEDGE", "10")):
+            return jsonify(ok=False, error="insufficient_amount",
+                           amount_found=found_amount,
+                           minimum_required=float(os.getenv("MIN_USDT_PLEDGE", "10"))), 400
 
-        # Parse transfer amount from log data
-        # data field contains uint256 value (32 bytes)
-        transfer = transfers[0]  # Get most recent
-        data_hex = transfer.get("data", "0x")[2:]  # Remove 0x
+        # Credit the pledge
+        success, result_data, error = process_usdt_pledge_credit(
+            registered_thr, bnb_address, found_amount, tx_hash,
+            source="manual-check"
+        )
 
-        try:
-            amount_wei = int(data_hex, 16) if data_hex else 0
-            amount_usdt = amount_wei / 1e18  # USDT has 18 decimals
-            tx_hash = transfer.get("transactionHash")
+        if success:
+            pledges = load_json(PLEDGE_CHAIN, [])
+            pledge = next(
+                (p for p in pledges if p.get("bnb_address") == bnb_address and p.get("pledge_type") == "usdt_bnb"),
+                None
+            )
+            send_seed = pledge.get("send_seed") if pledge else None
 
-            # If transfer found and amount >= MIN_USDT_PLEDGE, auto-confirm
-            if amount_usdt >= float(os.getenv("MIN_USDT_PLEDGE", "10")):
-                # Call the watcher endpoint to credit THR
-                success, result_data, error = process_usdt_pledge_credit(
-                    registered_thr, bnb_address, amount_usdt, tx_hash,
-                    source="manual-check"
-                )
-
-                if success:
-                    # Retrieve send_seed from pledge record
-                    pledges = load_json(PLEDGE_CHAIN, [])
-                    pledge = next(
-                        (p for p in pledges if p.get("bnb_address") == bnb_address and p.get("pledge_type") == "usdt_bnb"),
-                        None
-                    )
-                    send_seed = pledge.get("send_seed") if pledge else None
-
-                    return jsonify(
-                        ok=True,
-                        status="verified",
-                        message="Payment confirmed! THR credited and pool seeded.",
-                        amount_usdt=amount_usdt,
-                        thr_amount=amount_usdt * get_usdt_thr_rate_dynamic(),
-                        tx_hash=tx_hash,
-                        send_secret=send_seed
-                    ), 200
-                else:
-                    return jsonify(
-                        ok=False,
-                        error="confirmation_failed",
-                        details=error,
-                        found_transfer=True,
-                        amount_usdt=amount_usdt
-                    ), 400
-            else:
-                return jsonify(
-                    ok=False,
-                    error="insufficient_amount",
-                    found_transfer=True,
-                    amount_found=amount_usdt,
-                    minimum_required=float(os.getenv("MIN_USDT_PLEDGE", "10")),
-                    tx_hash=tx_hash
-                ), 400
-
-        except Exception as parse_err:
-            logger.error(f"Failed to parse transfer amount: {parse_err}")
-            return jsonify(ok=False, error="parse_error", details=str(parse_err)), 500
+            return jsonify(
+                ok=True,
+                status="verified",
+                message="Payment confirmed! THR credited and pool seeded.",
+                amount_usdt=found_amount,
+                thr_amount=found_amount * get_usdt_thr_rate_dynamic(),
+                tx_hash=tx_hash,
+                send_secret=send_seed
+            ), 200
+        else:
+            return jsonify(
+                ok=False,
+                error="confirmation_failed",
+                details=error,
+                found_transfer=True,
+                amount_usdt=found_amount
+            ), 400
 
     except Exception as e:
         logger.error(f"Manual USDT pledge check failed: {e}", exc_info=True)

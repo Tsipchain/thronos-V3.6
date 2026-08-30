@@ -34803,11 +34803,11 @@ def api_pledge_bnb_check_manual():
             return jsonify(ok=False, error="failed_to_get_block_number", details="All RPC endpoints unavailable"), 500
 
         current_block = int(current_block_res.json().get("result", "0x0"), 16)
-        start_block = max(0, current_block - 1000)  # Scan last 1000 blocks (~5 mins on BSC)
+        start_block = max(0, current_block - 100000)  # Scan last ~100k blocks (~3.5 days on BSC)
 
         # Look for Transfer events: Transfer(address indexed from, address indexed to, uint256 value)
         # from bnb_address to vault_address in USDT contract
-        transfer_sig = "0xddf252ad1be2c89b69c2b068fc378dfc33cfd62c0f1eb7ece0cbf6cda9b8a97"
+        transfer_sig = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 
         logs_res = try_rpc_call({
             "jsonrpc": "2.0",

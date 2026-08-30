@@ -84,7 +84,7 @@ ADMIN_SECRET    = os.getenv("ADMIN_SECRET", "CHANGE_ME_NOW")
 DATA_DIR        = os.getenv("DATA_DIR", "./data")
 
 # ERC-20 Transfer(address,address,uint256) topic0
-TRANSFER_EVENT_SIG = "0xddf252ad1be2c89b69c2b068fc378dfc33cfd62c0f1eb7ece0cbf6cda9b8a97"
+TRANSFER_EVENT_SIG = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 
 # State files
 WATCHER_STATE_FILE     = os.path.join(DATA_DIR, "pool_deposit_watcher_state.json")

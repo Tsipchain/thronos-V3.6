@@ -275,3 +275,239 @@ def update_state(asset_id):
     if not ok:
         return jsonify(ok=False, **result), 400
     return jsonify(ok=True, asset=result), 200
+
+
+# ── Production endpoints (Stage 2) ────────────────────────────────────────
+
+@physical_assets_bp.route('/creators/approve', methods=['POST'])
+def approve_creator():
+    guard = _write_guard()
+    if guard:
+        return guard
+
+    data = request.get_json() or {}
+    from_thr, payload, err_resp = _require_signed_intent(data, 'physical_asset_register')
+    if err_resp:
+        return err_resp
+
+    tenant_id = str(payload.get('tenant_id', '')).strip()
+    creator_address = str(payload.get('creator_address', '')).strip()
+    if not tenant_id:
+        return jsonify(ok=False, error='tenant_id_required'), 400
+    if not creator_address:
+        return jsonify(ok=False, error='creator_address_required'), 400
+
+    roles = payload.get('roles')
+    allowed_product_ids = payload.get('allowed_product_ids')
+
+    ok, result = _pa_service.approve_creator(
+        tenant_id=tenant_id,
+        creator_address=creator_address,
+        roles=roles,
+        allowed_product_ids=allowed_product_ids,
+    )
+    if not ok:
+        return jsonify(ok=False, **result), 400
+    return jsonify(ok=True, creator=result), 201
+
+
+@physical_assets_bp.route('/batches', methods=['POST'])
+def create_batch():
+    guard = _write_guard()
+    if guard:
+        return guard
+
+    data = request.get_json() or {}
+    from_thr, payload, err_resp = _require_signed_intent(data, 'physical_asset_produce')
+    if err_resp:
+        return err_resp
+
+    batch_id = str(payload.get('batch_id', '')).strip()
+    if not batch_id:
+        return jsonify(ok=False, error='batch_id_required'), 400
+
+    try:
+        quantity = int(payload.get('quantity', 0))
+        edition_start = int(payload.get('edition_start', 0))
+        edition_size = int(payload.get('edition_size', 0))
+        creation_fee = float(payload.get('creation_fee', 0))
+    except (ValueError, TypeError):
+        return jsonify(ok=False, error='invalid_numeric_field'), 400
+
+    ok, result = _pa_service.create_production_batch(
+        batch_id=batch_id,
+        tenant_id=str(payload.get('tenant_id', '')).strip(),
+        product_id=str(payload.get('product_id', '')).strip(),
+        sku=str(payload.get('sku', '')).strip().upper(),
+        creator_address=from_thr,
+        quantity=quantity,
+        edition_start=edition_start,
+        edition_size=edition_size,
+        design_hash=str(payload.get('design_hash', '')).strip(),
+        design_format=str(payload.get('design_format', '3mf')).strip().lower(),
+        creation_fee=creation_fee,
+    )
+
+    if not ok:
+        return jsonify(ok=False, **result), 400
+    return jsonify(ok=True, **result), 201
+
+
+@physical_assets_bp.route('/batches/<batch_id>', methods=['GET'])
+def get_batch(batch_id):
+    batch = _pa_service.get_batch(batch_id)
+    if not batch:
+        return jsonify(ok=False, error='batch_not_found'), 404
+    return jsonify(ok=True, batch=batch), 200
+
+
+@physical_assets_bp.route('/jobs', methods=['GET'])
+def list_jobs():
+    batch_id = request.args.get('batch_id')
+    status = request.args.get('status')
+    jobs = _pa_service.list_jobs(batch_id=batch_id, status=status)
+    return jsonify(ok=True, jobs=jobs, count=len(jobs)), 200
+
+
+@physical_assets_bp.route('/jobs/<job_id>', methods=['GET'])
+def get_job(job_id):
+    job = _pa_service.get_job(job_id)
+    if not job:
+        return jsonify(ok=False, error='job_not_found'), 404
+    return jsonify(ok=True, job=job), 200
+
+
+@physical_assets_bp.route('/jobs/<job_id>/status', methods=['GET'])
+def get_job_status(job_id):
+    status = _pa_service.get_production_status(job_id)
+    if not status:
+        return jsonify(ok=False, error='job_not_found'), 404
+    return jsonify(ok=True, **status), 200
+
+
+@physical_assets_bp.route('/jobs/<job_id>/gcode', methods=['POST'])
+def upload_gcode(job_id):
+    guard = _write_guard()
+    if guard:
+        return guard
+
+    data = request.get_json() or {}
+    from_thr, payload, err_resp = _require_signed_intent(data, 'physical_asset_produce')
+    if err_resp:
+        return err_resp
+
+    gcode_hash = str(payload.get('gcode_hash', '')).strip()
+    if not gcode_hash:
+        return jsonify(ok=False, error='gcode_hash_required'), 400
+
+    ok, result = _pa_service.upload_job_gcode(
+        job_id=job_id,
+        gcode_hash=gcode_hash,
+        creator_address=from_thr,
+    )
+
+    if not ok:
+        status = 404 if result.get('error') == 'job_not_found' else 400
+        return jsonify(ok=False, **result), status
+    return jsonify(ok=True, job=result), 200
+
+
+@physical_assets_bp.route('/jobs/<job_id>/start', methods=['POST'])
+def start_job(job_id):
+    guard = _write_guard()
+    if guard:
+        return guard
+
+    data = request.get_json() or {}
+    from_thr, payload, err_resp = _require_signed_intent(data, 'physical_asset_produce')
+    if err_resp:
+        return err_resp
+
+    printer_id = str(payload.get('printer_id', '')).strip()
+    if not printer_id:
+        return jsonify(ok=False, error='printer_id_required'), 400
+
+    ok, result = _pa_service.start_print_job(
+        job_id=job_id,
+        printer_id=printer_id,
+        creator_address=from_thr,
+    )
+
+    if not ok:
+        status = 404 if result.get('error') == 'job_not_found' else 400
+        return jsonify(ok=False, **result), status
+    return jsonify(ok=True, job=result), 200
+
+
+@physical_assets_bp.route('/jobs/<job_id>/fail', methods=['POST'])
+def fail_job(job_id):
+    guard = _write_guard()
+    if guard:
+        return guard
+
+    data = request.get_json() or {}
+    from_thr, payload, err_resp = _require_signed_intent(data, 'physical_asset_produce')
+    if err_resp:
+        return err_resp
+
+    reason = str(payload.get('reason', '')).strip()
+
+    ok, result = _pa_service.fail_print_job(
+        job_id=job_id,
+        creator_address=from_thr,
+        reason=reason,
+    )
+
+    if not ok:
+        status = 404 if result.get('error') == 'job_not_found' else 400
+        return jsonify(ok=False, **result), status
+    return jsonify(ok=True, job=result), 200
+
+
+@physical_assets_bp.route('/jobs/<job_id>/complete', methods=['POST'])
+def complete_job(job_id):
+    guard = _write_guard()
+    if guard:
+        return guard
+
+    data = request.get_json() or {}
+    from_thr, payload, err_resp = _require_signed_intent(data, 'physical_asset_produce')
+    if err_resp:
+        return err_resp
+
+    ok, result = _pa_service.complete_print_job(
+        job_id=job_id,
+        creator_address=from_thr,
+    )
+
+    if not ok:
+        status = 404 if result.get('error') == 'job_not_found' else 400
+        return jsonify(ok=False, **result), status
+    return jsonify(ok=True, job=result), 200
+
+
+@physical_assets_bp.route('/jobs/<job_id>/sign', methods=['POST'])
+def sign_job(job_id):
+    guard = _write_guard()
+    if guard:
+        return guard
+
+    data = request.get_json() or {}
+    from_thr, payload, err_resp = _require_signed_intent(data, 'physical_asset_produce')
+    if err_resp:
+        return err_resp
+
+    signature_data = payload.get('signature_data') or {}
+    if not signature_data:
+        return jsonify(ok=False, error='signature_data_required'), 400
+
+    ok, result = _pa_service.sign_production(
+        job_id=job_id,
+        creator_address=from_thr,
+        signature_data=signature_data,
+    )
+
+    if not ok:
+        status = 404 if result.get('error') in ('job_not_found', 'asset_not_found') else 400
+        return jsonify(ok=False, **result), status
+    return jsonify(ok=True, **result), 200

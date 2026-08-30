@@ -49,7 +49,7 @@ _SERIAL_RE = re.compile(r'^[A-Z0-9][A-Z0-9\-]{1,62}[A-Z0-9]$')
 _ID_RE = re.compile(r'^[a-f0-9]{32}$')
 
 # ── Module state (injected at init) ──────────────────────────────────────────
-_lock = threading.Lock()
+_lock = threading.RLock()
 _registry_file: Optional[str] = None
 _load_json = None
 _save_json = None
@@ -155,6 +155,7 @@ def register_asset(
     asset_type: str = 'COLLECTIBLE',
     idempotency_key: Optional[str] = None,
     metadata: Optional[Dict] = None,
+    creation_fee: float = 0.0,
 ) -> Tuple[bool, Dict[str, Any]]:
     err = _check_writable()
     if err:
@@ -233,6 +234,7 @@ def register_asset(
             'commerce_proof_link': None,
             'claim_secret_hash': None,
             'owner_address': None,
+            'creation_fee': max(0.0, float(creation_fee)),
             'metadata': metadata or {},
             'created_at': now,
             'updated_at': now,
@@ -324,14 +326,15 @@ def mint_asset_nft(
                 f"| Serial: {asset['serial']} | Design: {asset['design_hash'][:16]}..."
             ),
             'category': 'physical_asset',
-            'price': 0,
-            'royalties': 10,
+            'price': asset.get('creation_fee', 0),
+            'royalties': 5,
             'creator': asset['creator_address'],
             'owner': asset['creator_address'],
             'image_url': None,
             'created_at': timestamp,
-            'for_sale': False,
+            'for_sale': bool(asset.get('creation_fee', 0) > 0),
             'mint_fee': 0,
+            'creation_fee': asset.get('creation_fee', 0),
             'physical_asset_id': asset_id,
             'serial': asset['serial'],
             'edition_number': asset['edition_number'],
@@ -526,3 +529,585 @@ def update_asset_state(
         _save_registry(registry)
 
     return True, asset
+
+
+# ── Production layer (Stage 2) ──────────────────────────────────────────────
+# Batches, jobs, design file hashing, creator-signed production attestation.
+#
+# Flow:  3MF upload → hash → register asset → mint NFT → serial assigned
+#        → gcode uploaded+hashed → production job created → printer prints
+#        → creator signs completion → CERTIFIED
+
+BATCH_STATES = ('PLANNED', 'ACTIVE', 'COMPLETED', 'CANCELLED')
+
+JOB_STATES = (
+    'PLANNED',
+    'SERIAL_RESERVED',
+    'DESIGN_UPLOADED',
+    'NFT_MINTED',
+    'GCODE_READY',
+    'PRINTING',
+    'PRINT_FAILED',
+    'PRINTED',
+    'CREATOR_SIGN_PENDING',
+    'CREATOR_SIGNED',
+    'CERTIFIED',
+)
+
+_APPROVED_CREATORS_FILE = 'approved_creators.json'
+_BATCHES_FILE = 'production_batches.json'
+_DESIGNS_DIR = 'designs'
+
+
+def _batches_file() -> Optional[str]:
+    if not _registry_file:
+        return None
+    return os.path.join(os.path.dirname(_registry_file), _BATCHES_FILE)
+
+
+def _designs_dir() -> Optional[str]:
+    if not _registry_file:
+        return None
+    d = os.path.join(os.path.dirname(_registry_file), _DESIGNS_DIR)
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _approved_creators_file() -> Optional[str]:
+    if not _registry_file:
+        return None
+    return os.path.join(os.path.dirname(_registry_file), _APPROVED_CREATORS_FILE)
+
+
+def _load_batches() -> Dict[str, Any]:
+    f = _batches_file()
+    if not f or not _load_json:
+        return {'batches': {}, 'jobs': {}}
+    data = _load_json(f, {'batches': {}, 'jobs': {}})
+    data.setdefault('batches', {})
+    data.setdefault('jobs', {})
+    return data
+
+
+def _save_batches(data: Dict[str, Any]):
+    f = _batches_file()
+    if f and _save_json:
+        _save_json(f, data)
+
+
+def _load_approved_creators() -> Dict[str, Any]:
+    f = _approved_creators_file()
+    if not f or not _load_json:
+        return {'creators': {}}
+    data = _load_json(f, {'creators': {}})
+    data.setdefault('creators', {})
+    return data
+
+
+def _save_approved_creators(data: Dict[str, Any]):
+    f = _approved_creators_file()
+    if f and _save_json:
+        _save_json(f, data)
+
+
+def is_approved_creator(
+    creator_address: str,
+    tenant_id: str,
+    product_id: Optional[str] = None,
+) -> bool:
+    creators = _load_approved_creators()
+    key = f"{tenant_id}:{creator_address.upper()}"
+    entry = creators['creators'].get(key)
+    if not entry or not entry.get('active'):
+        return False
+    allowed = entry.get('allowed_product_ids')
+    if allowed and product_id and product_id not in allowed:
+        return False
+    return True
+
+
+def approve_creator(
+    tenant_id: str,
+    creator_address: str,
+    roles: Optional[List[str]] = None,
+    allowed_product_ids: Optional[List[str]] = None,
+) -> Tuple[bool, Dict[str, Any]]:
+    err = _check_writable()
+    if err:
+        return False, {'error': err}
+
+    creator_address = creator_address.strip().upper()
+    if not creator_address.startswith('THR'):
+        return False, {'error': 'invalid_creator_address'}
+
+    with _lock:
+        creators = _load_approved_creators()
+        key = f"{tenant_id}:{creator_address}"
+        entry = {
+            'tenant_id': tenant_id,
+            'creator_address': creator_address,
+            'roles': roles or ['creator', 'manufacturer'],
+            'allowed_product_ids': allowed_product_ids,
+            'active': True,
+            'approved_at': _now_iso(),
+        }
+        creators['creators'][key] = entry
+        _save_approved_creators(creators)
+
+    return True, entry
+
+
+def hash_design_file(file_path: str) -> str:
+    h = hashlib.sha256()
+    with open(file_path, 'rb') as f:
+        for chunk in iter(lambda: f.read(8192), b''):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def hash_design_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def store_design_file(
+    file_data: bytes,
+    filename: str,
+    tenant_id: str,
+    product_id: str,
+) -> Tuple[str, str]:
+    d = _designs_dir()
+    if not d:
+        raise RuntimeError('designs directory unavailable')
+
+    design_hash = hash_design_bytes(file_data)
+    safe_name = re.sub(r'[^a-zA-Z0-9._-]', '_', filename)
+    stored_name = f"{tenant_id}_{product_id}_{design_hash[:16]}_{safe_name}"
+    stored_path = os.path.join(d, stored_name)
+
+    with open(stored_path, 'wb') as f:
+        f.write(file_data)
+
+    return design_hash, stored_path
+
+
+def create_production_batch(
+    batch_id: str,
+    tenant_id: str,
+    product_id: str,
+    sku: str,
+    creator_address: str,
+    quantity: int,
+    edition_start: int,
+    edition_size: int,
+    design_hash: str,
+    design_format: str = '3mf',
+    creation_fee: float = 0.0,
+) -> Tuple[bool, Dict[str, Any]]:
+    err = _check_writable()
+    if err:
+        return False, {'error': err}
+
+    creator_address = creator_address.strip().upper()
+    if not is_approved_creator(creator_address, tenant_id, product_id):
+        return False, {'error': 'creator_not_approved'}
+
+    if not isinstance(quantity, int) or quantity < 1:
+        return False, {'error': 'invalid_quantity'}
+    if not isinstance(edition_start, int) or edition_start < 1:
+        return False, {'error': 'invalid_edition_start'}
+    if edition_start + quantity - 1 > edition_size:
+        return False, {'error': 'edition_overflow',
+                       'detail': f'editions {edition_start}..{edition_start+quantity-1} exceed size {edition_size}'}
+
+    hash_err = _validate_design_hash(design_hash)
+    if hash_err:
+        return False, {'error': hash_err}
+
+    with _lock:
+        batches_data = _load_batches()
+
+        if batch_id in batches_data['batches']:
+            existing = batches_data['batches'][batch_id]
+            if existing.get('design_hash') == design_hash.lower():
+                return True, existing
+            return False, {'error': 'duplicate_batch_id'}
+
+        now = _now_iso()
+        batch = {
+            'batch_id': batch_id,
+            'tenant_id': tenant_id,
+            'product_id': product_id,
+            'sku': sku,
+            'creator_address': creator_address,
+            'quantity': quantity,
+            'edition_start': edition_start,
+            'edition_size': edition_size,
+            'design_hash': design_hash.lower(),
+            'design_format': design_format,
+            'creation_fee': max(0.0, float(creation_fee)),
+            'status': 'PLANNED',
+            'created_at': now,
+            'updated_at': now,
+        }
+
+        # Create production jobs and register assets for each edition
+        jobs = []
+        for i in range(quantity):
+            edition_number = edition_start + i
+            serial = f"{sku}-{edition_number:03d}"
+            job_id = f"{batch_id}-J{edition_number:03d}"
+
+            # Register the asset
+            ok, asset_result = register_asset(
+                tenant_id=tenant_id,
+                product_id=product_id,
+                sku=sku,
+                serial=serial,
+                edition_number=edition_number,
+                edition_size=edition_size,
+                creator_address=creator_address,
+                design_hash=design_hash,
+                asset_type='THR_BACKED_COLLECTIBLE',
+                idempotency_key=f"batch:{batch_id}:ed:{edition_number}",
+                creation_fee=creation_fee,
+            )
+            if not ok:
+                return False, {
+                    'error': 'asset_registration_failed',
+                    'edition_number': edition_number,
+                    'detail': asset_result.get('error'),
+                }
+
+            asset_id = asset_result['id']
+
+            job = {
+                'job_id': job_id,
+                'batch_id': batch_id,
+                'asset_id': asset_id,
+                'serial': serial,
+                'edition_number': edition_number,
+                'printer_id': None,
+                'design_hash': design_hash.lower(),
+                'gcode_hash': None,
+                'status': 'PLANNED',
+                'started_at': None,
+                'completed_at': None,
+                'creator_signature': None,
+                'creator_tx_ref': None,
+                'nft_id': None,
+                'created_at': now,
+                'updated_at': now,
+            }
+            batches_data['jobs'][job_id] = job
+            jobs.append(job)
+
+        batch['status'] = 'ACTIVE'
+        batches_data['batches'][batch_id] = batch
+        _save_batches(batches_data)
+
+    return True, {'batch': batch, 'jobs': jobs}
+
+
+def get_batch(batch_id: str) -> Optional[Dict[str, Any]]:
+    batches_data = _load_batches()
+    return batches_data['batches'].get(batch_id)
+
+
+def get_job(job_id: str) -> Optional[Dict[str, Any]]:
+    batches_data = _load_batches()
+    return batches_data['jobs'].get(job_id)
+
+
+def list_jobs(
+    batch_id: Optional[str] = None,
+    status: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    batches_data = _load_batches()
+    jobs = list(batches_data['jobs'].values())
+    if batch_id:
+        jobs = [j for j in jobs if j.get('batch_id') == batch_id]
+    if status:
+        jobs = [j for j in jobs if j.get('status') == status]
+    jobs.sort(key=lambda j: j.get('edition_number', 0))
+    return jobs
+
+
+def upload_job_gcode(
+    job_id: str,
+    gcode_hash: str,
+    creator_address: str,
+) -> Tuple[bool, Dict[str, Any]]:
+    err = _check_writable()
+    if err:
+        return False, {'error': err}
+
+    hash_err = _validate_design_hash(gcode_hash)
+    if hash_err:
+        return False, {'error': 'invalid_gcode_hash'}
+
+    with _lock:
+        batches_data = _load_batches()
+        job = batches_data['jobs'].get(job_id)
+        if not job:
+            return False, {'error': 'job_not_found'}
+
+        batch = batches_data['batches'].get(job['batch_id'])
+        if not batch:
+            return False, {'error': 'batch_not_found'}
+
+        creator_address = creator_address.strip().upper()
+        if creator_address != batch['creator_address']:
+            return False, {'error': 'unauthorized_creator'}
+
+        job['gcode_hash'] = gcode_hash.lower()
+        job['status'] = 'GCODE_READY'
+        job['updated_at'] = _now_iso()
+        _save_batches(batches_data)
+
+    return True, job
+
+
+def start_print_job(
+    job_id: str,
+    printer_id: str,
+    creator_address: str,
+) -> Tuple[bool, Dict[str, Any]]:
+    err = _check_writable()
+    if err:
+        return False, {'error': err}
+
+    with _lock:
+        batches_data = _load_batches()
+        job = batches_data['jobs'].get(job_id)
+        if not job:
+            return False, {'error': 'job_not_found'}
+
+        batch = batches_data['batches'].get(job['batch_id'])
+        if not batch:
+            return False, {'error': 'batch_not_found'}
+
+        creator_address = creator_address.strip().upper()
+        if creator_address != batch['creator_address']:
+            return False, {'error': 'unauthorized_creator'}
+
+        if job['status'] not in ('PLANNED', 'GCODE_READY', 'PRINT_FAILED'):
+            return False, {'error': 'invalid_job_state', 'state': job['status']}
+
+        job['printer_id'] = printer_id
+        job['status'] = 'PRINTING'
+        job['started_at'] = _now_iso()
+        job['updated_at'] = _now_iso()
+
+        # Update the asset state
+        registry = _load_registry()
+        asset = registry['assets'].get(job['asset_id'])
+        if asset:
+            asset['state'] = 'PENDING_PRODUCTION'
+            asset['updated_at'] = _now_iso()
+            asset['version'] += 1
+            _save_registry(registry)
+
+        _save_batches(batches_data)
+
+    return True, job
+
+
+def fail_print_job(
+    job_id: str,
+    creator_address: str,
+    reason: str = '',
+) -> Tuple[bool, Dict[str, Any]]:
+    err = _check_writable()
+    if err:
+        return False, {'error': err}
+
+    with _lock:
+        batches_data = _load_batches()
+        job = batches_data['jobs'].get(job_id)
+        if not job:
+            return False, {'error': 'job_not_found'}
+
+        batch = batches_data['batches'].get(job['batch_id'])
+        if not batch:
+            return False, {'error': 'batch_not_found'}
+
+        creator_address = creator_address.strip().upper()
+        if creator_address != batch['creator_address']:
+            return False, {'error': 'unauthorized_creator'}
+
+        if job['status'] != 'PRINTING':
+            return False, {'error': 'job_not_printing', 'state': job['status']}
+
+        job['status'] = 'PRINT_FAILED'
+        job['updated_at'] = _now_iso()
+        job['metadata'] = job.get('metadata', {})
+        job['metadata']['fail_reason'] = reason
+        _save_batches(batches_data)
+
+    return True, job
+
+
+def complete_print_job(
+    job_id: str,
+    creator_address: str,
+) -> Tuple[bool, Dict[str, Any]]:
+    err = _check_writable()
+    if err:
+        return False, {'error': err}
+
+    with _lock:
+        batches_data = _load_batches()
+        job = batches_data['jobs'].get(job_id)
+        if not job:
+            return False, {'error': 'job_not_found'}
+
+        batch = batches_data['batches'].get(job['batch_id'])
+        if not batch:
+            return False, {'error': 'batch_not_found'}
+
+        creator_address = creator_address.strip().upper()
+        if creator_address != batch['creator_address']:
+            return False, {'error': 'unauthorized_creator'}
+
+        if job['status'] != 'PRINTING':
+            return False, {'error': 'job_not_printing', 'state': job['status']}
+
+        job['status'] = 'PRINTED'
+        job['completed_at'] = _now_iso()
+        job['updated_at'] = _now_iso()
+
+        registry = _load_registry()
+        asset = registry['assets'].get(job['asset_id'])
+        if asset:
+            asset['state'] = 'PRODUCED'
+            asset['updated_at'] = _now_iso()
+            asset['version'] += 1
+            _save_registry(registry)
+
+        _save_batches(batches_data)
+
+    return True, job
+
+
+def sign_production(
+    job_id: str,
+    creator_address: str,
+    signature_data: Dict[str, Any],
+) -> Tuple[bool, Dict[str, Any]]:
+    """Creator signs production attestation after successful print.
+
+    The signature_data must bind: tenant_id, batch_id, job_id, asset_id,
+    product_id, serial, edition_number, creator_address, design_hash,
+    gcode_hash, printer_id, completion_timestamp, nonce.
+
+    On success: mints NFT, transitions to CERTIFIED.
+    Failed print must never reach this point.
+    """
+    err = _check_writable()
+    if err:
+        return False, {'error': err}
+
+    with _lock:
+        batches_data = _load_batches()
+        job = batches_data['jobs'].get(job_id)
+        if not job:
+            return False, {'error': 'job_not_found'}
+
+        batch = batches_data['batches'].get(job['batch_id'])
+        if not batch:
+            return False, {'error': 'batch_not_found'}
+
+        creator_address = creator_address.strip().upper()
+        if creator_address != batch['creator_address']:
+            return False, {'error': 'unauthorized_creator'}
+
+        if job['status'] == 'CERTIFIED':
+            return True, {'job': job, 'already_certified': True}
+
+        if job['status'] not in ('PRINTED', 'CREATOR_SIGN_PENDING'):
+            return False, {'error': 'job_not_printed', 'state': job['status']}
+
+        # Verify signature binds the correct data
+        required_bindings = [
+            'tenant_id', 'batch_id', 'job_id', 'asset_id',
+            'serial', 'edition_number', 'creator_address',
+            'design_hash', 'nonce',
+        ]
+        for field in required_bindings:
+            if not signature_data.get(field):
+                return False, {'error': 'incomplete_signature', 'missing': field}
+
+        if str(signature_data.get('design_hash', '')).lower() != job['design_hash']:
+            return False, {'error': 'design_hash_mismatch'}
+
+        if signature_data.get('serial') != job['serial']:
+            return False, {'error': 'serial_mismatch'}
+
+        if int(signature_data.get('edition_number', 0)) != job['edition_number']:
+            return False, {'error': 'edition_mismatch'}
+
+        # Mint NFT through the asset registry
+        registry = _load_registry()
+        asset = registry['assets'].get(job['asset_id'])
+        if not asset:
+            return False, {'error': 'asset_not_found'}
+
+    # Mint outside the lock (mint_asset_nft has its own lock)
+    mint_ok, mint_result = mint_asset_nft(
+        asset_id=job['asset_id'],
+        from_address=creator_address,
+        verified=True,
+    )
+
+    if not mint_ok:
+        return False, {'error': 'nft_mint_failed', 'detail': mint_result.get('error')}
+
+    with _lock:
+        batches_data = _load_batches()
+        job = batches_data['jobs'].get(job_id)
+        if not job:
+            return False, {'error': 'job_not_found'}
+
+        job['nft_id'] = mint_result.get('nft_id')
+        job['creator_signature'] = signature_data.get('signature', '')
+        job['status'] = 'CERTIFIED'
+        job['updated_at'] = _now_iso()
+
+        # Update asset to CERTIFIED via direct registry access
+        registry = _load_registry()
+        asset = registry['assets'].get(job['asset_id'])
+        if asset:
+            asset['state'] = 'MINTED'
+            asset['updated_at'] = _now_iso()
+            asset['version'] += 1
+            _save_registry(registry)
+
+        # Check if all jobs in batch are certified
+        all_batch_jobs = [j for j in batches_data['jobs'].values()
+                         if j.get('batch_id') == job['batch_id']]
+        if all(j.get('status') == 'CERTIFIED' for j in all_batch_jobs):
+            batch = batches_data['batches'].get(job['batch_id'])
+            if batch:
+                batch['status'] = 'COMPLETED'
+                batch['updated_at'] = _now_iso()
+
+        _save_batches(batches_data)
+
+    return True, {
+        'job': job,
+        'nft_id': mint_result.get('nft_id'),
+        'certified': True,
+    }
+
+
+def get_production_status(job_id: str) -> Optional[Dict[str, Any]]:
+    batches_data = _load_batches()
+    job = batches_data['jobs'].get(job_id)
+    if not job:
+        return None
+    asset = get_asset(job.get('asset_id', ''))
+    return {
+        'job': job,
+        'asset': asset,
+        'batch_id': job.get('batch_id'),
+    }

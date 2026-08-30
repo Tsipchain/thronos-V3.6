@@ -42,6 +42,48 @@ try:
 except Exception as exc:  # pragma: no cover
     app.logger.warning("[L2E-EDU] Blueprint NOT loaded: %s", exc)
 
+# Physical Assets Registry — physical-asset lifecycle, NFT bridge, claim/transfer
+try:
+    import physical_assets_service as _pa_svc
+    from physical_assets_blueprint import physical_assets_bp, init_physical_assets_blueprint
+
+    import os as _pa_os
+    _strip = getattr(server_module, '_strip_env_quotes', lambda x: x.strip('"').strip("'"))
+    _pa_feature_enabled = _strip(
+        _pa_os.getenv("PHYSICAL_ASSETS_ENABLED", "0")
+    ) == "1"
+
+    _pa_svc.init_physical_assets(
+        data_dir=getattr(server_module, 'DATA_DIR', 'data'),
+        load_json_fn=getattr(server_module, 'load_json', None),
+        save_json_fn=getattr(server_module, 'save_json', None),
+        node_role=node_role,
+        read_only=read_only,
+        feature_enabled=_pa_feature_enabled,
+        load_nft_registry_fn=getattr(server_module, 'load_nft_registry', None),
+        save_nft_registry_fn=getattr(server_module, 'save_nft_registry', None),
+        nft_mint_fee=float(getattr(server_module, 'NFT_MINT_FEE', 1.0)),
+    )
+    # Intent verification functions are defined later in this file;
+    # use a lazy wrapper so they resolve at request time, not import time.
+    def _lazy_verify_intent(intent, sig, pubkey):
+        return _verify_wallet_action_intent(intent, sig, pubkey)
+
+    def _lazy_verify_payload_hash(expected, payload):
+        return _verify_action_payload_hash(expected, payload)
+
+    init_physical_assets_blueprint(
+        verify_intent_fn=_lazy_verify_intent,
+        verify_payload_hash_fn=_lazy_verify_payload_hash,
+        pa_service_module=_pa_svc,
+        node_role=node_role,
+        read_only=read_only,
+    )
+    app.register_blueprint(physical_assets_bp)
+    app.logger.info("[PhysicalAssets] Blueprint registered at /api/assets")
+except Exception as exc:  # pragma: no cover
+    app.logger.warning("[PhysicalAssets] Blueprint NOT loaded: %s", exc)
+
 # ── Pledge-based v0 wallet migration ──────────────────────────────────────────
 # Lets pledge/HMAC users find their old THR address via send_secret only,
 # then migrate to a V1 wallet and set up PIN + passkey.
@@ -341,6 +383,8 @@ _WALLET_ACTION_ALLOWED_ACTIONS = frozenset({
     'crosschain_withdraw', 'crosschain_add_liquidity',
     'swap', 'bridge', 'pledge', 'token_create',
     'nft_mint', 'nft_buy',
+    'physical_asset_register', 'physical_asset_produce',
+    'physical_asset_transfer',
 })
 
 _WALLET_ACTION_NONCES_FILE_CACHED = None

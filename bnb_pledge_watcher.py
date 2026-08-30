@@ -59,7 +59,7 @@ LAST_SCANNED_BLOCK_FILE = os.path.join(DATA_DIR, "bnb_last_scanned_block.json")
 BNB_USER_REGISTRY_FILE = os.path.join(DATA_DIR, "bnb_user_registry.json")
 
 # ERC20 Transfer event signature (keccak256 of "Transfer(address,address,uint256)")
-TRANSFER_EVENT_SIGNATURE = "0xddf252ad1be2c89b69c2b068fc378dfc33cfd62c0f1eb7ece0cbf6cda9b8a97"
+TRANSFER_EVENT_SIGNATURE = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 
 
 def load_processed_txs() -> List[str]:

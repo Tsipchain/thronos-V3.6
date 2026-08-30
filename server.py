@@ -33956,24 +33956,28 @@ if NODE_ROLE == "master" and SCHEDULER_ENABLED and ENABLE_CHAIN:
         print(f"[SCHEDULER] BTC pledge watcher unavailable: {e}")
 
     # BNB/USDT Pledge Watcher – polls BSC for USDT vault deposits via eth_getLogs
+    # Interval configurable via BNB_WATCHER_INTERVAL_MINUTES (default 30).
+    # On-demand checks use /api/pledge/bnb/check-manual with tx_hash instead.
+    _bnb_watcher_interval = int(_strip_env_quotes(os.getenv("BNB_WATCHER_INTERVAL_MINUTES", "30")))
     try:
         from bnb_pledge_watcher import watch_bnb_pledges
-        scheduler.add_job(_with_app_context(watch_bnb_pledges), "interval", minutes=5,
+        scheduler.add_job(_with_app_context(watch_bnb_pledges), "interval", minutes=_bnb_watcher_interval,
                          coalesce=True, max_instances=1, id="bnb_pledge_watcher")
-        print("[SCHEDULER] BNB/USDT pledge watcher scheduled (every 5 min)")
+        print(f"[SCHEDULER] BNB/USDT pledge watcher scheduled (every {_bnb_watcher_interval} min)")
         _BNB_WATCHER_AVAILABLE = True
     except ImportError as e:
         print(f"[SCHEDULER] BNB/USDT pledge watcher unavailable: {e}")
         _BNB_WATCHER_AVAILABLE = False
 
     # Pool Deposit Watcher – polls BSC/Base vault addresses for real ERC-20 deposits
-    # Separate from pledge watcher; credits pool_liquidity_ledger external_reserve.
+    # Interval configurable via POOL_WATCHER_INTERVAL_MINUTES (default 30).
     # Requires POOL_WATCHER_ENABLED=1 to activate scanning.
+    _pool_watcher_interval = int(_strip_env_quotes(os.getenv("POOL_WATCHER_INTERVAL_MINUTES", "30")))
     try:
         from pool_deposit_watcher import scan_pool_deposits
-        scheduler.add_job(_with_app_context(scan_pool_deposits), "interval", minutes=5,
+        scheduler.add_job(_with_app_context(scan_pool_deposits), "interval", minutes=_pool_watcher_interval,
                          coalesce=True, max_instances=1, id="pool_deposit_watcher")
-        print("[SCHEDULER] Pool deposit watcher scheduled (every 5 min)")
+        print(f"[SCHEDULER] Pool deposit watcher scheduled (every {_pool_watcher_interval} min)")
         _POOL_WATCHER_AVAILABLE = True
     except ImportError as e:
         print(f"[SCHEDULER] Pool deposit watcher unavailable: {e}")

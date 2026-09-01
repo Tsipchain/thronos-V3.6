@@ -5,7 +5,7 @@ Manages the lifecycle of physical assets (3D-printed coins, collectibles)
 from registration through NFT minting, claim, and transfer.
 
 Storage: JSON file in DATA_DIR (physical_assets_registry.json).
-Concurrency: file-level locking via threading.Lock + atomic writes.
+Concurrency: file-level locking via threading.RLock + atomic writes.
 Serial format: {SKU}-{edition_number:03d}  e.g. TPC-S1-001
 """
 
@@ -62,6 +62,9 @@ _load_nft_registry = None
 _save_nft_registry = None
 _nft_mint_fee = 1.0
 
+# Canonical NFT mint adapter — injected at init, wraps nft_mint_core
+_canonical_mint_fn = None
+
 
 def init_physical_assets(
     data_dir: str,
@@ -73,9 +76,11 @@ def init_physical_assets(
     load_nft_registry_fn=None,
     save_nft_registry_fn=None,
     nft_mint_fee: float = 1.0,
+    canonical_mint_fn=None,
 ):
     global _registry_file, _load_json, _save_json, _node_role, _read_only
     global _feature_enabled, _load_nft_registry, _save_nft_registry, _nft_mint_fee
+    global _canonical_mint_fn
 
     _registry_file = os.path.join(data_dir, 'physical_assets_registry.json')
     _load_json = load_json_fn
@@ -86,6 +91,7 @@ def init_physical_assets(
     _load_nft_registry = load_nft_registry_fn
     _save_nft_registry = save_nft_registry_fn
     _nft_mint_fee = nft_mint_fee
+    _canonical_mint_fn = canonical_mint_fn
 
 
 def _now_iso() -> str:
@@ -231,10 +237,13 @@ def register_asset(
             'state': 'REGISTERED',
             'nft_id': None,
             'nft_tx_id': None,
+            'nft_mint_status': None,
             'commerce_proof_link': None,
             'claim_secret_hash': None,
             'owner_address': None,
             'creation_fee': max(0.0, float(creation_fee)),
+            'listing_price': 0,
+            'for_sale': False,
             'metadata': metadata or {},
             'created_at': now,
             'updated_at': now,
@@ -296,7 +305,7 @@ def mint_asset_nft(
     if err:
         return False, {'error': err}
 
-    if not _load_nft_registry or not _save_nft_registry:
+    if not _canonical_mint_fn:
         return False, {'error': 'nft_engine_unavailable'}
 
     with _lock:
@@ -315,44 +324,38 @@ def mint_asset_nft(
         if from_address != asset['creator_address'] and not verified:
             return False, {'error': 'unauthorized_mint'}
 
-        nft_id = f"NFT-PA-{int(time.time() * 1000)}"
-        timestamp = time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())
-
-        nft = {
-            'id': nft_id,
-            'name': f"Thronos Physical Asset {asset['serial']}",
-            'description': (
+        result = _canonical_mint_fn(
+            name=f"Thronos Physical Asset {asset['serial']}",
+            description=(
                 f"Physical Asset #{asset['edition_number']}/{asset['edition_size']} "
                 f"| Serial: {asset['serial']} | Design: {asset['design_hash'][:16]}..."
             ),
-            'category': 'physical_asset',
-            'price': asset.get('creation_fee', 0),
-            'royalties': 5,
-            'creator': asset['creator_address'],
-            'owner': asset['creator_address'],
-            'image_url': None,
-            'created_at': timestamp,
-            'for_sale': bool(asset.get('creation_fee', 0) > 0),
-            'mint_fee': 0,
-            'creation_fee': asset.get('creation_fee', 0),
-            'physical_asset_id': asset_id,
-            'serial': asset['serial'],
-            'edition_number': asset['edition_number'],
-            'edition_size': asset['edition_size'],
-            'design_hash': asset['design_hash'],
-        }
+            category='physical_asset',
+            price=asset.get('listing_price', 0),
+            royalties=5,
+            creator=asset['creator_address'],
+            for_sale=asset.get('for_sale', False),
+            mint_fee=0,
+            extra_fields={
+                'creation_fee': asset.get('creation_fee', 0),
+                'physical_asset_id': asset_id,
+                'serial': asset['serial'],
+                'edition_number': asset['edition_number'],
+                'edition_size': asset['edition_size'],
+                'design_hash': asset['design_hash'],
+            },
+        )
 
-        nft_registry = _load_nft_registry()
-        nft_registry.setdefault('nfts', []).append(nft)
-        _save_nft_registry(nft_registry)
-
+        nft_id = result['nft_id']
         asset['nft_id'] = nft_id
+        asset['nft_tx_id'] = result.get('tx_id')
+        asset['nft_mint_status'] = 'confirmed'
         asset['state'] = 'MINTED'
         asset['updated_at'] = _now_iso()
         asset['version'] += 1
         _save_registry(registry)
 
-    return True, {'nft_id': nft_id, 'nft': nft}
+    return True, {'nft_id': nft_id, 'nft': result.get('nft'), 'tx_id': result.get('tx_id')}
 
 
 def set_claim_secret(asset_id: str, claim_secret: str) -> Tuple[bool, Dict[str, Any]]:
@@ -534,24 +537,24 @@ def update_asset_state(
 # ── Production layer (Stage 2) ──────────────────────────────────────────────
 # Batches, jobs, design file hashing, creator-signed production attestation.
 #
-# Flow:  3MF upload → hash → register asset → mint NFT → serial assigned
+# Flow:  3MF upload → hash → register asset → serial assigned
 #        → gcode uploaded+hashed → production job created → printer prints
-#        → creator signs completion → CERTIFIED
+#        → creator signs attestation → canonical NFT mint → CERTIFIED
 
 BATCH_STATES = ('PLANNED', 'ACTIVE', 'COMPLETED', 'CANCELLED')
 
 JOB_STATES = (
     'PLANNED',
-    'SERIAL_RESERVED',
-    'DESIGN_UPLOADED',
-    'NFT_MINTED',
     'GCODE_READY',
     'PRINTING',
     'PRINT_FAILED',
     'PRINTED',
-    'CREATOR_SIGN_PENDING',
     'CREATOR_SIGNED',
+    'MINT_PENDING',
+    'CHAIN_CONFIRMED',
+    'NFT_CONFIRMED',
     'CERTIFIED',
+    'AVAILABLE',
 )
 
 _APPROVED_CREATORS_FILE = 'approved_creators.json'
@@ -996,12 +999,8 @@ def sign_production(
 ) -> Tuple[bool, Dict[str, Any]]:
     """Creator signs production attestation after successful print.
 
-    The signature_data must bind: tenant_id, batch_id, job_id, asset_id,
-    product_id, serial, edition_number, creator_address, design_hash,
-    gcode_hash, printer_id, completion_timestamp, nonce.
-
-    On success: mints NFT, transitions to CERTIFIED.
-    Failed print must never reach this point.
+    Transitions to CREATOR_SIGNED. Does NOT mint NFT or certify — use
+    certify_production() after signing to trigger canonical NFT mint.
     """
     err = _check_writable()
     if err:
@@ -1024,7 +1023,10 @@ def sign_production(
         if job['status'] == 'CERTIFIED':
             return True, {'job': job, 'already_certified': True}
 
-        if job['status'] not in ('PRINTED', 'CREATOR_SIGN_PENDING'):
+        if job['status'] == 'CREATOR_SIGNED':
+            return True, {'job': job, 'already_signed': True}
+
+        if job['status'] != 'PRINTED':
             return False, {'error': 'job_not_printed', 'state': job['status']}
 
         # Verify signature binds the correct data
@@ -1046,11 +1048,51 @@ def sign_production(
         if int(signature_data.get('edition_number', 0)) != job['edition_number']:
             return False, {'error': 'edition_mismatch'}
 
-        # Mint NFT through the asset registry
-        registry = _load_registry()
-        asset = registry['assets'].get(job['asset_id'])
-        if not asset:
-            return False, {'error': 'asset_not_found'}
+        job['creator_signature'] = signature_data.get('signature', '')
+        job['status'] = 'CREATOR_SIGNED'
+        job['updated_at'] = _now_iso()
+        _save_batches(batches_data)
+
+    return True, {'job': job, 'signed': True}
+
+
+def certify_production(
+    job_id: str,
+    creator_address: str,
+) -> Tuple[bool, Dict[str, Any]]:
+    """Trigger canonical NFT mint after creator signing.
+
+    CREATOR_SIGNED → MINT_PENDING → canonical mint → CERTIFIED.
+    On mint failure, job stays MINT_PENDING (retryable).
+    """
+    err = _check_writable()
+    if err:
+        return False, {'error': err}
+
+    with _lock:
+        batches_data = _load_batches()
+        job = batches_data['jobs'].get(job_id)
+        if not job:
+            return False, {'error': 'job_not_found'}
+
+        batch = batches_data['batches'].get(job['batch_id'])
+        if not batch:
+            return False, {'error': 'batch_not_found'}
+
+        creator_address = creator_address.strip().upper()
+        if creator_address != batch['creator_address']:
+            return False, {'error': 'unauthorized_creator'}
+
+        if job['status'] == 'CERTIFIED':
+            return True, {'job': job, 'already_certified': True, 'nft_id': job.get('nft_id')}
+
+        if job['status'] not in ('CREATOR_SIGNED', 'MINT_PENDING'):
+            return False, {'error': 'job_not_signed', 'state': job['status']}
+
+        # Transition to MINT_PENDING before calling canonical mint
+        job['status'] = 'MINT_PENDING'
+        job['updated_at'] = _now_iso()
+        _save_batches(batches_data)
 
     # Mint outside the lock (mint_asset_nft has its own lock)
     mint_ok, mint_result = mint_asset_nft(
@@ -1060,7 +1102,8 @@ def sign_production(
     )
 
     if not mint_ok:
-        return False, {'error': 'nft_mint_failed', 'detail': mint_result.get('error')}
+        return False, {'error': 'nft_mint_failed', 'detail': mint_result.get('error'),
+                       'retryable': True}
 
     with _lock:
         batches_data = _load_batches()
@@ -1069,18 +1112,8 @@ def sign_production(
             return False, {'error': 'job_not_found'}
 
         job['nft_id'] = mint_result.get('nft_id')
-        job['creator_signature'] = signature_data.get('signature', '')
         job['status'] = 'CERTIFIED'
         job['updated_at'] = _now_iso()
-
-        # Update asset to CERTIFIED via direct registry access
-        registry = _load_registry()
-        asset = registry['assets'].get(job['asset_id'])
-        if asset:
-            asset['state'] = 'MINTED'
-            asset['updated_at'] = _now_iso()
-            asset['version'] += 1
-            _save_registry(registry)
 
         # Check if all jobs in batch are certified
         all_batch_jobs = [j for j in batches_data['jobs'].values()
@@ -1096,6 +1129,7 @@ def sign_production(
     return True, {
         'job': job,
         'nft_id': mint_result.get('nft_id'),
+        'tx_id': mint_result.get('tx_id'),
         'certified': True,
     }
 

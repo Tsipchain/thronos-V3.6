@@ -518,3 +518,25 @@ def sign_job(job_id):
         status = 404 if result.get('error') in ('job_not_found', 'asset_not_found') else 400
         return jsonify(ok=False, **result), status
     return jsonify(ok=True, **result), 200
+
+
+@physical_assets_bp.route('/jobs/<job_id>/certify', methods=['POST'])
+def certify_job(job_id):
+    guard = _write_guard()
+    if guard:
+        return guard
+
+    data = request.get_json() or {}
+    from_thr, payload, err_resp = _require_signed_intent(data, 'physical_asset_produce')
+    if err_resp:
+        return err_resp
+
+    ok, result = _pa_service.certify_production(
+        job_id=job_id,
+        creator_address=from_thr,
+    )
+
+    if not ok:
+        status = 404 if result.get('error') in ('job_not_found', 'asset_not_found') else 400
+        return jsonify(ok=False, **result), status
+    return jsonify(ok=True, **result), 200

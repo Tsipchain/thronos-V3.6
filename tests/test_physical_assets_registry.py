@@ -47,6 +47,29 @@ def _init_service(feature_enabled=True, read_only=False, node_role='master'):
         nft_store.clear()
         nft_store.update(reg)
 
+    import copy as _copy
+    import time as _time
+
+    def canonical_mint(name, description, category, price, royalties, creator,
+                       for_sale=False, mint_fee=0, extra_fields=None, nft_id=None):
+        if nft_id is None:
+            nft_id = f"NFT-PA-{int(_time.time() * 1000)}"
+        timestamp = _time.strftime('%Y-%m-%d %H:%M:%S UTC', _time.gmtime())
+        nft = {
+            'id': nft_id, 'name': name, 'description': description,
+            'category': category, 'price': price, 'royalties': royalties,
+            'creator': creator, 'owner': creator, 'image_url': None,
+            'created_at': timestamp, 'for_sale': for_sale, 'mint_fee': mint_fee,
+        }
+        if extra_fields:
+            nft.update(extra_fields)
+        store_copy = _copy.deepcopy(nft_store)
+        store_copy.setdefault('nfts', []).append(nft)
+        nft_store.clear()
+        nft_store.update(store_copy)
+        tx_id = f"{nft_id}-TX"
+        return {'nft_id': nft_id, 'nft': nft, 'tx_id': tx_id}
+
     pa_svc.init_physical_assets(
         data_dir=tmpdir,
         load_json_fn=load_json,
@@ -57,6 +80,7 @@ def _init_service(feature_enabled=True, read_only=False, node_role='master'):
         load_nft_registry_fn=load_nft,
         save_nft_registry_fn=save_nft,
         nft_mint_fee=1.0,
+        canonical_mint_fn=canonical_mint,
     )
     return tmpdir, nft_store
 
@@ -677,7 +701,7 @@ class TestProductionJobFlow(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(job['status'], 'PRINTING')
 
-    def test_sign_production_certifies(self):
+    def test_sign_production_only_signs(self):
         pa_svc.upload_job_gcode(self.job_id, 'b' * 64, CREATOR)
         pa_svc.start_print_job(self.job_id, 'BAMBU-X1C-001', CREATOR)
         pa_svc.complete_print_job(self.job_id, CREATOR)
@@ -695,13 +719,43 @@ class TestProductionJobFlow(unittest.TestCase):
             'nonce': 'test-nonce-001',
             'signature': 'fakesig',
         }
-        ok, result = pa_svc.sign_production(
-            self.job_id, CREATOR, sig_data)
+        ok, result = pa_svc.sign_production(self.job_id, CREATOR, sig_data)
+        self.assertTrue(ok)
+        self.assertTrue(result.get('signed'))
+        self.assertNotIn('certified', result)
+
+        job = pa_svc.get_job(self.job_id)
+        self.assertEqual(job['status'], 'CREATOR_SIGNED')
+        self.assertEqual(len(self.nft_store.get('nfts', [])), 0)
+
+    def test_sign_then_certify_mints_nft(self):
+        pa_svc.upload_job_gcode(self.job_id, 'b' * 64, CREATOR)
+        pa_svc.start_print_job(self.job_id, 'BAMBU-X1C-001', CREATOR)
+        pa_svc.complete_print_job(self.job_id, CREATOR)
+
+        job = pa_svc.get_job(self.job_id)
+        sig_data = {
+            'tenant_id': 'aisthetic',
+            'batch_id': 'BATCH-FLOW',
+            'job_id': self.job_id,
+            'asset_id': self.asset_id,
+            'serial': job['serial'],
+            'edition_number': job['edition_number'],
+            'creator_address': CREATOR,
+            'design_hash': 'a' * 64,
+            'nonce': 'test-nonce-001',
+            'signature': 'fakesig',
+        }
+        pa_svc.sign_production(self.job_id, CREATOR, sig_data)
+        ok, result = pa_svc.certify_production(self.job_id, CREATOR)
         self.assertTrue(ok)
         self.assertTrue(result.get('certified'))
         self.assertIn('nft_id', result)
 
-    def test_sign_production_mints_nft_with_5pct_royalty(self):
+        job = pa_svc.get_job(self.job_id)
+        self.assertEqual(job['status'], 'CERTIFIED')
+
+    def test_certify_mints_nft_with_5pct_royalty(self):
         pa_svc.upload_job_gcode(self.job_id, 'b' * 64, CREATOR)
         pa_svc.start_print_job(self.job_id, 'BAMBU-X1C-001', CREATOR)
         pa_svc.complete_print_job(self.job_id, CREATOR)
@@ -720,12 +774,14 @@ class TestProductionJobFlow(unittest.TestCase):
             'signature': 'fakesig',
         }
         pa_svc.sign_production(self.job_id, CREATOR, sig_data)
+        pa_svc.certify_production(self.job_id, CREATOR)
 
         self.assertEqual(len(self.nft_store.get('nfts', [])), 1)
         nft = self.nft_store['nfts'][0]
         self.assertEqual(nft['royalties'], 5)
         self.assertEqual(nft['creation_fee'], 10.0)
-        self.assertEqual(nft['price'], 10.0)
+        self.assertEqual(nft['price'], 0)
+        self.assertFalse(nft['for_sale'])
         self.assertEqual(nft['creator'], CREATOR)
 
     def test_failed_print_cannot_sign(self):
@@ -812,6 +868,7 @@ class TestBatchCompletion(unittest.TestCase):
                 'signature': 'fakesig',
             }
             pa_svc.sign_production(job['job_id'], CREATOR, sig_data)
+            pa_svc.certify_production(job['job_id'], CREATOR)
 
         batch = pa_svc.get_batch('BATCH-MULTI')
         self.assertEqual(batch['status'], 'COMPLETED')
@@ -891,15 +948,15 @@ class TestNFTRoyalty5Percent(unittest.TestCase):
         nft = self.nft_store['nfts'][0]
         self.assertEqual(nft['royalties'], 5)
 
-    def test_creation_fee_on_nft(self):
+    def test_creation_fee_does_not_auto_list(self):
         ok, asset = _register_default(creation_fee=50.0)
         self.assertTrue(ok)
         ok, result = pa_svc.mint_asset_nft(asset['id'], CREATOR)
         self.assertTrue(ok)
         nft = self.nft_store['nfts'][0]
         self.assertEqual(nft['creation_fee'], 50.0)
-        self.assertEqual(nft['price'], 50.0)
-        self.assertTrue(nft['for_sale'])
+        self.assertEqual(nft['price'], 0)
+        self.assertFalse(nft['for_sale'])
 
     def test_zero_fee_not_for_sale(self):
         ok, asset = _register_default(creation_fee=0)
@@ -932,7 +989,7 @@ class TestSecurityRejections(unittest.TestCase):
         self.job_id = result['jobs'][0]['job_id']
         self.asset_id = result['jobs'][0]['asset_id']
 
-    def _certify_job(self):
+    def _sign_and_certify_job(self):
         pa_svc.upload_job_gcode(self.job_id, 'b' * 64, CREATOR)
         pa_svc.start_print_job(self.job_id, 'BAMBU-X1C-001', CREATOR)
         pa_svc.complete_print_job(self.job_id, CREATOR)
@@ -943,17 +1000,20 @@ class TestSecurityRejections(unittest.TestCase):
             'creator_address': CREATOR, 'design_hash': 'a' * 64,
             'nonce': 'nonce-1', 'signature': 'fakesig',
         }
-        return pa_svc.sign_production(self.job_id, CREATOR, sig_data), sig_data
+        pa_svc.sign_production(self.job_id, CREATOR, sig_data)
+        cert_result = pa_svc.certify_production(self.job_id, CREATOR)
+        return cert_result, sig_data
 
     def test_duplicate_certification_idempotent(self):
-        (ok1, r1), sig_data = self._certify_job()
+        (ok1, r1), sig_data = self._sign_and_certify_job()
         self.assertTrue(ok1)
         self.assertTrue(r1.get('certified'))
         nft_id = r1['nft_id']
 
-        ok2, r2 = pa_svc.sign_production(self.job_id, CREATOR, sig_data)
+        ok2, r2 = pa_svc.certify_production(self.job_id, CREATOR)
         self.assertTrue(ok2)
         self.assertTrue(r2.get('already_certified'))
+        self.assertEqual(r2.get('nft_id'), nft_id)
         self.assertEqual(len(self.nft_store.get('nfts', [])), 1)
 
     def test_cross_tenant_batch_creation_rejected(self):
@@ -1046,6 +1106,7 @@ class TestInvalidStateTransitions(unittest.TestCase):
             'nonce': 'nonce-1', 'signature': 'fakesig',
         }
         pa_svc.sign_production(self.job_id, CREATOR, sig_data)
+        pa_svc.certify_production(self.job_id, CREATOR)
         ok, result = pa_svc.start_print_job(self.job_id, 'BAMBU', CREATOR)
         self.assertFalse(ok)
         self.assertEqual(result['error'], 'invalid_job_state')
@@ -1062,6 +1123,7 @@ class TestInvalidStateTransitions(unittest.TestCase):
             'nonce': 'nonce-1', 'signature': 'fakesig',
         }
         pa_svc.sign_production(self.job_id, CREATOR, sig_data)
+        pa_svc.certify_production(self.job_id, CREATOR)
         ok, result = pa_svc.complete_print_job(self.job_id, CREATOR)
         self.assertFalse(ok)
         self.assertEqual(result['error'], 'job_not_printing')
@@ -1077,6 +1139,338 @@ class TestInvalidStateTransitions(unittest.TestCase):
         ok, result = pa_svc.sign_production(self.job_id, CREATOR, sig_data)
         self.assertFalse(ok)
         self.assertEqual(result['error'], 'job_not_printed')
+
+
+# ── Stage 2.5: Architecture corrections ────────────────────────────────────
+
+class TestCertificationLifecycle(unittest.TestCase):
+    """Correction C: expanded certification lifecycle tests."""
+
+    def setUp(self):
+        self.tmpdir, self.nft_store = _init_service()
+        pa_svc.approve_creator('aisthetic', CREATOR)
+        ok, result = pa_svc.create_production_batch(
+            batch_id='BATCH-CERT',
+            tenant_id='aisthetic',
+            product_id='coin-v1',
+            sku='TPC-S1',
+            creator_address=CREATOR,
+            quantity=1,
+            edition_start=1,
+            edition_size=100,
+            design_hash='a' * 64,
+        )
+        self.assertTrue(ok)
+        self.job_id = result['jobs'][0]['job_id']
+        self.asset_id = result['jobs'][0]['asset_id']
+
+    def _print_job(self):
+        pa_svc.upload_job_gcode(self.job_id, 'b' * 64, CREATOR)
+        pa_svc.start_print_job(self.job_id, 'BAMBU-X1C-001', CREATOR)
+        pa_svc.complete_print_job(self.job_id, CREATOR)
+
+    def _sign_job(self):
+        sig_data = {
+            'tenant_id': 'aisthetic', 'batch_id': 'BATCH-CERT',
+            'job_id': self.job_id, 'asset_id': self.asset_id,
+            'serial': 'TPC-S1-001', 'edition_number': 1,
+            'creator_address': CREATOR, 'design_hash': 'a' * 64,
+            'nonce': 'nonce-cert-1', 'signature': 'fakesig',
+        }
+        return pa_svc.sign_production(self.job_id, CREATOR, sig_data)
+
+    def test_printed_unsigned_not_certified(self):
+        self._print_job()
+        job = pa_svc.get_job(self.job_id)
+        self.assertEqual(job['status'], 'PRINTED')
+        self.assertNotEqual(job['status'], 'CERTIFIED')
+
+    def test_creator_signed_not_certified(self):
+        self._print_job()
+        self._sign_job()
+        job = pa_svc.get_job(self.job_id)
+        self.assertEqual(job['status'], 'CREATOR_SIGNED')
+        self.assertNotEqual(job['status'], 'CERTIFIED')
+
+    def test_mint_submitted_not_certified(self):
+        self._print_job()
+        self._sign_job()
+        # Inject a failing canonical mint to test MINT_PENDING state
+        original_fn = pa_svc._canonical_mint_fn
+        pa_svc._canonical_mint_fn = None
+        ok, result = pa_svc.certify_production(self.job_id, CREATOR)
+        pa_svc._canonical_mint_fn = original_fn
+        self.assertFalse(ok)
+        job = pa_svc.get_job(self.job_id)
+        self.assertEqual(job['status'], 'MINT_PENDING')
+        self.assertNotEqual(job['status'], 'CERTIFIED')
+
+    def test_canonical_mint_rejected_not_certified(self):
+        self._print_job()
+        self._sign_job()
+        original_fn = pa_svc._canonical_mint_fn
+        pa_svc._canonical_mint_fn = None
+        ok, result = pa_svc.certify_production(self.job_id, CREATOR)
+        pa_svc._canonical_mint_fn = original_fn
+        self.assertFalse(ok)
+        self.assertEqual(result['error'], 'nft_mint_failed')
+        job = pa_svc.get_job(self.job_id)
+        self.assertNotEqual(job['status'], 'CERTIFIED')
+
+    def test_canonical_mint_timeout_retryable(self):
+        self._print_job()
+        self._sign_job()
+        original_fn = pa_svc._canonical_mint_fn
+        pa_svc._canonical_mint_fn = None
+        ok1, r1 = pa_svc.certify_production(self.job_id, CREATOR)
+        self.assertFalse(ok1)
+        job = pa_svc.get_job(self.job_id)
+        self.assertEqual(job['status'], 'MINT_PENDING')
+
+        # Restore and retry — should succeed
+        pa_svc._canonical_mint_fn = original_fn
+        ok2, r2 = pa_svc.certify_production(self.job_id, CREATOR)
+        self.assertTrue(ok2)
+        self.assertTrue(r2.get('certified'))
+        job = pa_svc.get_job(self.job_id)
+        self.assertEqual(job['status'], 'CERTIFIED')
+
+    def test_confirmed_tx_nft_certified(self):
+        self._print_job()
+        self._sign_job()
+        ok, result = pa_svc.certify_production(self.job_id, CREATOR)
+        self.assertTrue(ok)
+        self.assertTrue(result.get('certified'))
+        self.assertIn('nft_id', result)
+        self.assertIn('tx_id', result)
+
+        job = pa_svc.get_job(self.job_id)
+        self.assertEqual(job['status'], 'CERTIFIED')
+        asset = pa_svc.get_asset(self.asset_id)
+        self.assertEqual(asset['state'], 'MINTED')
+        self.assertIsNotNone(asset['nft_id'])
+        self.assertIsNotNone(asset['nft_tx_id'])
+        self.assertEqual(asset['nft_mint_status'], 'confirmed')
+
+    def test_duplicate_certify_returns_same_nft(self):
+        self._print_job()
+        self._sign_job()
+        ok1, r1 = pa_svc.certify_production(self.job_id, CREATOR)
+        self.assertTrue(ok1)
+        nft_id_1 = r1['nft_id']
+
+        ok2, r2 = pa_svc.certify_production(self.job_id, CREATOR)
+        self.assertTrue(ok2)
+        self.assertTrue(r2.get('already_certified'))
+        self.assertEqual(r2.get('nft_id'), nft_id_1)
+        self.assertEqual(len(self.nft_store.get('nfts', [])), 1)
+
+
+class TestCreationFeeNotAutoList(unittest.TestCase):
+    """Correction B: creation_fee does NOT auto-list the NFT."""
+
+    def setUp(self):
+        self.tmpdir, self.nft_store = _init_service()
+
+    def test_nonzero_creation_fee_does_not_auto_list(self):
+        ok, asset = _register_default(creation_fee=100.0)
+        self.assertTrue(ok)
+        self.assertEqual(asset['creation_fee'], 100.0)
+        self.assertEqual(asset['listing_price'], 0)
+        self.assertFalse(asset['for_sale'])
+
+        ok, result = pa_svc.mint_asset_nft(asset['id'], CREATOR)
+        self.assertTrue(ok)
+        nft = self.nft_store['nfts'][0]
+        self.assertEqual(nft['creation_fee'], 100.0)
+        self.assertEqual(nft['price'], 0)
+        self.assertFalse(nft['for_sale'])
+
+    def test_listing_price_defaults_zero(self):
+        ok, asset = _register_default()
+        self.assertTrue(ok)
+        self.assertEqual(asset['listing_price'], 0)
+        self.assertFalse(asset['for_sale'])
+
+    def test_creation_fee_separate_from_listing(self):
+        ok, asset = _register_default(creation_fee=50.0)
+        self.assertTrue(ok)
+        self.assertEqual(asset['creation_fee'], 50.0)
+        self.assertEqual(asset['listing_price'], 0)
+        self.assertFalse(asset['for_sale'])
+
+
+class TestCanonicalNFTRoyalty(unittest.TestCase):
+    """Correction D: canonical NFT result has 5% royalty."""
+
+    def setUp(self):
+        self.tmpdir, self.nft_store = _init_service()
+        pa_svc.approve_creator('aisthetic', CREATOR)
+
+    def test_canonical_nft_has_5pct_royalty(self):
+        ok, result = pa_svc.create_production_batch(
+            batch_id='BATCH-ROY',
+            tenant_id='aisthetic',
+            product_id='coin-v1',
+            sku='TPC-S1',
+            creator_address=CREATOR,
+            quantity=1,
+            edition_start=1,
+            edition_size=100,
+            design_hash='a' * 64,
+            creation_fee=25.0,
+        )
+        self.assertTrue(ok)
+        job_id = result['jobs'][0]['job_id']
+        asset_id = result['jobs'][0]['asset_id']
+
+        pa_svc.upload_job_gcode(job_id, 'b' * 64, CREATOR)
+        pa_svc.start_print_job(job_id, 'BAMBU-X1C-001', CREATOR)
+        pa_svc.complete_print_job(job_id, CREATOR)
+
+        sig_data = {
+            'tenant_id': 'aisthetic', 'batch_id': 'BATCH-ROY',
+            'job_id': job_id, 'asset_id': asset_id,
+            'serial': 'TPC-S1-001', 'edition_number': 1,
+            'creator_address': CREATOR, 'design_hash': 'a' * 64,
+            'nonce': 'nonce-roy-1', 'signature': 'fakesig',
+        }
+        pa_svc.sign_production(job_id, CREATOR, sig_data)
+        ok, cert_result = pa_svc.certify_production(job_id, CREATOR)
+        self.assertTrue(ok)
+
+        self.assertEqual(len(self.nft_store.get('nfts', [])), 1)
+        nft = self.nft_store['nfts'][0]
+        self.assertEqual(nft['royalties'], 5)
+        self.assertFalse(nft['for_sale'])
+        self.assertEqual(nft['price'], 0)
+
+    def test_manual_mint_also_has_5pct_royalty(self):
+        ok, asset = _register_default()
+        self.assertTrue(ok)
+        ok, result = pa_svc.mint_asset_nft(asset['id'], CREATOR)
+        self.assertTrue(ok)
+        nft = self.nft_store['nfts'][0]
+        self.assertEqual(nft['royalties'], 5)
+
+
+class TestJobStatesExpanded(unittest.TestCase):
+    """Correction C: verify expanded JOB_STATES tuple."""
+
+    def test_all_required_states_present(self):
+        required = [
+            'PLANNED', 'GCODE_READY', 'PRINTING', 'PRINT_FAILED',
+            'PRINTED', 'CREATOR_SIGNED', 'MINT_PENDING',
+            'CHAIN_CONFIRMED', 'NFT_CONFIRMED', 'CERTIFIED', 'AVAILABLE',
+        ]
+        for state in required:
+            self.assertIn(state, pa_svc.JOB_STATES, f'{state} missing from JOB_STATES')
+
+    def test_removed_states_absent(self):
+        removed = ['SERIAL_RESERVED', 'DESIGN_UPLOADED', 'NFT_MINTED', 'CREATOR_SIGN_PENDING']
+        for state in removed:
+            self.assertNotIn(state, pa_svc.JOB_STATES, f'{state} should be removed')
+
+
+class TestCertifyRequiresSigning(unittest.TestCase):
+    """Correction C: certify without signing must fail."""
+
+    def setUp(self):
+        self.tmpdir, self.nft_store = _init_service()
+        pa_svc.approve_creator('aisthetic', CREATOR)
+        ok, result = pa_svc.create_production_batch(
+            batch_id='BATCH-REQ',
+            tenant_id='aisthetic',
+            product_id='coin-v1',
+            sku='TPC-S1',
+            creator_address=CREATOR,
+            quantity=1,
+            edition_start=1,
+            edition_size=100,
+            design_hash='a' * 64,
+        )
+        self.job_id = result['jobs'][0]['job_id']
+
+    def test_certify_printed_without_sign_fails(self):
+        pa_svc.upload_job_gcode(self.job_id, 'b' * 64, CREATOR)
+        pa_svc.start_print_job(self.job_id, 'BAMBU-X1C-001', CREATOR)
+        pa_svc.complete_print_job(self.job_id, CREATOR)
+        ok, result = pa_svc.certify_production(self.job_id, CREATOR)
+        self.assertFalse(ok)
+        self.assertEqual(result['error'], 'job_not_signed')
+
+    def test_certify_planned_job_fails(self):
+        ok, result = pa_svc.certify_production(self.job_id, CREATOR)
+        self.assertFalse(ok)
+        self.assertEqual(result['error'], 'job_not_signed')
+
+
+class TestAssetPersistsNftFields(unittest.TestCase):
+    """Correction A: PA must persist nft_id, nft_tx_id, canonical mint status."""
+
+    def setUp(self):
+        self.tmpdir, self.nft_store = _init_service()
+
+    def test_asset_has_nft_mint_fields(self):
+        ok, asset = _register_default()
+        self.assertTrue(ok)
+        self.assertIsNone(asset['nft_id'])
+        self.assertIsNone(asset['nft_tx_id'])
+        self.assertIsNone(asset['nft_mint_status'])
+
+    def test_mint_sets_nft_fields(self):
+        ok, asset = _register_default()
+        self.assertTrue(ok)
+        ok, result = pa_svc.mint_asset_nft(asset['id'], CREATOR)
+        self.assertTrue(ok)
+
+        updated = pa_svc.get_asset(asset['id'])
+        self.assertIsNotNone(updated['nft_id'])
+        self.assertIsNotNone(updated['nft_tx_id'])
+        self.assertEqual(updated['nft_mint_status'], 'confirmed')
+        self.assertEqual(updated['state'], 'MINTED')
+
+
+class TestSigningIntegration(unittest.TestCase):
+    """Correction E: Maker Agent signed envelope accepted by Wallet V1 verifier."""
+
+    def test_maker_agent_signature_accepted_by_verifier(self):
+        try:
+            from maker_agent.signer import MakerSigner
+            from wallet_action_verify import verify_wallet_action_signature
+            import wallet_v1_production_final as wv1
+        except ImportError:
+            self.skipTest('maker_agent or wallet_action_verify not available')
+
+        signer = MakerSigner.generate()
+        address = wv1.derive_thronos_address(signer.public_key_hex)
+
+        import hashlib, json, time as _t
+        payload = {'batch_id': 'B1', 'job_id': 'J1', 'action': 'produce'}
+        payload_hash = hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()
+        ).hexdigest()
+
+        intent = {
+            'type': 'thronos_wallet_action',
+            'version': '1',
+            'action': 'physical_asset_produce',
+            'wallet_id': 'test-wallet',
+            'from_thr': address,
+            'nonce': 'int-test-nonce-001',
+            'created_at': str(int(_t.time())),
+            'payload_hash': payload_hash,
+            'amount': '0',
+            'asset': 'THR',
+            'chain': 'thronos',
+            'recipient': '',
+        }
+
+        signature_hex = signer.sign_intent(intent)
+        ok, err_code, err_detail = verify_wallet_action_signature(
+            intent, signature_hex, signer.public_key_hex
+        )
+        self.assertTrue(ok, f'Verification failed: {err_code} — {err_detail}')
 
 
 if __name__ == '__main__':

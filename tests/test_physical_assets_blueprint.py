@@ -55,6 +55,30 @@ def _init_test_env(
         nft_store.clear()
         nft_store.update(reg)
 
+    _nft_counter = [0]
+
+    def canonical_mint(name, description, category, price, royalties, creator,
+                       image_url=None, for_sale=True, mint_fee=0,
+                       extra_fields=None, nft_id=None, **kwargs):
+        _nft_counter[0] += 1
+        nft_id = nft_id or f'NFT_BP_{_nft_counter[0]}'
+        nft = {
+            'nft_id': nft_id,
+            'name': name,
+            'description': description,
+            'category': category,
+            'price': price,
+            'royalties': royalties,
+            'creator': creator,
+            'for_sale': for_sale,
+        }
+        if extra_fields:
+            nft.update(extra_fields)
+        reg = load_nft()
+        reg['nfts'].append(nft)
+        save_nft(reg)
+        return {'nft_id': nft_id, 'nft': nft, 'tx_id': f'TX_BP_{_nft_counter[0]}'}
+
     pa_svc.init_physical_assets(
         data_dir=tmpdir,
         load_json_fn=load_json,
@@ -65,6 +89,7 @@ def _init_test_env(
         load_nft_registry_fn=load_nft,
         save_nft_registry_fn=save_nft,
         nft_mint_fee=1.0,
+        canonical_mint_fn=canonical_mint,
     )
 
     def verify_intent(intent, signature, public_key):
@@ -391,6 +416,14 @@ class TestBlueprintProductionEndpoints(unittest.TestCase):
         data = resp.get_json()
         self.assertEqual(resp.status_code, 200)
         self.assertTrue(data['ok'])
+        self.assertTrue(data.get('signed'))
+        self.assertEqual(data['job']['status'], 'CREATOR_SIGNED')
+
+        resp = self.client.post(f'/api/assets/jobs/{job_id}/certify',
+            json=_signed_request('physical_asset_produce', {}))
+        data = resp.get_json()
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(data['ok'])
         self.assertTrue(data.get('certified'))
         self.assertIn('nft_id', data)
 
@@ -422,6 +455,82 @@ class TestBlueprintProductionEndpoints(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertTrue(data['ok'])
         self.assertEqual(data['job']['status'], 'PRINT_FAILED')
+
+    def test_certify_endpoint_requires_signing_first(self):
+        resp = self.client.post('/api/assets/batches',
+            json=_signed_request('physical_asset_produce', {
+                'batch_id': 'BATCH-BP-CERT',
+                'tenant_id': 'aisthetic',
+                'product_id': 'coin-v1',
+                'sku': 'TPC-S1',
+                'quantity': 1,
+                'edition_start': 1,
+                'edition_size': 100,
+                'design_hash': 'a' * 64,
+            }))
+        job_id = resp.get_json()['jobs'][0]['job_id']
+
+        self.client.post(f'/api/assets/jobs/{job_id}/gcode',
+            json=_signed_request('physical_asset_produce', {
+                'gcode_hash': 'b' * 64}))
+        self.client.post(f'/api/assets/jobs/{job_id}/start',
+            json=_signed_request('physical_asset_produce', {
+                'printer_id': 'BAMBU-X1C-001'}))
+        self.client.post(f'/api/assets/jobs/{job_id}/complete',
+            json=_signed_request('physical_asset_produce', {}))
+
+        resp = self.client.post(f'/api/assets/jobs/{job_id}/certify',
+            json=_signed_request('physical_asset_produce', {}))
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(resp.get_json()['ok'])
+
+    def test_certify_endpoint_success(self):
+        resp = self.client.post('/api/assets/batches',
+            json=_signed_request('physical_asset_produce', {
+                'batch_id': 'BATCH-BP-CERT2',
+                'tenant_id': 'aisthetic',
+                'product_id': 'coin-v1',
+                'sku': 'TPC-S1',
+                'quantity': 1,
+                'edition_start': 1,
+                'edition_size': 100,
+                'design_hash': 'a' * 64,
+            }))
+        data = resp.get_json()
+        job_id = data['jobs'][0]['job_id']
+        asset_id = data['jobs'][0]['asset_id']
+
+        self.client.post(f'/api/assets/jobs/{job_id}/gcode',
+            json=_signed_request('physical_asset_produce', {
+                'gcode_hash': 'b' * 64}))
+        self.client.post(f'/api/assets/jobs/{job_id}/start',
+            json=_signed_request('physical_asset_produce', {
+                'printer_id': 'BAMBU-X1C-001'}))
+        self.client.post(f'/api/assets/jobs/{job_id}/complete',
+            json=_signed_request('physical_asset_produce', {}))
+        self.client.post(f'/api/assets/jobs/{job_id}/sign',
+            json=_signed_request('physical_asset_produce', {
+                'signature_data': {
+                    'tenant_id': 'aisthetic',
+                    'batch_id': 'BATCH-BP-CERT2',
+                    'job_id': job_id,
+                    'asset_id': asset_id,
+                    'serial': 'TPC-S1-001',
+                    'edition_number': 1,
+                    'creator_address': CREATOR,
+                    'design_hash': 'a' * 64,
+                    'nonce': 'nonce-1',
+                    'signature': 'fakesig',
+                },
+            }))
+
+        resp = self.client.post(f'/api/assets/jobs/{job_id}/certify',
+            json=_signed_request('physical_asset_produce', {}))
+        data = resp.get_json()
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(data['ok'])
+        self.assertTrue(data['certified'])
+        self.assertIn('nft_id', data)
 
 
 # ── Stage 1 read endpoints via blueprint ─────────────────────────────────────

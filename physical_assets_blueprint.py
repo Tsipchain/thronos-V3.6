@@ -40,6 +40,13 @@ def _write_guard():
 
 
 def _require_signed_intent(data, allowed_action='physical_asset_register'):
+    for forbidden in ('private_key', 'secret_key', 'secret'):
+        if data.get(forbidden):
+            return None, None, (
+                jsonify(ok=False, error='raw_secret_in_request',
+                        detail=f'{forbidden} must never be sent in requests'), 400
+            )
+
     intent_raw = data.get('intent')
     signature = (data.get('signature') or '').strip()
     public_key = (data.get('public_key') or '').strip()

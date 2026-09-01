@@ -911,5 +911,173 @@ class TestNFTRoyalty5Percent(unittest.TestCase):
         self.assertFalse(nft['for_sale'])
 
 
+# ── Stage 2: Security rejection tests ────────────────────────────────────────
+
+class TestSecurityRejections(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir, self.nft_store = _init_service()
+        pa_svc.approve_creator('aisthetic', CREATOR)
+        ok, result = pa_svc.create_production_batch(
+            batch_id='BATCH-SEC',
+            tenant_id='aisthetic',
+            product_id='coin-v1',
+            sku='TPC-S1',
+            creator_address=CREATOR,
+            quantity=1,
+            edition_start=1,
+            edition_size=100,
+            design_hash='a' * 64,
+        )
+        self.assertTrue(ok)
+        self.job_id = result['jobs'][0]['job_id']
+        self.asset_id = result['jobs'][0]['asset_id']
+
+    def _certify_job(self):
+        pa_svc.upload_job_gcode(self.job_id, 'b' * 64, CREATOR)
+        pa_svc.start_print_job(self.job_id, 'BAMBU-X1C-001', CREATOR)
+        pa_svc.complete_print_job(self.job_id, CREATOR)
+        sig_data = {
+            'tenant_id': 'aisthetic', 'batch_id': 'BATCH-SEC',
+            'job_id': self.job_id, 'asset_id': self.asset_id,
+            'serial': 'TPC-S1-001', 'edition_number': 1,
+            'creator_address': CREATOR, 'design_hash': 'a' * 64,
+            'nonce': 'nonce-1', 'signature': 'fakesig',
+        }
+        return pa_svc.sign_production(self.job_id, CREATOR, sig_data), sig_data
+
+    def test_duplicate_certification_idempotent(self):
+        (ok1, r1), sig_data = self._certify_job()
+        self.assertTrue(ok1)
+        self.assertTrue(r1.get('certified'))
+        nft_id = r1['nft_id']
+
+        ok2, r2 = pa_svc.sign_production(self.job_id, CREATOR, sig_data)
+        self.assertTrue(ok2)
+        self.assertTrue(r2.get('already_certified'))
+        self.assertEqual(len(self.nft_store.get('nfts', [])), 1)
+
+    def test_cross_tenant_batch_creation_rejected(self):
+        ok, result = pa_svc.create_production_batch(
+            batch_id='BATCH-XT', tenant_id='other_tenant',
+            product_id='coin-v1', sku='TPC-S1',
+            creator_address=CREATOR, quantity=1,
+            edition_start=1, edition_size=100,
+            design_hash='a' * 64,
+        )
+        self.assertFalse(ok)
+        self.assertEqual(result['error'], 'creator_not_approved')
+
+    def test_wrong_creator_signs_rejected(self):
+        pa_svc.approve_creator('aisthetic', CREATOR2)
+        pa_svc.upload_job_gcode(self.job_id, 'b' * 64, CREATOR)
+        pa_svc.start_print_job(self.job_id, 'BAMBU-X1C-001', CREATOR)
+        pa_svc.complete_print_job(self.job_id, CREATOR)
+        sig_data = {
+            'tenant_id': 'aisthetic', 'batch_id': 'BATCH-SEC',
+            'job_id': self.job_id, 'asset_id': self.asset_id,
+            'serial': 'TPC-S1-001', 'edition_number': 1,
+            'creator_address': CREATOR2, 'design_hash': 'a' * 64,
+            'nonce': 'nonce-1', 'signature': 'fakesig',
+        }
+        ok, result = pa_svc.sign_production(self.job_id, CREATOR2, sig_data)
+        self.assertFalse(ok)
+        self.assertEqual(result['error'], 'unauthorized_creator')
+
+    def test_wrong_creator_starts_print_rejected(self):
+        pa_svc.approve_creator('aisthetic', CREATOR2)
+        pa_svc.upload_job_gcode(self.job_id, 'b' * 64, CREATOR)
+        ok, result = pa_svc.start_print_job(self.job_id, 'BAMBU', CREATOR2)
+        self.assertFalse(ok)
+        self.assertEqual(result['error'], 'unauthorized_creator')
+
+
+class TestInvalidStateTransitions(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir, self.nft_store = _init_service()
+        pa_svc.approve_creator('aisthetic', CREATOR)
+        ok, result = pa_svc.create_production_batch(
+            batch_id='BATCH-STATE',
+            tenant_id='aisthetic',
+            product_id='coin-v1',
+            sku='TPC-S1',
+            creator_address=CREATOR,
+            quantity=1,
+            edition_start=1,
+            edition_size=100,
+            design_hash='a' * 64,
+        )
+        self.assertTrue(ok)
+        self.job_id = result['jobs'][0]['job_id']
+        self.asset_id = result['jobs'][0]['asset_id']
+
+    def test_complete_before_start_rejected(self):
+        ok, result = pa_svc.complete_print_job(self.job_id, CREATOR)
+        self.assertFalse(ok)
+        self.assertEqual(result['error'], 'job_not_printing')
+
+    def test_fail_before_start_rejected(self):
+        ok, result = pa_svc.fail_print_job(self.job_id, CREATOR, 'reason')
+        self.assertFalse(ok)
+        self.assertEqual(result['error'], 'job_not_printing')
+
+    def test_sign_before_complete_rejected(self):
+        pa_svc.upload_job_gcode(self.job_id, 'b' * 64, CREATOR)
+        pa_svc.start_print_job(self.job_id, 'BAMBU-X1C-001', CREATOR)
+        sig_data = {
+            'tenant_id': 'aisthetic', 'batch_id': 'BATCH-STATE',
+            'job_id': self.job_id, 'asset_id': self.asset_id,
+            'serial': 'TPC-S1-001', 'edition_number': 1,
+            'creator_address': CREATOR, 'design_hash': 'a' * 64,
+            'nonce': 'nonce-1', 'signature': 'fakesig',
+        }
+        ok, result = pa_svc.sign_production(self.job_id, CREATOR, sig_data)
+        self.assertFalse(ok)
+        self.assertEqual(result['error'], 'job_not_printed')
+
+    def test_start_certified_job_rejected(self):
+        pa_svc.upload_job_gcode(self.job_id, 'b' * 64, CREATOR)
+        pa_svc.start_print_job(self.job_id, 'BAMBU-X1C-001', CREATOR)
+        pa_svc.complete_print_job(self.job_id, CREATOR)
+        sig_data = {
+            'tenant_id': 'aisthetic', 'batch_id': 'BATCH-STATE',
+            'job_id': self.job_id, 'asset_id': self.asset_id,
+            'serial': 'TPC-S1-001', 'edition_number': 1,
+            'creator_address': CREATOR, 'design_hash': 'a' * 64,
+            'nonce': 'nonce-1', 'signature': 'fakesig',
+        }
+        pa_svc.sign_production(self.job_id, CREATOR, sig_data)
+        ok, result = pa_svc.start_print_job(self.job_id, 'BAMBU', CREATOR)
+        self.assertFalse(ok)
+        self.assertEqual(result['error'], 'invalid_job_state')
+
+    def test_complete_certified_job_rejected(self):
+        pa_svc.upload_job_gcode(self.job_id, 'b' * 64, CREATOR)
+        pa_svc.start_print_job(self.job_id, 'BAMBU-X1C-001', CREATOR)
+        pa_svc.complete_print_job(self.job_id, CREATOR)
+        sig_data = {
+            'tenant_id': 'aisthetic', 'batch_id': 'BATCH-STATE',
+            'job_id': self.job_id, 'asset_id': self.asset_id,
+            'serial': 'TPC-S1-001', 'edition_number': 1,
+            'creator_address': CREATOR, 'design_hash': 'a' * 64,
+            'nonce': 'nonce-1', 'signature': 'fakesig',
+        }
+        pa_svc.sign_production(self.job_id, CREATOR, sig_data)
+        ok, result = pa_svc.complete_print_job(self.job_id, CREATOR)
+        self.assertFalse(ok)
+        self.assertEqual(result['error'], 'job_not_printing')
+
+    def test_sign_planned_job_rejected(self):
+        sig_data = {
+            'tenant_id': 'aisthetic', 'batch_id': 'BATCH-STATE',
+            'job_id': self.job_id, 'asset_id': self.asset_id,
+            'serial': 'TPC-S1-001', 'edition_number': 1,
+            'creator_address': CREATOR, 'design_hash': 'a' * 64,
+            'nonce': 'nonce-1', 'signature': 'fakesig',
+        }
+        ok, result = pa_svc.sign_production(self.job_id, CREATOR, sig_data)
+        self.assertFalse(ok)
+        self.assertEqual(result['error'], 'job_not_printed')
+
+
 if __name__ == '__main__':
     unittest.main()

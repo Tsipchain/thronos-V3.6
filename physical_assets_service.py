@@ -551,11 +551,13 @@ JOB_STATES = (
     'PRINTED',
     'CREATOR_SIGNED',
     'MINT_PENDING',
-    'CHAIN_CONFIRMED',
-    'NFT_CONFIRMED',
     'CERTIFIED',
-    'AVAILABLE',
 )
+# Architecture note: ThronosChain canonical NFT mint is atomic —
+# append to CHAIN_FILE = confirmed. There is no separate
+# CHAIN_CONFIRMED / NFT_CONFIRMED step. MINT_PENDING → CERTIFIED
+# happens in one certify_production() call when canonical_mint_nft
+# succeeds (NFT in registry + tx in chain).
 
 _APPROVED_CREATORS_FILE = 'approved_creators.json'
 _BATCHES_FILE = 'production_batches.json'
@@ -1064,6 +1066,12 @@ def certify_production(
 
     CREATOR_SIGNED → MINT_PENDING → canonical mint → CERTIFIED.
     On mint failure, job stays MINT_PENDING (retryable).
+
+    ThronosChain canonical NFT mint is atomic: append to CHAIN_FILE
+    = confirmed. There is no separate pending/confirmation step for
+    NFT mints. A successful canonical_mint_nft() call means the NFT
+    is in the registry and the tx is in the chain — that is the
+    chain confirmation.
     """
     err = _check_writable()
     if err:
@@ -1084,7 +1092,10 @@ def certify_production(
             return False, {'error': 'unauthorized_creator'}
 
         if job['status'] == 'CERTIFIED':
-            return True, {'job': job, 'already_certified': True, 'nft_id': job.get('nft_id')}
+            return True, {
+                'job': job, 'already_certified': True,
+                'nft_id': job.get('nft_id'), 'tx_id': job.get('nft_tx_id'),
+            }
 
         if job['status'] not in ('CREATOR_SIGNED', 'MINT_PENDING'):
             return False, {'error': 'job_not_signed', 'state': job['status']}
@@ -1105,13 +1116,18 @@ def certify_production(
         return False, {'error': 'nft_mint_failed', 'detail': mint_result.get('error'),
                        'retryable': True}
 
+    nft_id = mint_result.get('nft_id')
+    tx_id = mint_result.get('tx_id')
+
     with _lock:
         batches_data = _load_batches()
         job = batches_data['jobs'].get(job_id)
         if not job:
             return False, {'error': 'job_not_found'}
 
-        job['nft_id'] = mint_result.get('nft_id')
+        job['nft_id'] = nft_id
+        job['nft_tx_id'] = tx_id
+        job['nft_mint_status'] = 'confirmed'
         job['status'] = 'CERTIFIED'
         job['updated_at'] = _now_iso()
 
@@ -1128,8 +1144,9 @@ def certify_production(
 
     return True, {
         'job': job,
-        'nft_id': mint_result.get('nft_id'),
-        'tx_id': mint_result.get('tx_id'),
+        'nft_id': nft_id,
+        'tx_id': tx_id,
+        'nft_mint_status': 'confirmed',
         'certified': True,
     }
 

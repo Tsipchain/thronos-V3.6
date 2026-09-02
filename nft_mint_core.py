@@ -67,10 +67,12 @@ def canonical_mint_nft(
 
     tx_id = None
     if load_chain_fn and save_chain_fn:
+        tx_id = f"{nft_id}-{timestamp.replace(' ', '-')}"
         chain = load_chain_fn()
         tx = {
             'type': 'nft_mint',
             'category': 'nft_mint',
+            'tx_id': tx_id,
             'from': creator,
             'to': network_wallet,
             'amount': effective_fee,
@@ -88,6 +90,5 @@ def canonical_mint_nft(
         save_chain_fn(chain)
         if update_last_block_fn:
             update_last_block_fn(tx, is_block=False)
-        tx_id = f"{nft_id}-{timestamp.replace(' ', '-')}"
 
     return {'nft_id': nft_id, 'nft': nft, 'tx_id': tx_id}

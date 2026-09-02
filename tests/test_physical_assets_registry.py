@@ -1266,6 +1266,100 @@ class TestCertificationLifecycle(unittest.TestCase):
         self.assertEqual(len(self.nft_store.get('nfts', [])), 1)
 
 
+class TestCanonicalTxIdentity(unittest.TestCase):
+    """Gate 2: canonical tx identity must be real and durable.
+
+    ThronosChain canonical NFT mint is atomic — append to CHAIN_FILE
+    = confirmed. The tx_id and nft_id must be persisted on both the
+    job and asset, and match the canonical chain entry.
+    """
+
+    def setUp(self):
+        self.tmpdir, self.nft_store = _init_service()
+        pa_svc.approve_creator('aisthetic', CREATOR)
+        ok, result = pa_svc.create_production_batch(
+            batch_id='BATCH-TX', tenant_id='aisthetic', product_id='coin-v1',
+            sku='TPC-S1', creator_address=CREATOR, quantity=1,
+            edition_start=1, edition_size=100, design_hash='a' * 64,
+        )
+        self.assertTrue(ok)
+        self.job_id = result['jobs'][0]['job_id']
+        self.asset_id = result['jobs'][0]['asset_id']
+
+    def _full_certify(self):
+        pa_svc.upload_job_gcode(self.job_id, 'b' * 64, CREATOR)
+        pa_svc.start_print_job(self.job_id, 'BAMBU-X1C-001', CREATOR)
+        pa_svc.complete_print_job(self.job_id, CREATOR)
+        sig_data = {
+            'tenant_id': 'aisthetic', 'batch_id': 'BATCH-TX',
+            'job_id': self.job_id, 'asset_id': self.asset_id,
+            'serial': 'TPC-S1-001', 'edition_number': 1,
+            'creator_address': CREATOR, 'design_hash': 'a' * 64,
+            'nonce': 'nonce-tx-1', 'signature': 'fakesig',
+        }
+        pa_svc.sign_production(self.job_id, CREATOR, sig_data)
+        return pa_svc.certify_production(self.job_id, CREATOR)
+
+    def test_certified_has_nft_id_and_tx_id(self):
+        ok, result = self._full_certify()
+        self.assertTrue(ok)
+        self.assertIsNotNone(result['nft_id'])
+        self.assertIsNotNone(result['tx_id'])
+        self.assertTrue(result['nft_id'].startswith('NFT'))
+        self.assertIn(result['nft_id'], result['tx_id'])
+
+    def test_job_persists_canonical_reference(self):
+        ok, result = self._full_certify()
+        self.assertTrue(ok)
+        job = pa_svc.get_job(self.job_id)
+        self.assertEqual(job['nft_id'], result['nft_id'])
+        self.assertEqual(job['nft_tx_id'], result['tx_id'])
+        self.assertEqual(job['nft_mint_status'], 'confirmed')
+
+    def test_asset_persists_canonical_reference(self):
+        ok, result = self._full_certify()
+        self.assertTrue(ok)
+        asset = pa_svc.get_asset(self.asset_id)
+        self.assertEqual(asset['nft_id'], result['nft_id'])
+        self.assertEqual(asset['nft_tx_id'], result['tx_id'])
+        self.assertEqual(asset['nft_mint_status'], 'confirmed')
+
+    def test_missing_canonical_mint_not_certified(self):
+        pa_svc.upload_job_gcode(self.job_id, 'b' * 64, CREATOR)
+        pa_svc.start_print_job(self.job_id, 'BAMBU-X1C-001', CREATOR)
+        pa_svc.complete_print_job(self.job_id, CREATOR)
+        sig_data = {
+            'tenant_id': 'aisthetic', 'batch_id': 'BATCH-TX',
+            'job_id': self.job_id, 'asset_id': self.asset_id,
+            'serial': 'TPC-S1-001', 'edition_number': 1,
+            'creator_address': CREATOR, 'design_hash': 'a' * 64,
+            'nonce': 'nonce-tx-2', 'signature': 'fakesig',
+        }
+        pa_svc.sign_production(self.job_id, CREATOR, sig_data)
+        original = pa_svc._canonical_mint_fn
+        pa_svc._canonical_mint_fn = None
+        ok, result = pa_svc.certify_production(self.job_id, CREATOR)
+        pa_svc._canonical_mint_fn = original
+        self.assertFalse(ok)
+        job = pa_svc.get_job(self.job_id)
+        self.assertNotEqual(job['status'], 'CERTIFIED')
+        self.assertIsNone(job.get('nft_id'))
+
+    def test_duplicate_certify_same_tx_id(self):
+        ok, r1 = self._full_certify()
+        self.assertTrue(ok)
+        ok, r2 = pa_svc.certify_production(self.job_id, CREATOR)
+        self.assertTrue(ok)
+        self.assertTrue(r2.get('already_certified'))
+        self.assertEqual(r2['nft_id'], r1['nft_id'])
+        self.assertEqual(r2['tx_id'], r1['tx_id'])
+
+    def test_nft_mint_status_in_certify_result(self):
+        ok, result = self._full_certify()
+        self.assertTrue(ok)
+        self.assertEqual(result['nft_mint_status'], 'confirmed')
+
+
 class TestCreationFeeNotAutoList(unittest.TestCase):
     """Correction B: creation_fee does NOT auto-list the NFT."""
 
@@ -1360,16 +1454,19 @@ class TestJobStatesExpanded(unittest.TestCase):
     def test_all_required_states_present(self):
         required = [
             'PLANNED', 'GCODE_READY', 'PRINTING', 'PRINT_FAILED',
-            'PRINTED', 'CREATOR_SIGNED', 'MINT_PENDING',
-            'CHAIN_CONFIRMED', 'NFT_CONFIRMED', 'CERTIFIED', 'AVAILABLE',
+            'PRINTED', 'CREATOR_SIGNED', 'MINT_PENDING', 'CERTIFIED',
         ]
         for state in required:
             self.assertIn(state, pa_svc.JOB_STATES, f'{state} missing from JOB_STATES')
 
     def test_removed_states_absent(self):
-        removed = ['SERIAL_RESERVED', 'DESIGN_UPLOADED', 'NFT_MINTED', 'CREATOR_SIGN_PENDING']
+        removed = [
+            'SERIAL_RESERVED', 'DESIGN_UPLOADED', 'NFT_MINTED',
+            'CREATOR_SIGN_PENDING',
+            'CHAIN_CONFIRMED', 'NFT_CONFIRMED', 'AVAILABLE',
+        ]
         for state in removed:
-            self.assertNotIn(state, pa_svc.JOB_STATES, f'{state} should be removed')
+            self.assertNotIn(state, pa_svc.JOB_STATES, f'{state} should not be in JOB_STATES')
 
 
 class TestCertifyRequiresSigning(unittest.TestCase):
@@ -1432,45 +1529,84 @@ class TestAssetPersistsNftFields(unittest.TestCase):
 
 
 class TestSigningIntegration(unittest.TestCase):
-    """Correction E: Maker Agent signed envelope accepted by Wallet V1 verifier."""
+    """Correction E: Maker Agent signed envelope accepted by Wallet V1 verifier.
+
+    Security-critical gate — MUST pass, never skip.
+    Requires: cryptography (same dependency as maker_agent.signer).
+    """
 
     def test_maker_agent_signature_accepted_by_verifier(self):
-        try:
-            from maker_agent.signer import MakerSigner
-            from wallet_action_verify import verify_wallet_action_signature
-            import wallet_v1_production_final as wv1
-        except ImportError:
-            self.skipTest('maker_agent or wallet_action_verify not available')
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from maker_agent.signer import WalletSigner
+        from wallet_action_verify import verify_wallet_action_signature
 
-        signer = MakerSigner.generate()
-        address = wv1.derive_thronos_address(signer.public_key_hex)
+        privkey = ec.generate_private_key(ec.SECP256K1())
+        privkey_hex = format(privkey.private_numbers().private_value, '064x')
+        signer = WalletSigner(privkey_hex)
 
-        import hashlib, json, time as _t
         payload = {'batch_id': 'B1', 'job_id': 'J1', 'action': 'produce'}
-        payload_hash = hashlib.sha256(
-            json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()
-        ).hexdigest()
-
-        intent = {
-            'type': 'thronos_wallet_action',
-            'version': '1',
-            'action': 'physical_asset_produce',
-            'wallet_id': 'test-wallet',
-            'from_thr': address,
-            'nonce': 'int-test-nonce-001',
-            'created_at': str(int(_t.time())),
-            'payload_hash': payload_hash,
-            'amount': '0',
-            'asset': 'THR',
-            'chain': 'thronos',
-            'recipient': '',
-        }
-
+        intent = signer.create_intent('physical_asset_produce', payload)
         signature_hex = signer.sign_intent(intent)
+
         ok, err_code, err_detail = verify_wallet_action_signature(
             intent, signature_hex, signer.public_key_hex
         )
         self.assertTrue(ok, f'Verification failed: {err_code} — {err_detail}')
+
+    def test_address_pubkey_binding(self):
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from maker_agent.signer import WalletSigner
+        from wallet_action_verify import verify_wallet_action_signature
+        import wallet_v1_production_final as wv1
+
+        privkey = ec.generate_private_key(ec.SECP256K1())
+        privkey_hex = format(privkey.private_numbers().private_value, '064x')
+        signer = WalletSigner(privkey_hex)
+
+        derived = wv1.derive_thronos_address(signer.public_key_hex)
+        self.assertEqual(signer.address, derived)
+
+        payload = {'test': 'binding'}
+        intent = signer.create_intent('physical_asset_register', payload)
+        sig = signer.sign_intent(intent)
+
+        ok, _, _ = verify_wallet_action_signature(intent, sig, signer.public_key_hex)
+        self.assertTrue(ok)
+
+    def test_tampered_intent_rejected(self):
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from maker_agent.signer import WalletSigner
+        from wallet_action_verify import verify_wallet_action_signature
+
+        privkey = ec.generate_private_key(ec.SECP256K1())
+        privkey_hex = format(privkey.private_numbers().private_value, '064x')
+        signer = WalletSigner(privkey_hex)
+
+        payload = {'batch_id': 'B1'}
+        intent = signer.create_intent('physical_asset_produce', payload)
+        sig = signer.sign_intent(intent)
+
+        intent['action'] = 'physical_asset_transfer'
+        ok, err_code, _ = verify_wallet_action_signature(intent, sig, signer.public_key_hex)
+        self.assertFalse(ok)
+        self.assertEqual(err_code, 'invalid_signature')
+
+    def test_wrong_key_rejected(self):
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from maker_agent.signer import WalletSigner
+        from wallet_action_verify import verify_wallet_action_signature
+
+        key1 = ec.generate_private_key(ec.SECP256K1())
+        key2 = ec.generate_private_key(ec.SECP256K1())
+        signer1 = WalletSigner(format(key1.private_numbers().private_value, '064x'))
+        signer2 = WalletSigner(format(key2.private_numbers().private_value, '064x'))
+
+        payload = {'batch_id': 'B1'}
+        intent = signer1.create_intent('physical_asset_produce', payload)
+        sig = signer1.sign_intent(intent)
+
+        ok, err_code, _ = verify_wallet_action_signature(intent, sig, signer2.public_key_hex)
+        self.assertFalse(ok)
 
 
 if __name__ == '__main__':

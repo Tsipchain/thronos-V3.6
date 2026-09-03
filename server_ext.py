@@ -59,14 +59,15 @@ try:
     _pa_mint_fee = float(getattr(server_module, 'NFT_MINT_FEE', 1.0))
 
     def _pa_canonical_mint(name, description, category, price, royalties, creator,
-                           for_sale=False, mint_fee=0, extra_fields=None, nft_id=None):
+                           for_sale=False, mint_fee=0, extra_fields=None,
+                           nft_id=None, tx_id=None):
         from nft_mint_core import canonical_mint_nft
         _chain_file = getattr(server_module, 'CHAIN_FILE', None)
         return canonical_mint_nft(
             name=name, description=description, category=category,
             price=price, royalties=royalties, creator=creator,
             for_sale=for_sale, mint_fee=mint_fee, extra_fields=extra_fields,
-            nft_id=nft_id,
+            nft_id=nft_id, tx_id=tx_id,
             load_nft_registry_fn=_pa_load_nft,
             save_nft_registry_fn=_pa_save_nft,
             load_chain_fn=(lambda: server_module.load_json(_chain_file, [])) if _chain_file else None,

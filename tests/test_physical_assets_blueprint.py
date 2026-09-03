@@ -90,6 +90,7 @@ def _init_test_env(
         save_nft_registry_fn=save_nft,
         nft_mint_fee=1.0,
         canonical_mint_fn=canonical_mint,
+        creator_approval_authorizer=lambda a, t, c: True,
     )
 
     def verify_intent(intent, signature, public_key):
@@ -203,7 +204,7 @@ class TestBlueprintSignatureValidation(unittest.TestCase):
         app, _, _ = _init_test_env(payload_hash_ok=False)
         with app.test_client() as c:
             resp = c.post('/api/assets/creators/approve',
-                          json=_signed_request(payload={
+                          json=_signed_request('physical_asset_register', {
                               'tenant_id': 'a', 'creator_address': CREATOR}))
             self.assertEqual(resp.status_code, 400)
             self.assertEqual(resp.get_json()['error'], 'payload_hash_mismatch')
@@ -261,7 +262,7 @@ class TestBlueprintProductionEndpoints(unittest.TestCase):
             json=_signed_request('physical_asset_register', {
                 'tenant_id': 'aisthetic',
                 'creator_address': CREATOR,
-            }))
+            }, from_thr=CREATOR2))
         self.assertTrue(resp.get_json()['ok'])
 
     def test_create_batch_endpoint(self):
@@ -398,6 +399,7 @@ class TestBlueprintProductionEndpoints(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertTrue(resp.get_json()['ok'])
 
+        job = pa_svc.get_job(job_id)
         resp = self.client.post(f'/api/assets/jobs/{job_id}/sign',
             json=_signed_request('physical_asset_produce', {
                 'signature_data': {
@@ -409,6 +411,9 @@ class TestBlueprintProductionEndpoints(unittest.TestCase):
                     'edition_number': 1,
                     'creator_address': CREATOR,
                     'design_hash': 'a' * 64,
+                    'gcode_hash': job.get('gcode_hash', ''),
+                    'printer_id': job.get('printer_id', ''),
+                    'completed_at': job.get('completed_at', ''),
                     'nonce': 'nonce-1',
                     'signature': 'fakesig',
                 },
@@ -508,6 +513,7 @@ class TestBlueprintProductionEndpoints(unittest.TestCase):
                 'printer_id': 'BAMBU-X1C-001'}))
         self.client.post(f'/api/assets/jobs/{job_id}/complete',
             json=_signed_request('physical_asset_produce', {}))
+        job = pa_svc.get_job(job_id)
         self.client.post(f'/api/assets/jobs/{job_id}/sign',
             json=_signed_request('physical_asset_produce', {
                 'signature_data': {
@@ -519,6 +525,9 @@ class TestBlueprintProductionEndpoints(unittest.TestCase):
                     'edition_number': 1,
                     'creator_address': CREATOR,
                     'design_hash': 'a' * 64,
+                    'gcode_hash': job.get('gcode_hash', ''),
+                    'printer_id': job.get('printer_id', ''),
+                    'completed_at': job.get('completed_at', ''),
                     'nonce': 'nonce-1',
                     'signature': 'fakesig',
                 },
@@ -558,6 +567,142 @@ class TestBlueprintReadEndpoints(unittest.TestCase):
     def test_proof_nonexistent_404(self):
         resp = self.client.get('/api/assets/nonexistent/proof')
         self.assertEqual(resp.status_code, 404)
+
+
+# ── Stage 2.7: Security gate tests ──────────────────────────────────────────
+
+ADMIN = 'THRADMIN0000000000000000000000000000000001'
+
+
+class TestGate1ActionEnforcement(unittest.TestCase):
+    """Gate 1: Wrong wallet action is rejected with 403."""
+
+    def setUp(self):
+        self.app, self.tmpdir, self.nft_store = _init_test_env()
+        self.client = self.app.test_client()
+
+    def test_wrong_action_on_approve_rejected(self):
+        resp = self.client.post('/api/assets/creators/approve',
+            json=_signed_request('physical_asset_produce', {
+                'tenant_id': 'aisthetic',
+                'creator_address': CREATOR,
+            }))
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp.get_json()['error'], 'wallet_action_not_allowed')
+
+    def test_wrong_action_on_batch_rejected(self):
+        resp = self.client.post('/api/assets/batches',
+            json=_signed_request('physical_asset_register', {
+                'batch_id': 'B1',
+                'tenant_id': 'aisthetic',
+            }))
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp.get_json()['error'], 'wallet_action_not_allowed')
+
+    def test_correct_action_on_approve_accepted(self):
+        resp = self.client.post('/api/assets/creators/approve',
+            json=_signed_request('physical_asset_register', {
+                'tenant_id': 'aisthetic',
+                'creator_address': CREATOR,
+            }, from_thr=CREATOR2))
+        self.assertEqual(resp.status_code, 201)
+        self.assertTrue(resp.get_json()['ok'])
+
+
+class TestGate2SelfApprovalBlueprint(unittest.TestCase):
+    """Gate 2: Self-approval rejected through blueprint."""
+
+    def setUp(self):
+        self.app, self.tmpdir, self.nft_store = _init_test_env()
+        self.client = self.app.test_client()
+
+    def test_self_approval_rejected(self):
+        resp = self.client.post('/api/assets/creators/approve',
+            json=_signed_request('physical_asset_register', {
+                'tenant_id': 'aisthetic',
+                'creator_address': CREATOR,
+            }, from_thr=CREATOR))
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.get_json()['error'], 'self_approval_not_allowed')
+
+
+class TestGate7PublicReadSanitizationBlueprint(unittest.TestCase):
+    """Gate 7: Public read endpoints strip claim_secret_hash."""
+
+    def setUp(self):
+        self.app, self.tmpdir, self.nft_store = _init_test_env()
+        self.client = self.app.test_client()
+        ok, self.asset = pa_svc.register_asset(
+            tenant_id='aisthetic', product_id='coin-v1', sku='TPC-S1',
+            serial='TPC-S1-001', edition_number=1, edition_size=100,
+            creator_address=CREATOR, design_hash='a' * 64,
+            asset_type='THR_BACKED_COLLECTIBLE',
+        )
+        self.assertTrue(ok)
+        pa_svc.set_claim_secret(self.asset['id'], 'my-secret-456')
+
+    def test_get_asset_strips_secret_hash(self):
+        resp = self.client.get(f"/api/assets/{self.asset['id']}")
+        data = resp.get_json()
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotIn('claim_secret_hash', data['asset'])
+
+    def test_get_by_serial_strips_secret_hash(self):
+        resp = self.client.get('/api/assets/serial/TPC-S1-001')
+        data = resp.get_json()
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotIn('claim_secret_hash', data['asset'])
+
+    def test_list_assets_strips_secret_hash(self):
+        resp = self.client.get('/api/assets/?tenant_id=aisthetic')
+        data = resp.get_json()
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(data['count'] >= 1)
+        for asset in data['assets']:
+            self.assertNotIn('claim_secret_hash', asset)
+
+
+class TestGate8RecursiveSecretRejection(unittest.TestCase):
+    """Gate 8: Nested secrets in payload recursively rejected."""
+
+    def setUp(self):
+        self.app, self.tmpdir, self.nft_store = _init_test_env()
+        self.client = self.app.test_client()
+
+    def test_nested_private_key_rejected(self):
+        body = _signed_request('physical_asset_register', {
+            'tenant_id': 'a', 'creator_address': CREATOR,
+        })
+        body['payload']['nested'] = {'private_key': 'deadbeef' * 8}
+        resp = self.client.post('/api/assets/creators/approve', json=body)
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.get_json()['error'], 'raw_secret_in_request')
+
+    def test_deeply_nested_mnemonic_rejected(self):
+        body = _signed_request('physical_asset_register', {
+            'tenant_id': 'a', 'creator_address': CREATOR,
+        })
+        body['payload']['level1'] = {'level2': {'mnemonic': 'word1 word2 word3'}}
+        resp = self.client.post('/api/assets/creators/approve', json=body)
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.get_json()['error'], 'raw_secret_in_request')
+
+    def test_secret_in_list_rejected(self):
+        body = _signed_request('physical_asset_register', {
+            'tenant_id': 'a', 'creator_address': CREATOR,
+        })
+        body['payload']['items'] = [{'seed_phrase': 'one two three'}]
+        resp = self.client.post('/api/assets/creators/approve', json=body)
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.get_json()['error'], 'raw_secret_in_request')
+
+    def test_empty_secret_value_passes(self):
+        body = _signed_request('physical_asset_register', {
+            'tenant_id': 'a', 'creator_address': CREATOR,
+        }, from_thr=CREATOR2)
+        body['payload']['private_key'] = ''
+        resp = self.client.post('/api/assets/creators/approve', json=body)
+        self.assertNotEqual(resp.get_json().get('error'), 'raw_secret_in_request')
 
 
 if __name__ == '__main__':

@@ -39,13 +39,37 @@ def _write_guard():
     return None
 
 
+_FORBIDDEN_KEYS = frozenset({
+    'private_key', 'secret_key', 'secret',
+    'mnemonic', 'seed', 'seed_phrase', 'passphrase',
+})
+
+
+def _contains_forbidden_keys(obj, _depth=0):
+    if _depth > 10:
+        return None
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if k in _FORBIDDEN_KEYS and v:
+                return k
+            found = _contains_forbidden_keys(v, _depth + 1)
+            if found:
+                return found
+    elif isinstance(obj, (list, tuple)):
+        for item in obj:
+            found = _contains_forbidden_keys(item, _depth + 1)
+            if found:
+                return found
+    return None
+
+
 def _require_signed_intent(data, allowed_action='physical_asset_register'):
-    for forbidden in ('private_key', 'secret_key', 'secret'):
-        if data.get(forbidden):
-            return None, None, (
-                jsonify(ok=False, error='raw_secret_in_request',
-                        detail=f'{forbidden} must never be sent in requests'), 400
-            )
+    forbidden = _contains_forbidden_keys(data)
+    if forbidden:
+        return None, None, (
+            jsonify(ok=False, error='raw_secret_in_request',
+                    detail=f'{forbidden} must never be sent in requests'), 400
+        )
 
     intent_raw = data.get('intent')
     signature = (data.get('signature') or '').strip()
@@ -61,6 +85,13 @@ def _require_signed_intent(data, allowed_action='physical_asset_register'):
     ok, err_code, err_detail = _verify_wallet_action_intent(intent, signature, public_key)
     if not ok:
         return None, None, (jsonify(ok=False, error=err_code, detail=err_detail), 400)
+
+    if intent.get('action') != allowed_action:
+        return None, None, (
+            jsonify(ok=False, error='wallet_action_not_allowed',
+                    detail=f'intent action {intent.get("action")!r} does not match '
+                           f'required action {allowed_action!r}'), 403
+        )
 
     payload = data.get('payload') or {}
     if not _verify_action_payload_hash(intent.get('payload_hash', ''), payload):
@@ -80,7 +111,7 @@ def get_asset(asset_id):
     asset = _pa_service.get_asset(asset_id)
     if not asset:
         return jsonify(ok=False, error='asset_not_found'), 404
-    return jsonify(ok=True, asset=asset), 200
+    return jsonify(ok=True, asset=_pa_service.sanitize_asset_for_public(asset)), 200
 
 
 @physical_assets_bp.route('/serial/<serial>', methods=['GET'])
@@ -88,7 +119,7 @@ def get_asset_by_serial(serial):
     asset = _pa_service.get_asset_by_serial(serial)
     if not asset:
         return jsonify(ok=False, error='asset_not_found'), 404
-    return jsonify(ok=True, asset=asset), 200
+    return jsonify(ok=True, asset=_pa_service.sanitize_asset_for_public(asset)), 200
 
 
 @physical_assets_bp.route('/<asset_id>/proof', methods=['GET'])
@@ -119,7 +150,8 @@ def list_assets():
         limit=limit,
         offset=offset,
     )
-    return jsonify(ok=True, assets=assets, count=len(assets)), 200
+    sanitized = [_pa_service.sanitize_asset_for_public(a) for a in assets]
+    return jsonify(ok=True, assets=sanitized, count=len(sanitized)), 200
 
 
 # ── Authenticated state-changing endpoints ───────────────────────────────────
@@ -310,6 +342,7 @@ def approve_creator():
     ok, result = _pa_service.approve_creator(
         tenant_id=tenant_id,
         creator_address=creator_address,
+        approver_address=from_thr,
         roles=roles,
         allowed_product_ids=allowed_product_ids,
     )

@@ -10,14 +10,16 @@ Serial format: {SKU}-{edition_number:03d}  e.g. TPC-S1-001
 """
 
 import hashlib
+import hmac
 import json
 import os
 import re
+import secrets
 import threading
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 
 # ── Lifecycle states ─────────────────────────────────────────────────────────
@@ -65,6 +67,19 @@ _nft_mint_fee = 1.0
 # Canonical NFT mint adapter — injected at init, wraps nft_mint_core
 _canonical_mint_fn = None
 
+# Creator approval authorizer — injected at init.
+# Signature: (approver_address: str, tenant_id: str, creator_address: str) -> bool
+_creator_approval_authorizer: Optional[Callable] = None
+
+# States that may be set via the manual state-mutation endpoint.
+# All other states are reached exclusively through their lifecycle endpoints.
+_MANUAL_ALLOWED_STATES = frozenset({'RETIRED'})
+
+# Fields stripped from public asset reads.
+_INTERNAL_FIELDS = frozenset({
+    'claim_secret_hash',
+})
+
 
 def init_physical_assets(
     data_dir: str,
@@ -77,10 +92,11 @@ def init_physical_assets(
     save_nft_registry_fn=None,
     nft_mint_fee: float = 1.0,
     canonical_mint_fn=None,
+    creator_approval_authorizer=None,
 ):
     global _registry_file, _load_json, _save_json, _node_role, _read_only
     global _feature_enabled, _load_nft_registry, _save_nft_registry, _nft_mint_fee
-    global _canonical_mint_fn
+    global _canonical_mint_fn, _creator_approval_authorizer
 
     _registry_file = os.path.join(data_dir, 'physical_assets_registry.json')
     _load_json = load_json_fn
@@ -92,6 +108,7 @@ def init_physical_assets(
     _save_nft_registry = save_nft_registry_fn
     _nft_mint_fee = nft_mint_fee
     _canonical_mint_fn = canonical_mint_fn
+    _creator_approval_authorizer = creator_approval_authorizer
 
 
 def _now_iso() -> str:
@@ -145,6 +162,18 @@ def _validate_design_hash(design_hash: str) -> Optional[str]:
 
 def _hash_claim_secret(secret: str) -> str:
     return hashlib.sha256(secret.encode('utf-8')).hexdigest()
+
+
+def _verify_claim_secret(candidate: str, stored_hash: str) -> bool:
+    return hmac.compare_digest(_hash_claim_secret(candidate), stored_hash)
+
+
+def generate_claim_secret() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def sanitize_asset_for_public(asset: Dict[str, Any]) -> Dict[str, Any]:
+    return {k: v for k, v in asset.items() if k not in _INTERNAL_FIELDS}
 
 
 # ── Public API functions ─────────────────────────────────────────────────────
@@ -324,6 +353,9 @@ def mint_asset_nft(
         if from_address != asset['creator_address'] and not verified:
             return False, {'error': 'unauthorized_mint'}
 
+        stable_nft_id = f"NFT-PA-{asset_id}"
+        stable_tx_id = f"NFT-PA-{asset_id}-MINT"
+
         result = _canonical_mint_fn(
             name=f"Thronos Physical Asset {asset['serial']}",
             description=(
@@ -336,6 +368,8 @@ def mint_asset_nft(
             creator=asset['creator_address'],
             for_sale=asset.get('for_sale', False),
             mint_fee=0,
+            nft_id=stable_nft_id,
+            tx_id=stable_tx_id,
             extra_fields={
                 'creation_fee': asset.get('creation_fee', 0),
                 'physical_asset_id': asset_id,
@@ -409,7 +443,7 @@ def claim_asset(
         if not stored_hash:
             return False, {'error': 'no_claim_secret_set'}
 
-        if _hash_claim_secret(claim_secret) != stored_hash:
+        if not _verify_claim_secret(claim_secret, stored_hash):
             return False, {'error': 'invalid_claim_secret'}
 
         old_owner = asset.get('owner_address') or asset['creator_address']
@@ -519,6 +553,13 @@ def update_asset_state(
 
     if new_state not in ASSET_STATES:
         return False, {'error': 'invalid_state', 'valid': list(ASSET_STATES)}
+
+    if new_state not in _MANUAL_ALLOWED_STATES:
+        return False, {
+            'error': 'state_not_manually_settable',
+            'detail': f'{new_state} can only be reached through its lifecycle endpoint',
+            'allowed': sorted(_MANUAL_ALLOWED_STATES),
+        }
 
     with _lock:
         registry = _load_registry()
@@ -634,6 +675,7 @@ def is_approved_creator(
 def approve_creator(
     tenant_id: str,
     creator_address: str,
+    approver_address: Optional[str] = None,
     roles: Optional[List[str]] = None,
     allowed_product_ids: Optional[List[str]] = None,
 ) -> Tuple[bool, Dict[str, Any]]:
@@ -641,9 +683,22 @@ def approve_creator(
     if err:
         return False, {'error': err}
 
+    if not _creator_approval_authorizer:
+        return False, {'error': 'creator_approval_not_configured'}
+
     creator_address = creator_address.strip().upper()
     if not creator_address.startswith('THR'):
         return False, {'error': 'invalid_creator_address'}
+
+    if not approver_address:
+        return False, {'error': 'approver_address_required'}
+    approver_address = approver_address.strip().upper()
+
+    if approver_address == creator_address:
+        return False, {'error': 'self_approval_not_allowed'}
+
+    if not _creator_approval_authorizer(approver_address, tenant_id, creator_address):
+        return False, {'error': 'approver_not_authorized'}
 
     with _lock:
         creators = _load_approved_creators()
@@ -651,6 +706,7 @@ def approve_creator(
         entry = {
             'tenant_id': tenant_id,
             'creator_address': creator_address,
+            'approved_by': approver_address,
             'roles': roles or ['creator', 'manufacturer'],
             'allowed_product_ids': allowed_product_ids,
             'active': True,
@@ -1035,7 +1091,8 @@ def sign_production(
         required_bindings = [
             'tenant_id', 'batch_id', 'job_id', 'asset_id',
             'serial', 'edition_number', 'creator_address',
-            'design_hash', 'nonce',
+            'design_hash', 'gcode_hash', 'printer_id',
+            'completed_at', 'nonce',
         ]
         for field in required_bindings:
             if not signature_data.get(field):
@@ -1049,6 +1106,30 @@ def sign_production(
 
         if int(signature_data.get('edition_number', 0)) != job['edition_number']:
             return False, {'error': 'edition_mismatch'}
+
+        if str(signature_data.get('gcode_hash', '')).lower() != (job.get('gcode_hash') or ''):
+            return False, {'error': 'gcode_hash_mismatch'}
+
+        if str(signature_data.get('printer_id', '')) != (job.get('printer_id') or ''):
+            return False, {'error': 'printer_id_mismatch'}
+
+        if str(signature_data.get('completed_at', '')) != (job.get('completed_at') or ''):
+            return False, {'error': 'completed_at_mismatch'}
+
+        if str(signature_data.get('batch_id', '')) != job['batch_id']:
+            return False, {'error': 'batch_id_mismatch'}
+
+        if str(signature_data.get('job_id', '')) != job_id:
+            return False, {'error': 'job_id_mismatch'}
+
+        if str(signature_data.get('asset_id', '')) != job['asset_id']:
+            return False, {'error': 'asset_id_mismatch'}
+
+        if str(signature_data.get('tenant_id', '')) != batch.get('tenant_id', ''):
+            return False, {'error': 'tenant_id_mismatch'}
+
+        if str(signature_data.get('creator_address', '')).upper() != creator_address:
+            return False, {'error': 'creator_address_mismatch'}
 
         job['creator_signature'] = signature_data.get('signature', '')
         job['status'] = 'CREATOR_SIGNED'

@@ -98,17 +98,6 @@ class MakerAgent:
                 h.update(chunk)
         return h.hexdigest()
 
-    # ── Creator approval ──────────────────────────────────────────────
-
-    def approve_self(self, allowed_product_ids: list = None) -> dict:
-        payload = {
-            'tenant_id': self.tenant_id,
-            'creator_address': self.address,
-        }
-        if allowed_product_ids:
-            payload['allowed_product_ids'] = allowed_product_ids
-        return self._signed_post('/creators/approve', 'physical_asset_register', payload)
-
     # ── Design & batch creation ───────────────────────────────────────
 
     def create_batch(
@@ -197,7 +186,7 @@ class MakerAgent:
         job = status.get('job', {})
         asset = status.get('asset', {})
 
-        if job.get('status') not in ('PRINTED', 'CREATOR_SIGN_PENDING'):
+        if job.get('status') != 'PRINTED':
             return {'ok': False, 'error': 'job_not_ready',
                     'detail': f"job status is {job.get('status')}, need PRINTED"}
 
@@ -213,6 +202,7 @@ class MakerAgent:
             'design_hash': job.get('design_hash', ''),
             'gcode_hash': job.get('gcode_hash', ''),
             'printer_id': job.get('printer_id', ''),
+            'completed_at': job.get('completed_at', ''),
             'nonce': uuid.uuid4().hex,
             'signature': 'maker_agent_attestation',
         }
@@ -270,12 +260,7 @@ class MakerAgent:
         """
         logger.info(f"=== Production run: {product_id} x{quantity} ===")
 
-        # Approve self as creator
-        approval = self.approve_self()
-        if not approval.get('ok'):
-            return {'ok': False, 'error': 'approval_failed', 'detail': approval}
-
-        # Create batch
+        # Create batch (creator must be pre-approved by a tenant admin)
         batch = self.create_batch(
             product_id=product_id,
             sku=sku,

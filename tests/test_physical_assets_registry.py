@@ -365,10 +365,10 @@ class TestClaimAsset(unittest.TestCase):
         ok, asset = _register_default()
         self.assertTrue(ok)
         pa_svc.mint_asset_nft(asset['id'], 'THR0000000000000000000000000000000000000001')
-        pa_svc.set_claim_secret(asset['id'], 'supersecret123')
+        pa_svc.set_claim_secret(asset['id'], 'supersecret123-claim-key!')
         ok, result = pa_svc.claim_asset(
             asset_id=asset['id'],
-            claim_secret='supersecret123',
+            claim_secret='supersecret123-claim-key!',
             new_owner_address='THRNEWOWNER0000000000000000000000000000001',
         )
         self.assertTrue(ok)
@@ -377,7 +377,7 @@ class TestClaimAsset(unittest.TestCase):
     def test_wrong_claim_secret(self):
         ok, asset = _register_default()
         self.assertTrue(ok)
-        pa_svc.set_claim_secret(asset['id'], 'supersecret123')
+        pa_svc.set_claim_secret(asset['id'], 'supersecret123-claim-key!')
         ok, result = pa_svc.claim_asset(
             asset_id=asset['id'],
             claim_secret='wrongsecret',
@@ -390,8 +390,8 @@ class TestClaimAsset(unittest.TestCase):
         ok, asset = _register_default()
         self.assertTrue(ok)
         pa_svc.mint_asset_nft(asset['id'], 'THR0000000000000000000000000000000000000001')
-        pa_svc.set_claim_secret(asset['id'], 'supersecret123')
-        pa_svc.claim_asset(asset['id'], 'supersecret123', 'THRNEWOWNER0000000000000000000000000000001')
+        pa_svc.set_claim_secret(asset['id'], 'supersecret123-claim-key!')
+        pa_svc.claim_asset(asset['id'], 'supersecret123-claim-key!', 'THRNEWOWNER0000000000000000000000000000001')
         nft = self.nft_store['nfts'][0]
         self.assertEqual(nft['owner'], 'THRNEWOWNER0000000000000000000000000000001')
 
@@ -482,10 +482,10 @@ class TestRawSecretFieldsRejected(unittest.TestCase):
     def test_claim_secret_stored_as_hash_only(self):
         ok, asset = _register_default()
         self.assertTrue(ok)
-        pa_svc.set_claim_secret(asset['id'], 'mysecret12345')
+        pa_svc.set_claim_secret(asset['id'], 'mysecretclaim12345678901')
         updated = pa_svc.get_asset(asset['id'])
         self.assertIsNotNone(updated.get('claim_secret_hash'))
-        self.assertNotEqual(updated['claim_secret_hash'], 'mysecret12345')
+        self.assertNotEqual(updated['claim_secret_hash'], 'mysecretclaim12345678901')
         self.assertEqual(len(updated['claim_secret_hash']), 64)
 
 
@@ -1673,7 +1673,7 @@ class TestGate7PublicReadSanitization(unittest.TestCase):
         self.tmpdir, self.nft_store = _init_service()
         ok, self.asset = _register_default()
         self.assertTrue(ok)
-        pa_svc.set_claim_secret(self.asset['id'], 'my-secret-123')
+        pa_svc.set_claim_secret(self.asset['id'], 'my-secret-123-claim-long!')
 
     def test_sanitize_strips_claim_secret_hash(self):
         raw = pa_svc.get_asset(self.asset['id'])
@@ -1684,8 +1684,8 @@ class TestGate7PublicReadSanitization(unittest.TestCase):
         self.assertIn('edition_number', sanitized)
 
     def test_constant_time_comparison(self):
-        pa_svc.set_claim_secret(self.asset['id'], 'correct-secret')
-        ok, _ = pa_svc.claim_asset(self.asset['id'], 'correct-secret',
+        pa_svc.set_claim_secret(self.asset['id'], 'correct-secret-for-claim!')
+        ok, _ = pa_svc.claim_asset(self.asset['id'], 'correct-secret-for-claim!',
                                    'THRNEWOWNER0000000000000000000000000000001')
         self.assertTrue(ok)
 
@@ -1726,6 +1726,203 @@ class TestGate34StableCanonicalIdentity(unittest.TestCase):
         self.assertTrue(ok2)
         self.assertEqual(r1['nft_id'], r2['nft_id'])
         self.assertTrue(r2.get('already_minted'))
+
+
+# ── Fix 1: Partial NFT mint recovery ──────────────────────────────────────────
+
+class TestPartialMintRecovery(unittest.TestCase):
+    """Fix 1: tx_id=None must block confirmation."""
+
+    def setUp(self):
+        self.tmpdir, self.nft_store = _init_service()
+
+    def test_mint_without_chain_callbacks_returns_tx_none(self):
+        """canonical_mint_nft with no chain callbacks returns tx_id=None."""
+        from nft_mint_core import canonical_mint_nft
+        result = canonical_mint_nft(
+            name='Test', description='Test', category='test',
+            price=0, royalties=5, creator=CREATOR,
+            load_nft_registry_fn=lambda: self.nft_store,
+            save_nft_registry_fn=lambda r: self.nft_store.update(r),
+        )
+        self.assertIsNone(result['tx_id'])
+
+    def test_mint_asset_nft_rejects_missing_tx_id(self):
+        """mint_asset_nft must fail if canonical mint returns tx_id=None."""
+        ok, asset = _register_default()
+        self.assertTrue(ok)
+
+        original = pa_svc._canonical_mint_fn
+        def no_chain_mint(**kwargs):
+            result = original(**kwargs)
+            result['tx_id'] = None
+            return result
+        pa_svc._canonical_mint_fn = no_chain_mint
+
+        ok, result = pa_svc.mint_asset_nft(asset['id'], CREATOR)
+        pa_svc._canonical_mint_fn = original
+        self.assertFalse(ok)
+        self.assertEqual(result['error'], 'canonical_tx_missing')
+
+        updated = pa_svc.get_asset(asset['id'])
+        self.assertNotEqual(updated.get('nft_mint_status'), 'confirmed')
+
+    def test_certify_rejects_missing_tx_id(self):
+        """certify_production must fail if mint returns tx_id=None."""
+        pa_svc.approve_creator('aisthetic', CREATOR, approver_address=ADMIN)
+        ok, result = pa_svc.create_production_batch(
+            batch_id='BATCH-NOTX', tenant_id='aisthetic',
+            product_id='coin-v1', sku='TPC-S1',
+            creator_address=CREATOR, quantity=1,
+            edition_start=1, edition_size=100, design_hash='a' * 64,
+        )
+        self.assertTrue(ok)
+        job_id = result['jobs'][0]['job_id']
+
+        pa_svc.upload_job_gcode(job_id, 'b' * 64, CREATOR)
+        pa_svc.start_print_job(job_id, 'BAMBU-X1C-001', CREATOR)
+        pa_svc.complete_print_job(job_id, CREATOR)
+        job = pa_svc.get_job(job_id)
+        sig_data = _build_sig_data(job, nonce='notx-1')
+        pa_svc.sign_production(job_id, CREATOR, sig_data)
+
+        original = pa_svc._canonical_mint_fn
+        def no_chain_mint(**kwargs):
+            result = original(**kwargs)
+            result['tx_id'] = None
+            return result
+        pa_svc._canonical_mint_fn = no_chain_mint
+
+        ok, result = pa_svc.certify_production(job_id, CREATOR)
+        pa_svc._canonical_mint_fn = original
+        self.assertFalse(ok)
+        self.assertIn(result['error'], ('canonical_tx_missing', 'nft_mint_failed'))
+
+        job = pa_svc.get_job(job_id)
+        self.assertNotEqual(job['status'], 'CERTIFIED')
+
+
+class TestPartialMintRecoveryCore(unittest.TestCase):
+    """Fix 1: nft_mint_core partial-failure recovery."""
+
+    def test_registry_saved_chain_missing_recovers(self):
+        """If NFT exists in registry but chain tx is missing, _ensure_chain_tx reconstructs it."""
+        from nft_mint_core import canonical_mint_nft
+
+        nft_store = {'nfts': []}
+        chain = []
+        call_count = {'save_chain': 0}
+
+        def load_nft():
+            import copy
+            return copy.deepcopy(nft_store)
+        def save_nft(reg):
+            nft_store.clear()
+            nft_store.update(reg)
+        def load_chain():
+            import copy
+            return copy.deepcopy(chain)
+        def save_chain(c):
+            call_count['save_chain'] += 1
+            chain.clear()
+            chain.extend(c)
+
+        # First mint — succeeds normally
+        r1 = canonical_mint_nft(
+            name='Test', description='Test', category='test',
+            price=0, royalties=5, creator=CREATOR,
+            nft_id='NFT-PA-RECOV', tx_id='NFT-PA-RECOV-MINT',
+            load_nft_registry_fn=load_nft, save_nft_registry_fn=save_nft,
+            load_chain_fn=load_chain, save_chain_fn=save_chain,
+        )
+        self.assertEqual(r1['nft_id'], 'NFT-PA-RECOV')
+        self.assertEqual(r1['tx_id'], 'NFT-PA-RECOV-MINT')
+        self.assertEqual(len(chain), 1)
+
+        # Simulate partial failure: clear chain but leave NFT in registry
+        chain.clear()
+        self.assertEqual(len(nft_store.get('nfts', [])), 1)
+        self.assertEqual(len(chain), 0)
+
+        # Retry — should recover: no duplicate NFT, chain tx reconstructed
+        r2 = canonical_mint_nft(
+            name='Test', description='Test', category='test',
+            price=0, royalties=5, creator=CREATOR,
+            nft_id='NFT-PA-RECOV', tx_id='NFT-PA-RECOV-MINT',
+            load_nft_registry_fn=load_nft, save_nft_registry_fn=save_nft,
+            load_chain_fn=load_chain, save_chain_fn=save_chain,
+        )
+        self.assertEqual(r2['nft_id'], 'NFT-PA-RECOV')
+        self.assertEqual(r2['tx_id'], 'NFT-PA-RECOV-MINT')
+        self.assertEqual(len(nft_store.get('nfts', [])), 1)
+        self.assertEqual(len(chain), 1)
+
+
+# ── Fix 2: Creator approval authorizer wiring ─────────────────────────────────
+
+class TestCreatorApprovalAuthorizer(unittest.TestCase):
+    """Fix 2: Authorizer must be fail-closed."""
+
+    def test_no_authorizer_rejects_approval(self):
+        tmpdir = tempfile.mkdtemp()
+        pa_svc.init_physical_assets(
+            data_dir=tmpdir,
+            load_json_fn=lambda p, d: d,
+            save_json_fn=lambda p, d: None,
+            feature_enabled=True,
+            creator_approval_authorizer=None,
+        )
+        ok, result = pa_svc.approve_creator('t', CREATOR, approver_address=ADMIN)
+        self.assertFalse(ok)
+        self.assertEqual(result['error'], 'creator_approval_not_configured')
+
+    def test_fail_closed_authorizer(self):
+        tmpdir = tempfile.mkdtemp()
+        pa_svc.init_physical_assets(
+            data_dir=tmpdir,
+            load_json_fn=lambda p, d: d,
+            save_json_fn=lambda p, d: None,
+            feature_enabled=True,
+            creator_approval_authorizer=lambda a, t, c: False,
+        )
+        ok, result = pa_svc.approve_creator('t', CREATOR, approver_address=ADMIN)
+        self.assertFalse(ok)
+        self.assertEqual(result['error'], 'approver_not_authorized')
+
+
+# ── Fix 4: Claim secret hardening ──────────────────────────────────────────────
+
+class TestClaimSecretHardening(unittest.TestCase):
+    """Fix 4: Minimum 24-char claim secret, server-generated preferred."""
+
+    def setUp(self):
+        self.tmpdir, self.nft_store = _init_service()
+        ok, self.asset = _register_default()
+        self.assertTrue(ok)
+
+    def test_short_secret_rejected(self):
+        ok, result = pa_svc.set_claim_secret(self.asset['id'], 'short')
+        self.assertFalse(ok)
+        self.assertEqual(result['error'], 'claim_secret_too_short')
+
+    def test_23_chars_rejected(self):
+        ok, result = pa_svc.set_claim_secret(self.asset['id'], 'a' * 23)
+        self.assertFalse(ok)
+        self.assertEqual(result['error'], 'claim_secret_too_short')
+
+    def test_24_chars_accepted(self):
+        ok, result = pa_svc.set_claim_secret(self.asset['id'], 'a' * 24)
+        self.assertTrue(ok)
+        self.assertEqual(result['state'], 'CLAIM_PENDING')
+
+    def test_generated_secret_meets_minimum(self):
+        secret = pa_svc.generate_claim_secret()
+        self.assertGreaterEqual(len(secret), 24)
+
+    def test_old_8_char_secret_now_rejected(self):
+        ok, result = pa_svc.set_claim_secret(self.asset['id'], '12345678')
+        self.assertFalse(ok)
+        self.assertEqual(result['error'], 'claim_secret_too_short')
 
 
 if __name__ == '__main__':

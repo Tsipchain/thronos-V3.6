@@ -176,22 +176,11 @@ class MakerAgent:
             logger.warning(f"Print failed: {job_id} — {reason}")
         return result
 
-    # ── Creator certification ─────────────────────────────────────────
+    # ── Creator signing & certification ─────────────────────────────────
 
-    def certify(self, job_id: str) -> dict:
-        status = self.get_job_status(job_id)
-        if not status.get('ok'):
-            return status
-
-        job = status.get('job', {})
-        asset = status.get('asset', {})
-
-        if job.get('status') != 'PRINTED':
-            return {'ok': False, 'error': 'job_not_ready',
-                    'detail': f"job status is {job.get('status')}, need PRINTED"}
-
+    def _build_signature_data(self, job_id: str, job: dict) -> dict:
         import uuid
-        signature_data = {
+        return {
             'tenant_id': self.tenant_id,
             'batch_id': job.get('batch_id', ''),
             'job_id': job_id,
@@ -207,12 +196,48 @@ class MakerAgent:
             'signature': 'maker_agent_attestation',
         }
 
+    def sign_production(self, job_id: str) -> dict:
+        """Sign production attestation (PRINTED → CREATOR_SIGNED)."""
+        status = self.get_job_status(job_id)
+        if not status.get('ok'):
+            return status
+
+        job = status.get('job', {})
+
+        if job.get('status') != 'PRINTED':
+            return {'ok': False, 'error': 'job_not_ready',
+                    'detail': f"job status is {job.get('status')}, need PRINTED"}
+
+        signature_data = self._build_signature_data(job_id, job)
         payload = {'signature_data': signature_data}
         result = self._signed_post(f'/jobs/{job_id}/sign', 'physical_asset_produce', payload)
         if result.get('ok'):
-            nft_id = result.get('nft_id', '')
-            logger.info(f"CERTIFIED: {job_id} → NFT {nft_id}")
+            logger.info(f"Signed: {job_id}")
         return result
+
+    def certify_production(self, job_id: str) -> dict:
+        """Trigger canonical NFT mint (CREATOR_SIGNED → CERTIFIED)."""
+        result = self._signed_post(f'/jobs/{job_id}/certify', 'physical_asset_produce', {})
+        if result.get('ok'):
+            nft_id = result.get('nft_id', '')
+            tx_id = result.get('tx_id', '')
+            if not result.get('certified'):
+                logger.warning(f"Certify returned ok but certified=False: {job_id}")
+                return {'ok': False, 'error': 'certification_incomplete',
+                        'detail': 'server did not confirm certification'}
+            if not nft_id or not tx_id:
+                logger.warning(f"Certify missing nft_id or tx_id: {job_id}")
+                return {'ok': False, 'error': 'certification_incomplete',
+                        'detail': 'missing nft_id or tx_id'}
+            logger.info(f"CERTIFIED: {job_id} → NFT {nft_id} tx {tx_id}")
+        return result
+
+    def certify(self, job_id: str) -> dict:
+        """Full sign → certify flow (PRINTED → CREATOR_SIGNED → CERTIFIED)."""
+        sign_result = self.sign_production(job_id)
+        if not sign_result.get('ok'):
+            return sign_result
+        return self.certify_production(job_id)
 
     # ── Status queries ────────────────────────────────────────────────
 
@@ -251,9 +276,10 @@ class MakerAgent:
     ) -> dict:
         """Run the full production flow for a batch.
 
-        Steps: approve self → create batch → upload gcode per job →
-        start print → (wait for manual complete) → optionally certify.
+        Steps: create batch → upload gcode per job → start print →
+        (wait for manual complete) → optionally sign + certify.
 
+        Creator must be pre-approved by a tenant admin before calling.
         In auto mode, all steps run sequentially (for testing).
         In normal mode, returns after starting prints —
         call complete_print() and certify() per job when ready.
@@ -299,8 +325,12 @@ class MakerAgent:
                     continue
 
                 cert = self.certify(jid)
-                results.append({'job_id': jid, 'certified': cert.get('ok'),
-                                'nft_id': cert.get('nft_id', '')})
+                results.append({
+                    'job_id': jid,
+                    'certified': cert.get('certified', False),
+                    'nft_id': cert.get('nft_id', ''),
+                    'tx_id': cert.get('tx_id', ''),
+                })
             else:
                 results.append({'job_id': jid, 'status': 'PRINTING',
                                 'serial': job.get('serial')})

@@ -75,6 +75,19 @@ try:
             update_last_block_fn=getattr(server_module, 'update_last_block', None),
         )
 
+    # Build creator approval authorizer from env config
+    _pa_admin_wallets_raw = _pa_os.getenv('THRONOS_PHYSICAL_ASSET_ADMIN_WALLETS', '')
+    _pa_admin_wallets = frozenset(
+        w.strip().upper()
+        for w in _pa_admin_wallets_raw.split(',')
+        if w.strip()
+    )
+
+    def _pa_creator_approval_authorizer(approver_address, tenant_id, creator_address):
+        if not _pa_admin_wallets:
+            return False
+        return approver_address.strip().upper() in _pa_admin_wallets
+
     _pa_svc.init_physical_assets(
         data_dir=getattr(server_module, 'DATA_DIR', 'data'),
         load_json_fn=getattr(server_module, 'load_json', None),
@@ -86,6 +99,7 @@ try:
         save_nft_registry_fn=_pa_save_nft,
         nft_mint_fee=_pa_mint_fee,
         canonical_mint_fn=_pa_canonical_mint,
+        creator_approval_authorizer=_pa_creator_approval_authorizer,
     )
     # Intent verification functions are defined later in this file;
     # use a lazy wrapper so they resolve at request time, not import time.

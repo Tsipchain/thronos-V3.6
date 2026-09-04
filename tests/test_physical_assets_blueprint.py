@@ -639,7 +639,7 @@ class TestGate7PublicReadSanitizationBlueprint(unittest.TestCase):
             asset_type='THR_BACKED_COLLECTIBLE',
         )
         self.assertTrue(ok)
-        pa_svc.set_claim_secret(self.asset['id'], 'my-secret-456')
+        pa_svc.set_claim_secret(self.asset['id'], 'my-secret-456-claim-long!')
 
     def test_get_asset_strips_secret_hash(self):
         resp = self.client.get(f"/api/assets/{self.asset['id']}")

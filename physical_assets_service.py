@@ -381,15 +381,21 @@ def mint_asset_nft(
         )
 
         nft_id = result['nft_id']
+        result_tx_id = result.get('tx_id')
+
+        if not result_tx_id:
+            return False, {'error': 'canonical_tx_missing',
+                           'detail': 'NFT registered but chain tx was not created'}
+
         asset['nft_id'] = nft_id
-        asset['nft_tx_id'] = result.get('tx_id')
+        asset['nft_tx_id'] = result_tx_id
         asset['nft_mint_status'] = 'confirmed'
         asset['state'] = 'MINTED'
         asset['updated_at'] = _now_iso()
         asset['version'] += 1
         _save_registry(registry)
 
-    return True, {'nft_id': nft_id, 'nft': result.get('nft'), 'tx_id': result.get('tx_id')}
+    return True, {'nft_id': nft_id, 'nft': result.get('nft'), 'tx_id': result_tx_id}
 
 
 def set_claim_secret(asset_id: str, claim_secret: str) -> Tuple[bool, Dict[str, Any]]:
@@ -397,8 +403,9 @@ def set_claim_secret(asset_id: str, claim_secret: str) -> Tuple[bool, Dict[str, 
     if err:
         return False, {'error': err}
 
-    if not claim_secret or len(claim_secret) < 8:
-        return False, {'error': 'claim_secret_too_short'}
+    if not claim_secret or len(claim_secret) < 24:
+        return False, {'error': 'claim_secret_too_short',
+                       'detail': 'minimum 24 characters; use generate_claim_secret() for production'}
 
     with _lock:
         registry = _load_registry()
@@ -1199,6 +1206,11 @@ def certify_production(
 
     nft_id = mint_result.get('nft_id')
     tx_id = mint_result.get('tx_id')
+
+    if not tx_id:
+        return False, {'error': 'canonical_tx_missing',
+                       'detail': 'NFT mint succeeded but chain tx was not created',
+                       'retryable': True}
 
     with _lock:
         batches_data = _load_batches()

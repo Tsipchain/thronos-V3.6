@@ -542,6 +542,72 @@ class TestBlueprintProductionEndpoints(unittest.TestCase):
         self.assertIn('nft_id', data)
 
 
+class TestCreatorSignatureEvidence(unittest.TestCase):
+    """Verify sign endpoint persists real crypto evidence on the job."""
+
+    def setUp(self):
+        self.app, self.tmpdir, self.nft_store = _init_test_env()
+        self.client = self.app.test_client()
+        self.client.post('/api/assets/creators/approve',
+            json=_signed_request('physical_asset_register', {
+                'tenant_id': 'aisthetic', 'creator_address': CREATOR,
+            }, from_thr=CREATOR2))
+
+    def test_sign_stores_wallet_evidence(self):
+        resp = self.client.post('/api/assets/batches',
+            json=_signed_request('physical_asset_produce', {
+                'batch_id': 'BATCH-BP-EVID', 'tenant_id': 'aisthetic',
+                'product_id': 'coin-v1', 'sku': 'TPC-S1',
+                'creator_address': CREATOR, 'quantity': 1,
+                'edition_start': 1, 'edition_size': 100,
+                'design_hash': 'a' * 64,
+            }))
+        data = resp.get_json()
+        job_id = data['jobs'][0]['job_id']
+        asset_id = data['jobs'][0]['asset_id']
+
+        self.client.post(f'/api/assets/jobs/{job_id}/gcode',
+            json=_signed_request('physical_asset_produce', {
+                'gcode_hash': 'b' * 64}))
+        self.client.post(f'/api/assets/jobs/{job_id}/start',
+            json=_signed_request('physical_asset_produce', {
+                'printer_id': 'BAMBU-X1C-001'}))
+        self.client.post(f'/api/assets/jobs/{job_id}/complete',
+            json=_signed_request('physical_asset_produce', {}))
+
+        job = pa_svc.get_job(job_id)
+        resp = self.client.post(f'/api/assets/jobs/{job_id}/sign',
+            json=_signed_request('physical_asset_produce', {
+                'signature_data': {
+                    'tenant_id': 'aisthetic',
+                    'batch_id': 'BATCH-BP-EVID',
+                    'job_id': job_id,
+                    'asset_id': asset_id,
+                    'serial': 'TPC-S1-001',
+                    'edition_number': 1,
+                    'creator_address': CREATOR,
+                    'design_hash': 'a' * 64,
+                    'gcode_hash': job.get('gcode_hash', ''),
+                    'printer_id': job.get('printer_id', ''),
+                    'completed_at': job.get('completed_at', ''),
+                    'nonce': 'evid-nonce-1',
+                },
+            }))
+        self.assertEqual(resp.status_code, 200)
+        data = resp.get_json()
+        self.assertTrue(data['ok'])
+
+        signed_job = pa_svc.get_job(job_id)
+        self.assertEqual(signed_job['status'], 'CREATOR_SIGNED')
+        self.assertTrue(signed_job.get('creator_wallet_signature'))
+        self.assertTrue(signed_job.get('creator_public_key'))
+        self.assertTrue(signed_job.get('creator_payload_hash'))
+        self.assertTrue(signed_job.get('creator_intent_hash'))
+        self.assertTrue(signed_job.get('creator_nonce'))
+        self.assertTrue(signed_job.get('creator_signed_at'))
+        self.assertNotEqual(signed_job.get('creator_wallet_signature'), 'maker_agent_attestation')
+
+
 # ── Stage 1 read endpoints via blueprint ─────────────────────────────────────
 
 class TestBlueprintReadEndpoints(unittest.TestCase):

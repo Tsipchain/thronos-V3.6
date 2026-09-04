@@ -59,6 +59,10 @@ def _init_service(feature_enabled=True, read_only=False, node_role='master'):
             nft_id = f"NFT-PA-{int(_time.time() * 1000)}"
         if tx_id is None:
             tx_id = f"{nft_id}-TX"
+        store_copy = _copy.deepcopy(nft_store)
+        for existing in store_copy.get('nfts', []):
+            if existing.get('id') == nft_id:
+                return {'nft_id': nft_id, 'nft': existing, 'tx_id': tx_id}
         timestamp = _time.strftime('%Y-%m-%d %H:%M:%S UTC', _time.gmtime())
         nft = {
             'id': nft_id, 'name': name, 'description': description,
@@ -68,7 +72,6 @@ def _init_service(feature_enabled=True, read_only=False, node_role='master'):
         }
         if extra_fields:
             nft.update(extra_fields)
-        store_copy = _copy.deepcopy(nft_store)
         store_copy.setdefault('nfts', []).append(nft)
         nft_store.clear()
         nft_store.update(store_copy)
@@ -104,7 +107,6 @@ def _build_sig_data(job, asset_id=None, **overrides):
         'printer_id': job.get('printer_id', ''),
         'completed_at': job.get('completed_at', ''),
         'nonce': 'test-nonce',
-        'signature': 'fakesig',
     }
     data.update(overrides)
     return data
@@ -1856,6 +1858,79 @@ class TestPartialMintRecoveryCore(unittest.TestCase):
         self.assertEqual(r2['tx_id'], 'NFT-PA-RECOV-MINT')
         self.assertEqual(len(nft_store.get('nfts', [])), 1)
         self.assertEqual(len(chain), 1)
+
+
+class TestAssetSavedJobUnsavedRecovery(unittest.TestCase):
+    """Fix: asset nft_id saved but nft_tx_id missing (crash before job update).
+
+    Retry must reconcile the chain tx without minting a second NFT,
+    returning the same nft_id and tx_id.
+    """
+
+    def setUp(self):
+        self.tmpdir, self.nft_store = _init_service()
+
+    def test_asset_saved_job_unsaved_recovery(self):
+        pa_svc.approve_creator('aisthetic', CREATOR, approver_address=ADMIN)
+        ok, result = pa_svc.create_production_batch(
+            batch_id='BATCH-RECOV', tenant_id='aisthetic',
+            product_id='coin-v1', sku='TPC-S1',
+            creator_address=CREATOR, quantity=1,
+            edition_start=1, edition_size=100, design_hash='a' * 64,
+        )
+        self.assertTrue(ok)
+        job_id = result['jobs'][0]['job_id']
+        asset_id = result['jobs'][0]['asset_id']
+
+        pa_svc.upload_job_gcode(job_id, 'b' * 64, CREATOR)
+        pa_svc.start_print_job(job_id, 'BAMBU-X1C-001', CREATOR)
+        pa_svc.complete_print_job(job_id, CREATOR)
+
+        job = pa_svc.get_job(job_id)
+        sig_data = _build_sig_data(job, nonce='recov-1')
+        pa_svc.sign_production(job_id, CREATOR, sig_data)
+
+        # First certify succeeds — asset gets nft_id + nft_tx_id + MINTED
+        ok1, r1 = pa_svc.certify_production(job_id, CREATOR)
+        self.assertTrue(ok1)
+        self.assertTrue(r1.get('certified'))
+        first_nft_id = r1['nft_id']
+        first_tx_id = r1['tx_id']
+        self.assertTrue(first_nft_id)
+        self.assertTrue(first_tx_id)
+
+        asset = pa_svc.get_asset(asset_id)
+        self.assertEqual(asset['nft_id'], first_nft_id)
+        self.assertEqual(asset['nft_tx_id'], first_tx_id)
+        self.assertEqual(asset['nft_mint_status'], 'confirmed')
+
+        # Simulate crash: asset saved with nft_id but nft_tx_id wiped
+        with pa_svc._lock:
+            registry = pa_svc._load_registry()
+            registry['assets'][asset_id]['nft_tx_id'] = ''
+            pa_svc._save_registry(registry)
+
+        # Now call mint_asset_nft again (as certify retry would)
+        ok2, r2 = pa_svc.mint_asset_nft(asset_id, CREATOR, verified=True)
+        self.assertTrue(ok2)
+        self.assertTrue(r2.get('already_minted'))
+        self.assertEqual(r2['nft_id'], first_nft_id)
+        self.assertTrue(r2.get('tx_id'))
+        self.assertEqual(len(self.nft_store.get('nfts', [])), 1)
+
+    def test_asset_saved_with_tx_id_returns_both(self):
+        """If asset has both nft_id and nft_tx_id, return both on retry."""
+        ok, asset = _register_default()
+        self.assertTrue(ok)
+
+        ok1, r1 = pa_svc.mint_asset_nft(asset['id'], CREATOR)
+        self.assertTrue(ok1)
+
+        ok2, r2 = pa_svc.mint_asset_nft(asset['id'], CREATOR)
+        self.assertTrue(ok2)
+        self.assertTrue(r2.get('already_minted'))
+        self.assertEqual(r2['nft_id'], r1['nft_id'])
+        self.assertEqual(r2['tx_id'], r1['tx_id'])
 
 
 # ── Fix 2: Creator approval authorizer wiring ─────────────────────────────────

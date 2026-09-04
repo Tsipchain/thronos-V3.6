@@ -193,7 +193,6 @@ class MakerAgent:
             'printer_id': job.get('printer_id', ''),
             'completed_at': job.get('completed_at', ''),
             'nonce': uuid.uuid4().hex,
-            'signature': 'maker_agent_attestation',
         }
 
     def sign_production(self, job_id: str) -> dict:

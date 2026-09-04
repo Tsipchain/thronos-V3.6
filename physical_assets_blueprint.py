@@ -5,6 +5,9 @@ Routes are prefixed at /api/assets.
 All state-changing endpoints require signed wallet action intents.
 """
 
+import hashlib
+import json as _json_bp
+
 from flask import Blueprint, jsonify, request
 
 physical_assets_bp = Blueprint('physical_assets', __name__, url_prefix='/api/assets')
@@ -541,10 +544,25 @@ def sign_job(job_id):
     if not signature_data:
         return jsonify(ok=False, error='signature_data_required'), 400
 
+    intent = data.get('intent') or {}
+    _canon_fields = ('action', 'amount', 'asset', 'chain', 'created_at', 'from_thr',
+                     'nonce', 'payload_hash', 'recipient', 'type', 'version', 'wallet_id')
+    _canon_parts = [f'"{k}":{_json_bp.dumps(str(intent.get(k, "")))}' for k in _canon_fields]
+    _canon_str = '{' + ','.join(_canon_parts) + '}'
+    verified_evidence = {
+        'creator_wallet_signature': (data.get('signature') or '').strip(),
+        'creator_public_key': (data.get('public_key') or '').strip(),
+        'creator_payload_hash': str(intent.get('payload_hash', '')),
+        'creator_intent_hash': hashlib.sha256(_canon_str.encode('utf-8')).hexdigest(),
+        'creator_nonce': str(intent.get('nonce', '')),
+        'creator_signed_at': str(intent.get('created_at', '')),
+    }
+
     ok, result = _pa_service.sign_production(
         job_id=job_id,
         creator_address=from_thr,
         signature_data=signature_data,
+        verified_evidence=verified_evidence,
     )
 
     if not ok:

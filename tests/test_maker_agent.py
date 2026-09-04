@@ -193,5 +193,115 @@ class TestFileHashing(unittest.TestCase):
         self.assertEqual(h, expected)
 
 
+class TestManufacturingSignatureEvidence(unittest.TestCase):
+    """Verify real crypto evidence is preserved and re-verifiable."""
+
+    def setUp(self):
+        self.key_hex = _generate_test_key()
+        self.signer = WalletSigner(self.key_hex)
+
+    def _canonical_intent(self, intent):
+        fields = ('action', 'amount', 'asset', 'chain', 'created_at', 'from_thr',
+                  'nonce', 'payload_hash', 'recipient', 'type', 'version', 'wallet_id')
+        parts = [f'"{k}":{json.dumps(str(intent.get(k, "")))}' for k in fields]
+        return '{' + ','.join(parts) + '}'
+
+    def test_evidence_fields_from_signed_request(self):
+        """Signed request produces all 6 evidence fields for storage."""
+        payload = {
+            'signature_data': {
+                'tenant_id': 'aisthetic',
+                'batch_id': 'BATCH-001',
+                'job_id': 'JOB-001',
+                'asset_id': 'ASSET-001',
+                'serial': 'TPC-S1-001',
+                'edition_number': 1,
+                'creator_address': self.signer.address,
+                'design_hash': 'a' * 64,
+                'gcode_hash': 'b' * 64,
+                'printer_id': 'BAMBU-X1C-001',
+                'completed_at': '2025-01-01T00:00:00Z',
+                'nonce': 'test-nonce-001',
+            }
+        }
+        req = self.signer.build_signed_request('physical_asset_produce', payload)
+
+        intent = req['intent']
+        canonical_str = self._canonical_intent(intent)
+        intent_hash = hashlib.sha256(canonical_str.encode('utf-8')).hexdigest()
+
+        evidence = {
+            'creator_wallet_signature': req['signature'],
+            'creator_public_key': req['public_key'],
+            'creator_payload_hash': intent['payload_hash'],
+            'creator_intent_hash': intent_hash,
+            'creator_nonce': intent['nonce'],
+            'creator_signed_at': intent['created_at'],
+        }
+
+        self.assertTrue(len(evidence['creator_wallet_signature']) > 20)
+        self.assertEqual(len(evidence['creator_public_key']), 66)
+        self.assertEqual(len(evidence['creator_payload_hash']), 64)
+        self.assertEqual(len(evidence['creator_intent_hash']), 64)
+        self.assertTrue(len(evidence['creator_nonce']) > 0)
+        self.assertTrue(len(evidence['creator_signed_at']) > 0)
+
+    def test_verification_succeeds_with_stored_evidence(self):
+        """Re-verification using stored evidence matches original."""
+        payload = {'batch_id': 'B1', 'sku': 'TPC'}
+        req = self.signer.build_signed_request('physical_asset_produce', payload)
+
+        intent = req['intent']
+        sig_hex = req['signature']
+        pub_hex = req['public_key']
+
+        canonical = self._canonical_intent(intent).encode('utf-8')
+        pub_bytes = bytes.fromhex(pub_hex)
+        sig_bytes = bytes.fromhex(sig_hex)
+        pub_obj = ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256K1(), pub_bytes)
+        pub_obj.verify(sig_bytes, canonical, ec.ECDSA(hashes.SHA256()))
+
+    def test_tampered_payload_fails_verification(self):
+        """Tampered manufacturing payload fails re-verification."""
+        payload = {
+            'signature_data': {
+                'batch_id': 'BATCH-001',
+                'serial': 'TPC-S1-001',
+            }
+        }
+        req = self.signer.build_signed_request('physical_asset_produce', payload)
+
+        intent = req['intent']
+        sig_hex = req['signature']
+        pub_hex = req['public_key']
+
+        tampered_intent = dict(intent)
+        tampered_intent['payload_hash'] = hashlib.sha256(b'tampered').hexdigest()
+
+        canonical = self._canonical_intent(tampered_intent).encode('utf-8')
+        pub_bytes = bytes.fromhex(pub_hex)
+        sig_bytes = bytes.fromhex(sig_hex)
+        pub_obj = ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256K1(), pub_bytes)
+        with self.assertRaises(Exception):
+            pub_obj.verify(sig_bytes, canonical, ec.ECDSA(hashes.SHA256()))
+
+    def test_signature_data_has_no_placeholder(self):
+        """_build_signature_data must not contain 'maker_agent_attestation'."""
+        from maker_agent.agent import MakerAgent
+        agent = MagicMock(spec=MakerAgent)
+        agent.tenant_id = 'aisthetic'
+        agent.address = self.signer.address
+
+        job = {
+            'batch_id': 'B1', 'asset_id': 'A1', 'serial': 'TPC-S1-001',
+            'edition_number': 1, 'design_hash': 'a' * 64,
+            'gcode_hash': 'b' * 64, 'printer_id': 'P1',
+            'completed_at': '2025-01-01T00:00:00Z',
+        }
+        sig_data = MakerAgent._build_signature_data(agent, 'JOB-1', job)
+        self.assertNotIn('signature', sig_data)
+        self.assertNotEqual(sig_data.get('signature'), 'maker_agent_attestation')
+
+
 if __name__ == '__main__':
     unittest.main()

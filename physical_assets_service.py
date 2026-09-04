@@ -344,7 +344,43 @@ def mint_asset_nft(
             return False, {'error': 'asset_not_found'}
 
         if asset.get('nft_id'):
-            return True, {'nft_id': asset['nft_id'], 'already_minted': True}
+            if asset.get('nft_tx_id'):
+                return True, {
+                    'nft_id': asset['nft_id'],
+                    'tx_id': asset['nft_tx_id'],
+                    'already_minted': True,
+                }
+            stable_nft_id = f"NFT-PA-{asset_id}"
+            stable_tx_id = f"NFT-PA-{asset_id}-MINT"
+            result = _canonical_mint_fn(
+                name=f"Thronos Physical Asset {asset['serial']}",
+                description=(
+                    f"Physical Asset #{asset['edition_number']}/{asset['edition_size']} "
+                    f"| Serial: {asset['serial']} | Design: {asset['design_hash'][:16]}..."
+                ),
+                category='physical_asset',
+                price=asset.get('listing_price', 0),
+                royalties=5,
+                creator=asset['creator_address'],
+                for_sale=asset.get('for_sale', False),
+                mint_fee=0,
+                nft_id=stable_nft_id,
+                tx_id=stable_tx_id,
+            )
+            reconciled_tx_id = result.get('tx_id')
+            if not reconciled_tx_id:
+                return False, {'error': 'canonical_tx_missing',
+                               'detail': 'NFT exists but chain tx reconciliation failed'}
+            asset['nft_tx_id'] = reconciled_tx_id
+            asset['nft_mint_status'] = 'confirmed'
+            asset['updated_at'] = _now_iso()
+            asset['version'] += 1
+            _save_registry(registry)
+            return True, {
+                'nft_id': asset['nft_id'],
+                'tx_id': reconciled_tx_id,
+                'already_minted': True,
+            }
 
         if asset['state'] not in ('REGISTERED', 'SERIAL_RESERVED', 'PRODUCED', 'PENDING_PRODUCTION'):
             return False, {'error': 'invalid_state_for_mint', 'state': asset['state']}
@@ -1061,6 +1097,7 @@ def sign_production(
     job_id: str,
     creator_address: str,
     signature_data: Dict[str, Any],
+    verified_evidence: Optional[Dict[str, str]] = None,
 ) -> Tuple[bool, Dict[str, Any]]:
     """Creator signs production attestation after successful print.
 
@@ -1138,7 +1175,17 @@ def sign_production(
         if str(signature_data.get('creator_address', '')).upper() != creator_address:
             return False, {'error': 'creator_address_mismatch'}
 
-        job['creator_signature'] = signature_data.get('signature', '')
+        if verified_evidence:
+            job['creator_wallet_signature'] = verified_evidence.get('creator_wallet_signature', '')
+            job['creator_public_key'] = verified_evidence.get('creator_public_key', '')
+            job['creator_payload_hash'] = verified_evidence.get('creator_payload_hash', '')
+            job['creator_intent_hash'] = verified_evidence.get('creator_intent_hash', '')
+            job['creator_nonce'] = verified_evidence.get('creator_nonce', '')
+            job['creator_signed_at'] = verified_evidence.get('creator_signed_at', '')
+        else:
+            job['creator_wallet_signature'] = ''
+            job['creator_public_key'] = ''
+
         job['status'] = 'CREATOR_SIGNED'
         job['updated_at'] = _now_iso()
         _save_batches(batches_data)

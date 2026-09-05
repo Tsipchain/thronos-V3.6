@@ -42,6 +42,85 @@ try:
 except Exception as exc:  # pragma: no cover
     app.logger.warning("[L2E-EDU] Blueprint NOT loaded: %s", exc)
 
+# Physical Assets Registry — physical-asset lifecycle, NFT bridge, claim/transfer
+try:
+    import physical_assets_service as _pa_svc
+    from physical_assets_blueprint import physical_assets_bp, init_physical_assets_blueprint
+
+    import os as _pa_os
+    _strip = getattr(server_module, '_strip_env_quotes', lambda x: x.strip('"').strip("'"))
+    _pa_feature_enabled = _strip(
+        _pa_os.getenv("PHYSICAL_ASSETS_ENABLED", "0")
+    ) == "1"
+
+    # Build canonical NFT mint adapter for Physical Assets
+    _pa_load_nft = getattr(server_module, 'load_nft_registry', None)
+    _pa_save_nft = getattr(server_module, 'save_nft_registry', None)
+    _pa_mint_fee = float(getattr(server_module, 'NFT_MINT_FEE', 1.0))
+
+    def _pa_canonical_mint(name, description, category, price, royalties, creator,
+                           for_sale=False, mint_fee=0, extra_fields=None,
+                           nft_id=None, tx_id=None):
+        from nft_mint_core import canonical_mint_nft
+        _chain_file = getattr(server_module, 'CHAIN_FILE', None)
+        return canonical_mint_nft(
+            name=name, description=description, category=category,
+            price=price, royalties=royalties, creator=creator,
+            for_sale=for_sale, mint_fee=mint_fee, extra_fields=extra_fields,
+            nft_id=nft_id, tx_id=tx_id,
+            load_nft_registry_fn=_pa_load_nft,
+            save_nft_registry_fn=_pa_save_nft,
+            load_chain_fn=(lambda: server_module.load_json(_chain_file, [])) if _chain_file else None,
+            save_chain_fn=(lambda c: server_module.save_json(_chain_file, c)) if _chain_file else None,
+            update_last_block_fn=getattr(server_module, 'update_last_block', None),
+        )
+
+    # Build creator approval authorizer from env config
+    _pa_admin_wallets_raw = _pa_os.getenv('THRONOS_PHYSICAL_ASSET_ADMIN_WALLETS', '')
+    _pa_admin_wallets = frozenset(
+        w.strip().upper()
+        for w in _pa_admin_wallets_raw.split(',')
+        if w.strip()
+    )
+
+    def _pa_creator_approval_authorizer(approver_address, tenant_id, creator_address):
+        if not _pa_admin_wallets:
+            return False
+        return approver_address.strip().upper() in _pa_admin_wallets
+
+    _pa_svc.init_physical_assets(
+        data_dir=getattr(server_module, 'DATA_DIR', 'data'),
+        load_json_fn=getattr(server_module, 'load_json', None),
+        save_json_fn=getattr(server_module, 'save_json', None),
+        node_role=node_role,
+        read_only=read_only,
+        feature_enabled=_pa_feature_enabled,
+        load_nft_registry_fn=_pa_load_nft,
+        save_nft_registry_fn=_pa_save_nft,
+        nft_mint_fee=_pa_mint_fee,
+        canonical_mint_fn=_pa_canonical_mint,
+        creator_approval_authorizer=_pa_creator_approval_authorizer,
+    )
+    # Intent verification functions are defined later in this file;
+    # use a lazy wrapper so they resolve at request time, not import time.
+    def _lazy_verify_intent(intent, sig, pubkey):
+        return _verify_wallet_action_intent(intent, sig, pubkey)
+
+    def _lazy_verify_payload_hash(expected, payload):
+        return _verify_action_payload_hash(expected, payload)
+
+    init_physical_assets_blueprint(
+        verify_intent_fn=_lazy_verify_intent,
+        verify_payload_hash_fn=_lazy_verify_payload_hash,
+        pa_service_module=_pa_svc,
+        node_role=node_role,
+        read_only=read_only,
+    )
+    app.register_blueprint(physical_assets_bp)
+    app.logger.info("[PhysicalAssets] Blueprint registered at /api/assets")
+except Exception as exc:  # pragma: no cover
+    app.logger.warning("[PhysicalAssets] Blueprint NOT loaded: %s", exc)
+
 # ── Pledge-based v0 wallet migration ──────────────────────────────────────────
 # Lets pledge/HMAC users find their old THR address via send_secret only,
 # then migrate to a V1 wallet and set up PIN + passkey.
@@ -341,6 +420,8 @@ _WALLET_ACTION_ALLOWED_ACTIONS = frozenset({
     'crosschain_withdraw', 'crosschain_add_liquidity',
     'swap', 'bridge', 'pledge', 'token_create',
     'nft_mint', 'nft_buy',
+    'physical_asset_register', 'physical_asset_produce',
+    'physical_asset_transfer',
 })
 
 _WALLET_ACTION_NONCES_FILE_CACHED = None
@@ -356,21 +437,13 @@ def _get_action_nonces_file():
 
 
 def _canonical_wallet_action_intent(intent: dict) -> str:
-    """Deterministic canonical JSON for intent signing — all values str, keys alphabetical.
-
-    Must match the JS _canonicalWalletActionIntentMsg() in wallet_session.js exactly.
-    """
-    fields = ('action', 'amount', 'asset', 'chain', 'created_at', 'from_thr',
-              'nonce', 'payload_hash', 'recipient', 'type', 'version', 'wallet_id')
-    parts = [f'"{k}":{_json_wa.dumps(str(intent.get(k, "")))}' for k in fields]
-    return '{' + ','.join(parts) + '}'
+    from wallet_action_verify import canonical_wallet_action_intent
+    return canonical_wallet_action_intent(intent)
 
 
 def _verify_action_payload_hash(expected_hash: str, payload: dict) -> bool:
-    """Verify SHA-256 of canonical payload JSON equals the hash committed inside the intent."""
-    canonical = _json_wa.dumps(payload, sort_keys=True, separators=(',', ':'))
-    actual = _hashlib.sha256(canonical.encode('utf-8')).hexdigest()
-    return actual == expected_hash
+    from wallet_action_verify import verify_action_payload_hash
+    return verify_action_payload_hash(expected_hash, payload)
 
 
 def _verify_wallet_action_intent(intent: dict, signature_hex: str, public_key_hex: str) -> tuple:
@@ -378,51 +451,23 @@ def _verify_wallet_action_intent(intent: dict, signature_hex: str, public_key_he
 
     Returns (ok: bool, error_code: str, error_detail: str).
 
-    Check order:
-      1. Required fields present and non-empty.
-      2. type == 'thronos_wallet_action'.
-      3. version == '1'.
-      4. action is in allowed set.
-      5. created_at (unix timestamp) within 5-minute window.
-      6. Nonce not previously seen.
-      7. Signature valid over canonical intent (SHA-256 + ECDSA secp256k1 DER).
-      8. public_key maps to from_thr address.
-      9. Consume nonce (only after all checks pass).
+    Steps 1-5, 7, 8 delegated to wallet_action_verify (pure crypto, no server.py).
+    Steps 6, 9 (nonce management) handled here.
     """
-    # 1. Required fields
-    required = ('type', 'version', 'action', 'wallet_id', 'from_thr',
-                'nonce', 'created_at', 'payload_hash')
-    for field in required:
-        if not intent.get(field):
-            return False, 'missing_field', f'missing field: {field}'
+    from wallet_action_verify import verify_wallet_action_signature
 
-    # 2. Type
-    if intent.get('type') != 'thronos_wallet_action':
-        return False, 'invalid_type', f'expected thronos_wallet_action, got {intent.get("type")!r}'
-
-    # 3. Version
-    if str(intent.get('version', '')) != '1':
-        return False, 'invalid_version', f'expected version 1, got {intent.get("version")!r}'
-
-    # 4. Action allowed
-    action = str(intent.get('action', ''))
-    if action not in _WALLET_ACTION_ALLOWED_ACTIONS:
-        return False, 'invalid_action', f'action {action!r} not permitted'
-
-    # 5. Age check — created_at is a unix epoch integer (seconds)
-    try:
-        created_ts = int(str(intent.get('created_at', '0')))
-        age = _time_wa.time() - created_ts
-        if age < -30 or age > 300:
-            return False, 'intent_expired', f'intent age {int(age)}s exceeds 5-minute window'
-    except (ValueError, TypeError) as exc:
-        return False, 'invalid_created_at', f'cannot parse created_at: {exc}'
+    # Steps 1-5, 7, 8: pure cryptographic verification
+    ok, err_code, err_detail = verify_wallet_action_signature(
+        intent, signature_hex, public_key_hex
+    )
+    if not ok:
+        return ok, err_code, err_detail
 
     # 6. Nonce replay check
     nonce = str(intent['nonce'])
     from_thr = str(intent['from_thr']).upper()
-    load_json = getattr(_srv, 'load_json', None)
-    save_json = getattr(_srv, 'save_json', None)
+    load_json = getattr(server_module, 'load_json', None)
+    save_json = getattr(server_module, 'save_json', None)
     if not callable(load_json) or not callable(save_json):
         return False, 'system_error', 'state helpers unavailable'
 
@@ -431,32 +476,6 @@ def _verify_wallet_action_intent(intent: dict, signature_hex: str, public_key_he
     wallet_nonces = nonces_store.get(from_thr, [])
     if nonce in wallet_nonces:
         return False, 'nonce_reused', 'intent nonce has already been consumed'
-
-    # 7. Signature verification (SHA-256 over canonical intent + secp256k1 ECDSA DER)
-    canonical_msg = _canonical_wallet_action_intent(intent).encode('utf-8')
-    try:
-        from cryptography.hazmat.primitives import hashes as _hashes_wa
-        from cryptography.hazmat.primitives.asymmetric import ec as _ec_wa
-        from cryptography.exceptions import InvalidSignature as _InvalidSig
-        pub_bytes = bytes.fromhex(public_key_hex)
-        sig_bytes = bytes.fromhex(signature_hex)
-        pub_obj = _ec_wa.EllipticCurvePublicKey.from_encoded_point(_ec_wa.SECP256K1(), pub_bytes)
-        pub_obj.verify(sig_bytes, canonical_msg, _ec_wa.ECDSA(_hashes_wa.SHA256()))
-    except _InvalidSig:
-        return False, 'invalid_signature', 'signature does not match intent'
-    except Exception as exc:
-        return False, 'invalid_signature', f'signature verification failed: {exc}'
-
-    # 8. Key-address binding
-    try:
-        import wallet_v1_production_final as _wv1pf_wa
-        binding_ok, binding_error = _wv1pf_wa.verify_publickey_matches_address(
-            {'from': from_thr, 'publicKey': public_key_hex}
-        )
-        if not binding_ok:
-            return False, 'key_address_mismatch', binding_error
-    except Exception as exc:
-        return False, 'key_address_mismatch', f'address binding failed: {exc}'
 
     # 9. Consume nonce — written only after all checks pass
     wallet_nonces.append(nonce)

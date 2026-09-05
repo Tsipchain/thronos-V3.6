@@ -46559,7 +46559,8 @@ def api_v1_nfts_mint():
 
     # Handle image upload
     image_url = None
-    nft_id = f"NFT{int(time.time() * 1000)}"
+    from nft_mint_core import generate_nft_id as _gen_nft_id
+    nft_id = _gen_nft_id()
     if "image" in request.files:
         file = request.files["image"]
         if file and file.filename:
@@ -46579,48 +46580,21 @@ def api_v1_nfts_mint():
     ledger[network_wallet] = round(network_balance + mint_fee, 6)
     save_json(LEDGER_FILE, ledger)
 
-    # Create NFT
-    timestamp = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
-    nft = {
-        "id": nft_id,
-        "name": name,
-        "description": description,
-        "category": category,
-        "price": price,
-        "royalties": royalties,
-        "creator": creator,
-        "owner": creator,
-        "image_url": image_url,
-        "created_at": timestamp,
-        "for_sale": True,
-        "mint_fee": mint_fee,
-    }
-
-    registry = load_nft_registry()
-    registry["nfts"].append(nft)
-    save_nft_registry(registry)
-
-    # --- Record on chain ---
-    chain = load_json(CHAIN_FILE, [])
-    tx = {
-        "type": "nft_mint",
-        "category": "nft_mint",
-        "from": creator,
-        "to": network_wallet,
-        "amount": mint_fee,
-        "fee": mint_fee,
-        "fee_burned": mint_fee,
-        "symbol": "THR",
-        "token_symbol": "THR",
-        "asset_symbol": "THR",
-        "nft_id": nft_id,
-        "nft_name": name,
-        "timestamp": timestamp,
-        "status": "confirmed",
-    }
-    chain.append(tx)
-    save_json(CHAIN_FILE, chain)
-    update_last_block(tx, is_block=False)
+    # Create NFT via canonical mint
+    from nft_mint_core import canonical_mint_nft as _canonical_mint
+    _mint_result = _canonical_mint(
+        name=name, description=description, category=category,
+        price=price, royalties=royalties, creator=creator,
+        image_url=image_url, for_sale=True, mint_fee=mint_fee,
+        nft_id=nft_id,
+        load_nft_registry_fn=load_nft_registry,
+        save_nft_registry_fn=save_nft_registry,
+        load_chain_fn=lambda: load_json(CHAIN_FILE, []),
+        save_chain_fn=lambda c: save_json(CHAIN_FILE, c),
+        update_last_block_fn=update_last_block,
+        network_wallet=network_wallet,
+    )
+    nft = _mint_result['nft']
 
     logger.info(f"NFT Mint: {creator} → {nft_id} '{name}' | Fee: {mint_fee} THR")
 

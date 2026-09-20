@@ -1070,6 +1070,14 @@ PYTHIA_AMM_WORKER_STATE_FILE = os.path.join(DATA_DIR, "pythia_amm_worker_state.j
 POOL_DEPOSIT_WATCHER_STATE_FILE = os.path.join(DATA_DIR, "pool_deposit_watcher_state.json")
 POOL_EXTERNAL_DEPOSITS_FILE     = os.path.join(DATA_DIR, "pool_external_deposits.json")
 
+# B2B partner directory (RWA) — cafes, smart parking, IoT operators, EV chargers, retail
+B2B_PARTNERS_FILE = os.path.join(DATA_DIR, "b2b_partners.json")
+B2B_PARTNER_TYPES = frozenset({
+    "cafe", "restaurant", "retail", "smart_parking", "ev_charger",
+    "iot_operator", "event_venue", "coworking", "hotel", "clinic",
+    "school", "gym", "logistics", "other",
+})
+
 # Active peers tracking (for replicas heartbeating to master)
 PEER_TTL_SECONDS = 60  # Peers expire after 60 seconds without heartbeat
 PEERS = {}  # {url: {"url": url, "node_role": role, "height": int, "last_seen": ts}}
@@ -13511,6 +13519,210 @@ def api_iot_register_device():
         api_key=data.get("api_key"),
     )
     return jsonify({"ok": True, "status": "registered", "device": normalized}), 200
+
+
+# ─── B2B PARTNER DIRECTORY (RWA) ─────────────────────────────────────────────
+#
+# Any Thronos wallet can self-register as a B2B partner (cafe, smart parking,
+# EV charger, IoT operator, retail, event venue, …). The registry provides:
+#
+#  * A public directory of partners (verified only, filterable by type/location)
+#  * A per-address lookup used by wallet UIs to render a "🏪 Partner" badge
+#  * A link to existing IoT devices this partner owns (existing iot_devices SQL)
+#  * An admin-only verify flag so unverified self-registrations don't clutter
+#    the public listing until reviewed
+#
+# No new payment flow is introduced — partners transact through the same
+# THR wallet primitives (send, tip, pool, mining) already available to any
+# user. This registry only characterises them for discovery + trust signals.
+
+def _load_b2b_partners() -> dict:
+    """Registry keyed by uppercase THR address."""
+    data = load_json(B2B_PARTNERS_FILE, {})
+    if not isinstance(data, dict):
+        data = {}
+    return data
+
+
+def _save_b2b_partners(data: dict) -> None:
+    save_json(B2B_PARTNERS_FILE, data)
+
+
+def is_b2b_partner(thr_address: str) -> dict | None:
+    """Return the partner record for a THR address, or None. Case-insensitive.
+    Convenience for other modules (wallet UI, tip flow, pool flow) that want
+    to detect and label partner accounts."""
+    if not thr_address:
+        return None
+    partners = _load_b2b_partners()
+    return partners.get((thr_address or "").strip().upper())
+
+
+@app.route("/api/b2b/partner/register", methods=["POST"])
+def api_b2b_partner_register():
+    """Self-register a THR address as a B2B partner. Not yet verified.
+    Body: {
+        thr_address, business_name, partner_type, location,
+        services?, rwa_metadata?, contact_email?, website?
+    }
+    Verification is gated behind /api/admin/b2b/verify — until then the
+    partner is stored but is NOT returned in the public listing.
+    """
+    data = request.get_json(silent=True) or {}
+    addr = (data.get("thr_address") or "").strip().upper()
+    biz  = (data.get("business_name") or "").strip()
+    ptype = (data.get("partner_type") or "").strip().lower()
+    loc   = data.get("location") or {}
+
+    if not addr or not validate_thr_address(addr):
+        return jsonify(ok=False, error="invalid_thr_address"), 400
+    if not biz or len(biz) < 2:
+        return jsonify(ok=False, error="business_name_required"), 400
+    if ptype not in B2B_PARTNER_TYPES:
+        return jsonify(
+            ok=False, error="invalid_partner_type",
+            valid_types=sorted(B2B_PARTNER_TYPES),
+        ), 400
+
+    partners = _load_b2b_partners()
+    now_iso = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    existing = partners.get(addr)
+    record = {
+        "thr_address":    addr,
+        "business_name":  biz,
+        "partner_type":   ptype,
+        "location":       loc if isinstance(loc, dict) else {"raw": str(loc)},
+        "services":       data.get("services") or [],
+        "rwa_metadata":   data.get("rwa_metadata") or {},
+        "contact_email":  (data.get("contact_email") or "").strip(),
+        "website":        (data.get("website") or "").strip(),
+        "verified":       bool(existing and existing.get("verified")),
+        "verified_at":    existing.get("verified_at") if existing else None,
+        "registered_at":  (existing or {}).get("registered_at") or now_iso,
+        "updated_at":     now_iso,
+    }
+    partners[addr] = record
+    _save_b2b_partners(partners)
+    return jsonify(ok=True, partner=record, status="pending_verification"), 200
+
+
+@app.route("/api/admin/b2b/verify", methods=["POST"])
+def api_admin_b2b_verify():
+    """Admin: mark or unmark a partner as verified. Only verified partners
+    appear in the public /api/b2b/partners listing."""
+    denied = require_admin()
+    if denied:
+        return denied
+    data = request.get_json(silent=True) or {}
+    addr = (data.get("thr_address") or "").strip().upper()
+    verify = bool(data.get("verified", True))
+    if not addr:
+        return jsonify(ok=False, error="thr_address_required"), 400
+    partners = _load_b2b_partners()
+    record = partners.get(addr)
+    if not record:
+        return jsonify(ok=False, error="partner_not_found"), 404
+    record["verified"] = verify
+    record["verified_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()) if verify else None
+    record["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    partners[addr] = record
+    _save_b2b_partners(partners)
+    return jsonify(ok=True, partner=record), 200
+
+
+@app.route("/api/b2b/partners", methods=["GET"])
+def api_b2b_partners_list():
+    """Public listing of verified B2B partners. Filters: ?type=cafe&city=…"""
+    partners = _load_b2b_partners()
+    ptype = (request.args.get("type") or "").strip().lower()
+    city  = (request.args.get("city") or "").strip().lower()
+    result = []
+    for addr, rec in partners.items():
+        if not rec.get("verified"):
+            continue
+        if ptype and rec.get("partner_type") != ptype:
+            continue
+        if city and (rec.get("location", {}).get("city") or "").lower() != city:
+            continue
+        # Strip contact_email + rwa_metadata from public listing — those are
+        # for admin review only. Public-safe subset:
+        result.append({
+            "thr_address":   rec["thr_address"],
+            "business_name": rec["business_name"],
+            "partner_type":  rec["partner_type"],
+            "location":      rec.get("location", {}),
+            "services":      rec.get("services", []),
+            "website":       rec.get("website", ""),
+            "verified_at":   rec.get("verified_at"),
+        })
+    return jsonify(
+        ok=True,
+        count=len(result),
+        filter={"type": ptype or None, "city": city or None},
+        partner_types=sorted(B2B_PARTNER_TYPES),
+        partners=result,
+    ), 200
+
+
+@app.route("/api/b2b/partner/<thr_address>", methods=["GET"])
+def api_b2b_partner_detail(thr_address):
+    """Per-address lookup. Returns the full record for verified partners,
+    a minimal ok=false hint for unregistered addresses."""
+    addr = (thr_address or "").strip().upper()
+    partners = _load_b2b_partners()
+    rec = partners.get(addr)
+    if not rec:
+        return jsonify(ok=False, error="partner_not_found"), 404
+    # Strip admin-only fields for public consumption
+    public_rec = {k: v for k, v in rec.items() if k not in ("contact_email", "rwa_metadata")}
+    if not rec.get("verified"):
+        return jsonify(ok=True, verified=False, partner=public_rec, hint="pending_admin_verification"), 200
+
+    # Attach any IoT devices this partner owns — reuses existing iot_devices SQL
+    devices: list = []
+    try:
+        if USE_SQLITE_LEDGER:
+            with _get_ledger_db_connection() as conn:
+                rows = conn.execute(
+                    "SELECT device_id, label, sensor_type, location FROM iot_devices WHERE owner_wallet = ? ORDER BY updated_at DESC LIMIT 100",
+                    (addr,),
+                ).fetchall()
+                for r in rows:
+                    devices.append({
+                        "device_id":   r["device_id"],
+                        "label":       r["label"],
+                        "sensor_type": r["sensor_type"],
+                        "location":    r["location"],
+                    })
+    except Exception as exc:
+        logger.warning("[b2b] iot device lookup failed for %s: %s", addr, exc)
+
+    return jsonify(ok=True, verified=True, partner=public_rec, iot_devices=devices), 200
+
+
+@app.route("/api/b2b/partner/link-device", methods=["POST"])
+def api_b2b_partner_link_device():
+    """Link an existing IoT device to this partner. Requires the partner to
+    already be the owner_wallet of the device (so we don't allow arbitrary
+    theft of devices between partners). Just returns a confirmation — the
+    IoT device already has owner_wallet, this is a validation echo."""
+    data = request.get_json(silent=True) or {}
+    addr = (data.get("thr_address") or "").strip().upper()
+    device_id = (data.get("device_id") or "").strip()
+    if not addr or not device_id:
+        return jsonify(ok=False, error="thr_address_and_device_id_required"), 400
+    partners = _load_b2b_partners()
+    if addr not in partners:
+        return jsonify(ok=False, error="partner_not_registered"), 404
+    if not USE_SQLITE_LEDGER:
+        return jsonify(ok=False, error="sqlite_iot_storage_disabled"), 503
+    device = _get_iot_device(device_id)
+    if not device:
+        return jsonify(ok=False, error="device_not_found"), 404
+    if (device["owner_wallet"] or "").strip().upper() != addr:
+        return jsonify(ok=False, error="device_not_owned_by_partner",
+                       device_owner=device["owner_wallet"]), 403
+    return jsonify(ok=True, linked=True, device_id=device_id, partner=addr), 200
 
 
 @app.route("/api/iot/push_reading", methods=["POST"])

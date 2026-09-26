@@ -36,6 +36,15 @@ CURATED_MODELS: Dict[str, dict] = {
             {"id": "gemini-2.5-pro-latest", "label": "Gemini 2.5 Pro"},
         ],
     },
+    "ollama": {
+        "models": [
+            {"id": "qwen2.5-coder:32b", "label": "Qwen 2.5 Coder 32B (local)", "default": True},
+            {"id": "qwen2.5-coder:14b", "label": "Qwen 2.5 Coder 14B (local)"},
+            {"id": "deepseek-coder-v2:16b", "label": "DeepSeek Coder V2 16B (local)"},
+            {"id": "codellama:34b", "label": "Code Llama 34B (local)"},
+            {"id": "starcoder2:15b", "label": "StarCoder2 15B (local)"},
+        ],
+    },
 }
 
 

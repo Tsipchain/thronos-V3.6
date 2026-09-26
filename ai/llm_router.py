@@ -10,7 +10,7 @@ This module exposes a single entry point `call_llm` which:
 import os
 from typing import Dict, Any, Optional
 
-from .providers import openai_helper, anthropic_helper, gemini_helper
+from .providers import openai_helper, anthropic_helper, gemini_helper, ollama_helper
 
 THRONOS_AI_MODE = os.getenv("THRONOS_AI_MODE", "openai").lower()
 
@@ -40,6 +40,8 @@ def call_llm(
         return anthropic_helper.generate(prompt, model=model, system_prompt=system_prompt, metadata=metadata)
     elif mode == "gemini":
         return gemini_helper.generate(prompt, model=model, system_prompt=system_prompt, metadata=metadata)
+    elif mode == "ollama":
+        return ollama_helper.generate(prompt, model=model, system_prompt=system_prompt, metadata=metadata)
     else:
         # default: OpenAI
         return openai_helper.generate(prompt, model=model, system_prompt=system_prompt, metadata=metadata)

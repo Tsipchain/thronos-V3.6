@@ -121,6 +121,14 @@ try:
 except Exception as exc:  # pragma: no cover
     app.logger.warning("[PhysicalAssets] Blueprint NOT loaded: %s", exc)
 
+# Code Assistant — self-hosted AI coding tenant (Ollama + MCP tools)
+try:
+    from services.code_assistant.api_routes import code_assistant_bp
+    app.register_blueprint(code_assistant_bp, url_prefix="/api/code-assistant")
+    app.logger.info("[CodeAssistant] Blueprint registered at /api/code-assistant")
+except Exception as exc:  # pragma: no cover
+    app.logger.warning("[CodeAssistant] Blueprint NOT loaded: %s", exc)
+
 # ── Pledge-based v0 wallet migration ──────────────────────────────────────────
 # Lets pledge/HMAC users find their old THR address via send_secret only,
 # then migrate to a V1 wallet and set up PIN + passkey.

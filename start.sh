@@ -45,12 +45,33 @@ else
   echo "=== PYTHEIA Worker will run via APScheduler on master node ==="
 fi
 
+OLLAMA_PID=""
+if [[ "${ENABLE_OLLAMA:-false}" == "true" ]]; then
+  echo "=== Starting Ollama (self-hosted LLM server) ==="
+  mkdir -p /app/workspace /app/data/code_sessions
+  if command -v ollama &> /dev/null; then
+    ollama serve &
+    OLLAMA_PID=$!
+    sleep 5
+    MODEL="${OLLAMA_DEFAULT_MODEL:-qwen2.5-coder:32b}"
+    if ! ollama list 2>/dev/null | grep -q "$MODEL"; then
+      echo "=== Pulling model $MODEL (first run, may take a while) ==="
+      ollama pull "$MODEL" &
+    fi
+    echo "=== Ollama ready at http://localhost:11434 ==="
+  else
+    echo "=== Ollama not installed — set ENABLE_OLLAMA=false or install Ollama ==="
+  fi
+else
+  echo "=== Ollama disabled (set ENABLE_OLLAMA=true to start local LLM) ==="
+fi
+
 echo "=== Starting Flask app on HTTP port ${PORT} (server_ext:app) ==="
 # server_ext:app wraps server:app and registers additional blueprints (L2E EDU etc.)
 gunicorn -c gunicorn_config.py server_ext:app
 
 echo "=== Shutting down background services ==="
-for pid in $STRATUM_PID $MINER_PID $PYTHEIA_PID; do
+for pid in $STRATUM_PID $MINER_PID $PYTHEIA_PID $OLLAMA_PID; do
   if [[ -n "$pid" ]]; then
     kill "$pid" 2>/dev/null || true
   fi

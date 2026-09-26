@@ -47,13 +47,20 @@ app.register_blueprint(code_assistant_bp, url_prefix="/api/code-assistant")
 def index():
     return jsonify({
         "service": "Thronos AI",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "endpoints": {
             "health": "/health",
             "chat": "/api/ai/chat",
+            "complete": "/api/ai/complete",
+            "translate": "/api/ai/translate",
+            "languages": "/api/ai/languages",
             "models": "/api/ai/models",
             "code_assistant": "/api/code-assistant",
         },
+        "capabilities": [
+            "chat", "code_completion", "code_translation",
+            "multi_language", "agentic_coding", "mcp_tools",
+        ],
         "powered_by": "Ollama (self-hosted, no API key)",
         "node": "ai.thronoschain.org",
     })
@@ -145,6 +152,99 @@ def complete():
         "provider": result.get("provider"),
         "model": result.get("model"),
         "completion": result.get("content"),
+    })
+
+
+@app.route("/api/ai/translate", methods=["POST"])
+def translate_code():
+    """Translate code between any programming languages.
+
+    Input:  { "code": "...", "source_language": "python", "target_language": "cpp" }
+    Output: { "translated_code": "...", "source_language": "...", "target_language": "..." }
+
+    Supports all languages: Python, C/C++, Rust, Go, Java, JavaScript/TypeScript,
+    Solidity, Ruby, Swift, Kotlin, Haskell, Scala, Lua, PHP, C#, and more.
+    """
+    data = request.get_json(force=True)
+    code = data.get("code")
+    if not code:
+        return jsonify({"error": "code is required"}), 400
+
+    source_lang = data.get("source_language", "auto-detect")
+    target_lang = data.get("target_language")
+    if not target_lang:
+        return jsonify({"error": "target_language is required"}), 400
+
+    preserve_comments = data.get("preserve_comments", True)
+    explain = data.get("explain", False)
+
+    system_prompt = (
+        "You are an expert polyglot programmer fluent in every programming language. "
+        "You translate code accurately between languages, preserving logic, structure, "
+        "and idioms. Use the target language's conventions and best practices. "
+        "Handle language-specific features (memory management, type systems, concurrency) appropriately."
+    )
+
+    prompt_parts = [f"Translate the following {source_lang} code to {target_lang}.\n"]
+    if preserve_comments:
+        prompt_parts.append("Preserve comments (translated to English if needed).\n")
+    if explain:
+        prompt_parts.append("After the code, add a brief section explaining key translation decisions.\n")
+    prompt_parts.append(f"\n```{source_lang}\n{code}\n```")
+
+    result = ollama_helper.generate(
+        prompt="\n".join(prompt_parts),
+        model=data.get("model"),
+        system_prompt=system_prompt,
+    )
+
+    return jsonify({
+        "provider": result.get("provider"),
+        "model": result.get("model"),
+        "source_language": source_lang,
+        "target_language": target_lang,
+        "translated_code": result.get("content"),
+        "error": result.get("error"),
+    })
+
+
+@app.route("/api/ai/languages", methods=["GET"])
+def supported_languages():
+    """List all programming languages the AI can work with."""
+    return jsonify({
+        "languages": [
+            {"id": "python", "name": "Python", "extensions": [".py"]},
+            {"id": "javascript", "name": "JavaScript", "extensions": [".js", ".mjs"]},
+            {"id": "typescript", "name": "TypeScript", "extensions": [".ts", ".tsx"]},
+            {"id": "cpp", "name": "C++", "extensions": [".cpp", ".hpp", ".cc", ".h"]},
+            {"id": "c", "name": "C", "extensions": [".c", ".h"]},
+            {"id": "rust", "name": "Rust", "extensions": [".rs"]},
+            {"id": "go", "name": "Go", "extensions": [".go"]},
+            {"id": "java", "name": "Java", "extensions": [".java"]},
+            {"id": "kotlin", "name": "Kotlin", "extensions": [".kt"]},
+            {"id": "swift", "name": "Swift", "extensions": [".swift"]},
+            {"id": "csharp", "name": "C#", "extensions": [".cs"]},
+            {"id": "ruby", "name": "Ruby", "extensions": [".rb"]},
+            {"id": "php", "name": "PHP", "extensions": [".php"]},
+            {"id": "solidity", "name": "Solidity", "extensions": [".sol"]},
+            {"id": "haskell", "name": "Haskell", "extensions": [".hs"]},
+            {"id": "scala", "name": "Scala", "extensions": [".scala"]},
+            {"id": "lua", "name": "Lua", "extensions": [".lua"]},
+            {"id": "r", "name": "R", "extensions": [".r", ".R"]},
+            {"id": "dart", "name": "Dart", "extensions": [".dart"]},
+            {"id": "elixir", "name": "Elixir", "extensions": [".ex", ".exs"]},
+            {"id": "shell", "name": "Shell/Bash", "extensions": [".sh", ".bash"]},
+            {"id": "sql", "name": "SQL", "extensions": [".sql"]},
+            {"id": "html", "name": "HTML", "extensions": [".html"]},
+            {"id": "css", "name": "CSS", "extensions": [".css"]},
+            {"id": "yaml", "name": "YAML", "extensions": [".yml", ".yaml"]},
+            {"id": "toml", "name": "TOML", "extensions": [".toml"]},
+            {"id": "zig", "name": "Zig", "extensions": [".zig"]},
+            {"id": "nim", "name": "Nim", "extensions": [".nim"]},
+            {"id": "assembly", "name": "Assembly", "extensions": [".asm", ".s"]},
+        ],
+        "translation_supported": True,
+        "completion_supported": True,
     })
 
 

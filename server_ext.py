@@ -129,6 +129,18 @@ try:
 except Exception as exc:  # pragma: no cover
     app.logger.warning("[CodeAssistant] Blueprint NOT loaded: %s", exc)
 
+# Ollama Proxy — lets Render (ai.thronoschain.org) reach local Ollama over the network
+try:
+    import os as _os_ollama
+    if _os_ollama.getenv("OLLAMA_PROXY_ENABLED", "0") == "1":
+        from ollama_proxy_blueprint import ollama_proxy_bp
+        app.register_blueprint(ollama_proxy_bp, url_prefix="/ollama-bridge")
+        app.logger.info("[OllamaProxy] Blueprint registered at /ollama-bridge")
+    else:
+        app.logger.info("[OllamaProxy] Disabled (set OLLAMA_PROXY_ENABLED=1 to enable)")
+except Exception as exc:  # pragma: no cover
+    app.logger.warning("[OllamaProxy] Blueprint NOT loaded: %s", exc)
+
 # ── Pledge-based v0 wallet migration ──────────────────────────────────────────
 # Lets pledge/HMAC users find their old THR address via send_secret only,
 # then migrate to a V1 wallet and set up PIN + passkey.

@@ -141,6 +141,14 @@ try:
 except Exception as exc:  # pragma: no cover
     app.logger.warning("[OllamaProxy] Blueprint NOT loaded: %s", exc)
 
+# 3-Factor Auth — biometric push approval for transactions
+try:
+    from three_factor_auth import three_factor_bp
+    app.register_blueprint(three_factor_bp, url_prefix="/api/3fa")
+    app.logger.info("[3FA] Blueprint registered at /api/3fa")
+except Exception as exc:  # pragma: no cover
+    app.logger.warning("[3FA] Blueprint NOT loaded: %s", exc)
+
 # ── Pledge-based v0 wallet migration ──────────────────────────────────────────
 # Lets pledge/HMAC users find their old THR address via send_secret only,
 # then migrate to a V1 wallet and set up PIN + passkey.

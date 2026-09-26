@@ -34600,6 +34600,13 @@ def process_usdt_pledge_credit(thr_address, bnb_address, usdt_amount, bnb_txid, 
         # Seed THR/USDT pool with half the pledge (new external capital, no debit)
         _seed_usdt_thr_pool(pool_usdt, pool_thr)
 
+        # Record pledge in balance buckets (locked, not withdrawable)
+        try:
+            _update_address_bucket(thr_address, "pledge_reserve_balance", pool_usdt)
+            _add_pledge_pool_floor("USDT", pool_usdt)
+        except Exception as _bucket_err:
+            logger.warning("[usdt_pledge] bucket update failed (non-fatal): %s", _bucket_err)
+
         # Create pledge transaction on the chain
         chain = load_json(CHAIN_FILE, [])
         tx_id = f"USDT_PLEDGE-{int(time.time())}-{secrets.token_hex(4)}"
@@ -35742,6 +35749,25 @@ def _update_address_bucket(thr_address: str, bucket: str, delta: float) -> float
         raise ValueError(f"Bucket underflow: {bucket} would be {new_val} for {thr_address}")
     addr[bucket] = new_val
     _save_balance_buckets(buckets)
+    return new_val
+
+
+PLEDGE_POOL_FLOOR_FILE = os.path.join(DATA_DIR, "pledge_pool_floor.json")
+
+
+def _get_pledge_pool_floor(token: str = "USDT") -> float:
+    """Total pledge-seeded stablecoin that must remain in the AMM pool."""
+    data = load_json(PLEDGE_POOL_FLOOR_FILE, {})
+    return float(data.get(token, 0.0))
+
+
+def _add_pledge_pool_floor(token: str, amount: float) -> float:
+    """Record additional pledge-seeded stablecoin in the pool floor."""
+    data = load_json(PLEDGE_POOL_FLOOR_FILE, {})
+    current = float(data.get(token, 0.0))
+    new_val = round(current + amount, 6)
+    data[token] = new_val
+    save_json(PLEDGE_POOL_FLOOR_FILE, data)
     return new_val
 
 

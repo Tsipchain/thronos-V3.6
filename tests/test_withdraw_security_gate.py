@@ -74,6 +74,7 @@ def data_dir():
 @pytest.fixture()
 def app_client(data_dir, derived_address, secp256k1_keypair):
     os.environ['DATA_DIR'] = data_dir
+    os.environ['MUSIC_VOLUME'] = data_dir
     os.environ['NODE_ROLE'] = 'master'
     os.environ.setdefault('BSC_RPC_URL', 'https://bsc-testnet.example.com')
     os.environ.setdefault('BSC_PAYOUT_ADDRESS', '0x' + 'aa' * 20)
@@ -86,6 +87,14 @@ def app_client(data_dir, derived_address, secp256k1_keypair):
     app.config['TESTING'] = True
 
     import server as _srv
+    _srv.DATA_DIR = data_dir
+    _srv.INTERNAL_ASSET_BALANCES_FILE = os.path.join(data_dir, 'internal_asset_balances.json')
+    _srv.BALANCE_BUCKETS_FILE = os.path.join(data_dir, 'balance_buckets.json')
+    _srv.PLEDGE_POOL_FLOOR_FILE = os.path.join(data_dir, 'pledge_pool_floor.json')
+    _srv.WITHDRAW_QUEUE_FILE = os.path.join(data_dir, 'withdraw_queue.json')
+    _srv.CHAIN_FILE = os.path.join(data_dir, 'chain.json')
+    _srv.POOLS_FILE = os.path.join(data_dir, 'pools.json')
+    _srv.WALLET_HISTORY_FILE = os.path.join(data_dir, 'wallet_history.json')
     _srv.WITHDRAW_CHAIN_CONFIG['bsc']['rpc_url'] = 'https://bsc-testnet.example.com'
     _srv.WITHDRAW_CHAIN_CONFIG['bsc']['payout_wallet'] = '0x' + 'aa' * 20
     _srv.WITHDRAW_CHAIN_CONFIG['base']['rpc_url'] = 'https://base-testnet.example.com'
@@ -97,7 +106,8 @@ def app_client(data_dir, derived_address, secp256k1_keypair):
     _cleanup_nonces(data_dir)
 
 
-def _init_data(data_dir, thr_address, balance=50.0, usdt_pool=1000.0, usdc_pool=500.0):
+def _init_data(data_dir, thr_address, balance=50.0, usdt_pool=1000.0, usdc_pool=500.0,
+               pledge_reserve=0.0, lp_locked=0.0, pledge_pool_floor_usdt=0.0):
     balances = {}
     if balance > 0:
         balances[thr_address] = {'USDT_bsc': balance, 'USDC_base': balance}
@@ -112,6 +122,20 @@ def _init_data(data_dir, thr_address, balance=50.0, usdt_pool=1000.0, usdc_pool=
     _write_json(os.path.join(data_dir, 'withdraw_queue.json'), [])
     _write_json(os.path.join(data_dir, 'wallet_history.json'), [])
     _write_json(os.path.join(data_dir, 'chain.json'), [])
+
+    buckets = {}
+    if pledge_reserve > 0 or lp_locked > 0:
+        buckets[thr_address] = {}
+        if pledge_reserve > 0:
+            buckets[thr_address]['pledge_reserve_balance'] = pledge_reserve
+        if lp_locked > 0:
+            buckets[thr_address]['lp_position_balance'] = lp_locked
+    _write_json(os.path.join(data_dir, 'balance_buckets.json'), buckets)
+
+    floor = {}
+    if pledge_pool_floor_usdt > 0:
+        floor['USDT'] = pledge_pool_floor_usdt
+    _write_json(os.path.join(data_dir, 'pledge_pool_floor.json'), floor)
 
     os.makedirs(os.path.join(data_dir, 'custom_ledgers'), exist_ok=True)
 
@@ -388,3 +412,78 @@ class TestPayoutIdempotency:
         assert entry['balance_before'] == 50.0
         assert entry['balance_after'] == 45.0
         assert entry['thr_address'] == derived_address
+
+
+class TestPledgeBucketEnforcement:
+    """Tests 13-16: Balance bucket enforcement — pledge funds are NOT withdrawable."""
+
+    def test_pledge_locked_funds_rejected(self, app_client, secp256k1_keypair, derived_address, data_dir):
+        """User has 50 USDT but 30 is pledge-locked → can only withdraw 20."""
+        _init_data(data_dir, derived_address, balance=50.0, pledge_reserve=30.0)
+        private_key, compressed_pub = secp256k1_keypair
+        req, _ = _build_withdraw_request(private_key, compressed_pub, derived_address, amount=25.0)
+        resp = app_client.post('/api/wallet/v1/withdraw', json=req)
+        data = resp.get_json()
+        assert resp.status_code == 400
+        assert data['error'] == 'insufficient_withdrawable_balance'
+        assert data['withdrawable'] == 20.0
+        assert data['pledge_locked'] == 30.0
+
+    def test_pledge_locked_partial_allowed(self, app_client, secp256k1_keypair, derived_address, data_dir):
+        """User has 50 USDT, 30 pledge-locked → withdrawing 15 succeeds."""
+        _init_data(data_dir, derived_address, balance=50.0, pledge_reserve=30.0)
+        private_key, compressed_pub = secp256k1_keypair
+        req, _ = _build_withdraw_request(private_key, compressed_pub, derived_address, amount=15.0)
+        resp = app_client.post('/api/wallet/v1/withdraw', json=req)
+        data = resp.get_json()
+        assert resp.status_code == 200
+        assert data['ok'] is True
+
+    def test_lp_locked_funds_rejected(self, app_client, secp256k1_keypair, derived_address, data_dir):
+        """User has 50 USDT but 20 is LP-locked → can only withdraw 30."""
+        _init_data(data_dir, derived_address, balance=50.0, lp_locked=20.0)
+        private_key, compressed_pub = secp256k1_keypair
+        req, _ = _build_withdraw_request(private_key, compressed_pub, derived_address, amount=35.0)
+        resp = app_client.post('/api/wallet/v1/withdraw', json=req)
+        data = resp.get_json()
+        assert resp.status_code == 400
+        assert data['error'] == 'insufficient_withdrawable_balance'
+        assert data['lp_locked'] == 20.0
+
+    def test_no_buckets_full_balance_available(self, app_client, secp256k1_keypair, derived_address, data_dir):
+        """User with no pledge or LP locks can withdraw full balance."""
+        _init_data(data_dir, derived_address, balance=50.0, pledge_reserve=0.0, lp_locked=0.0)
+        private_key, compressed_pub = secp256k1_keypair
+        req, _ = _build_withdraw_request(private_key, compressed_pub, derived_address, amount=50.0)
+        resp = app_client.post('/api/wallet/v1/withdraw', json=req)
+        data = resp.get_json()
+        assert resp.status_code == 200
+        assert data['ok'] is True
+
+
+class TestPoolPledgeFloor:
+    """Tests 17-18: Pool reserves cannot drop below pledge-seeded floor."""
+
+    def test_pool_floor_limits_withdrawal(self, app_client, secp256k1_keypair, derived_address, data_dir):
+        """Pool has 100 USDT but 80 is pledge-seeded → max withdrawal = 20."""
+        _init_data(data_dir, derived_address, balance=50.0, usdt_pool=100.0,
+                   pledge_pool_floor_usdt=80.0)
+        private_key, compressed_pub = secp256k1_keypair
+        req, _ = _build_withdraw_request(private_key, compressed_pub, derived_address, amount=25.0)
+        resp = app_client.post('/api/wallet/v1/withdraw', json=req)
+        data = resp.get_json()
+        assert resp.status_code == 400
+        assert data['error'] == 'insufficient_pool_liquidity'
+        assert data['available'] == 20.0
+        assert data['pledge_floor'] == 80.0
+
+    def test_pool_floor_allows_below_limit(self, app_client, secp256k1_keypair, derived_address, data_dir):
+        """Pool has 1000 USDT, 200 pledge floor → 800 available, 10 USDT withdrawal OK."""
+        _init_data(data_dir, derived_address, balance=50.0, usdt_pool=1000.0,
+                   pledge_pool_floor_usdt=200.0)
+        private_key, compressed_pub = secp256k1_keypair
+        req, _ = _build_withdraw_request(private_key, compressed_pub, derived_address, amount=10.0)
+        resp = app_client.post('/api/wallet/v1/withdraw', json=req)
+        data = resp.get_json()
+        assert resp.status_code == 200
+        assert data['ok'] is True

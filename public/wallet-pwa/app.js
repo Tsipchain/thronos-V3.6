@@ -3206,6 +3206,71 @@ async function _stopMusic() {
   }
 }
 
+async function _pwaConfirmSend(address, to, amount, token) {
+  return new Promise((resolve) => {
+    const fid = LS.getObj(`thr_fid_${address}`);
+    const hasFid = !!(fid?.credId);
+
+    const overlay = document.createElement('div');
+    overlay.id = 'pwaConfirmSendModal';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.88);z-index:10001;display:flex;align-items:center;justify-content:center;padding:16px;';
+    overlay.innerHTML = `
+    <div style="background:#13112a;border:1px solid #2a2050;border-radius:12px;padding:20px;width:100%;max-width:400px;">
+      <div style="font-weight:700;color:#b08cf8;margin-bottom:16px;font-size:15px;text-align:center;">Confirm Transaction</div>
+      <div style="background:#0d0a1a;border:1px solid #2a2050;border-radius:8px;padding:14px;margin-bottom:16px;">
+        <div style="color:var(--muted);font-size:.75rem;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">You are about to send</div>
+        <div style="font-size:1.4rem;font-weight:700;color:#fff;margin-bottom:8px">${escHtml(String(amount))} ${escHtml(token)}</div>
+        <div style="color:var(--muted);font-size:.75rem;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">To</div>
+        <div style="font-family:monospace;color:#b08cf8;font-size:.85rem;word-break:break-all">${escHtml(to)}</div>
+      </div>
+      ${hasFid ? `<button id="confirmFidBtn" class="btn btn--faceid" style="width:100%;margin-bottom:8px">${fidSvg()} Confirm with Face ID</button><div style="margin:8px 0;color:var(--muted);font-size:.75rem;text-align:center">or</div>` : ''}
+      <div style="display:flex;gap:8px;margin-bottom:8px">
+        <input type="password" id="confirmPinInput" class="input" placeholder="Enter PIN to confirm" autocomplete="off" style="flex:1;margin-bottom:0">
+        <button id="confirmPinBtn" class="btn btn--primary" style="padding:10px 16px">Confirm</button>
+      </div>
+      <button id="confirmCancelBtn" style="width:100%;padding:8px;background:none;border:1px solid #333;border-radius:6px;color:#666;font-size:.82rem;cursor:pointer;">Cancel</button>
+      <div id="confirmErr" style="color:#ff6b6b;font-size:.82rem;margin-top:8px;text-align:center;min-height:16px"></div>
+    </div>`;
+
+    document.body.appendChild(overlay);
+    const cleanup = (result) => { overlay.remove(); resolve(result); };
+
+    overlay.querySelector('#confirmCancelBtn').addEventListener('click', () => cleanup(false));
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) cleanup(false); });
+
+    if (hasFid) {
+      overlay.querySelector('#confirmFidBtn').addEventListener('click', async () => {
+        try {
+          await assertWebAuthn(fid.credId);
+          cleanup(true);
+        } catch {
+          const errEl = overlay.querySelector('#confirmErr');
+          if (errEl) errEl.textContent = 'Face ID verification failed or cancelled';
+        }
+      });
+    }
+
+    const verifyPin = async () => {
+      const pin = overlay.querySelector('#confirmPinInput').value.trim();
+      if (!pin) { const e = overlay.querySelector('#confirmErr'); if (e) e.textContent = 'Enter your PIN'; return; }
+      try {
+        const acc = getAccounts().find(a => a.address === address);
+        if (!acc) throw new Error('no account');
+        const kit = typeof acc.kit === 'string' ? JSON.parse(acc.kit) : acc.kit;
+        const encBlob = kit.encrypted_private_key_backup ?? kit.wallet_v1_encrypted_priv ?? kit.encrypted_private_key ?? kit.enc_key;
+        await decryptBlob(encBlob, pin);
+        cleanup(true);
+      } catch {
+        const e = overlay.querySelector('#confirmErr');
+        if (e) e.textContent = 'Wrong PIN';
+      }
+    };
+    overlay.querySelector('#confirmPinBtn').addEventListener('click', verifyPin);
+    overlay.querySelector('#confirmPinInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') verifyPin(); });
+  });
+}
+
+
 function showSend(preselectedToken = null, prefillAddr = null) {
   const address = getActiveAddr();
 
@@ -3377,10 +3442,14 @@ function showSend(preselectedToken = null, prefillAddr = null) {
       return;
     }
 
+    if (!privHex) { setError('Wallet is locked — please unlock first'); return; }
+
+    const confirmed = await _pwaConfirmSend(address, to.toUpperCase(), amount, token);
+    if (!confirmed) return;
+
     const btn = document.getElementById('sendBtn');
     btn.disabled = true; btn.textContent = 'Sending…'; setError(null);
     try {
-      if (!privHex) throw new Error('Wallet is locked — please unlock first');
       const result = await sendToken(address, to.toUpperCase(), amount, token, privHex);
       setSuccess(`Sent! TX: ${result.tx_hash || result.txid || result.tx || 'submitted'}`);
       btn.textContent = 'Sent ✓';

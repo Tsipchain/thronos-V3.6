@@ -1151,6 +1151,21 @@ def wallet_v1_withdraw():
                             token=token, chain=dest_chain,
                             balance_source=bal_source), 400
 
+        # 1b. Balance-bucket enforcement — pledge funds are NOT withdrawable
+        buckets = _srv._get_address_buckets(thr_address)
+        pledge_locked = buckets.get('pledge_reserve_balance', 0.0)
+        lp_locked = buckets.get('lp_position_balance', 0.0)
+        withdrawable = round(wallet_bal - pledge_locked - lp_locked, 6)
+        if withdrawable < amount:
+            return _jsonify(ok=False, error='insufficient_withdrawable_balance',
+                            balance=round(wallet_bal, 6),
+                            withdrawable=round(max(0, withdrawable), 6),
+                            pledge_locked=round(pledge_locked, 6),
+                            lp_locked=round(lp_locked, 6),
+                            required=round(amount, 6),
+                            detail='Pledge and LP funds are locked and cannot be withdrawn',
+                            token=token), 400
+
         # 2. Pool liquidity — token-specific (USDT→THR/USDT, USDC→THR/USDC)
         pools = _srv.load_pools()
         pool = next(
@@ -1165,10 +1180,16 @@ def wallet_v1_withdraw():
 
         _rk = 'reserves_b' if (pool.get('token_b') or '').upper() == token else 'reserves_a'
         stablecoin_reserve = float(pool.get(_rk, 0))
-        max_allowed = round(stablecoin_reserve * 0.9, 6)
+
+        # Pool pledge floor — reserves must never drop below pledge-seeded capital
+        pledge_floor = _srv._get_pledge_pool_floor(token)
+        anti_rug_limit = round(stablecoin_reserve * 0.9, 6)
+        floor_limit = round(stablecoin_reserve - pledge_floor, 6)
+        max_allowed = round(min(anti_rug_limit, max(0, floor_limit)), 6)
         if amount > max_allowed:
             return _jsonify(ok=False, error='insufficient_pool_liquidity',
-                            available=max_allowed, token=token), 400
+                            available=max_allowed, token=token,
+                            pledge_floor=round(pledge_floor, 6)), 400
 
         # 3. Atomically debit wallet balance BEFORE touching pool
         new_wallet_bal = round(wallet_bal - amount, 6)

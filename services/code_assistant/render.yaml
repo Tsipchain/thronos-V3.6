@@ -17,8 +17,8 @@ services:
       - key: OLLAMA_DEFAULT_MODEL
         value: qwen2.5-coder:32b
       - key: CODE_ASSISTANT_WORKSPACE
-        value: /app/workspace
+        value: /opt/render/project/src/data/workspace
       - key: CODE_ASSISTANT_SESSIONS
-        value: /app/data/code_sessions
+        value: /opt/render/project/src/data/code_sessions
       - key: PYTHON_VERSION
         value: "3.11"

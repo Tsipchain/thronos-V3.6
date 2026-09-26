@@ -19401,6 +19401,14 @@ def _handle_ai_chat_master():
     except Exception:
         # Fallback to no context on errors
         context_str = ""
+    # Inject relevant knowledge from past high-rated responses (learning loop)
+    knowledge_ctx = ""
+    try:
+        from ai_learning_engine import build_knowledge_context
+        knowledge_ctx = build_knowledge_context(msg, max_chars=1500)
+    except Exception:
+        pass
+
     # Prepend the context to the current message.  The role for the
     # current user is explicitly labelled as "User" to distinguish it
     # from previous messages.  Any attachments have already been
@@ -19411,7 +19419,7 @@ def _handle_ai_chat_master():
         LAST_PROMPT_HASH[session_key] = prompt_hash
     except Exception:
         pass
-    full_prompt = f"{context_str}User: {msg}" if context_str else msg
+    full_prompt = f"{knowledge_ctx}{context_str}User: {msg}" if (context_str or knowledge_ctx) else msg
 
     # --- AI execution path ---
     call_started = time.time()
@@ -43766,7 +43774,7 @@ def api_ai_debug():
 
 @app.route("/api/ai/feedback", methods=["POST"])
 def api_ai_feedback():
-    """Record user feedback (thumbs up/down) on AI responses"""
+    """Record user feedback (thumbs up/down) on AI responses and bridge to corpus for learning"""
     try:
         data = request.get_json() or {}
         session_id = data.get("session_id", "")
@@ -43780,7 +43788,7 @@ def api_ai_feedback():
         feedback_entry = {
             "session_id": session_id,
             "wallet": thr_wallet,
-            "message_text": message_text[:500],  # Truncate long messages
+            "message_text": message_text[:500],
             "thumbs_up": thumbs_up,
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
         }
@@ -43789,14 +43797,57 @@ def api_ai_feedback():
         feedback_file = os.path.join(DATA_DIR, "ai_feedback.json")
         feedback_list = load_json(feedback_file, [])
         feedback_list.append(feedback_entry)
-
-        # Save feedback
         save_json(feedback_file, feedback_list)
 
-        return jsonify({"ok": True, "message": "Feedback recorded"})
+        # Bridge feedback into corpus for learning loop
+        corpus_updated = False
+        try:
+            from ai_learning_engine import apply_feedback, maybe_rebuild
+            corpus_updated = apply_feedback(session_id, message_text, thumbs_up)
+            maybe_rebuild()
+        except Exception:
+            app.logger.debug("Learning engine feedback bridge skipped")
+
+        return jsonify({"ok": True, "message": "Feedback recorded", "corpus_updated": corpus_updated})
     except Exception as e:
         app.logger.exception("Feedback error")
         return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/ai/learning/stats", methods=["GET"])
+def api_ai_learning_stats():
+    """Return learning engine statistics — corpus size, feedback counts, knowledge blocks"""
+    try:
+        from ai_learning_engine import get_learning_stats
+        return jsonify(get_learning_stats())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/ai/learning/rebuild", methods=["POST"])
+def api_ai_learning_rebuild():
+    """Rebuild knowledge base from corpus (admin / on-demand)"""
+    try:
+        from ai_learning_engine import rebuild_knowledge_base
+        result = rebuild_knowledge_base(force=True)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/ai/learning/query", methods=["POST"])
+def api_ai_learning_query():
+    """Query the knowledge base — returns relevant past high-rated responses"""
+    try:
+        data = request.get_json() or {}
+        prompt = data.get("prompt") or data.get("query") or ""
+        if not prompt:
+            return jsonify({"error": "prompt is required"}), 400
+        from ai_learning_engine import retrieve_knowledge
+        results = retrieve_knowledge(prompt, top_k=int(data.get("top_k", 5)))
+        return jsonify({"results": results, "count": len(results)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # Update /chat route to pass wallet to template

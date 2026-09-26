@@ -1600,6 +1600,45 @@
     </div>
 
             <div id="walletLoginSection" class="wallet-popup-login" style="display:none;">
+                <!-- QR WALLET LOGIN: Scan with PWA/mobile wallet to connect -->
+                <div id="qrWalletLoginPanel" style="background:#0d0a1a; border:1px solid #7c5cbf; border-radius:10px; padding:16px; margin:0 0 14px 0; text-align:center;">
+                    <div style="display:flex; align-items:center; justify-content:center; gap:8px; margin-bottom:12px;">
+                        <span style="font-size:1.4em;">📱</span>
+                        <h5 style="color:#b08cf8; margin:0; font-size:1em;">
+                            <span class="lang-el">Σύνδεση με QR</span>
+                            <span class="lang-en">QR Wallet Login</span>
+                        </h5>
+                    </div>
+                    <p style="font-size:0.82em; color:#aaa; margin:0 0 12px 0; line-height:1.4;">
+                        <span class="lang-el">Σκάναρε με το Thronos PWA ή το mobile wallet σου</span>
+                        <span class="lang-en">Scan with Thronos PWA or mobile wallet</span>
+                    </p>
+                    <div id="qrLoginLoading" style="display:none; color:#b08cf8; padding:20px;">
+                        ⏳ <span class="lang-el">Δημιουργία QR...</span><span class="lang-en">Generating QR...</span>
+                    </div>
+                    <div id="qrLoginImageWrap" style="display:none;">
+                        <img id="qrLoginImage" src="" alt="QR Login" style="max-width:200px; border:2px solid #7c5cbf; border-radius:10px; background:#fff; padding:8px;" loading="lazy" />
+                        <div id="qrLoginTimer" style="font-size:0.8em; color:#9f9; margin-top:8px;"></div>
+                        <div id="qrLoginStatus" style="font-size:0.85em; color:#b08cf8; margin-top:6px;">
+                            <span class="lang-el">Περιμένω σάρωση...</span>
+                            <span class="lang-en">Waiting for scan...</span>
+                        </div>
+                    </div>
+                    <div id="qrLoginSuccess" style="display:none; color:#00ff66; padding:16px; font-size:1.1em;">
+                        ✅ <span class="lang-el">Συνδέθηκε!</span><span class="lang-en">Connected!</span>
+                    </div>
+                    <div id="qrLoginError" style="display:none; color:#ff4444; padding:8px; font-size:0.85em;"></div>
+                    <button id="qrLoginBtn" onclick="startQrWalletLogin()" style="margin-top:10px; width:100%; padding:12px; background:linear-gradient(135deg, #4a2a8a, #7c5cbf); color:#fff; border:1px solid #b08cf8; border-radius:8px; cursor:pointer; font-weight:bold; font-size:0.95em;">
+                        <span class="lang-el">📷 Δημιουργία QR Code</span>
+                        <span class="lang-en">📷 Generate QR Code</span>
+                    </button>
+                    <div style="border-bottom:1px solid #222; margin:14px 0 4px 0;"></div>
+                    <div style="font-size:0.75em; color:#666; cursor:pointer;" onclick="document.getElementById('qrWalletLoginPanel').style.display='none';">
+                        <span class="lang-el">▼ Ή συνδεθείτε χειροκίνητα</span>
+                        <span class="lang-en">▼ Or connect manually</span>
+                    </div>
+                </div>
+
                 <!-- PLEDGE ACTIVATION: Production mode CTA (no legacy repair UI) -->
                 <div id="walletV1PledgeActivationPanel" data-production-only="1" style="display:none; background:#1a2a1a; border:1px solid #00ff66; border-radius:8px; padding:15px; margin:12px 0;">
                     <h5 style="color:#00ff66; margin-top:0;">🔓 Activate Wallet V1</h5>
@@ -7416,6 +7455,17 @@ async function openHeaderWalletModal(){
     setWalletOpen(true);
     if(!walletSession.isBound()){
         showWalletLoginForm();
+        // Show QR login panel and reset its state for fresh scan
+        const qrPanel = document.getElementById('qrWalletLoginPanel');
+        if (qrPanel) {
+            qrPanel.style.display = 'block';
+            const qrBtn = document.getElementById('qrLoginBtn');
+            if (qrBtn) { qrBtn.style.display = 'block'; qrBtn.innerHTML = '<span class="lang-el">📷 Δημιουργία QR Code</span><span class="lang-en">📷 Generate QR Code</span>'; }
+            const qrImg = document.getElementById('qrLoginImageWrap');
+            if (qrImg) qrImg.style.display = 'none';
+            const qrSuccess = document.getElementById('qrLoginSuccess');
+            if (qrSuccess) qrSuccess.style.display = 'none';
+        }
         // Initialize ownership verification form (resolves canonical address from "loading...")
         setTimeout(() => initializeOwnershipVerificationForm(), 50);
     } else {
@@ -9188,6 +9238,104 @@ async function migrateLegacyWalletFromHeader(){
 // ── Pledge / HMAC v0 wallet migration ─────────────────────────────────────────
 // Users who only know their send_secret can find & migrate their pledge wallet.
 let _pledgeFoundAddress = null;
+// ── QR Wallet Login ─────────────────────────────────────────────────────────
+let _qrLoginPollTimer = null;
+let _qrLoginChallengeId = null;
+
+async function startQrWalletLogin() {
+    const btn = document.getElementById('qrLoginBtn');
+    const loading = document.getElementById('qrLoginLoading');
+    const imgWrap = document.getElementById('qrLoginImageWrap');
+    const img = document.getElementById('qrLoginImage');
+    const timer = document.getElementById('qrLoginTimer');
+    const status = document.getElementById('qrLoginStatus');
+    const success = document.getElementById('qrLoginSuccess');
+    const errorEl = document.getElementById('qrLoginError');
+
+    if (btn) btn.style.display = 'none';
+    if (loading) loading.style.display = 'block';
+    if (imgWrap) imgWrap.style.display = 'none';
+    if (success) success.style.display = 'none';
+    if (errorEl) { errorEl.style.display = 'none'; errorEl.textContent = ''; }
+    if (_qrLoginPollTimer) { clearInterval(_qrLoginPollTimer); _qrLoginPollTimer = null; }
+
+    try {
+        const resp = await fetch('/api/auth/challenge', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+        const data = await resp.json();
+        if (!data.ok) throw new Error(data.error || 'Challenge creation failed');
+
+        _qrLoginChallengeId = data.challenge.challenge_id;
+        const qrUri = data.qr_uri;
+        const expiresIn = data.expires_in || 120;
+
+        const qrUrl = 'https://api.qrserver.com/v1/create-qr-code/?data=' +
+            encodeURIComponent(qrUri) + '&size=220x220&color=b08cf8&bgcolor=0d0a1a&margin=8';
+
+        if (img) img.src = qrUrl;
+        if (loading) loading.style.display = 'none';
+        if (imgWrap) imgWrap.style.display = 'block';
+
+        let remaining = expiresIn;
+        if (timer) timer.textContent = remaining + 's';
+        const countdownId = setInterval(() => {
+            remaining--;
+            if (timer) timer.textContent = remaining + 's';
+            if (remaining <= 0) {
+                clearInterval(countdownId);
+                if (_qrLoginPollTimer) { clearInterval(_qrLoginPollTimer); _qrLoginPollTimer = null; }
+                if (status) status.innerHTML = '<span style="color:#ff8800;">⏰ Expired — click to retry</span>';
+                if (btn) { btn.style.display = 'block'; btn.textContent = '🔄 Retry QR Login'; }
+            }
+        }, 1000);
+
+        _qrLoginPollTimer = setInterval(async () => {
+            try {
+                const poll = await fetch('/api/auth/challenge/status/' + _qrLoginChallengeId);
+                const pollData = await poll.json();
+                if (pollData.ok && pollData.consumed) {
+                    clearInterval(_qrLoginPollTimer);
+                    _qrLoginPollTimer = null;
+                    clearInterval(countdownId);
+                    if (imgWrap) imgWrap.style.display = 'none';
+                    if (success) success.style.display = 'block';
+
+                    const sessResp = await fetch('/api/auth/session');
+                    const sessData = await sessResp.json();
+                    if (sessData.ok && sessData.address) {
+                        walletSession.setAddress(sessData.address);
+                        walletSession.setBound(true);
+                        updateWalletUI();
+                        showWalletContentSection();
+                        loadWalletBalances(true);
+                    }
+                    if (sessData.route) {
+                        setTimeout(() => { window.location.href = sessData.route; }, 1500);
+                    }
+                }
+            } catch (e) { /* poll error — ignore, will retry */ }
+        }, 2000);
+
+    } catch (err) {
+        if (loading) loading.style.display = 'none';
+        if (errorEl) { errorEl.style.display = 'block'; errorEl.textContent = '❌ ' + err.message; }
+        if (btn) btn.style.display = 'block';
+    }
+}
+
+// Also support thrconnect:// pairing for wallet-connect style sessions
+async function startWalletConnectQr() {
+    try {
+        const resp = await fetch('/api/wallet/wc/session/create', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ dapp: window.location.hostname })
+        });
+        const data = await resp.json();
+        if (!data.ok) return null;
+        return { session_id: data.session_id, uri: data.uri, qr_url: data.qr_url };
+    } catch (e) { return null; }
+}
+
 let _pledgeNewCanonical = null;
 
 function showPledgeMigratePanel() {

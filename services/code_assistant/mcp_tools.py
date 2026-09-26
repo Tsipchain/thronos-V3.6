@@ -17,7 +17,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 
-WORKSPACE_ROOT = os.getenv("CODE_ASSISTANT_WORKSPACE", "/app/workspace")
+_PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+WORKSPACE_ROOT = os.getenv("CODE_ASSISTANT_WORKSPACE", os.path.join(_PROJECT_DIR, "data", "workspace"))
 MAX_FILE_SIZE = 1_000_000  # 1MB read limit
 MAX_OUTPUT = 50_000  # 50KB command output limit
 
@@ -150,7 +151,7 @@ TOOL_SCHEMAS: List[dict] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "staged": {"type": "boolean", "description": "Show only staged changes", "default": False},
+                    "staged": {"type": "boolean", "description": "Show only staged changes", "default": false},
                 },
             },
         },

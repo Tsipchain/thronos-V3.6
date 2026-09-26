@@ -48,7 +48,7 @@ fi
 OLLAMA_PID=""
 if [[ "${ENABLE_OLLAMA:-false}" == "true" ]]; then
   echo "=== Starting Ollama (self-hosted LLM server) ==="
-  mkdir -p /app/workspace /app/data/code_sessions
+  mkdir -p "${CODE_ASSISTANT_WORKSPACE:-./data/workspace}" "${CODE_ASSISTANT_SESSIONS:-./data/code_sessions}"
   if command -v ollama &> /dev/null; then
     ollama serve &
     OLLAMA_PID=$!

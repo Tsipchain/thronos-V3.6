@@ -23,8 +23,9 @@ from .mcp_tools import TOOL_SCHEMAS, execute_tool
 
 logger = logging.getLogger(__name__)
 
-WORKSPACE_ROOT = os.getenv("CODE_ASSISTANT_WORKSPACE", "/app/workspace")
-SESSIONS_DIR = os.getenv("CODE_ASSISTANT_SESSIONS", "/app/data/code_sessions")
+_PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+WORKSPACE_ROOT = os.getenv("CODE_ASSISTANT_WORKSPACE", os.path.join(_PROJECT_DIR, "data", "workspace"))
+SESSIONS_DIR = os.getenv("CODE_ASSISTANT_SESSIONS", os.path.join(_PROJECT_DIR, "data", "code_sessions"))
 OLLAMA_BASE = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 
 SYSTEM_PROMPT = """You are Thronos Code Assistant — a self-hosted AI coding agent running on the Thronos network.

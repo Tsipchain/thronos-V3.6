@@ -132,6 +132,11 @@ PROVIDER_METADATA: Dict[str, Dict[str, str]] = {
         "name": "Google Gemini",
         "description": "Gemini 2.0 / 3.0 models",
     },
+    "ollama": {
+        "id": "ollama",
+        "name": "Ollama (Self-Hosted)",
+        "description": "Local GPU models via Ollama — no API key needed",
+    },
     "local": {
         "id": "local",
         "name": "Thronos Offline Corpus",
@@ -163,6 +168,13 @@ AI_MODEL_REGISTRY: Dict[str, List[ModelInfo]] = {
         ModelInfo(id="gemini-2.0-flash", display_name="Gemini 2.0 Flash", provider="gemini", tier="fast", default=True),
         ModelInfo(id="gemini-2.5-pro", display_name="Gemini 2.5 Pro", provider="gemini", tier="premium"),
         ModelInfo(id="gemini-2.5-flash", display_name="Gemini 2.5 Flash", provider="gemini", tier="fast"),
+    ],
+    "ollama": [
+        ModelInfo(id="qwen2.5-coder:32b", display_name="Qwen 2.5 Coder 32B", provider="ollama", tier="local", default=True),
+        ModelInfo(id="qwen2.5-coder:14b", display_name="Qwen 2.5 Coder 14B", provider="ollama", tier="local"),
+        ModelInfo(id="deepseek-coder-v2:16b", display_name="DeepSeek Coder V2 16B", provider="ollama", tier="local"),
+        ModelInfo(id="codellama:34b", display_name="Code Llama 34B", provider="ollama", tier="local"),
+        ModelInfo(id="starcoder2:15b", display_name="StarCoder2 15B", provider="ollama", tier="local"),
     ],
     "local": [
         ModelInfo(id="offline_corpus", display_name="Offline corpus (local)", provider="local", tier="local", default=False, enabled=False),

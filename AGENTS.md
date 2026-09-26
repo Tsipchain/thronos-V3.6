@@ -221,6 +221,55 @@ tail -f logs/watchers.log
 
 ---
 
+### 7. **Code Assistant Tenant** (New)
+
+**Purpose**: Self-hosted AI coding assistant with MCP tools — connects to any repo, writes/fixes code, runs tests
+**Location**: `services/code_assistant/`, `ai/providers/ollama_helper.py`
+**Dependencies**:
+- Ollama (local LLM server, no API key)
+- GPU: 24GB VRAM minimum
+- Git (for repo operations)
+
+**Environment Variables**:
+```bash
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_DEFAULT_MODEL=qwen2.5-coder:32b
+CODE_ASSISTANT_WORKSPACE=/app/workspace
+CODE_ASSISTANT_SESSIONS=/app/data/code_sessions
+```
+
+**Routes**:
+- `GET /api/code-assistant/health` - Ollama + model health check
+- `GET /api/code-assistant/models` - List available local models
+- `POST /api/code-assistant/models/pull` - Pull a new model
+- `POST /api/code-assistant/sessions` - Create coding session (optionally clone repo)
+- `GET /api/code-assistant/sessions` - List sessions
+- `GET /api/code-assistant/sessions/<id>` - Get session details
+- `POST /api/code-assistant/sessions/<id>/message` - Send message (agentic tool loop)
+- `DELETE /api/code-assistant/sessions/<id>` - Delete session
+
+**MCP Tools Available**:
+- `file_read`, `file_write`, `file_edit` - File operations
+- `file_search`, `code_grep` - Code search
+- `list_directory` - Browse project
+- `git_status`, `git_diff`, `git_log`, `git_commit` - Git operations
+- `run_command` - Terminal (tests, lint, build)
+
+**How to Deploy**:
+```bash
+# Docker with GPU
+docker build -t thronos-code-assistant -f services/code_assistant/Dockerfile .
+docker run --gpus all -p 11434:11434 -p 8080:8080 -v workspace:/app/workspace thronos-code-assistant
+
+# Or add as Railway service with GPU
+```
+
+**Active**: ✅ Yes
+**Production Ready**: ⚠️ Ready for testing
+**Known Issues**: Requires GPU-enabled Railway service or Docker with NVIDIA runtime
+
+---
+
 ## Deprecated / Inactive Agents
 
 ### 1. **agent_prototype.py** (Deprecated)
@@ -333,6 +382,7 @@ tail -f logs/watchers.log
 | Watchers | watchers_service.py | N/A | Binance, BTC RPC | ✅ Active | ✅ Yes |
 | AI Agent Service | ai_agent_service.py | `/api/ai_agent/*` | AI keys | ⚠️ Experimental | ❌ No |
 | Autonomous Trading | autonomous_trading.py | N/A | `ENABLE_AUTONOMOUS_TRADING` | 🚫 Disabled | ❌ No |
+| Code Assistant | services/code_assistant/ | `/api/code-assistant/*` | `OLLAMA_*` | ✅ Active | ⚠️ Testing |
 | agent_prototype | addons/ai_agent/agent_prototype.py | N/A | None | 🗑️ Deprecated | ❌ No |
 
 ---
@@ -381,7 +431,7 @@ tail -f logs/watchers.log
 OPENAI_API_KEY
 ANTHROPIC_API_KEY
 GOOGLE_API_KEY
-THRONOS_AI_MODE=all  # all | openai | anthropic | google
+THRONOS_AI_MODE=all  # all | openai | anthropic | google | ollama
 
 # PYTHEIA Worker
 PYTHEIA_BASE_URL=http://localhost:5000
@@ -394,6 +444,12 @@ BINANCE_API_SECRET
 BTC_RPC_URL
 BTC_RPC_USER
 BTC_RPC_PASSWORD
+
+# Code Assistant (self-hosted, no API key needed)
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_DEFAULT_MODEL=qwen2.5-coder:32b
+CODE_ASSISTANT_WORKSPACE=/app/workspace
+CODE_ASSISTANT_SESSIONS=/app/data/code_sessions
 
 # Feature Flags
 ENABLE_AUTONOMOUS_TRADING=false

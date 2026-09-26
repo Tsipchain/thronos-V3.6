@@ -151,7 +151,7 @@ TOOL_SCHEMAS: List[dict] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "staged": {"type": "boolean", "description": "Show only staged changes", "default": false},
+                    "staged": {"type": "boolean", "description": "Show only staged changes", "default": False},
                 },
             },
         },

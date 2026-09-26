@@ -15,6 +15,7 @@ from urllib.error import URLError
 logger = logging.getLogger(__name__)
 
 OLLAMA_BASE = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+OLLAMA_TOKEN = os.getenv("OLLAMA_PROXY_TOKEN", "")
 
 
 def _api_url(path: str) -> str:
@@ -25,12 +26,19 @@ def default_model() -> str:
     return os.getenv("OLLAMA_DEFAULT_MODEL", "qwen2.5-coder:32b")
 
 
+def _auth_headers() -> dict:
+    headers = {"Content-Type": "application/json"}
+    if OLLAMA_TOKEN:
+        headers["Authorization"] = f"Bearer {OLLAMA_TOKEN}"
+    return headers
+
+
 def _post_json(url: str, payload: dict, timeout: float = 120.0) -> dict:
     data = json.dumps(payload).encode("utf-8")
     req = urllib_request.Request(
         url,
         data=data,
-        headers={"Content-Type": "application/json"},
+        headers=_auth_headers(),
         method="POST",
     )
     with urllib_request.urlopen(req, timeout=timeout) as resp:
@@ -38,7 +46,7 @@ def _post_json(url: str, payload: dict, timeout: float = 120.0) -> dict:
 
 
 def _get_json(url: str, timeout: float = 10.0) -> dict:
-    req = urllib_request.Request(url, method="GET")
+    req = urllib_request.Request(url, headers=_auth_headers(), method="GET")
     with urllib_request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
 

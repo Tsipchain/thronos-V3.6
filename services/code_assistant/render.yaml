@@ -13,7 +13,9 @@ services:
     healthCheckPath: /health
     envVars:
       - key: OLLAMA_BASE_URL
-        sync: false  # Set manually — points to Railway GPU service
+        sync: false  # Set to https://api.thronoschain.org/ollama-bridge
+      - key: OLLAMA_PROXY_TOKEN
+        sync: false  # Must match OLLAMA_PROXY_TOKEN on Railway
       - key: OLLAMA_DEFAULT_MODEL
         value: qwen2.5-coder:32b
       - key: CODE_ASSISTANT_WORKSPACE

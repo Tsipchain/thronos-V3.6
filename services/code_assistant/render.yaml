@@ -1,0 +1,24 @@
+# Render Blueprint for thr-ai-core (ai.thronoschain.org)
+# This runs the standalone AI server, NOT the blockchain core.
+#
+# Deploy: connect this repo to Render, set root directory to repo root,
+# and use the start command below.
+
+services:
+  - type: web
+    name: thr-ai-core
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn services.code_assistant.ai_server:app --bind 0.0.0.0:$PORT --timeout 300 --workers 2
+    healthCheckPath: /health
+    envVars:
+      - key: OLLAMA_BASE_URL
+        sync: false  # Set manually — points to Railway GPU service
+      - key: OLLAMA_DEFAULT_MODEL
+        value: qwen2.5-coder:32b
+      - key: CODE_ASSISTANT_WORKSPACE
+        value: /app/workspace
+      - key: CODE_ASSISTANT_SESSIONS
+        value: /app/data/code_sessions
+      - key: PYTHON_VERSION
+        value: "3.11"

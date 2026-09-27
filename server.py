@@ -15578,8 +15578,6 @@ def api_admin_agents():
 
 @app.route("/api/admin/pytheia/state", methods=["GET"])
 def api_admin_pytheia_state():
-    if NODE_ROLE != "ai_core":
-        return jsonify({"error": "admin_only_on_ai_core"}), 404
     denied = require_admin()
     if denied:
         return denied
@@ -15597,8 +15595,6 @@ def api_admin_pytheia_state():
 
 @app.route("/api/admin/pytheia/control", methods=["POST"])
 def api_admin_pytheia_control():
-    if NODE_ROLE != "ai_core":
-        return jsonify({"error": "admin_only_on_ai_core"}), 404
     data = request.get_json(silent=True) or {}
     denied = require_admin(data)
     if denied:
@@ -16386,8 +16382,6 @@ def api_admin_ai_chat():
 
 @app.route("/api/admin/ai/voice_hook", methods=["POST"])
 def api_admin_ai_voice_hook():
-    if NODE_ROLE != "ai_core":
-        return jsonify({"error": "admin_only_on_ai_core"}), 404
     data = request.get_json(silent=True) or {}
     denied = require_admin(data)
     if denied:

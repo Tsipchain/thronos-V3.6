@@ -7113,8 +7113,12 @@ async function ensureWalletUnlocked(){
 function setWalletOpen(open){
     const statusEl = document.getElementById('walletStatus');
     if(!statusEl) return;
-    if(open) statusEl.classList.add('open');
-    else statusEl.classList.remove('open');
+    if(open){
+        statusEl.style.display = 'flex';
+        statusEl.classList.add('open');
+    } else {
+        statusEl.classList.remove('open');
+    }
 }
 
 function isWalletOpen(){
@@ -7394,13 +7398,11 @@ async function initializeWalletV1LegacyRepairUI() {
 }
 
 async function openHeaderWalletModal(){
-    // CRITICAL: Apply production mode constraints FIRST, before showing any content
-    // This ensures legacy UI is hidden before modal is rendered
-    await initializeWalletV1LegacyRepairUI();
+    try { await initializeWalletV1LegacyRepairUI(); } catch(e) { console.warn('[Wallet] init failed:', e.message); }
 
-    const addr = walletSession.getAddress();
-    const pin = walletSession.getPin();
-    const walletState = walletSession.getWalletState ? walletSession.getWalletState() : 'not_connected';
+    const addr = (window.walletSession && walletSession.getAddress) ? walletSession.getAddress() : null;
+    const pin = (window.walletSession && walletSession.getPin) ? walletSession.getPin() : null;
+    const walletState = (window.walletSession && walletSession.getWalletState) ? walletSession.getWalletState() : 'not_connected';
 
     // Check for recovery states that require immediate attention
     if (walletState === 'signing_key_unusable_legacy_format') {
@@ -7466,8 +7468,10 @@ async function openHeaderWalletModal(){
             const qrSuccess = document.getElementById('qrLoginSuccess');
             if (qrSuccess) qrSuccess.style.display = 'none';
         }
-        // Initialize ownership verification form (resolves canonical address from "loading...")
-        setTimeout(() => initializeOwnershipVerificationForm(), 50);
+        setTimeout(() => {
+            try { initializeOwnershipVerificationForm(); } catch(e) {}
+            if (typeof startQrWalletLogin === 'function') startQrWalletLogin();
+        }, 100);
     } else {
         showWalletContentSection();
         loadWalletBalances(true);
@@ -11503,21 +11507,21 @@ document.addEventListener('DOMContentLoaded', async () => {
 const originalOpenModal = window.openHeaderWalletModal;
 if (originalOpenModal) {
     window.openHeaderWalletModal = async function() {
-        // Sanitize stale state and apply production mode before original logic
-        const status = await fetchWalletStatusWithAddress();
-        if (status.ok) {
-            // Set global flag for admin mode check in switchWalletV1Mode
-            window.WALLET_V1_LEGACY_REPAIR_UI_ENABLED = status.legacy_repair_ui_enabled || false;
-            sanitizeWalletV1ProductionState(status);
-            applyWalletV1ProductionMode(status);
-        } else {
-            // Safe default when no address or fetch fails
-            const safeStatus = {legacy_repair_ui_enabled: false};
-            window.WALLET_V1_LEGACY_REPAIR_UI_ENABLED = false;
-            sanitizeWalletV1ProductionState(safeStatus);
-            applyWalletV1ProductionMode(safeStatus);
+        try {
+            const status = await fetchWalletStatusWithAddress();
+            if (status.ok) {
+                window.WALLET_V1_LEGACY_REPAIR_UI_ENABLED = status.legacy_repair_ui_enabled || false;
+                sanitizeWalletV1ProductionState(status);
+                applyWalletV1ProductionMode(status);
+            } else {
+                const safeStatus = {legacy_repair_ui_enabled: false};
+                window.WALLET_V1_LEGACY_REPAIR_UI_ENABLED = false;
+                sanitizeWalletV1ProductionState(safeStatus);
+                applyWalletV1ProductionMode(safeStatus);
+            }
+        } catch(e) {
+            console.warn('[WalletV1] Pre-open check failed, opening anyway:', e.message);
         }
-        // Call original
         return originalOpenModal.apply(this, arguments);
     };
 }

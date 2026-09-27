@@ -540,6 +540,38 @@ def get_provider_status() -> dict:
         thronos_entry["last_error"] = thronos_entry["invalid_models"][0].get("reason")
     status["thronos"] = thronos_entry
 
+    ollama_vars = ["OLLAMA_BASE_URL", "OLLAMA_DEFAULT_MODEL"]
+    ollama_url = (os.getenv("OLLAMA_BASE_URL") or "").strip()
+    ollama_configured = bool(ollama_url)
+    ollama_health_ok = False
+    ollama_health_err = "not_configured" if not ollama_url else None
+    if ollama_url:
+        try:
+            import urllib.request as _ureq
+            _r = _ureq.urlopen(ollama_url.rstrip("/") + "/api/tags", timeout=5)
+            ollama_health_ok = _r.status == 200
+            _r.close()
+        except Exception as _e:
+            ollama_health_err = str(_e)
+    ollama_entry = _ensure_diag(
+        _provider_status_entry(
+            ollama_configured and ollama_health_ok,
+            ollama_vars,
+            library_loaded=True,
+            last_error=None if ollama_health_ok else ollama_health_err,
+            extra={
+                "base_url": ollama_url,
+                "health_ok": ollama_health_ok,
+                "default_model": os.getenv("OLLAMA_DEFAULT_MODEL", "qwen2.5-coder:32b"),
+            },
+        )
+    )
+    ollama_entry["checked_sources"].append({"source": "health", "url": ollama_url, "ok": ollama_health_ok})
+    ollama_entry["invalid_models"] = invalid_by_provider.get("ollama", [])
+    if ollama_entry["invalid_models"] and not ollama_entry.get("last_error"):
+        ollama_entry["last_error"] = ollama_entry["invalid_models"][0].get("reason")
+    status["ollama"] = ollama_entry
+
     return status
 
 

@@ -6965,6 +6965,8 @@ def _allowed_providers() -> set[str]:
             allowed.add("gemini")
         if (os.getenv("THR_THAI_ENABLED") or "").strip().lower() in ("1", "true", "yes"):
             allowed.add("thrai")
+        if (os.getenv("OLLAMA_BASE_URL") or "").strip():
+            allowed.add("ollama")
         if not allowed - {"offline"}:
             allowed.add("openai")
         return allowed
@@ -6981,6 +6983,7 @@ def _is_provider_allowed(provider: str) -> bool:
         "google": "gemini",
         "local": "offline",
         "offline_corpus": "offline",
+        "ollama": "ollama",
         "thrai": "thrai",
         "thronos": "thrai",
     }

@@ -82,6 +82,7 @@
     <button class="legacy-tab" onclick="showLegacyTab('will')">📜 <span class="lang-el">Διαθήκη</span><span class="lang-en">Will</span></button>
     <button class="legacy-tab" onclick="showLegacyTab('claim')">🔑 <span class="lang-el">Αξίωση</span><span class="lang-en">Claim</span></button>
     <button class="legacy-tab" onclick="showLegacyTab('charity')">💜 <span class="lang-el">Φιλανθρωπία</span><span class="lang-en">Charity Pool</span></button>
+    <button class="legacy-tab" onclick="showLegacyTab('notary')">⚖️ <span class="lang-el">Συμβολαιογράφος</span><span class="lang-en">Notary</span></button>
 </div>
 
 <div id="legacyStatus"></div>
@@ -373,6 +374,58 @@
     </div>
 </div>
 
+<!-- ═══ NOTARY TAB ═══ -->
+<div id="panelNotary" class="legacy-panel">
+    <div class="legacy-card">
+        <h3>⚖️ <span class="lang-el">Σύστημα Συμβολαιογράφων</span><span class="lang-en">Notary Node System</span></h3>
+        <p>
+            <span class="lang-el">Οι εγγεγραμμένοι συμβολαιογράφοι παρέχουν ανθρώπινη επαλήθευση για τις ψηφιακές διαθήκες. Κάθε έγκριση καταγράφεται on-chain για πλήρη λογοδοσία, χωρίς να χαλάει ο αποκεντρωμένος χαρακτήρας του δικτύου.</span>
+            <span class="lang-en">Registered notaries provide human verification for digital wills. Every approval is logged on-chain for full accountability, without breaking the decentralized character of the network.</span>
+        </p>
+    </div>
+    <div class="legacy-card">
+        <h3>📊 <span class="lang-el">Στατιστικά Συμβολαιογράφων</span><span class="lang-en">Notary Statistics</span></h3>
+        <div style="display:flex; flex-wrap:wrap; gap:8px;">
+            <div class="legacy-stat"><div class="val" id="notaryTotal">0</div><div class="lbl"><span class="lang-el">Συμβολαιογράφοι</span><span class="lang-en">Notaries</span></div></div>
+            <div class="legacy-stat"><div class="val" id="notaryActive">0</div><div class="lbl"><span class="lang-el">Ενεργοί</span><span class="lang-en">Active</span></div></div>
+            <div class="legacy-stat"><div class="val" id="notaryApprovals">0</div><div class="lbl"><span class="lang-el">Εγκρίσεις</span><span class="lang-en">Approvals</span></div></div>
+            <div class="legacy-stat"><div class="val" id="notaryWills">0</div><div class="lbl"><span class="lang-el">Διαθήκες</span><span class="lang-en">Wills Verified</span></div></div>
+        </div>
+    </div>
+    <div class="legacy-card">
+        <h3>📋 <span class="lang-el">Εγγεγραμμένοι Συμβολαιογράφοι</span><span class="lang-en">Registered Notaries</span></h3>
+        <div id="notaryList" style="color:#888; font-size:0.9em;"><span class="lang-el">Φόρτωση...</span><span class="lang-en">Loading...</span></div>
+    </div>
+    <div class="legacy-card">
+        <h3>🔐 <span class="lang-el">Έγκριση Διαθήκης</span><span class="lang-en">Approve Will</span></h3>
+        <p style="color:#888; font-size:0.85em;">
+            <span class="lang-el">Ως εγγεγραμμένος συμβολαιογράφος, μπορείς να εγκρίνεις τη σφράγιση ή το άνοιγμα μιας διαθήκης.</span>
+            <span class="lang-en">As a registered notary, you can approve the sealing or opening of a will.</span>
+        </p>
+        <div class="legacy-form">
+            <label><span class="lang-el">ID Διαθήκης</span><span class="lang-en">Will ID</span></label>
+            <input id="notaryWillId" placeholder="will_...">
+            <label><span class="lang-el">Ενέργεια</span><span class="lang-en">Action</span></label>
+            <select id="notaryAction">
+                <option value="seal">🔒 Seal</option>
+                <option value="open">🔓 Open</option>
+            </select>
+            <label><span class="lang-el">Σημειώσεις</span><span class="lang-en">Notes</span></label>
+            <textarea id="notaryNotes" rows="2" placeholder="Optional notes..."></textarea>
+            <button class="legacy-btn" onclick="approveWillAsNotary()" style="margin-top:12px; width:100%;">⚖️ <span class="lang-el">Έγκριση</span><span class="lang-en">Approve</span></button>
+        </div>
+    </div>
+    <div class="legacy-card">
+        <h3>🔍 <span class="lang-el">Έλεγχος Εγκρίσεων Διαθήκης</span><span class="lang-en">Check Will Approvals</span></h3>
+        <div class="legacy-form">
+            <label><span class="lang-el">ID Διαθήκης</span><span class="lang-en">Will ID</span></label>
+            <input id="checkWillId" placeholder="will_...">
+            <button class="legacy-btn" onclick="checkWillApprovals()" style="margin-top:8px;">🔍 <span class="lang-el">Έλεγχος</span><span class="lang-en">Check</span></button>
+        </div>
+        <div id="willApprovalResult" style="margin-top:12px;"></div>
+    </div>
+</div>
+
 </div><!-- /legacyMain -->
 </div><!-- /legacy-page -->
 {% endblock %}
@@ -395,11 +448,12 @@ function setStatus(msg, isError) {
 function showLegacyTab(tab) {
     document.querySelectorAll('.legacy-tab').forEach(t => t.classList.remove('active'));
     document.querySelectorAll('.legacy-panel').forEach(p => p.classList.remove('active'));
-    const panels = {overview:'panelOverview', assets:'panelAssets', heirs:'panelHeirs', will:'panelWill', claim:'panelClaim', charity:'panelCharity'};
+    const panels = {overview:'panelOverview', assets:'panelAssets', heirs:'panelHeirs', will:'panelWill', claim:'panelClaim', charity:'panelCharity', notary:'panelNotary'};
     const panel = document.getElementById(panels[tab]);
     if (panel) panel.classList.add('active');
     event.target.classList.add('active');
     if (tab === 'charity') loadCharityStats();
+    if (tab === 'notary') loadNotaries();
 }
 
 async function apiFetch(path, opts) {
@@ -792,6 +846,104 @@ async function loadCharityStats() {
             document.getElementById('poolSubscriptions').textContent = estateData.active_subscriptions || estateData.total_estates || 0;
         }
     } catch(e) {}
+}
+
+// ─── Notary System ────────────────────────────────────
+async function loadNotaries() {
+    try {
+        const [listData, statsData] = await Promise.all([
+            apiFetch('/notary/list'),
+            apiFetch('/notary/stats')
+        ]);
+        if (statsData.total_notaries !== undefined) {
+            document.getElementById('notaryTotal').textContent = statsData.total_notaries || 0;
+            document.getElementById('notaryActive').textContent = statsData.active_notaries || 0;
+            document.getElementById('notaryApprovals').textContent = statsData.total_approvals || 0;
+            document.getElementById('notaryWills').textContent = statsData.unique_wills || 0;
+        }
+        const listEl = document.getElementById('notaryList');
+        const notaries = listData.notaries || [];
+        if (!notaries.length) {
+            listEl.innerHTML = '<p style="color:#888;">No notaries registered yet.</p>';
+            return;
+        }
+        let html = '<table style="width:100%; border-collapse:collapse; font-size:0.85em;">';
+        html += '<tr style="border-bottom:1px solid #333;"><th style="text-align:left; padding:6px;">Name</th><th style="text-align:left; padding:6px;">License</th><th style="text-align:left; padding:6px;">Jurisdiction</th><th style="text-align:left; padding:6px;">Status</th></tr>';
+        notaries.forEach(n => {
+            const statusColor = n.status === 'active' ? '#00c853' : '#888';
+            html += `<tr style="border-bottom:1px solid #222;">
+                <td style="padding:6px;">${n.name || 'Unknown'}</td>
+                <td style="padding:6px; font-family:monospace;">${(n.license_id || '').slice(0, 12)}...</td>
+                <td style="padding:6px;">${n.jurisdiction || '—'}</td>
+                <td style="padding:6px; color:${statusColor};">● ${n.status || 'unknown'}</td>
+            </tr>`;
+        });
+        html += '</table>';
+        listEl.innerHTML = html;
+    } catch(e) {
+        document.getElementById('notaryList').innerHTML = '<p style="color:#f44;">Failed to load notaries.</p>';
+    }
+}
+
+async function approveWillAsNotary() {
+    const willId = document.getElementById('notaryWillId').value.trim();
+    const action = document.getElementById('notaryAction').value;
+    const notes = document.getElementById('notaryNotes').value.trim();
+    if (!willId) { alert('Please enter a Will ID.'); return; }
+    const addr = localStorage.getItem('thr_address') || localStorage.getItem('thrWalletAddress');
+    if (!addr) { alert('Connect your wallet first.'); return; }
+    try {
+        const data = await apiFetch('/notary/approve', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({
+                will_id: willId,
+                notary_address: addr,
+                action: action,
+                notes: notes
+            })
+        });
+        if (data.status === 'approved') {
+            alert('✅ Will ' + action + ' approved! TX: ' + (data.approval_hash || '').slice(0,16) + '...');
+            document.getElementById('notaryWillId').value = '';
+            document.getElementById('notaryNotes').value = '';
+            loadNotaries();
+        } else {
+            alert('❌ ' + (data.error || 'Approval failed.'));
+        }
+    } catch(e) {
+        alert('Error: ' + e.message);
+    }
+}
+
+async function checkWillApprovals() {
+    const willId = document.getElementById('checkWillId').value.trim();
+    if (!willId) { alert('Please enter a Will ID.'); return; }
+    const resultEl = document.getElementById('willApprovalResult');
+    resultEl.innerHTML = '<p style="color:#888;">Loading...</p>';
+    try {
+        const data = await apiFetch('/notary/approvals/' + encodeURIComponent(willId));
+        const approvals = data.approvals || [];
+        if (!approvals.length) {
+            resultEl.innerHTML = '<p style="color:#ff9800;">No notary approvals found for this will.</p>';
+            return;
+        }
+        let html = '<div style="font-size:0.85em;">';
+        html += '<p style="color:#00c853; margin-bottom:8px;">' + approvals.length + ' approval(s) found:</p>';
+        approvals.forEach(a => {
+            html += `<div style="background:#1a1a1a; border:1px solid #333; border-radius:8px; padding:10px; margin-bottom:8px;">
+                <div><strong>${a.action === 'open' ? '🔓' : '🔒'} ${(a.action || '').toUpperCase()}</strong></div>
+                <div style="color:#888; font-size:0.85em;">Notary: ${(a.notary_address || '').slice(0,14)}...</div>
+                <div style="color:#888; font-size:0.85em;">Time: ${a.timestamp || '—'}</div>
+                <div style="color:#888; font-size:0.85em;">Hash: <span style="font-family:monospace;">${(a.approval_hash || '').slice(0,20)}...</span></div>
+                ${a.notes ? '<div style="color:#aaa; font-size:0.85em; margin-top:4px;">📝 ' + a.notes + '</div>' : ''}
+            </div>`;
+        });
+        html += '</div>';
+        resultEl.innerHTML = html;
+    } catch(e) {
+        resultEl.innerHTML = '<p style="color:#f44;">Failed to load approvals.</p>';
+    }
 }
 
 // ─── Boot ──────────────────────────────────────────

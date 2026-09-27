@@ -6552,6 +6552,73 @@ def _is_live_session_access_allowed(access_type: str, enrollment: dict | None, l
         return False, "Pledge required"
     return False, "Unsupported access type"
 
+
+def _mint_attendance_receipt(course_id: str, session_id: str,
+                             student_thr: str, att_hash: str,
+                             timestamp: str) -> dict | None:
+    """Mint a blockchain attendance receipt for a live session join."""
+    try:
+        chain = get_chain()
+        if not chain:
+            return None
+        tx = {
+            "from": "SYSTEM_ATTENDANCE",
+            "to": student_thr,
+            "amount": 0,
+            "token": "THR",
+            "type": "attendance_receipt",
+            "metadata": {
+                "course_id": course_id,
+                "session_id": session_id,
+                "student": student_thr,
+                "attestation_hash": att_hash,
+                "timestamp": timestamp,
+                "source": "l2e_live_session"
+            }
+        }
+        result = chain.add_transaction(tx)
+        if result:
+            logger = logging.getLogger("thronos")
+            logger.info(f"[L2E] Attendance receipt minted: {student_thr[:12]}... "
+                         f"course={course_id} session={session_id}")
+        return result if isinstance(result, dict) else {"tx_id": str(result)}
+    except Exception as e:
+        logging.getLogger("thronos").warning(f"[L2E] Attendance receipt error: {e}")
+        return None
+
+
+# ─────────────────────────────────────────────────────────────
+# NOTARY NODE SYSTEM — Human verification layer for digital wills
+# ─────────────────────────────────────────────────────────────
+#
+# Notary nodes are registered legal professionals who provide
+# human verification for will operations. They add a layer of
+# accountability without breaking the decentralized character:
+#   - Will sealing requires at least 1 notary signature
+#   - Will opening requires notary + heir majority
+#   - Notaries are registered with their THR address + credentials
+#   - Each notary action is logged on-chain for auditability
+
+NOTARY_REGISTRY_FILE = os.path.join(DATA_DIR, "notary_registry.json")
+NOTARY_APPROVALS_FILE = os.path.join(DATA_DIR, "notary_approvals.json")
+
+
+def load_notary_registry() -> dict:
+    return load_json(NOTARY_REGISTRY_FILE, {})
+
+
+def save_notary_registry(registry: dict) -> None:
+    save_json(NOTARY_REGISTRY_FILE, registry)
+
+
+def load_notary_approvals() -> dict:
+    return load_json(NOTARY_APPROVALS_FILE, {})
+
+
+def save_notary_approvals(approvals: dict) -> None:
+    save_json(NOTARY_APPROVALS_FILE, approvals)
+
+
 # -------------------------------------------------------------------------
 # Peer registry and broadcast helpers
 #
@@ -22057,14 +22124,16 @@ def api_can_open_smart_contract_will(will_id: str):
 
     GET /api/legacy/will/<will_id>/can-open
 
-    Checks three conditions:
+    Checks four conditions:
     1. Seal is intact (no tampering)
     2. Time-lock has expired (after death + grace period)
     3. Required heirs have signed (majority rule)
+    4. At least one notary has approved the opening
 
     Returns: {
         "can_open": true|false,
-        "reason": "Will can be opened" or error message
+        "reason": "Will can be opened" or error message,
+        "notary_approved": true|false
     }
     """
     try:
@@ -22073,9 +22142,19 @@ def api_can_open_smart_contract_will(will_id: str):
 
         can_open, reason = _will_manager.can_open_will(will_id)
 
+        approvals = load_notary_approvals()
+        will_approvals = approvals.get(will_id, [])
+        notary_open_approved = any(a.get("action") == "open" for a in will_approvals)
+
+        if can_open and not notary_open_approved:
+            can_open = False
+            reason = "Notary approval required for will opening"
+
         return jsonify(
             can_open=can_open,
-            reason=reason
+            reason=reason,
+            notary_approved=notary_open_approved,
+            notary_approvals=len(will_approvals)
         ), (200 if can_open else 403)
 
     except Exception as e:
@@ -22491,6 +22570,249 @@ def api_pool_stats(pool_id: str = None):
     except Exception as e:
         logger = logging.getLogger("thronos")
         logger.error(f"Error getting pool stats: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+# NOTARY NODE SYSTEM — Human Verification for Digital Wills
+# ────────────────────────────────────────────────────────────
+# Registered legal professionals provide human verification for will
+# operations, adding accountability without breaking decentralization.
+# Notary nodes: register, approve will sealing/opening, on-chain audit.
+
+@app.route("/api/legacy/notary/register", methods=["POST"])
+def api_register_notary():
+    """
+    Register a notary node (legal professional).
+
+    POST /api/legacy/notary/register
+    Body: {
+        "address": "THR...",
+        "name": "...",
+        "license_id": "...",
+        "jurisdiction": "GR",
+        "auth_secret": "..."
+    }
+    """
+    try:
+        data = request.get_json() or {}
+        address = (data.get("address") or "").strip()
+        name = (data.get("name") or "").strip()
+        license_id = (data.get("license_id") or "").strip()
+        jurisdiction = (data.get("jurisdiction") or "").strip()
+        auth_secret = (data.get("auth_secret") or "").strip()
+
+        if not address or not name or not license_id:
+            return jsonify(status="error", message="address, name, license_id required"), 400
+
+        if not address.startswith("THR") or len(address) < 20:
+            return jsonify(status="error", message="Invalid THR address"), 400
+
+        ok, _, err = validate_effective_auth(address, auth_secret, data.get("passphrase", ""))
+        if not ok:
+            return jsonify(status="error", message=f"Auth failed: {err}"), 403
+
+        registry = load_notary_registry()
+        if address in registry:
+            return jsonify(status="error", message="Notary already registered"), 409
+
+        import hashlib as _nh
+        notary_hash = _nh.sha256(f"{address}|{license_id}|{jurisdiction}".encode()).hexdigest()
+
+        registry[address] = {
+            "name": name,
+            "license_id": license_id,
+            "jurisdiction": jurisdiction,
+            "notary_hash": notary_hash,
+            "registered_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+            "active": True,
+            "approvals_count": 0
+        }
+        save_notary_registry(registry)
+
+        logger = logging.getLogger("thronos")
+        logger.info(f"[Notary] Registered: {name} ({address[:12]}...) jurisdiction={jurisdiction}")
+
+        return jsonify(
+            status="registered",
+            notary_address=address,
+            notary_hash=notary_hash,
+            message="Notary node registered successfully"
+        ), 201
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error registering notary: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/legacy/notary/list", methods=["GET"])
+def api_list_notaries():
+    """List all registered notary nodes."""
+    try:
+        registry = load_notary_registry()
+        notaries = []
+        for addr, info in registry.items():
+            if info.get("active", True):
+                notaries.append({
+                    "address": addr,
+                    "name": info.get("name", ""),
+                    "jurisdiction": info.get("jurisdiction", ""),
+                    "approvals_count": info.get("approvals_count", 0),
+                    "registered_at": info.get("registered_at", "")
+                })
+        return jsonify(status="success", notaries=notaries, total=len(notaries)), 200
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error listing notaries: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/legacy/notary/approve", methods=["POST"])
+def api_notary_approve_will():
+    """
+    Notary approves a will operation (sealing or opening).
+
+    POST /api/legacy/notary/approve
+    Body: {
+        "notary_address": "THR...",
+        "will_id": "will_...",
+        "action": "seal" | "open",
+        "auth_secret": "...",
+        "notes": "..."
+    }
+
+    Adds notary signature to the will's approval chain.
+    Logged on-chain for auditability.
+    """
+    try:
+        data = request.get_json() or {}
+        notary_address = (data.get("notary_address") or "").strip()
+        will_id = (data.get("will_id") or "").strip()
+        action = (data.get("action") or "").strip().lower()
+        auth_secret = (data.get("auth_secret") or "").strip()
+        notes = (data.get("notes") or "").strip()
+
+        if not notary_address or not will_id or action not in ("seal", "open"):
+            return jsonify(status="error", message="notary_address, will_id, action (seal/open) required"), 400
+
+        registry = load_notary_registry()
+        notary = registry.get(notary_address)
+        if not notary or not notary.get("active"):
+            return jsonify(status="error", message="Not a registered notary"), 403
+
+        ok, _, err = validate_effective_auth(notary_address, auth_secret, data.get("passphrase", ""))
+        if not ok:
+            return jsonify(status="error", message=f"Notary auth failed: {err}"), 403
+
+        if _will_manager:
+            will = _will_manager.wills.get(will_id)
+            if not will:
+                return jsonify(status="error", message="Will not found"), 404
+
+        import hashlib as _nh2
+        approval_ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+        approval_data = f"{notary_address}|{will_id}|{action}|{approval_ts}"
+        approval_hash = _nh2.sha256(approval_data.encode()).hexdigest()
+
+        approvals = load_notary_approvals()
+        will_approvals = approvals.setdefault(will_id, [])
+
+        for existing in will_approvals:
+            if existing.get("notary_address") == notary_address and existing.get("action") == action:
+                return jsonify(status="error", message="Notary already approved this action"), 409
+
+        will_approvals.append({
+            "notary_address": notary_address,
+            "notary_name": notary.get("name", ""),
+            "action": action,
+            "approval_hash": approval_hash,
+            "notes": notes,
+            "approved_at": approval_ts
+        })
+        save_notary_approvals(approvals)
+
+        notary["approvals_count"] = notary.get("approvals_count", 0) + 1
+        save_notary_registry(registry)
+
+        # Mint on-chain audit record
+        try:
+            chain = get_chain()
+            if chain:
+                chain.add_transaction({
+                    "from": notary_address,
+                    "to": "SYSTEM_NOTARY",
+                    "amount": 0,
+                    "token": "THR",
+                    "type": "notary_approval",
+                    "metadata": {
+                        "will_id": will_id,
+                        "action": action,
+                        "approval_hash": approval_hash,
+                        "notary_name": notary.get("name", ""),
+                        "jurisdiction": notary.get("jurisdiction", "")
+                    }
+                })
+        except Exception:
+            pass
+
+        logger = logging.getLogger("thronos")
+        logger.info(f"[Notary] {notary.get('name')} approved {action} for will {will_id}")
+
+        return jsonify(
+            status="approved",
+            will_id=will_id,
+            action=action,
+            approval_hash=approval_hash,
+            notary=notary.get("name", ""),
+            total_approvals=len(will_approvals),
+            message=f"Notary approved will {action}"
+        ), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error in notary approval: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/legacy/notary/approvals/<will_id>", methods=["GET"])
+def api_get_will_notary_approvals(will_id: str):
+    """Get all notary approvals for a specific will."""
+    try:
+        approvals = load_notary_approvals()
+        will_approvals = approvals.get(will_id, [])
+        has_seal = any(a.get("action") == "seal" for a in will_approvals)
+        has_open = any(a.get("action") == "open" for a in will_approvals)
+        return jsonify(
+            will_id=will_id,
+            approvals=will_approvals,
+            total=len(will_approvals),
+            has_seal_approval=has_seal,
+            has_open_approval=has_open
+        ), 200
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error getting notary approvals: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/legacy/notary/stats", methods=["GET"])
+def api_notary_stats():
+    """Get notary system statistics."""
+    try:
+        registry = load_notary_registry()
+        approvals = load_notary_approvals()
+        active_notaries = sum(1 for n in registry.values() if n.get("active"))
+        total_approvals = sum(len(a) for a in approvals.values())
+        wills_with_approvals = len(approvals)
+        return jsonify(
+            total_notaries=len(registry),
+            active_notaries=active_notaries,
+            total_approvals=total_approvals,
+            wills_with_approvals=wills_with_approvals
+        ), 200
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error getting notary stats: {e}")
         return jsonify(status="error", error=str(e)), 500
 
 
@@ -37965,13 +38287,39 @@ def api_v1_join_live_session(course_id: str, session_id: str):
         if session.get("max_seats", 0) > 0 and len(attendance) >= session["max_seats"]:
             return jsonify(status="error", message="No seats available"), 409
         attendance.append(learner_id)
-        session["last_joined_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+        join_ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+        session["last_joined_at"] = join_ts
         session["attendance_count"] = len(attendance)
         save_live_sessions(sessions)
+
+        # Mint blockchain attendance receipt
+        attendance_receipt_hash = None
+        if student_thr and student_thr.startswith("THR"):
+            try:
+                import hashlib as _att_hashlib
+                receipt_data = f"{course_id}|{session_id}|{student_thr}|{join_ts}"
+                att_hash = _att_hashlib.sha256(receipt_data.encode()).hexdigest()
+                chain_receipt = _mint_attendance_receipt(
+                    course_id=course_id,
+                    session_id=session_id,
+                    student_thr=student_thr,
+                    att_hash=att_hash,
+                    timestamp=join_ts
+                )
+                attendance_receipt_hash = chain_receipt.get("tx_id") if chain_receipt else None
+            except Exception as att_err:
+                logging.getLogger("thronos").warning(
+                    f"[L2E] Attendance receipt mint failed: {att_err}"
+                )
     else:
         return jsonify(status="error", message="Duplicate join"), 409
 
-    return jsonify(status="success", join_url=session.get("stream_url"), session=session), 200
+    return jsonify(
+        status="success",
+        join_url=session.get("stream_url"),
+        session=session,
+        attendance_receipt=attendance_receipt_hash
+    ), 200
 
 
 @app.route("/api/v1/courses/<string:course_id>/live_sessions/<string:session_id>", methods=["PATCH"])

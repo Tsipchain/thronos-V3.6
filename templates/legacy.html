@@ -1,0 +1,514 @@
+{% extends "base.html" %}
+{% block title %}Digital Legacy — Thronos{% endblock %}
+{% block content %}
+<style>
+.legacy-page { max-width:960px; margin:30px auto; padding:0 16px; font-family:'Segoe UI',sans-serif; color:#e0e0e0; }
+.legacy-hero { text-align:center; padding:40px 20px; background:linear-gradient(135deg,#0a0a2e,#1a0a3e); border:1px solid #7c5cbf; border-radius:16px; margin-bottom:30px; }
+.legacy-hero h1 { font-size:2em; color:#b08cf8; margin:0 0 10px; }
+.legacy-hero p { color:#aaa; font-size:1.05em; line-height:1.6; max-width:700px; margin:0 auto; }
+.legacy-tabs { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:20px; }
+.legacy-tab { padding:10px 18px; background:#111; border:1px solid #333; border-radius:8px; color:#aaa; cursor:pointer; font-weight:600; font-size:0.9em; transition:all 0.15s; }
+.legacy-tab:hover { border-color:#7c5cbf; color:#b08cf8; }
+.legacy-tab.active { background:#1a0a3e; border-color:#b08cf8; color:#fff; }
+.legacy-panel { display:none; }
+.legacy-panel.active { display:block; }
+.legacy-card { background:#0d0d1a; border:1px solid #222; border-radius:12px; padding:20px; margin-bottom:16px; }
+.legacy-card h3 { color:#b08cf8; margin:0 0 12px; font-size:1.1em; }
+.legacy-card p { color:#999; font-size:0.9em; line-height:1.5; margin:0 0 12px; }
+.legacy-form label { display:block; color:#b08cf8; font-size:0.85em; margin:10px 0 4px; font-weight:600; }
+.legacy-form input, .legacy-form select, .legacy-form textarea { width:100%; padding:10px; background:#000; border:1px solid #333; border-radius:6px; color:#e0e0e0; font-size:0.9em; box-sizing:border-box; }
+.legacy-form input:focus, .legacy-form select:focus { border-color:#7c5cbf; outline:none; }
+.legacy-btn { padding:12px 24px; border:1px solid #7c5cbf; background:linear-gradient(135deg,#4a2a8a,#7c5cbf); color:#fff; border-radius:8px; cursor:pointer; font-weight:bold; font-size:0.95em; transition:all 0.15s; }
+.legacy-btn:hover { background:linear-gradient(135deg,#5a3a9a,#9c7cdf); }
+.legacy-btn:disabled { opacity:0.5; cursor:not-allowed; }
+.legacy-btn-danger { background:linear-gradient(135deg,#8a2a2a,#bf5c5c); border-color:#bf5c5c; }
+.legacy-btn-success { background:linear-gradient(135deg,#2a8a2a,#5cbf5c); border-color:#5cbf5c; }
+.legacy-stat { display:inline-block; text-align:center; padding:12px 20px; background:#111; border:1px solid #222; border-radius:8px; margin:4px; min-width:120px; }
+.legacy-stat .val { font-size:1.6em; color:#b08cf8; font-weight:bold; }
+.legacy-stat .lbl { font-size:0.75em; color:#888; margin-top:2px; }
+.legacy-table { width:100%; border-collapse:collapse; font-size:0.85em; }
+.legacy-table th { text-align:left; padding:8px; color:#b08cf8; border-bottom:1px solid #333; }
+.legacy-table td { padding:8px; border-bottom:1px solid #1a1a2e; color:#ccc; }
+.legacy-badge { display:inline-block; padding:2px 8px; border-radius:4px; font-size:0.75em; font-weight:600; }
+.badge-active { background:rgba(0,255,102,0.15); color:#0f6; border:1px solid rgba(0,255,102,0.3); }
+.badge-pending { background:rgba(255,200,0,0.15); color:#fc0; border:1px solid rgba(255,200,0,0.3); }
+.badge-sealed { background:rgba(120,100,255,0.15); color:#88f; border:1px solid rgba(120,100,255,0.3); }
+.legacy-connect-msg { text-align:center; padding:40px; color:#888; }
+.legacy-connect-msg button { margin-top:16px; }
+.asset-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:12px; }
+.asset-card { background:#0a0a1a; border:1px solid #222; border-radius:10px; padding:14px; }
+.asset-card .asset-type { font-size:0.75em; color:#7c5cbf; text-transform:uppercase; letter-spacing:1px; }
+.asset-card .asset-name { font-size:1em; color:#e0e0e0; margin:4px 0; font-weight:600; }
+.asset-card .asset-val { color:#0f6; font-size:0.9em; }
+.heir-row { display:flex; align-items:center; justify-content:space-between; padding:10px; background:#0a0a1a; border:1px solid #1a1a2e; border-radius:8px; margin-bottom:8px; }
+.heir-addr { font-family:monospace; color:#b08cf8; font-size:0.85em; }
+.heir-share { color:#0f6; font-weight:bold; }
+#legacyStatus { font-size:0.85em; color:#0f6; margin:8px 0; min-height:20px; }
+</style>
+
+<div class="legacy-page">
+
+<div class="legacy-hero">
+    <h1>🏛️ <span class="lang-el">Ψηφιακή Κληρονομιά</span><span class="lang-en">Digital Legacy</span></h1>
+    <p>
+        <span class="lang-el">Προστάτεψε τα ψηφιακά σου περιουσιακά στοιχεία. Οι κληρονόμοι σου θα τα κληρονομήσουν με απόλυτη ασφάλεια — BTC, ETH, BNB, THR, USDT, USDC και κάθε τι αξίας.</span>
+        <span class="lang-en">Protect your digital assets forever. Your heirs will inherit them with absolute security — BTC, ETH, BNB, THR, USDT, USDC and everything of value.</span>
+    </p>
+</div>
+
+<div id="legacyConnectMsg" class="legacy-connect-msg" style="display:none;">
+    <p>🔒 <span class="lang-el">Σύνδεσε το wallet σου για να δημιουργήσεις την ψηφιακή κληρονομιά σου</span><span class="lang-en">Connect your wallet to create your digital legacy</span></p>
+    <button class="legacy-btn" onclick="openHeaderWalletModal()">💼 <span class="lang-el">Σύνδεση Wallet</span><span class="lang-en">Connect Wallet</span></button>
+</div>
+
+<div id="legacyMain" style="display:none;">
+
+<div class="legacy-tabs">
+    <button class="legacy-tab active" onclick="showLegacyTab('overview')">📊 <span class="lang-el">Επισκόπηση</span><span class="lang-en">Overview</span></button>
+    <button class="legacy-tab" onclick="showLegacyTab('assets')">💰 <span class="lang-el">Περιουσιακά</span><span class="lang-en">Assets</span></button>
+    <button class="legacy-tab" onclick="showLegacyTab('heirs')">👥 <span class="lang-el">Κληρονόμοι</span><span class="lang-en">Heirs</span></button>
+    <button class="legacy-tab" onclick="showLegacyTab('will')">📜 <span class="lang-el">Διαθήκη</span><span class="lang-en">Will</span></button>
+    <button class="legacy-tab" onclick="showLegacyTab('claim')">🔑 <span class="lang-el">Αξίωση</span><span class="lang-en">Claim</span></button>
+</div>
+
+<div id="legacyStatus"></div>
+
+<!-- ═══ OVERVIEW TAB ═══ -->
+<div id="panelOverview" class="legacy-panel active">
+    <div id="estateExists" style="display:none;">
+        <div style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:20px;" id="estateStats"></div>
+        <div class="legacy-card">
+            <h3>📋 <span class="lang-el">Η Κληρονομιά μου</span><span class="lang-en">My Estate</span></h3>
+            <div id="estateInfo"></div>
+        </div>
+    </div>
+    <div id="estateCreate" style="display:none;">
+        <div class="legacy-card">
+            <h3>🏛️ <span class="lang-el">Δημιουργία Ψηφιακής Κληρονομιάς</span><span class="lang-en">Create Digital Legacy</span></h3>
+            <p><span class="lang-el">Δημιούργησε την ψηφιακή κληρονομιά σου για να προστατεύσεις τα περιουσιακά σου στοιχεία και να ορίσεις κληρονόμους.</span><span class="lang-en">Create your digital legacy to protect your assets and designate heirs.</span></p>
+            <div class="legacy-form">
+                <label><span class="lang-el">Πλήρες Όνομα (προαιρετικό)</span><span class="lang-en">Full Name (optional)</span></label>
+                <input type="text" id="estateName" placeholder="Your full name" />
+                <div style="margin-top:16px;">
+                    <button class="legacy-btn" onclick="createEstate()">🏛️ <span class="lang-el">Δημιουργία Κληρονομιάς</span><span class="lang-en">Create Legacy</span></button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ═══ ASSETS TAB ═══ -->
+<div id="panelAssets" class="legacy-panel">
+    <div class="legacy-card">
+        <h3>➕ <span class="lang-el">Προσθήκη Περιουσιακού</span><span class="lang-en">Add Asset</span></h3>
+        <p><span class="lang-el">Κρυπτογράφησε και αποθήκευσε τα κλειδιά, κωδικούς και πληροφορίες πρόσβασης.</span><span class="lang-en">Encrypt and store your keys, passwords and access information.</span></p>
+        <div class="legacy-form">
+            <label><span class="lang-el">Τύπος</span><span class="lang-en">Asset Type</span></label>
+            <select id="assetType">
+                <option value="cryptocurrency">💰 Cryptocurrency (BTC, ETH, BNB, THR, USDT, USDC)</option>
+                <option value="exchange">🏦 Exchange Account (Binance, Kraken, etc.)</option>
+                <option value="cold_storage">🔐 Cold Storage (Hardware Wallet, USB)</option>
+                <option value="nft">🎨 NFT Collection</option>
+                <option value="bank">🏛️ Bank Account</option>
+                <option value="real_estate">🏠 Real Estate</option>
+                <option value="domain">🌐 Domain Names</option>
+                <option value="business">💼 Business Equity</option>
+                <option value="metals">🥇 Precious Metals</option>
+                <option value="other">📦 Other</option>
+            </select>
+            <label><span class="lang-el">Όνομα</span><span class="lang-en">Name</span></label>
+            <input type="text" id="assetName" placeholder="e.g. My Bitcoin Cold Wallet" />
+            <label><span class="lang-el">Περιγραφή / Οδηγίες Πρόσβασης</span><span class="lang-en">Description / Access Instructions</span></label>
+            <textarea id="assetDesc" rows="3" placeholder="Location, how to access, recovery steps..."></textarea>
+            <label><span class="lang-el">Κρυπτογραφημένα Κλειδιά (Private Keys / Passwords)</span><span class="lang-en">Encrypted Keys (Private Keys / Passwords)</span></label>
+            <textarea id="assetKeys" rows="2" placeholder="Encrypted private keys or passwords (AES-256)"></textarea>
+            <label><span class="lang-el">Recovery Codes (προαιρετικό)</span><span class="lang-en">Recovery Codes (optional)</span></label>
+            <textarea id="assetRecovery" rows="2" placeholder="Seed phrases, 2FA backup codes..."></textarea>
+            <label><span class="lang-el">Εκτιμώμενη Αξία (USD)</span><span class="lang-en">Estimated Value (USD)</span></label>
+            <input type="number" id="assetValue" placeholder="0.00" step="0.01" />
+            <div style="margin-top:16px;">
+                <button class="legacy-btn" onclick="addAsset()">💰 <span class="lang-el">Προσθήκη</span><span class="lang-en">Add Asset</span></button>
+            </div>
+        </div>
+    </div>
+    <div class="legacy-card">
+        <h3>📦 <span class="lang-el">Τα Περιουσιακά μου</span><span class="lang-en">My Assets</span></h3>
+        <div id="assetsList" class="asset-grid"></div>
+    </div>
+</div>
+
+<!-- ═══ HEIRS TAB ═══ -->
+<div id="panelHeirs" class="legacy-panel">
+    <div class="legacy-card">
+        <h3>➕ <span class="lang-el">Προσθήκη Κληρονόμου</span><span class="lang-en">Add Heir</span></h3>
+        <p><span class="lang-el">Πρόσθεσε κληρονόμο με THR wallet address και μερίδιο κληρονομιάς.</span><span class="lang-en">Add an heir with their THR wallet address and inheritance share.</span></p>
+        <div class="legacy-form">
+            <label><span class="lang-el">THR Address Κληρονόμου</span><span class="lang-en">Heir THR Address</span></label>
+            <input type="text" id="heirAddress" placeholder="THR..." />
+            <label><span class="lang-el">Μερίδιο (%)</span><span class="lang-en">Share (%)</span></label>
+            <input type="number" id="heirShare" placeholder="50" min="1" max="100" step="1" />
+            <label>Email (<span class="lang-el">προαιρετικό</span><span class="lang-en">optional</span>)</label>
+            <input type="email" id="heirEmail" placeholder="heir@email.com" />
+            <label><span class="lang-el">Τηλέφωνο (προαιρετικό)</span><span class="lang-en">Phone (optional)</span></label>
+            <input type="tel" id="heirPhone" placeholder="+30..." />
+            <div style="margin-top:16px;">
+                <button class="legacy-btn" onclick="addHeir()">👥 <span class="lang-el">Προσθήκη Κληρονόμου</span><span class="lang-en">Add Heir</span></button>
+            </div>
+        </div>
+    </div>
+    <div class="legacy-card">
+        <h3>👥 <span class="lang-el">Οι Κληρονόμοι μου</span><span class="lang-en">My Heirs</span></h3>
+        <div id="heirsList"></div>
+        <div id="heirsTotalShare" style="text-align:right; color:#888; font-size:0.85em; margin-top:8px;"></div>
+    </div>
+</div>
+
+<!-- ═══ WILL TAB ═══ -->
+<div id="panelWill" class="legacy-panel">
+    <div class="legacy-card">
+        <h3>📜 <span class="lang-el">Ψηφιακή Διαθήκη (Smart Contract)</span><span class="lang-en">Digital Will (Smart Contract)</span></h3>
+        <p><span class="lang-el">Δημιούργησε μια σφραγισμένη διαθήκη που προστατεύεται με SHA-256 hash, multi-sig και time-lock. Κανείς δεν μπορεί να την παραβιάσει.</span><span class="lang-en">Create a sealed will protected by SHA-256 hash, multi-sig and time-lock. No one can tamper with it.</span></p>
+        <div id="willExists" style="display:none;"></div>
+        <div id="willCreate">
+            <div class="legacy-form">
+                <label><span class="lang-el">Κλείδωμα Χρόνου (χρόνια)</span><span class="lang-en">Time Lock (years)</span></label>
+                <input type="number" id="willTimeLock" value="30" min="1" max="100" />
+                <p style="font-size:0.8em; color:#666; margin-top:4px;"><span class="lang-el">Μετά τον θάνατο, οι κληρονόμοι πρέπει να περιμένουν αυτό το διάστημα (ή να υπογράψουν multi-sig).</span><span class="lang-en">After death, heirs must wait this period (or provide multi-sig signatures).</span></p>
+                <div style="margin-top:16px;">
+                    <button class="legacy-btn" onclick="createWill()">📜 <span class="lang-el">Δημιουργία Διαθήκης</span><span class="lang-en">Create Will</span></button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="legacy-card">
+        <h3>🔒 <span class="lang-el">Ασφάλεια Διαθήκης</span><span class="lang-en">Will Security</span></h3>
+        <p><span class="lang-el">Η διαθήκη είναι κρυπτογραφημένη μέσα σε NFT εικόνα (στεγανογραφία). Κάθε αλλαγή σπάει τη σφραγίδα.</span><span class="lang-en">The will is encrypted inside an NFT image (steganography). Any modification breaks the seal.</span></p>
+        <ul style="font-size:0.85em; color:#aaa; line-height:2;">
+            <li>SHA-256 tamper detection</li>
+            <li>Multi-sig: <span class="lang-el">Πλειοψηφία κληρονόμων πρέπει να υπογράψει</span><span class="lang-en">Majority of heirs must sign</span></li>
+            <li>Time-lock: <span class="lang-el">Περίοδος αναμονής μετά τον θάνατο</span><span class="lang-en">Waiting period after death</span></li>
+            <li>LSB Steganography: <span class="lang-el">Κρυμμένη μέσα σε NFT εικόνα</span><span class="lang-en">Hidden inside NFT image</span></li>
+            <li><span class="lang-el">Αδιάκοπα αξίας — 30+ χρόνια μετά, τα ακαταπόνητα πάνε σε φιλανθρωπία</span><span class="lang-en">Unclaimed assets after 30+ years go to charity (schools, housing, healthcare)</span></li>
+        </ul>
+    </div>
+</div>
+
+<!-- ═══ CLAIM TAB ═══ -->
+<div id="panelClaim" class="legacy-panel">
+    <div class="legacy-card">
+        <h3>🔑 <span class="lang-el">Αξίωση Κληρονομιάς</span><span class="lang-en">Claim Inheritance</span></h3>
+        <p><span class="lang-el">Αν είσαι κληρονόμος, μπορείς να αξιώσεις τα περιουσιακά σου μετά την επαλήθευση ταυτότητας (3FA + βιομετρικά).</span><span class="lang-en">If you are an heir, you can claim your assets after identity verification (3FA + biometrics).</span></p>
+        <div class="legacy-form">
+            <label><span class="lang-el">Will ID (από τον αποθανόντα)</span><span class="lang-en">Will ID (from the deceased)</span></label>
+            <input type="text" id="claimWillId" placeholder="will_..." />
+            <label><span class="lang-el">Η THR Address σου (κληρονόμος)</span><span class="lang-en">Your THR Address (heir)</span></label>
+            <input type="text" id="claimHeirAddr" readonly />
+            <div style="margin-top:16px;">
+                <button class="legacy-btn" onclick="checkWillStatus()">🔍 <span class="lang-el">Έλεγχος Διαθήκης</span><span class="lang-en">Check Will Status</span></button>
+            </div>
+        </div>
+        <div id="claimWillInfo" style="display:none; margin-top:16px;"></div>
+    </div>
+    <div class="legacy-card">
+        <h3>📊 <span class="lang-el">Οι Αξιώσεις μου</span><span class="lang-en">My Claims</span></h3>
+        <div id="claimsList"><p style="color:#666; font-size:0.85em;"><span class="lang-el">Δεν βρέθηκαν αξιώσεις.</span><span class="lang-en">No claims found.</span></p></div>
+    </div>
+</div>
+
+</div><!-- /legacyMain -->
+</div><!-- /legacy-page -->
+{% endblock %}
+
+{% block scripts %}
+<script>
+const LEGACY_API = '/api/legacy';
+
+function getWallet() {
+    return (window.walletSession && walletSession.getAddress) ? walletSession.getAddress() : null;
+}
+
+function setStatus(msg, isError) {
+    const el = document.getElementById('legacyStatus');
+    if (el) { el.textContent = msg; el.style.color = isError ? '#f44' : '#0f6'; }
+}
+
+function showLegacyTab(tab) {
+    document.querySelectorAll('.legacy-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.legacy-panel').forEach(p => p.classList.remove('active'));
+    const panels = {overview:'panelOverview', assets:'panelAssets', heirs:'panelHeirs', will:'panelWill', claim:'panelClaim'};
+    const panel = document.getElementById(panels[tab]);
+    if (panel) panel.classList.add('active');
+    event.target.classList.add('active');
+}
+
+async function apiFetch(path, opts) {
+    try {
+        const r = await fetch(LEGACY_API + path, opts);
+        return await r.json();
+    } catch(e) {
+        return {status:'error', error: e.message};
+    }
+}
+
+// ─── Init ──────────────────────────────────────────
+async function initLegacy() {
+    const wallet = getWallet();
+    if (!wallet) {
+        document.getElementById('legacyConnectMsg').style.display = 'block';
+        document.getElementById('legacyMain').style.display = 'none';
+        return;
+    }
+    document.getElementById('legacyConnectMsg').style.display = 'none';
+    document.getElementById('legacyMain').style.display = 'block';
+    document.getElementById('claimHeirAddr').value = wallet;
+    await loadEstate(wallet);
+    loadClaims(wallet);
+}
+
+// ─── Estate ────────────────────────────────────────
+async function loadEstate(wallet) {
+    const data = await apiFetch('/estate/' + encodeURIComponent(wallet));
+    if (data.status === 'not_found' || data.status === 'error') {
+        document.getElementById('estateExists').style.display = 'none';
+        document.getElementById('estateCreate').style.display = 'block';
+        return;
+    }
+    document.getElementById('estateCreate').style.display = 'none';
+    document.getElementById('estateExists').style.display = 'block';
+    renderEstateInfo(data);
+    renderAssets(data.assets || []);
+    renderHeirs(data.heirs || []);
+}
+
+function renderEstateInfo(estate) {
+    const assets = estate.assets || [];
+    const heirs = estate.heirs || [];
+    const totalVal = assets.reduce((s, a) => s + (a.value_estimate || 0), 0);
+    const totalShare = heirs.reduce((s, h) => s + (h.share_percentage || 0), 0);
+
+    document.getElementById('estateStats').innerHTML = `
+        <div class="legacy-stat"><div class="val">${assets.length}</div><div class="lbl">Assets</div></div>
+        <div class="legacy-stat"><div class="val">${heirs.length}</div><div class="lbl">Heirs</div></div>
+        <div class="legacy-stat"><div class="val">$${totalVal.toLocaleString()}</div><div class="lbl">Total Value</div></div>
+        <div class="legacy-stat"><div class="val">${totalShare}%</div><div class="lbl">Allocated</div></div>
+        <div class="legacy-stat"><div class="val"><span class="legacy-badge badge-active">${estate.will_status || 'draft'}</span></div><div class="lbl">Will Status</div></div>
+    `;
+
+    document.getElementById('estateInfo').innerHTML = `
+        <p style="color:#ccc;"><strong>Owner:</strong> <span style="font-family:monospace; color:#b08cf8;">${estate.owner_address || ''}</span></p>
+        ${estate.name ? '<p style="color:#ccc;"><strong>Name:</strong> ' + estate.name + '</p>' : ''}
+        <p style="color:#888; font-size:0.8em;">Created: ${estate.created_at || 'N/A'}</p>
+    `;
+}
+
+async function createEstate() {
+    const wallet = getWallet();
+    if (!wallet) return setStatus('Connect wallet first', true);
+    const name = document.getElementById('estateName').value.trim();
+    const data = await apiFetch('/estate/create', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({address: wallet, name: name || undefined})
+    });
+    if (data.status === 'created') {
+        setStatus('Digital legacy created!');
+        loadEstate(wallet);
+    } else {
+        setStatus(data.message || data.error || 'Failed', true);
+    }
+}
+
+// ─── Assets ────────────────────────────────────────
+function renderAssets(assets) {
+    const el = document.getElementById('assetsList');
+    if (!assets.length) {
+        el.innerHTML = '<p style="color:#666; font-size:0.85em;">No assets added yet.</p>';
+        return;
+    }
+    const icons = {cryptocurrency:'💰', exchange:'🏦', cold_storage:'🔐', nft:'🎨', bank:'🏛️', real_estate:'🏠', domain:'🌐', business:'💼', metals:'🥇', other:'📦'};
+    el.innerHTML = assets.map(a => `
+        <div class="asset-card">
+            <div class="asset-type">${icons[a.asset_type] || '📦'} ${a.asset_type}</div>
+            <div class="asset-name">${a.name}</div>
+            <div class="asset-val">$${(a.value_estimate || 0).toLocaleString()}</div>
+            <div style="font-size:0.8em; color:#666; margin-top:4px;">${a.description || ''}</div>
+        </div>
+    `).join('');
+}
+
+async function addAsset() {
+    const wallet = getWallet();
+    if (!wallet) return setStatus('Connect wallet first', true);
+    const payload = {
+        address: wallet,
+        asset_type: document.getElementById('assetType').value,
+        name: document.getElementById('assetName').value.trim(),
+        description: document.getElementById('assetDesc').value.trim(),
+        encrypted_keys: document.getElementById('assetKeys').value.trim(),
+        encrypted_recovery: document.getElementById('assetRecovery').value.trim(),
+        value_estimate: parseFloat(document.getElementById('assetValue').value) || 0
+    };
+    if (!payload.name || !payload.encrypted_keys) return setStatus('Name and keys are required', true);
+    const data = await apiFetch('/asset/add', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(payload)
+    });
+    if (data.status === 'created') {
+        setStatus('Asset added!');
+        ['assetName','assetDesc','assetKeys','assetRecovery','assetValue'].forEach(id => document.getElementById(id).value = '');
+        loadEstate(wallet);
+    } else {
+        setStatus(data.message || data.error || 'Failed', true);
+    }
+}
+
+// ─── Heirs ─────────────────────────────────────────
+function renderHeirs(heirs) {
+    const el = document.getElementById('heirsList');
+    const totalEl = document.getElementById('heirsTotalShare');
+    if (!heirs.length) {
+        el.innerHTML = '<p style="color:#666; font-size:0.85em;">No heirs added yet.</p>';
+        totalEl.textContent = '';
+        return;
+    }
+    const total = heirs.reduce((s, h) => s + (h.share_percentage || 0), 0);
+    el.innerHTML = heirs.map(h => `
+        <div class="heir-row">
+            <div>
+                <div class="heir-addr">${h.heir_address}</div>
+                <div style="font-size:0.75em; color:#666;">${h.email || ''} ${h.phone || ''}</div>
+            </div>
+            <div class="heir-share">${h.share_percentage}%</div>
+        </div>
+    `).join('');
+    totalEl.innerHTML = `Total: <strong style="color:${total === 100 ? '#0f6' : '#fc0'}">${total}%</strong> ${total !== 100 ? '(should be 100%)' : '✓'}`;
+}
+
+async function addHeir() {
+    const wallet = getWallet();
+    if (!wallet) return setStatus('Connect wallet first', true);
+    const payload = {
+        owner_address: wallet,
+        heir_address: document.getElementById('heirAddress').value.trim(),
+        share_percentage: parseFloat(document.getElementById('heirShare').value) || 0,
+        email: document.getElementById('heirEmail').value.trim() || undefined,
+        phone: document.getElementById('heirPhone').value.trim() || undefined
+    };
+    if (!payload.heir_address) return setStatus('Heir address required', true);
+    if (payload.share_percentage <= 0 || payload.share_percentage > 100) return setStatus('Share must be 1-100%', true);
+    const data = await apiFetch('/heir/add', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(payload)
+    });
+    if (data.status === 'created') {
+        setStatus('Heir added!');
+        ['heirAddress','heirShare','heirEmail','heirPhone'].forEach(id => document.getElementById(id).value = '');
+        loadEstate(wallet);
+    } else {
+        setStatus(data.message || data.error || 'Failed', true);
+    }
+}
+
+// ─── Will ──────────────────────────────────────────
+async function createWill() {
+    const wallet = getWallet();
+    if (!wallet) return setStatus('Connect wallet first', true);
+    const timeLock = parseInt(document.getElementById('willTimeLock').value) || 30;
+    const data = await apiFetch('/will/create', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({owner_address: wallet, time_lock_years: timeLock})
+    });
+    if (data.status === 'created') {
+        setStatus('Will created! ID: ' + (data.will && data.will.will_id || ''));
+        renderWillInfo(data.will);
+    } else {
+        setStatus(data.message || data.error || 'Failed', true);
+    }
+}
+
+function renderWillInfo(will) {
+    if (!will) return;
+    document.getElementById('willCreate').style.display = 'none';
+    document.getElementById('willExists').style.display = 'block';
+    const statusBadge = will.status === 'sealed' ? 'badge-sealed' : will.status === 'active' ? 'badge-active' : 'badge-pending';
+    document.getElementById('willExists').innerHTML = `
+        <div style="background:#0a0a1a; border:1px solid #222; border-radius:8px; padding:16px;">
+            <p><strong>Will ID:</strong> <span style="font-family:monospace; color:#b08cf8;">${will.will_id}</span></p>
+            <p><strong>Status:</strong> <span class="legacy-badge ${statusBadge}">${will.status}</span></p>
+            <p><strong>Heirs:</strong> ${(will.heir_addresses || []).length} | <strong>Required Signatures:</strong> ${will.required_heirs || 0}</p>
+            <p><strong>Time Lock:</strong> ${will.time_lock_years || 30} years</p>
+            <p><strong>Signatures:</strong> ${will.signature_count || 0} / ${will.required_heirs || 0}</p>
+            ${will.status !== 'sealed' ? '<button class="legacy-btn" style="margin-top:12px;" onclick="sealWill(\'' + will.will_id + '\')">🔒 Seal Will</button>' : '<p style="color:#0f6;">✅ Sealed — tamper-proof</p>'}
+        </div>
+    `;
+}
+
+async function sealWill(willId) {
+    const data = await apiFetch('/will/' + willId + '/seal', {method:'POST'});
+    if (data.status === 'sealed') {
+        setStatus('Will sealed! Tamper-proof.');
+        loadEstate(getWallet());
+    } else {
+        setStatus(data.message || 'Failed to seal', true);
+    }
+}
+
+// ─── Claim ─────────────────────────────────────────
+async function checkWillStatus() {
+    const willId = document.getElementById('claimWillId').value.trim();
+    if (!willId) return setStatus('Enter a Will ID', true);
+    const data = await apiFetch('/will/' + willId + '/can-open');
+    const infoEl = document.getElementById('claimWillInfo');
+    infoEl.style.display = 'block';
+    if (data.can_open) {
+        infoEl.innerHTML = `<div style="background:#0a2a0a; border:1px solid #0f6; border-radius:8px; padding:16px;">
+            <p style="color:#0f6; font-size:1.1em;">✅ Will can be opened!</p>
+            <p style="color:#aaa;">${data.reason || ''}</p>
+            <button class="legacy-btn legacy-btn-success" onclick="signWill('${willId}')">🔑 Sign & Claim</button>
+        </div>`;
+    } else {
+        infoEl.innerHTML = `<div style="background:#2a0a0a; border:1px solid #f44; border-radius:8px; padding:16px;">
+            <p style="color:#f44;">🔒 Will cannot be opened yet</p>
+            <p style="color:#aaa;">${data.reason || ''}</p>
+        </div>`;
+    }
+}
+
+async function signWill(willId) {
+    const wallet = getWallet();
+    if (!wallet) return setStatus('Connect wallet first', true);
+    const data = await apiFetch('/will/' + willId + '/sign', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({heir_address: wallet, signature: 'wallet_v1_sig_' + Date.now()})
+    });
+    if (data.status === 'signed') {
+        setStatus(`Signed! ${data.signature_count}/${data.required_count} signatures collected.`);
+        checkWillStatus();
+    } else {
+        setStatus(data.message || 'Failed to sign', true);
+    }
+}
+
+async function loadClaims(wallet) {
+    const data = await apiFetch('/distribution/heir-claims/' + encodeURIComponent(wallet));
+    const el = document.getElementById('claimsList');
+    if (data.claims && data.claims.length) {
+        el.innerHTML = '<table class="legacy-table"><tr><th>Asset</th><th>Status</th><th>Date</th></tr>' +
+            data.claims.map(c => `<tr><td>${c.asset_id}</td><td><span class="legacy-badge ${c.status === 'claimed' ? 'badge-active' : 'badge-pending'}">${c.status}</span></td><td>${c.released_at || ''}</td></tr>`).join('') +
+            '</table>';
+    }
+}
+
+// ─── Boot ──────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+    initLegacy();
+    window.addEventListener('storage', (ev) => {
+        if (ev.key && ev.key.includes('wallet')) initLegacy();
+    });
+});
+</script>
+{% endblock %}

@@ -6888,7 +6888,19 @@ def _normalized_ai_mode() -> str:
 def _allowed_providers() -> set[str]:
     raw = os.getenv("THR_ALLOWED_PROVIDERS", "")
     if not raw.strip():
-        return {"openai", "offline"}
+        # Auto-detect: allow every provider whose API key is configured
+        allowed = {"offline"}
+        if (os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_KEY") or "").strip():
+            allowed.add("openai")
+        if (os.getenv("ANTHROPIC_API_KEY") or "").strip():
+            allowed.add("anthropic")
+        if (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip():
+            allowed.add("gemini")
+        if (os.getenv("THR_THAI_ENABLED") or "").strip().lower() in ("1", "true", "yes"):
+            allowed.add("thrai")
+        if not allowed - {"offline"}:
+            allowed.add("openai")
+        return allowed
     return {p.strip().lower() for p in raw.split(",") if p.strip()}
 
 
@@ -8484,10 +8496,10 @@ def enforce_read_only():
         return None
     # Allow health/bootstrap even as POST (for monitoring tools)
     safe_paths = ("/health", "/bootstrap.json", "/api/whoami")
-    admin_ai_safe_paths = ("/api/admin/login", "/api/admin/ai/chat", "/api/admin/ai/health", "/api/admin/models", "/api/admin/models/toggle", "/api/admin/agents", "/api/admin/pytheia/state", "/api/admin/pytheia/control", "/api/admin/ai/voice_hook", "/api/voice/x9_webhook")
+    admin_ai_safe_paths = ("/api/admin/login", "/api/admin/ai/chat", "/api/admin/ai/health", "/api/admin/models", "/api/admin/models/toggle", "/api/admin/agents", "/api/admin/pytheia/state", "/api/admin/pytheia/control", "/api/admin/ai/voice_hook", "/api/voice/x9_webhook", "/api/delphi/")
     if request.path.startswith(safe_paths):
         return None
-    if NODE_ROLE == "ai_core" and request.path.startswith(admin_ai_safe_paths):
+    if request.path.startswith(admin_ai_safe_paths):
         return None
     return jsonify({
         "ok": False,
@@ -9857,6 +9869,11 @@ def api_ledger_alias():
 #     Extends base.html and uses walletSession for connection.
 #     """
 #     return render_template("thronos_wallet.html")
+
+
+@app.route("/legacy")
+def legacy_page():
+    return render_template("legacy.html")
 
 
 @app.route("/api/wallet/dashboard", methods=["GET"])
@@ -15449,8 +15466,6 @@ def api_admin_login():
 
 @app.route("/api/admin/ai/health", methods=["GET"])
 def api_admin_ai_health():
-    if NODE_ROLE != "ai_core":
-        return jsonify({"error": "admin_only_on_ai_core"}), 404
     denied = require_admin()
     if denied:
         return denied
@@ -15568,8 +15583,6 @@ def api_admin_agents():
 
 @app.route("/api/admin/pytheia/state", methods=["GET"])
 def api_admin_pytheia_state():
-    if NODE_ROLE != "ai_core":
-        return jsonify({"error": "admin_only_on_ai_core"}), 404
     denied = require_admin()
     if denied:
         return denied
@@ -15587,8 +15600,6 @@ def api_admin_pytheia_state():
 
 @app.route("/api/admin/pytheia/control", methods=["POST"])
 def api_admin_pytheia_control():
-    if NODE_ROLE != "ai_core":
-        return jsonify({"error": "admin_only_on_ai_core"}), 404
     data = request.get_json(silent=True) or {}
     denied = require_admin(data)
     if denied:
@@ -16256,8 +16267,6 @@ def api_sigbalbot_wallet_snapshots():
 
 @app.route("/api/admin/ai/chat", methods=["POST"])
 def api_admin_ai_chat():
-    if NODE_ROLE != "ai_core":
-        return jsonify({"error": "admin_only_on_ai_core"}), 404
     data = request.get_json(silent=True) or {}
     denied = require_admin(data)
     if denied:
@@ -16378,8 +16387,6 @@ def api_admin_ai_chat():
 
 @app.route("/api/admin/ai/voice_hook", methods=["POST"])
 def api_admin_ai_voice_hook():
-    if NODE_ROLE != "ai_core":
-        return jsonify({"error": "admin_only_on_ai_core"}), 404
     data = request.get_json(silent=True) or {}
     denied = require_admin(data)
     if denied:
@@ -19041,8 +19048,6 @@ def api_admin_withdrawal_liquidity_status():
 @app.route("/d3lfoi", methods=["GET"])
 @app.route("/d3lfoi_admin", methods=["GET"])
 def d3lfoi_admin_console():
-    if NODE_ROLE != "ai_core":
-        return jsonify({"error": "admin_only_on_ai_core"}), 404
     return render_template("d3lfoi_admin.html")
 
 
@@ -19401,6 +19406,14 @@ def _handle_ai_chat_master():
     except Exception:
         # Fallback to no context on errors
         context_str = ""
+    # Inject relevant knowledge from past high-rated responses (learning loop)
+    knowledge_ctx = ""
+    try:
+        from ai_learning_engine import build_knowledge_context
+        knowledge_ctx = build_knowledge_context(msg, max_chars=1500)
+    except Exception:
+        pass
+
     # Prepend the context to the current message.  The role for the
     # current user is explicitly labelled as "User" to distinguish it
     # from previous messages.  Any attachments have already been
@@ -19411,7 +19424,7 @@ def _handle_ai_chat_master():
         LAST_PROMPT_HASH[session_key] = prompt_hash
     except Exception:
         pass
-    full_prompt = f"{context_str}User: {msg}" if context_str else msg
+    full_prompt = f"{knowledge_ctx}{context_str}User: {msg}" if (context_str or knowledge_ctx) else msg
 
     # --- AI execution path ---
     call_started = time.time()
@@ -43766,7 +43779,7 @@ def api_ai_debug():
 
 @app.route("/api/ai/feedback", methods=["POST"])
 def api_ai_feedback():
-    """Record user feedback (thumbs up/down) on AI responses"""
+    """Record user feedback (thumbs up/down) on AI responses and bridge to corpus for learning"""
     try:
         data = request.get_json() or {}
         session_id = data.get("session_id", "")
@@ -43780,7 +43793,7 @@ def api_ai_feedback():
         feedback_entry = {
             "session_id": session_id,
             "wallet": thr_wallet,
-            "message_text": message_text[:500],  # Truncate long messages
+            "message_text": message_text[:500],
             "thumbs_up": thumbs_up,
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
         }
@@ -43789,14 +43802,57 @@ def api_ai_feedback():
         feedback_file = os.path.join(DATA_DIR, "ai_feedback.json")
         feedback_list = load_json(feedback_file, [])
         feedback_list.append(feedback_entry)
-
-        # Save feedback
         save_json(feedback_file, feedback_list)
 
-        return jsonify({"ok": True, "message": "Feedback recorded"})
+        # Bridge feedback into corpus for learning loop
+        corpus_updated = False
+        try:
+            from ai_learning_engine import apply_feedback, maybe_rebuild
+            corpus_updated = apply_feedback(session_id, message_text, thumbs_up)
+            maybe_rebuild()
+        except Exception:
+            app.logger.debug("Learning engine feedback bridge skipped")
+
+        return jsonify({"ok": True, "message": "Feedback recorded", "corpus_updated": corpus_updated})
     except Exception as e:
         app.logger.exception("Feedback error")
         return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/ai/learning/stats", methods=["GET"])
+def api_ai_learning_stats():
+    """Return learning engine statistics — corpus size, feedback counts, knowledge blocks"""
+    try:
+        from ai_learning_engine import get_learning_stats
+        return jsonify(get_learning_stats())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/ai/learning/rebuild", methods=["POST"])
+def api_ai_learning_rebuild():
+    """Rebuild knowledge base from corpus (admin / on-demand)"""
+    try:
+        from ai_learning_engine import rebuild_knowledge_base
+        result = rebuild_knowledge_base(force=True)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/ai/learning/query", methods=["POST"])
+def api_ai_learning_query():
+    """Query the knowledge base — returns relevant past high-rated responses"""
+    try:
+        data = request.get_json() or {}
+        prompt = data.get("prompt") or data.get("query") or ""
+        if not prompt:
+            return jsonify({"error": "prompt is required"}), 400
+        from ai_learning_engine import retrieve_knowledge
+        results = retrieve_knowledge(prompt, top_k=int(data.get("top_k", 5)))
+        return jsonify({"results": results, "count": len(results)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # Update /chat route to pass wallet to template

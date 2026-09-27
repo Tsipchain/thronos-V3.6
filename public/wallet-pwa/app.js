@@ -1361,6 +1361,9 @@ async function showWallet() {
   const address = getActiveAddr();
   if (!address || !unlocked.has(address)) { showUnlock(); return; }
 
+  // Register device for 3FA push notifications (non-blocking)
+  if (typeof register3FADevice === 'function') setTimeout(register3FADevice, 1000);
+
   const accs = getAccounts();
   const acc = getAccount(address);
   const label = acc?.label || shortAddr(address);
@@ -5847,5 +5850,115 @@ window.buyNFT = buyNFT;
 window.pwaOpenEvmAssetActions = pwaOpenEvmAssetActions;
 window.pwaOpenEvmSendModal = pwaOpenEvmSendModal;
 window.pwaOpenPoolDepositModal = pwaOpenPoolDepositModal;
+
+// ─── 3FA Push Notification Registration & Approval Handling ─────────────────
+
+const VAPID_PUBLIC_KEY = localStorage.getItem('thr_vapid_public') || '';
+
+async function register3FADevice() {
+  const addr = getActiveAddr();
+  if (!addr || !('serviceWorker' in navigator) || !('PushManager' in window)) return;
+
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub && VAPID_PUBLIC_KEY) {
+      const key = Uint8Array.from(atob(VAPID_PUBLIC_KEY.replace(/-/g,'+').replace(/_/g,'/')), c => c.charCodeAt(0));
+      sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+    }
+    if (!sub) return;
+
+    const deviceId = localStorage.getItem('thr_device_id') || crypto.randomUUID();
+    localStorage.setItem('thr_device_id', deviceId);
+
+    const biometric = !!(navigator.credentials && navigator.credentials.create);
+
+    await fetch('/api/3fa/device/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        wallet: addr,
+        device_id: deviceId,
+        device_name: navigator.userAgent.slice(0, 60),
+        push_subscription: sub.toJSON(),
+        biometric_capable: biometric,
+      }),
+    });
+  } catch (_) { /* silent — 3FA registration is optional */ }
+}
+
+async function handle3FAApproval(approvalId, action) {
+  const addr = getActiveAddr();
+  const deviceId = localStorage.getItem('thr_device_id') || '';
+  if (!addr || !deviceId) return;
+
+  const endpoint = action === 'deny' ? '/api/3fa/approval/deny' : '/api/3fa/approval/approve';
+
+  if (action !== 'deny') {
+    try {
+      const fidId = localStorage.getItem('thr_fid_' + addr);
+      if (fidId) {
+        await navigator.credentials.get({
+          publicKey: {
+            challenge: new TextEncoder().encode(approvalId),
+            allowCredentials: [{ type: 'public-key', id: Uint8Array.from(atob(fidId), c => c.charCodeAt(0)) }],
+            userVerification: 'required',
+            timeout: 60000,
+          },
+        });
+      }
+    } catch (_) { /* biometric optional — fall through */ }
+  }
+
+  const resp = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ approval_id: approvalId, device_id: deviceId }),
+  });
+  return resp.json();
+}
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.addEventListener('message', async (e) => {
+    if (e.data && e.data.type === '3fa_action') {
+      const { approval_id, user_action } = e.data;
+      if (user_action === 'approve' || user_action === 'deny') {
+        await handle3FAApproval(approval_id, user_action);
+      } else {
+        const overlay = document.createElement('div');
+        overlay.id = 'tfa-overlay';
+        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:9999;display:flex;align-items:center;justify-content:center;';
+        const details = e.data.details || {};
+        overlay.innerHTML = `
+          <div style="background:#1a1a2e;border:1px solid #7c5cbf;border-radius:12px;padding:24px;max-width:360px;text-align:center;">
+            <h3 style="color:#fff;margin:0 0 12px;">Transaction Approval</h3>
+            <p style="color:#ccc;">${details.action || 'Transaction'} ${details.amount ? details.amount + ' THR' : ''}</p>
+            ${details.to ? `<p style="color:#888;font-size:12px;">To: ${details.to}</p>` : ''}
+            <div style="display:flex;gap:12px;justify-content:center;margin-top:16px;">
+              <button onclick="window._tfa_resolve('approve')" style="padding:10px 24px;background:#23ff6b;color:#000;border:none;border-radius:8px;font-weight:bold;cursor:pointer;">Approve</button>
+              <button onclick="window._tfa_resolve('deny')" style="padding:10px 24px;background:#f44;color:#fff;border:none;border-radius:8px;cursor:pointer;">Deny</button>
+            </div>
+          </div>`;
+        document.body.appendChild(overlay);
+        window._tfa_resolve = async (action) => {
+          overlay.remove();
+          await handle3FAApproval(approval_id, action);
+        };
+      }
+    }
+  });
+
+  const params = new URLSearchParams(location.search);
+  const tfa3 = params.get('3fa');
+  const tfaAction = params.get('action');
+  if (tfa3) {
+    setTimeout(() => handle3FAApproval(tfa3, tfaAction || 'open'), 500);
+  }
+}
+
+window.register3FADevice = register3FADevice;
+window.handle3FAApproval = handle3FAApproval;
 
 boot();

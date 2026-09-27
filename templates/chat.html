@@ -2368,9 +2368,14 @@
             setSessionStatus("Provider blocked");
             return;
           }
-          if (data && data.error === "insufficient_ai_credits") {
-            usageStatusEl.textContent = "Δεν έχεις άλλα Quantum credits…";
+          if (data && (data.error === "insufficient_ai_credits" || data.error === "no_credits")) {
+            usageStatusEl.textContent = "Δεν έχεις άλλα Quantum credits — αγόρασε AI Pack ή ζήτα από admin.";
             await refreshCreditsForWallet(wallet);
+            appendMessage({
+              role: "assistant",
+              content: "⚠️ Δεν έχεις AI credits. Αγόρασε ένα AI Pack ή επικοινώνησε με τον admin για credits.\n\nNo AI credits available. Purchase an AI Pack or contact admin for credits.",
+              model: "system",
+            });
             setSessionStatus("No credits");
             return;
           }

@@ -81,12 +81,37 @@
         <div class="tabs">
           <button id="tabHealth">Health</button>
           <button id="tabModels">Models</button>
+          <button id="tabCredits">Credits</button>
           <button id="tabAgents">Agents</button>
           <button id="tabPytheia">PYTHEIA</button>
         </div>
         <div id="panelHealth">
           <h4>Core Health</h4>
           <pre id="healthPre">-</pre>
+          <h5>Configuration Issues</h5>
+          <pre id="configIssuesPre" style="color:#ff8e8e;">-</pre>
+        </div>
+        <div id="panelCredits" style="display:none;">
+          <h4>AI Credits Management</h4>
+          <label>Wallet Address</label>
+          <input id="creditsWallet" placeholder="THR..." />
+          <div class="row" style="margin-top:8px;">
+            <button id="checkCreditsBtn">Check Balance</button>
+          </div>
+          <div id="creditsBalance" class="status" style="margin:8px 0;font-size:14px;"></div>
+          <label>Grant Credits</label>
+          <div class="row">
+            <input id="grantAmount" type="number" placeholder="Amount" min="1" style="width:120px;" />
+            <input id="grantReason" placeholder="Reason (optional)" />
+            <button id="grantCreditsBtn" style="width:auto;background:#194636;">Grant</button>
+          </div>
+          <div id="grantResult" class="status" style="margin:8px 0;"></div>
+          <h5>Recent Ledger</h5>
+          <div style="max-height:200px;overflow:auto;">
+            <table><thead><tr><th>Time</th><th>Wallet</th><th>Delta</th><th>After</th><th>Reason</th></tr></thead><tbody id="ledgerBody"></tbody></table>
+          </div>
+          <h5>Pool Stats</h5>
+          <pre id="creditsStatsPre">-</pre>
         </div>
         <div id="panelModels" style="display:none;">
           <h4>Models</h4>
@@ -209,8 +234,77 @@
   function showTab(name) {
     $('panelHealth').style.display = name === 'health' ? 'block' : 'none';
     $('panelModels').style.display = name === 'models' ? 'block' : 'none';
+    $('panelCredits').style.display = name === 'credits' ? 'block' : 'none';
     $('panelAgents').style.display = name === 'agents' ? 'block' : 'none';
     $('panelPytheia').style.display = name === 'pytheia' ? 'block' : 'none';
+  }
+
+  async function loadDelphiHealth() {
+    try {
+      const data = await api('/api/delphi/health');
+      $('healthPre').textContent = JSON.stringify(data, null, 2);
+      const issues = data.config_issues || [];
+      $('configIssuesPre').textContent = issues.length ? issues.join('\n') : 'No issues found';
+      $('configIssuesPre').style.color = issues.length ? '#ff8e8e' : '#86ffbc';
+    } catch(e) {
+      $('healthPre').textContent = e.message;
+    }
+  }
+
+  async function checkCredits() {
+    const wallet = $('creditsWallet').value.trim();
+    if (!wallet) { $('creditsBalance').textContent = 'Enter a wallet address'; return; }
+    try {
+      const data = await api(`/api/delphi/credits/check?wallet=${encodeURIComponent(wallet)}`);
+      $('creditsBalance').textContent = `Balance: ${data.credits} credits`;
+      $('creditsBalance').style.color = data.credits > 0 ? '#86ffbc' : '#ff8e8e';
+    } catch(e) { $('creditsBalance').textContent = e.message; }
+  }
+
+  async function grantCredits() {
+    const wallet = $('creditsWallet').value.trim();
+    const amount = parseInt($('grantAmount').value || '0');
+    const reason = $('grantReason').value.trim() || 'admin_grant';
+    if (!wallet) { $('grantResult').textContent = 'Enter wallet'; return; }
+    if (amount < 1) { $('grantResult').textContent = 'Amount must be > 0'; return; }
+    try {
+      const data = await api('/api/delphi/credits/grant', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ wallet, amount, reason })
+      });
+      $('grantResult').textContent = `Granted ${data.granted} credits. Balance: ${data.before} → ${data.after}`;
+      $('grantResult').style.color = '#86ffbc';
+      $('creditsBalance').textContent = `Balance: ${data.after} credits`;
+      $('creditsBalance').style.color = '#86ffbc';
+      await loadCreditsLedger();
+      await loadCreditsStats();
+    } catch(e) { $('grantResult').textContent = e.message; $('grantResult').style.color = '#ff8e8e'; }
+  }
+
+  async function loadCreditsLedger() {
+    const wallet = $('creditsWallet').value.trim();
+    try {
+      const url = wallet ? `/api/delphi/credits/ledger?wallet=${encodeURIComponent(wallet)}&limit=20` : '/api/delphi/credits/ledger?limit=20';
+      const data = await api(url);
+      const rows = data.entries || [];
+      $('ledgerBody').innerHTML = '';
+      rows.forEach(e => {
+        const tr = document.createElement('tr');
+        const ts = (e.timestamp || '').replace(' UTC', '');
+        const w = (e.wallet || '').slice(0, 12) + '...';
+        const delta = e.delta > 0 ? `+${e.delta}` : `${e.delta}`;
+        tr.innerHTML = `<td>${ts}</td><td>${w}</td><td style="color:${e.delta > 0 ? '#86ffbc' : '#ff8e8e'}">${delta}</td><td>${e.balance_after}</td><td>${e.reason}</td>`;
+        $('ledgerBody').appendChild(tr);
+      });
+    } catch(e) {}
+  }
+
+  async function loadCreditsStats() {
+    try {
+      const data = await api('/api/delphi/stats');
+      $('creditsStatsPre').textContent = JSON.stringify(data.credits || {}, null, 2);
+    } catch(e) {}
   }
 
   async function loadPytheiaState() {
@@ -288,10 +382,12 @@
       $('admin-main').style.display = 'grid';
       $('operatorStatus').textContent = 'operator session active';
       await loadModels();
-      await loadHealth();
+      await loadDelphiHealth();
       await loadAdminModels();
       await loadAdminAgents();
       await loadPytheiaState();
+      await loadCreditsLedger();
+      await loadCreditsStats();
       state.attachments = [];
       renderAttachments();
     } catch (e) {
@@ -299,15 +395,18 @@
     }
   });
 
-  $('tabHealth').addEventListener('click', () => showTab('health'));
+  $('tabHealth').addEventListener('click', async () => { showTab('health'); await loadDelphiHealth(); });
   $('tabModels').addEventListener('click', async () => { showTab('models'); await loadAdminModels(); });
+  $('tabCredits').addEventListener('click', async () => { showTab('credits'); await loadCreditsLedger(); await loadCreditsStats(); });
   $('tabAgents').addEventListener('click', async () => { showTab('agents'); await loadAdminAgents(); });
   $('tabPytheia').addEventListener('click', async () => { showTab('pytheia'); await loadPytheiaState(); });
+  $('checkCreditsBtn').addEventListener('click', checkCredits);
+  $('grantCreditsBtn').addEventListener('click', grantCredits);
   $('savePytheiaBtn').addEventListener('click', savePytheiaControl);
   $('refreshModelsBtn').addEventListener('click', async () => {
     await loadModels();
     await loadAdminModels();
-    await loadHealth();
+    await loadDelphiHealth();
   });
 
 

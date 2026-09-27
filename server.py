@@ -6888,7 +6888,19 @@ def _normalized_ai_mode() -> str:
 def _allowed_providers() -> set[str]:
     raw = os.getenv("THR_ALLOWED_PROVIDERS", "")
     if not raw.strip():
-        return {"openai", "offline"}
+        # Auto-detect: allow every provider whose API key is configured
+        allowed = {"offline"}
+        if (os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_KEY") or "").strip():
+            allowed.add("openai")
+        if (os.getenv("ANTHROPIC_API_KEY") or "").strip():
+            allowed.add("anthropic")
+        if (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip():
+            allowed.add("gemini")
+        if (os.getenv("THR_THAI_ENABLED") or "").strip().lower() in ("1", "true", "yes"):
+            allowed.add("thrai")
+        if not allowed - {"offline"}:
+            allowed.add("openai")
+        return allowed
     return {p.strip().lower() for p in raw.split(",") if p.strip()}
 
 
@@ -8484,10 +8496,10 @@ def enforce_read_only():
         return None
     # Allow health/bootstrap even as POST (for monitoring tools)
     safe_paths = ("/health", "/bootstrap.json", "/api/whoami")
-    admin_ai_safe_paths = ("/api/admin/login", "/api/admin/ai/chat", "/api/admin/ai/health", "/api/admin/models", "/api/admin/models/toggle", "/api/admin/agents", "/api/admin/pytheia/state", "/api/admin/pytheia/control", "/api/admin/ai/voice_hook", "/api/voice/x9_webhook")
+    admin_ai_safe_paths = ("/api/admin/login", "/api/admin/ai/chat", "/api/admin/ai/health", "/api/admin/models", "/api/admin/models/toggle", "/api/admin/agents", "/api/admin/pytheia/state", "/api/admin/pytheia/control", "/api/admin/ai/voice_hook", "/api/voice/x9_webhook", "/api/delphi/")
     if request.path.startswith(safe_paths):
         return None
-    if NODE_ROLE == "ai_core" and request.path.startswith(admin_ai_safe_paths):
+    if request.path.startswith(admin_ai_safe_paths):
         return None
     return jsonify({
         "ok": False,
@@ -15449,8 +15461,6 @@ def api_admin_login():
 
 @app.route("/api/admin/ai/health", methods=["GET"])
 def api_admin_ai_health():
-    if NODE_ROLE != "ai_core":
-        return jsonify({"error": "admin_only_on_ai_core"}), 404
     denied = require_admin()
     if denied:
         return denied
@@ -16256,8 +16266,6 @@ def api_sigbalbot_wallet_snapshots():
 
 @app.route("/api/admin/ai/chat", methods=["POST"])
 def api_admin_ai_chat():
-    if NODE_ROLE != "ai_core":
-        return jsonify({"error": "admin_only_on_ai_core"}), 404
     data = request.get_json(silent=True) or {}
     denied = require_admin(data)
     if denied:
@@ -19041,8 +19049,6 @@ def api_admin_withdrawal_liquidity_status():
 @app.route("/d3lfoi", methods=["GET"])
 @app.route("/d3lfoi_admin", methods=["GET"])
 def d3lfoi_admin_console():
-    if NODE_ROLE != "ai_core":
-        return jsonify({"error": "admin_only_on_ai_core"}), 404
     return render_template("d3lfoi_admin.html")
 
 

@@ -11,6 +11,7 @@ import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS } from '../constants/theme';
 import { useStore } from '../store/useStore';
 import { CONFIG } from '../constants/config';
 import { authenticateWithBiometrics } from '../services/wallet';
+import { signMessage } from '../services/signing';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -196,24 +197,41 @@ export default function ScanScreen() {
 
     setPairing(true);
     try {
+      const challengeResponse = {
+        type: 'thronos_api_login',
+        version: '1',
+        challenge_id: parsed.challengeId,
+        nonce: parsed.nonce,
+        audience: parsed.audience,
+        timestamp: parsed.ts || String(Math.floor(Date.now() / 1000)),
+      };
+
+      // Build canonical message matching server's _canonical_login_challenge_msg format
+      const fields = ['audience', 'challenge_id', 'nonce', 'timestamp', 'type', 'version'] as const;
+      const parts = fields.map(k => `"${k}":${JSON.stringify(String(challengeResponse[k] || ''))}`);
+      const canonicalMsg = '{' + parts.join(',') + '}';
+
+      // Sign with wallet's private key (ECDSA secp256k1 + SHA256)
+      const signed = await signMessage(canonicalMsg);
+
       const resp = await fetch(`${CONFIG.API_URL}/api/auth/verify`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          challenge_id: parsed.challengeId,
-          address: walletAddress,
-          nonce: parsed.nonce,
+          challenge_response: challengeResponse,
+          signature: signed.signature,
+          public_key: signed.publicKey,
         }),
       });
       const json = await resp.json().catch(() => ({}));
       if (resp.ok && json.ok) {
         Alert.alert(
           'Logged In',
-          'You are now logged in on the website.',
+          `Wallet ${(json.address || walletAddress).slice(0, 14)}... connected.`,
           [{ text: 'Done', onPress: () => navigation.goBack() }],
         );
       } else {
-        throw new Error(json.error || `HTTP ${resp.status}`);
+        throw new Error(json.detail || json.error || `HTTP ${resp.status}`);
       }
     } catch (err: any) {
       Alert.alert(

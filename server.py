@@ -9871,6 +9871,11 @@ def api_ledger_alias():
 #     return render_template("thronos_wallet.html")
 
 
+@app.route("/legacy")
+def legacy_page():
+    return render_template("legacy.html")
+
+
 @app.route("/api/wallet/dashboard", methods=["GET"])
 def api_wallet_dashboard():
     """Wallet dashboard snapshot with stable AI credits aliases."""

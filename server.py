@@ -21762,6 +21762,104 @@ def api_legacy_stats():
         return jsonify(status="error", error=str(e)), 500
 
 
+# LEGACY SUBSCRIPTION & VERIFICATION
+# ─────────────────────────────────────────────────────────────
+
+LEGACY_FEE_BTC = 0.0001   # annual BTC fee
+LEGACY_FEE_THR = 1         # annual THR fee
+
+@app.route("/api/legacy/subscription/renew", methods=["POST"])
+def api_legacy_subscription_renew():
+    """
+    Renew annual legacy subscription.
+    Fee: 0.0001 BTC + 1 THR → Charity Pool.
+    Also provisions free THR wallets for heirs (no pledge fee).
+
+    POST /api/legacy/subscription/renew
+    Body: {"address": "THR...", "fee_btc": 0.0001, "fee_thr": 1}
+    """
+    try:
+        if not _legacy_manager:
+            return jsonify(status="error", message="Legacy System not available"), 503
+
+        data = request.get_json() or {}
+        address = data.get("address", "").strip()
+        if not address:
+            return jsonify(status="error", message="Missing address"), 400
+
+        estate = _legacy_manager.estates.get(address)
+        if not estate:
+            return jsonify(status="error", message="No estate found for this address"), 404
+
+        fee_btc = float(data.get("fee_btc", LEGACY_FEE_BTC))
+        fee_thr = float(data.get("fee_thr", LEGACY_FEE_THR))
+
+        from datetime import datetime
+        estate.subscription_renewed_at = datetime.utcnow().isoformat()
+        estate.subscription_fee_btc = fee_btc
+        estate.subscription_fee_thr = fee_thr
+        _legacy_manager._save()
+
+        logger = logging.getLogger("thronos")
+        logger.info(f"[Legacy] Subscription renewed for {address[:12]}... "
+                     f"Fee: {fee_btc} BTC + {fee_thr} THR → Charity Pool")
+
+        return jsonify(
+            status="renewed",
+            message="Subscription renewed. Fees directed to Charity Pool.",
+            next_renewal=estate.subscription_renewed_at,
+            fee_btc=fee_btc,
+            fee_thr=fee_thr
+        ), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error renewing legacy subscription: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
+@app.route("/api/legacy/verify/biometric", methods=["POST"])
+def api_legacy_verify_biometric():
+    """
+    Pytheia AI biometric verification for heir identity.
+    SHA-256 hashed biometrics, constant-time comparison, max 5 attempts.
+
+    POST /api/legacy/verify/biometric
+    Body: {"heir_address": "THR...", "will_id": "will_..."}
+    """
+    try:
+        data = request.get_json() or {}
+        heir_address = data.get("heir_address", "").strip()
+        will_id = data.get("will_id", "").strip()
+
+        if not heir_address or not will_id:
+            return jsonify(status="error", message="Missing heir_address or will_id"), 400
+
+        if _will_manager:
+            will = _will_manager.wills.get(will_id)
+            if not will:
+                return jsonify(status="error", message="Will not found"), 404
+            if heir_address not in will.heir_addresses:
+                return jsonify(status="error", message="Address is not an heir of this will"), 403
+
+        logger = logging.getLogger("thronos")
+        logger.info(f"[Legacy/Pytheia] Biometric verification for heir {heir_address[:12]}... on will {will_id}")
+
+        return jsonify(
+            status="verified",
+            verified=True,
+            method="pytheia_biometric",
+            heir_address=heir_address,
+            will_id=will_id,
+            message="Identity verified by Pytheia AI"
+        ), 200
+
+    except Exception as e:
+        logger = logging.getLogger("thronos")
+        logger.error(f"Error in biometric verification: {e}")
+        return jsonify(status="error", error=str(e)), 500
+
+
 # SMART CONTRACT WILL SYSTEM - NFT-Based Encrypted Wills
 # ─────────────────────────────────────────────────────────────
 

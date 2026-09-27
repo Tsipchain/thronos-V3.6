@@ -7453,11 +7453,22 @@ async function openHeaderWalletModal(){
         return;
     }
 
-    // Otherwise show modal
+    // No wallet at all → send to pledge to create one
+    const hasV1Stored = !!(localStorage.getItem('wallet_v1_address'));
+    if (!addr && !hasV1Stored) {
+        if (window.location.pathname === '/pledge') {
+            const pledgeForm = document.getElementById('pledgeForm') || document.querySelector('.pledge-form');
+            if (pledgeForm) pledgeForm.scrollIntoView({behavior: 'smooth'});
+        } else {
+            window.location.href = '/pledge';
+        }
+        return;
+    }
+
+    // Has wallet data but not bound → show modal with QR + login form
     setWalletOpen(true);
     if(!walletSession.isBound()){
         showWalletLoginForm();
-        // Show QR login panel and reset its state for fresh scan
         const qrPanel = document.getElementById('qrWalletLoginPanel');
         if (qrPanel) {
             qrPanel.style.display = 'block';

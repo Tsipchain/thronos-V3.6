@@ -9276,13 +9276,31 @@ async function startQrWalletLogin() {
     if (_qrLoginPollTimer) { clearInterval(_qrLoginPollTimer); _qrLoginPollTimer = null; }
 
     try {
-        const resp = await fetch('/api/auth/challenge', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
-        const data = await resp.json();
-        if (!data.ok) throw new Error(data.error || 'Challenge creation failed');
+        // Use thrconnect:// WalletConnect flow — understood by both PWA and native app
+        const wcResp = await fetch('/api/wallet/wc/session/create', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ dapp: window.location.hostname, mode: 'login' })
+        });
+        const wcData = await wcResp.json();
 
-        _qrLoginChallengeId = data.challenge.challenge_id;
-        const qrUri = data.qr_uri;
-        const expiresIn = data.expires_in || 120;
+        let qrUri, sessionId, expiresIn;
+
+        if (wcData.ok && wcData.uri) {
+            // thrconnect:// URI — PWA and native app both handle this
+            qrUri = wcData.uri;
+            sessionId = wcData.session_id;
+            expiresIn = 120;
+        } else {
+            // Fallback to thronos://login challenge (PWA app.js handles this too)
+            const resp = await fetch('/api/auth/challenge', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+            const data = await resp.json();
+            if (!data.ok) throw new Error(data.error || 'Challenge creation failed');
+            _qrLoginChallengeId = data.challenge.challenge_id;
+            qrUri = data.qr_uri;
+            expiresIn = data.expires_in || 120;
+            sessionId = null;
+        }
 
         const qrUrl = 'https://api.qrserver.com/v1/create-qr-code/?data=' +
             encodeURIComponent(qrUri) + '&size=220x220&color=b08cf8&bgcolor=0d0a1a&margin=8';
@@ -9306,26 +9324,44 @@ async function startQrWalletLogin() {
 
         _qrLoginPollTimer = setInterval(async () => {
             try {
-                const poll = await fetch('/api/auth/challenge/status/' + _qrLoginChallengeId);
-                const pollData = await poll.json();
-                if (pollData.ok && pollData.consumed) {
-                    clearInterval(_qrLoginPollTimer);
-                    _qrLoginPollTimer = null;
-                    clearInterval(countdownId);
-                    if (imgWrap) imgWrap.style.display = 'none';
-                    if (success) success.style.display = 'block';
-
-                    const sessResp = await fetch('/api/auth/session');
-                    const sessData = await sessResp.json();
-                    if (sessData.ok && sessData.address) {
-                        walletSession.setAddress(sessData.address);
+                if (sessionId) {
+                    // Poll WalletConnect session for pairing
+                    const poll = await fetch('/api/wallet/wc/session/' + sessionId);
+                    const pollData = await poll.json();
+                    if (pollData.ok && pollData.status === 'paired' && pollData.address) {
+                        clearInterval(_qrLoginPollTimer);
+                        _qrLoginPollTimer = null;
+                        clearInterval(countdownId);
+                        if (imgWrap) imgWrap.style.display = 'none';
+                        if (success) success.style.display = 'block';
+                        walletSession.setAddress(pollData.address);
                         walletSession.setBound(true);
                         updateWalletUI();
                         showWalletContentSection();
                         loadWalletBalances(true);
                     }
-                    if (sessData.route) {
-                        setTimeout(() => { window.location.href = sessData.route; }, 1500);
+                } else if (_qrLoginChallengeId) {
+                    // Poll auth challenge
+                    const poll = await fetch('/api/auth/challenge/status/' + _qrLoginChallengeId);
+                    const pollData = await poll.json();
+                    if (pollData.ok && pollData.consumed) {
+                        clearInterval(_qrLoginPollTimer);
+                        _qrLoginPollTimer = null;
+                        clearInterval(countdownId);
+                        if (imgWrap) imgWrap.style.display = 'none';
+                        if (success) success.style.display = 'block';
+                        const sessResp = await fetch('/api/auth/session');
+                        const sessData = await sessResp.json();
+                        if (sessData.ok && sessData.address) {
+                            walletSession.setAddress(sessData.address);
+                            walletSession.setBound(true);
+                            updateWalletUI();
+                            showWalletContentSection();
+                            loadWalletBalances(true);
+                        }
+                        if (sessData.route) {
+                            setTimeout(() => { window.location.href = sessData.route; }, 1500);
+                        }
                     }
                 }
             } catch (e) { /* poll error — ignore, will retry */ }

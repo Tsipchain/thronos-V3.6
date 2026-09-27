@@ -20,6 +20,13 @@ interface ThrConnectURI {
   dapp: string;
 }
 
+interface LoginQrURI {
+  challengeId: string;
+  nonce: string;
+  audience: string;
+  ts: string;
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function parseThrConnect(uri: string): ThrConnectURI | null {
@@ -33,6 +40,25 @@ function parseThrConnect(uri: string): ThrConnectURI | null {
       sessionId,
       relay: params.get('relay') || CONFIG.API_URL,
       dapp: params.get('dapp') || 'ThronosBuilder',
+    };
+  } catch {
+    return null;
+  }
+}
+
+function parseLoginQr(uri: string): LoginQrURI | null {
+  try {
+    if (!uri.startsWith('thronos://login')) return null;
+    const qIdx = uri.indexOf('?');
+    if (qIdx < 0) return null;
+    const params = new URLSearchParams(uri.slice(qIdx + 1));
+    const challengeId = params.get('challenge_id');
+    if (!challengeId) return null;
+    return {
+      challengeId,
+      nonce: params.get('nonce') || '',
+      audience: params.get('audience') || '',
+      ts: params.get('ts') || '',
     };
   } catch {
     return null;
@@ -71,6 +97,12 @@ export default function ScanScreen() {
     const thrConnect = parseThrConnect(data);
     if (thrConnect) {
       await handleWalletConnect(thrConnect);
+      return;
+    }
+
+    const loginQr = parseLoginQr(data);
+    if (loginQr) {
+      await handleLoginQr(loginQr);
       return;
     }
 
@@ -144,6 +176,59 @@ export default function ScanScreen() {
     }
   };
 
+  const handleLoginQr = async (parsed: LoginQrURI) => {
+    if (!walletAddress) {
+      Alert.alert('No Wallet', 'Please unlock your wallet first.', [
+        { text: 'OK', onPress: () => navigation.goBack() },
+      ]);
+      return;
+    }
+
+    const authenticated = await authenticateWithBiometrics('Approve login request');
+    if (!authenticated) {
+      Alert.alert(
+        'Authentication Required',
+        'Please authenticate to sign the login challenge.',
+        [{ text: 'OK', onPress: () => { processingRef.current = false; setScanned(false); } }],
+      );
+      return;
+    }
+
+    setPairing(true);
+    try {
+      const resp = await fetch(`${CONFIG.API_URL}/api/auth/verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          challenge_id: parsed.challengeId,
+          address: walletAddress,
+          nonce: parsed.nonce,
+        }),
+      });
+      const json = await resp.json().catch(() => ({}));
+      if (resp.ok && json.ok) {
+        Alert.alert(
+          'Logged In',
+          'You are now logged in on the website.',
+          [{ text: 'Done', onPress: () => navigation.goBack() }],
+        );
+      } else {
+        throw new Error(json.error || `HTTP ${resp.status}`);
+      }
+    } catch (err: any) {
+      Alert.alert(
+        'Login Failed',
+        err?.message || 'Could not complete login. Please try again.',
+        [
+          { text: 'Retry', onPress: () => { processingRef.current = false; setScanned(false); setPairing(false); } },
+          { text: 'Cancel', onPress: () => navigation.goBack() },
+        ],
+      );
+    } finally {
+      setPairing(false);
+    }
+  };
+
   // ── Permission not yet determined ──
   if (!permission) {
     return (
@@ -205,7 +290,7 @@ export default function ScanScreen() {
         {/* Bottom */}
         <View style={[styles.overlaySegment, { flex: 1, alignItems: 'center', justifyContent: 'flex-start', paddingTop: SPACING.xl }]}>
           <Text style={styles.scanLabel}>Scan a Thronos QR code</Text>
-          <Text style={styles.scanSub}>thrconnect:// or THR address</Text>
+          <Text style={styles.scanSub}>thrconnect:// · thronos://login · THR address</Text>
         </View>
       </View>
 

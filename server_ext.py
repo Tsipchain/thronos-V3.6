@@ -1769,6 +1769,32 @@ def wallet_v1_create_token():
     if any(t.get('symbol') == symbol for t in tokens):
         return _jsonify(ok=False, error='symbol_already_exists'), 400
 
+    # --- 100 THR creation fee ---
+    CREATION_FEE = 100.0
+    ledger = _srv3.load_json(_srv3.LEDGER_FILE, {})
+    creator_balance = float(ledger.get(from_addr, 0.0))
+    if creator_balance < CREATION_FEE:
+        return _jsonify(ok=False, error='insufficient_balance',
+                        detail=f'You need {CREATION_FEE} THR to create a token.',
+                        balance=round(creator_balance, 6), required=CREATION_FEE), 402
+
+    # --- Require minimum 100 USDT or USDC in Pytheia pools ---
+    MIN_PYTHEIA_STABLE = 100.0
+    token_bals = _srv3.load_token_balances()
+    usdt_bal = float(token_bals.get('USDT', {}).get(from_addr, 0.0))
+    usdc_bal = float(token_bals.get('USDC', {}).get(from_addr, 0.0))
+    if (usdt_bal + usdc_bal) < MIN_PYTHEIA_STABLE:
+        return _jsonify(ok=False, error='pytheia_pool_requirement',
+                        detail=f'You must hold at least {MIN_PYTHEIA_STABLE} USDT or USDC in Pytheia pools.',
+                        usdt_balance=round(usdt_bal, 6), usdc_balance=round(usdc_bal, 6),
+                        required=MIN_PYTHEIA_STABLE), 400
+
+    # Deduct 100 THR fee → Pytheia pool wallet
+    network_wallet = _srv3.os.getenv('NETWORK_FEE_WALLET', 'THR_NETWORK_FEES_00001')
+    ledger[from_addr] = round(creator_balance - CREATION_FEE, 6)
+    ledger[network_wallet] = round(float(ledger.get(network_wallet, 0.0)) + CREATION_FEE, 6)
+    _srv3.save_json(_srv3.LEDGER_FILE, ledger)
+
     token_id = str(_uuid3.uuid4())
     new_token = {
         'id': token_id, 'name': name, 'symbol': symbol,
@@ -1783,15 +1809,41 @@ def wallet_v1_create_token():
     balances[symbol][from_addr] = round(total_supply, decimals)
     _srv3.save_token_balances(balances)
 
+    # --- Mandatory liquidity pool: new token ↔ THR ---
+    pools = _srv3.load_pools()
+    pool_exists = any(
+        (p.get('token_a') == symbol and p.get('token_b') == 'THR') or
+        (p.get('token_a') == 'THR' and p.get('token_b') == symbol)
+        for p in pools
+    )
+    if not pool_exists:
+        pool_id = f"{symbol}-THR-{_uuid3.uuid4().hex[:8]}"
+        new_pool = {
+            'id': pool_id, 'token_a': symbol, 'token_b': 'THR',
+            'reserves_a': 0.0, 'reserves_b': 0.0,
+            'fee_bps': 30, 'volume_24h': 0.0, 'volume_total': 0.0,
+            'fees_collected': 0.0, 'last_swap_time': None,
+            'creator': from_addr,
+        }
+        pools.append(new_pool)
+        _srv3.save_pools(pools)
+
     ts = _t3.strftime('%Y-%m-%d %H:%M:%S UTC', _t3.gmtime())
     tx_id = f"TOKEN-CREATE-{int(_t3.time())}-{_uuid3.uuid4().hex[:8]}"
+    fee_tx = {
+        'type': 'token_create_fee', 'from': from_addr, 'to': network_wallet,
+        'amount': CREATION_FEE, 'symbol': 'THR',
+        'token_symbol': symbol, 'timestamp': ts, 'status': 'confirmed',
+    }
     tx = {
         'type': 'token_create', 'symbol': symbol, 'name': name,
         'decimals': decimals, 'owner': from_addr,
         'total_supply': round(total_supply, decimals),
+        'creation_fee': CREATION_FEE,
         'timestamp': ts, 'tx_id': tx_id, 'status': 'confirmed',
     }
     chain = _srv3.load_json(_srv3.CHAIN_FILE, [])
+    chain.append(fee_tx)
     chain.append(tx)
     _srv3.save_json(_srv3.CHAIN_FILE, chain)
     try: _srv3.update_last_block(tx, is_block=False)
@@ -1799,7 +1851,10 @@ def wallet_v1_create_token():
     try: _srv3.broadcast_tx(tx)
     except Exception: pass
 
-    return _jsonify(ok=True, status='success', token=new_token), 201
+    return _jsonify(ok=True, status='success', token=new_token,
+                    creation_fee=CREATION_FEE,
+                    new_balance=ledger.get(from_addr, 0.0),
+                    pool_created=not pool_exists), 201
 
 
 @app.route('/api/wallet/v1/nfts/mint', methods=['POST'])
@@ -1855,12 +1910,23 @@ def wallet_v1_nfts_mint():
     except (TypeError, ValueError):
         return _jsonify(ok=False, error='invalid_royalties'), 400
 
-    mint_fee = _srv4.NFT_MINT_FEE
+    # --- NFT Mint Fee: 1 THR + 0.5 USDT → Pytheia pool ---
+    thr_fee = 1.0
+    usdt_fee = 0.5
+
     ledger = _srv4.load_json(_srv4.LEDGER_FILE, {})
-    balance = float(ledger.get(from_addr, 0.0))
-    if balance < mint_fee:
-        return _jsonify(ok=False, error='insufficient_balance',
-                        mint_fee=mint_fee, balance=balance), 402
+    thr_balance = float(ledger.get(from_addr, 0.0))
+    if thr_balance < thr_fee:
+        return _jsonify(ok=False, error='insufficient_thr_balance',
+                        detail=f'You need at least {thr_fee} THR for minting.',
+                        thr_fee=thr_fee, balance=round(thr_balance, 6)), 402
+
+    token_bals = _srv4.load_token_balances()
+    usdt_balance = float(token_bals.get('USDT', {}).get(from_addr, 0.0))
+    if usdt_balance < usdt_fee:
+        return _jsonify(ok=False, error='insufficient_usdt_balance',
+                        detail=f'You need at least {usdt_fee} USDT for minting.',
+                        usdt_fee=usdt_fee, usdt_balance=round(usdt_balance, 6)), 402
 
     nft_id = f"NFT{int(_t4.time() * 1000)}"
     image_url = None
@@ -1878,36 +1944,57 @@ def wallet_v1_nfts_mint():
             except Exception:
                 image_url = None
 
-    ledger[from_addr] = round(balance - mint_fee, 6)
+    # Deduct 1 THR fee
     network_wallet = _srv4.os.getenv('NETWORK_FEE_WALLET', 'THR_NETWORK_FEES_00001')
-    ledger[network_wallet] = round(float(ledger.get(network_wallet, 0.0)) + mint_fee, 6)
+    ledger[from_addr] = round(thr_balance - thr_fee, 6)
+    ledger[network_wallet] = round(float(ledger.get(network_wallet, 0.0)) + thr_fee, 6)
     _srv4.save_json(_srv4.LEDGER_FILE, ledger)
 
+    # Deduct 0.5 USDT fee → Pytheia pool
+    usdt_bucket = token_bals.setdefault('USDT', {})
+    usdt_bucket[from_addr] = round(usdt_balance - usdt_fee, 6)
+    usdt_bucket[network_wallet] = round(float(usdt_bucket.get(network_wallet, 0.0)) + usdt_fee, 6)
+    _srv4.save_token_balances(token_bals)
+
     timestamp = _t4.strftime('%Y-%m-%d %H:%M:%S UTC', _t4.gmtime())
+    total_fee_display = f"{thr_fee} THR + {usdt_fee} USDT"
     nft = {
         'id': nft_id, 'name': name, 'description': description, 'category': category,
         'price': price, 'royalties': royalties, 'creator': from_addr, 'owner': from_addr,
-        'image_url': image_url, 'created_at': timestamp, 'for_sale': True, 'mint_fee': mint_fee,
+        'image_url': image_url, 'created_at': timestamp, 'for_sale': True,
+        'mint_fee_thr': thr_fee, 'mint_fee_usdt': usdt_fee,
     }
     registry = _srv4.load_nft_registry()
     registry.setdefault('nfts', []).append(nft)
     _srv4.save_nft_registry(registry)
 
     chain = _srv4.load_json(_srv4.CHAIN_FILE, [])
-    tx = {
-        'type': 'nft_mint', 'category': 'nft_mint', 'from': from_addr, 'to': network_wallet,
-        'amount': mint_fee, 'fee': mint_fee, 'fee_burned': mint_fee,
+    thr_tx = {
+        'type': 'nft_mint_fee', 'category': 'nft_mint', 'from': from_addr, 'to': network_wallet,
+        'amount': thr_fee, 'fee': thr_fee,
         'symbol': 'THR', 'token_symbol': 'THR', 'asset_symbol': 'THR',
         'nft_id': nft_id, 'nft_name': name, 'timestamp': timestamp, 'status': 'confirmed',
     }
-    chain.append(tx)
+    usdt_tx = {
+        'type': 'nft_mint_fee', 'category': 'nft_mint', 'from': from_addr, 'to': network_wallet,
+        'amount': usdt_fee, 'fee': usdt_fee,
+        'symbol': 'USDT', 'token_symbol': 'USDT', 'asset_symbol': 'USDT',
+        'nft_id': nft_id, 'nft_name': name, 'timestamp': timestamp, 'status': 'confirmed',
+    }
+    mint_tx = {
+        'type': 'nft_mint', 'category': 'nft_mint', 'from': from_addr,
+        'nft_id': nft_id, 'nft_name': name, 'timestamp': timestamp, 'status': 'confirmed',
+    }
+    chain.extend([thr_tx, usdt_tx, mint_tx])
     _srv4.save_json(_srv4.CHAIN_FILE, chain)
-    try: _srv4.update_last_block(tx, is_block=False)
+    try: _srv4.update_last_block(mint_tx, is_block=False)
     except Exception: pass
 
     nft['image_url'] = _srv4.normalize_media_url(nft.get('image_url') or nft.get('image'))
-    return _jsonify(ok=True, status='success', nft=nft, mint_fee=mint_fee,
-                    new_balance=ledger.get(from_addr, 0.0)), 201
+    return _jsonify(ok=True, status='success', nft=nft,
+                    mint_fee_thr=thr_fee, mint_fee_usdt=usdt_fee,
+                    new_thr_balance=ledger.get(from_addr, 0.0),
+                    new_usdt_balance=usdt_bucket.get(from_addr, 0.0)), 201
 
 
 @app.route('/api/wallet/v1/nfts/buy', methods=['POST'])
@@ -1999,6 +2086,79 @@ def wallet_v1_nfts_buy():
 
     return _jsonify(ok=True, status='success', nft=nft, price=price,
                     royalty=royalty_amount, new_balance=ledger.get(buyer, 0.0)), 200
+
+
+# ── Pool Invite ──────────────────────────────────────────────────────────────
+
+@app.route('/api/wallet/v1/pool/invite', methods=['POST'])
+def wallet_v1_pool_invite():
+    """
+    Invite a friend by THR address to a pool you own/created.
+    Requires signed action intent.
+
+    Required fields:
+      intent      – action='pool_invite'
+      signature, public_key
+      payload     – { pool_id, invitee_address }
+    """
+    import server as _srv6
+    import time as _t6
+
+    data = _request.get_json() or {}
+    intent_raw = data.get('intent')
+    signature  = (data.get('signature')  or '').strip()
+    public_key = (data.get('public_key') or '').strip()
+
+    if not (intent_raw and signature and public_key):
+        return _jsonify(ok=False, error='signed_wallet_action_required',
+                        detail='intent, signature, and public_key are required'), 401
+
+    intent = intent_raw if isinstance(intent_raw, dict) else {}
+    ok, err_code, err_detail = _verify_wallet_action_intent(intent, signature, public_key)
+    if not ok:
+        return _jsonify(ok=False, error=err_code, detail=err_detail), 400
+    payload = data.get('payload') or {}
+    if not _verify_action_payload_hash(intent.get('payload_hash', ''), payload):
+        return _jsonify(ok=False, error='payload_hash_mismatch',
+                        detail='payload does not match signed intent'), 400
+
+    from_addr       = str(intent.get('from_thr', '')).strip().upper()
+    pool_id         = str(payload.get('pool_id') or '').strip()
+    invitee_address = str(payload.get('invitee_address') or '').strip().upper()
+
+    if not from_addr or not pool_id or not invitee_address:
+        return _jsonify(ok=False, error='missing_required_fields',
+                        detail='pool_id and invitee_address are required'), 400
+    if from_addr == invitee_address:
+        return _jsonify(ok=False, error='cannot_invite_self'), 400
+
+    pools = _srv6.load_pools()
+    pool = next((p for p in pools if p.get('id') == pool_id), None)
+    if not pool:
+        return _jsonify(ok=False, error='pool_not_found'), 404
+
+    pool_creator = str(pool.get('creator') or '').upper()
+    if pool_creator != from_addr:
+        return _jsonify(ok=False, error='not_pool_creator',
+                        detail='Only the pool creator can invite members'), 403
+
+    invitees = pool.setdefault('invitees', [])
+    if invitee_address in invitees:
+        return _jsonify(ok=True, status='already_invited'), 200
+    invitees.append(invitee_address)
+    _srv6.save_pools(pools)
+
+    timestamp = _t6.strftime('%Y-%m-%d %H:%M:%S UTC', _t6.gmtime())
+    chain = _srv6.load_json(_srv6.CHAIN_FILE, [])
+    chain.append({
+        'type': 'pool_invite', 'pool_id': pool_id,
+        'from': from_addr, 'invitee': invitee_address,
+        'timestamp': timestamp, 'status': 'confirmed',
+    })
+    _srv6.save_json(_srv6.CHAIN_FILE, chain)
+
+    return _jsonify(ok=True, status='success',
+                    pool_id=pool_id, invitee=invitee_address), 200
 
 
 # ── THR Wallet PWA — served from public/wallet-pwa/ ───────────────────────────

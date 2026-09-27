@@ -3209,6 +3209,68 @@ async function _stopMusic() {
   }
 }
 
+async function _pwaConfirmAction(address, headline, detail) {
+  return new Promise((resolve) => {
+    const fid = LS.getObj(`thr_fid_${address}`);
+    const hasFid = !!(fid?.credId);
+
+    const overlay = document.createElement('div');
+    overlay.id = 'pwaConfirmActionModal';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.88);z-index:10001;display:flex;align-items:center;justify-content:center;padding:16px;';
+    overlay.innerHTML = `
+    <div style="background:#13112a;border:1px solid #2a2050;border-radius:12px;padding:20px;width:100%;max-width:400px;">
+      <div style="font-weight:700;color:#b08cf8;margin-bottom:16px;font-size:15px;text-align:center;">Confirm Action</div>
+      <div style="background:#0d0a1a;border:1px solid #2a2050;border-radius:8px;padding:14px;margin-bottom:16px;">
+        <div style="font-size:1.1rem;font-weight:700;color:#fff;margin-bottom:6px;text-align:center">${escHtml(headline)}</div>
+        ${detail ? `<div style="color:var(--muted);font-size:.85rem;text-align:center">${escHtml(detail)}</div>` : ''}
+      </div>
+      ${hasFid ? `<button id="confirmFidBtn" class="btn btn--faceid" style="width:100%;margin-bottom:8px">${fidSvg()} Confirm with Face ID</button><div style="margin:8px 0;color:var(--muted);font-size:.75rem;text-align:center">or</div>` : ''}
+      <div style="display:flex;gap:8px;margin-bottom:8px">
+        <input type="password" id="confirmPinInput" class="input" placeholder="Enter PIN to confirm" autocomplete="off" style="flex:1;margin-bottom:0">
+        <button id="confirmPinBtn" class="btn btn--primary" style="padding:10px 16px">Confirm</button>
+      </div>
+      <button id="confirmCancelBtn" style="width:100%;padding:8px;background:none;border:1px solid #333;border-radius:6px;color:#666;font-size:.82rem;cursor:pointer;">Cancel</button>
+      <div id="confirmErr" style="color:#ff6b6b;font-size:.82rem;margin-top:8px;text-align:center;min-height:16px"></div>
+    </div>`;
+
+    document.body.appendChild(overlay);
+    const cleanup = (result) => { overlay.remove(); resolve(result); };
+
+    overlay.querySelector('#confirmCancelBtn').addEventListener('click', () => cleanup(false));
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) cleanup(false); });
+
+    if (hasFid) {
+      overlay.querySelector('#confirmFidBtn').addEventListener('click', async () => {
+        try {
+          await assertWebAuthn(fid.credId);
+          cleanup(true);
+        } catch {
+          const errEl = overlay.querySelector('#confirmErr');
+          if (errEl) errEl.textContent = 'Face ID verification failed or cancelled';
+        }
+      });
+    }
+
+    const verifyPin = async () => {
+      const pin = overlay.querySelector('#confirmPinInput').value.trim();
+      if (!pin) { const e = overlay.querySelector('#confirmErr'); if (e) e.textContent = 'Enter your PIN'; return; }
+      try {
+        const acc = getAccounts().find(a => a.address === address);
+        if (!acc) throw new Error('no account');
+        const kit = typeof acc.kit === 'string' ? JSON.parse(acc.kit) : acc.kit;
+        const encBlob = kit.encrypted_private_key_backup ?? kit.wallet_v1_encrypted_priv ?? kit.encrypted_private_key ?? kit.enc_key;
+        await decryptBlob(encBlob, pin);
+        cleanup(true);
+      } catch {
+        const e = overlay.querySelector('#confirmErr');
+        if (e) e.textContent = 'Wrong PIN';
+      }
+    };
+    overlay.querySelector('#confirmPinBtn').addEventListener('click', verifyPin);
+    overlay.querySelector('#confirmPinInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') verifyPin(); });
+  });
+}
+
 async function _pwaConfirmSend(address, to, amount, token) {
   return new Promise((resolve) => {
     const fid = LS.getObj(`thr_fid_${address}`);
@@ -3623,6 +3685,10 @@ async function showSwap(preselectedIn = null) {
     const amtIn = parseFloat(document.getElementById('amountIn').value);
     const minOut = lastQuote.amount_out * 0.97; // 3% slippage tolerance
 
+    // Biometric/PIN confirmation before swap
+    const confirmed = await _pwaConfirmAction(address, `Swap ${amtIn} ${tokenIn}`, `→ ~${Number(lastQuote.amount_out).toLocaleString(undefined, {maximumFractionDigits:8})} ${tokenOut}`);
+    if (!confirmed) return;
+
     const btn = document.getElementById('swapExecBtn');
     btn.disabled = true; btn.textContent = 'Approving…';
     setSwapErr(null); setSwapOk(null);
@@ -3631,7 +3697,6 @@ async function showSwap(preselectedIn = null) {
       if (!ws || !ws.buildWalletActionIntent) {
         setSwapErr('Unlock wallet with biometric/passkey to approve this action.'); btn.disabled = false; btn.textContent = 'Swap Now'; return;
       }
-      // Signed intent — no private key sent to server
       const payload = { token_in: tokenIn, token_out: tokenOut, amount_in: amtIn, min_amount_out: minOut };
       const intent = await ws.buildWalletActionIntent(
         'swap',
@@ -4150,6 +4215,7 @@ async function showPools() {
         <div style="display:flex;gap:8px">
           <button class="btn btn--primary" style="flex:1;padding:8px;font-size:.8rem" onclick="showSwap('${a}')">🔄 Swap</button>
           <button class="btn btn--ghost" style="flex:1;padding:8px;font-size:.8rem" onclick="showAddLiquidity('${pool.id}','${a}','${b}')">+ Add Liquidity</button>
+          ${(pool.creator || '').toUpperCase() === address.toUpperCase() ? `<button class="btn btn--ghost" style="padding:8px;font-size:.8rem" onclick="showPoolInvite('${pool.id}','${a}','${b}')">📩 Invite</button>` : ''}
         </div>
       </div>`;
     }).join('');
@@ -4201,6 +4267,69 @@ async function showPythiaWithdrawIntent(poolId, pair, extAsset) {
       : `❌ ${d.error || 'Failed'}`);
     if (d.ok) showPools();
   } catch (e) { alert(`❌ ${e.message}`); }
+}
+
+async function showPoolInvite(poolId, tokenA, tokenB) {
+  const address = getActiveAddr();
+  if (!address) { showUnlock(); return; }
+
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:#000000aa;z-index:999;display:flex;align-items:flex-end;justify-content:center;';
+  overlay.innerHTML = `
+    <div style="background:#13112a;border-radius:16px 16px 0 0;width:100%;max-width:480px;padding:20px 20px 32px">
+      <div style="font-size:1rem;font-weight:700;color:#fff;margin-bottom:14px">📩 Invite to Pool</div>
+      <div style="font-size:.82rem;color:var(--muted);margin-bottom:10px">Pool: <span style="color:#b08cf8">${escHtml(tokenA)}/${escHtml(tokenB)}</span></div>
+      <label style="font-size:.82rem;color:var(--muted)">Friend's THR Address</label>
+      <input type="text" id="inviteAddr" class="input" placeholder="THR…" style="margin-bottom:14px">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <button id="inviteCancel" class="btn btn--ghost" style="padding:12px">Cancel</button>
+        <button id="inviteSendBtn" class="btn btn--primary" style="padding:12px">Send Invite</button>
+      </div>
+      <div id="inviteErr" style="margin-top:10px;color:#ff6b6b;font-size:.82rem;display:none"></div>
+      <div id="inviteOk" style="margin-top:10px;color:#00ff66;font-size:.82rem;display:none"></div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#inviteCancel').addEventListener('click', () => overlay.remove());
+
+  overlay.querySelector('#inviteSendBtn').addEventListener('click', async () => {
+    const invitee = overlay.querySelector('#inviteAddr').value.trim().toUpperCase();
+    const errEl = overlay.querySelector('#inviteErr');
+    const okEl = overlay.querySelector('#inviteOk');
+    errEl.style.display = 'none'; okEl.style.display = 'none';
+
+    if (!invitee) { errEl.textContent = 'Enter a THR address'; errEl.style.display = ''; return; }
+
+    const ws = window.walletSession;
+    if (!ws || ws.isLocked()) { errEl.textContent = 'Unlock wallet first'; errEl.style.display = ''; return; }
+
+    const btn = overlay.querySelector('#inviteSendBtn');
+    btn.disabled = true; btn.textContent = 'Sending…';
+    try {
+      const payload = { pool_id: poolId, invitee_address: invitee };
+      const intent = await ws.buildWalletActionIntent(
+        'pool_invite',
+        { from_thr: address, wallet_id: address, chain: 'thronos', asset: 'POOL', amount: '0' },
+        payload
+      );
+      const { signature, public_key } = await ws.signWalletActionIntent(intent);
+      const r = await fetch(`${API_WRITE}/api/wallet/v1/pool/invite`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ intent, signature, public_key, payload }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok && (d.ok || d.status === 'success' || d.status === 'already_invited')) {
+        okEl.textContent = d.status === 'already_invited' ? 'Already invited!' : `✅ Invite sent to ${invitee}`;
+        okEl.style.display = '';
+        setTimeout(() => overlay.remove(), 1800);
+      } else {
+        throw new Error(d.detail || d.error || 'Failed');
+      }
+    } catch (e) {
+      errEl.textContent = e.message || 'Invite failed';
+      errEl.style.display = '';
+      btn.disabled = false; btn.textContent = 'Send Invite';
+    }
+  });
 }
 
 async function showPythiaQuote(chain, token) {
@@ -4797,8 +4926,15 @@ async function showCreateToken() {
       </div>
       <div style="padding:4px 0">
         <p style="color:var(--muted);font-size:.8rem;margin-bottom:14px">
-          Launch your own experimental token on the Thronos network. The full supply is minted to your address.
+          Launch your own token on the Thronos network. The full supply is minted to your address.
         </p>
+        <div style="background:#1a1040;border:1px solid #2a2050;border-radius:8px;padding:12px;margin-bottom:14px">
+          <div style="font-size:.82rem;font-weight:600;color:#b08cf8;margin-bottom:6px">⬡ Creation Fee: 100 THR</div>
+          <div style="font-size:.75rem;color:var(--muted);line-height:1.4">
+            A mandatory liquidity pool (your token + THR) will be created automatically.
+            You must hold at least 100 USDT or USDC in Pytheia pools.
+          </div>
+        </div>
         <label style="font-size:.82rem;color:var(--muted)">Token Name</label>
         <input type="text" id="tokName" class="input" placeholder="e.g. My Awesome Token" style="margin-bottom:10px">
         <label style="font-size:.82rem;color:var(--muted)">Symbol (1-8 chars, A-Z0-9)</label>
@@ -4966,7 +5102,11 @@ function showMintNFT() {
   overlay.style.cssText = 'position:fixed;inset:0;background:#000000aa;z-index:999;display:flex;align-items:flex-end;justify-content:center;';
   overlay.innerHTML = `
     <div style="background:#13112a;border-radius:16px 16px 0 0;width:100%;max-width:480px;padding:20px 20px 32px;max-height:88vh;overflow-y:auto">
-      <div style="font-size:1rem;font-weight:700;color:#fff;margin-bottom:14px">🖼️ Mint NFT</div>
+      <div style="font-size:1rem;font-weight:700;color:#fff;margin-bottom:8px">🖼️ Mint NFT</div>
+      <div style="background:#1a1040;border:1px solid #2a2050;border-radius:8px;padding:10px;margin-bottom:14px">
+        <div style="font-size:.8rem;font-weight:600;color:#b08cf8">Mint Fee: 0.5 USDT + 1 THR</div>
+        <div style="font-size:.72rem;color:var(--muted)">Fees go to Pytheia AMM pool</div>
+      </div>
       <label style="font-size:.82rem;color:var(--muted)">Image (optional)</label>
       <input type="file" id="nftImg" accept="image/png,image/jpeg,image/gif,image/webp" style="margin-bottom:10px;width:100%;color:var(--muted)">
       <label style="font-size:.82rem;color:var(--muted)">Name</label>

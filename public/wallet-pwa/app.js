@@ -321,11 +321,14 @@ const _USDT_ARB  = '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9'; // 6 dec
 const _USDC_BASE = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'; // 6 dec
 
 // EVM asset action config
-const _EVM_CHAIN_IDS = { ethereum: 1, bnb: 56, arbitrum: 42161, base: 8453 };
+const _EVM_CHAIN_IDS = { ethereum: 1, bnb: 56, arbitrum: 42161, base: 8453, polygon: 137 };
+const _USDT_POLY = '0xc2132D05D31c914a87C6611C10748AEb04B58e8F'; // 6 dec
+const _USDC_POLY = '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359'; // 6 dec
 const _EVM_TOKENS = {
   bnb:      { USDT: { contract: _USDT_BNB, decimals: 18 } },
   arbitrum: { USDT: { contract: _USDT_ARB, decimals: 6  } },
   base:     { USDC: { contract: _USDC_BASE, decimals: 6  } },
+  polygon:  { USDT: { contract: _USDT_POLY, decimals: 6  }, USDC: { contract: _USDC_POLY, decimals: 6 } },
 };
 const _EVM_POOL_IDS = { bnb: 'bsc-usdt', base: 'base-usdc' };
 
@@ -401,19 +404,20 @@ let _pwaSigningCtx = null;
 
 async function _fetchAllChainBalances(privHex, btcAddr) {
   const evmAddr = privHex ? await _deriveEvmAddress(privHex) : null;
-  const [btc, eth, bnb, arb, op, base, usdtBnb, usdtArb, usdcBase] = await Promise.allSettled([
+  const [btc, eth, bnb, arb, op, base, poly, usdtBnb, usdtArb, usdcBase] = await Promise.allSettled([
     _fetchBtcBalance(btcAddr),
     _fetchEvmNative(evmAddr, _CC_RPC.eth),
     _fetchEvmNative(evmAddr, _CC_RPC.bnb),
     _fetchEvmNative(evmAddr, _CC_RPC.arb),
     _fetchEvmNative(evmAddr, _CC_RPC.op),
     _fetchEvmNative(evmAddr, _CC_RPC.base),
+    _fetchEvmNative(evmAddr, _CC_RPC.poly),
     _fetchErc20(evmAddr, _USDT_BNB, _CC_RPC.bnb, 18),
     _fetchErc20(evmAddr, _USDT_ARB, _CC_RPC.arb, 6),
     _fetchErc20(evmAddr, _USDC_BASE, _CC_RPC.base, 6),
   ]);
   const v = r => r.status === 'fulfilled' ? r.value : null;
-  return { evmAddr, btc: v(btc), eth: v(eth), bnb: v(bnb), arb: v(arb), op: v(op), base: v(base), usdtBnb: v(usdtBnb), usdtArb: v(usdtArb), usdcBase: v(usdcBase) };
+  return { evmAddr, btc: v(btc), eth: v(eth), bnb: v(bnb), arb: v(arb), op: v(op), base: v(base), poly: v(poly), usdtBnb: v(usdtBnb), usdtArb: v(usdtArb), usdcBase: v(usdcBase) };
 }
 
 async function fetchHistory(address) {
@@ -3226,11 +3230,11 @@ async function _pwaConfirmSend(address, to, amount, token) {
         <div style="color:var(--muted);font-size:.75rem;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">To</div>
         <div style="font-family:monospace;color:#b08cf8;font-size:.85rem;word-break:break-all">${escHtml(to)}</div>
       </div>
-      ${hasFid ? `<button id="confirmFidBtn" class="btn btn--faceid" style="width:100%;margin-bottom:8px">${fidSvg()} Confirm with Face ID</button><div style="margin:8px 0;color:var(--muted);font-size:.75rem;text-align:center">or</div>` : ''}
-      <div style="display:flex;gap:8px;margin-bottom:8px">
+      ${hasFid ? `<button id="confirmFidBtn" class="btn btn--faceid" style="width:100%;margin-bottom:8px">${fidSvg()} Confirm with Biometric</button>` : ''}
+      ${!hasFid ? `<div style="display:flex;gap:8px;margin-bottom:8px">
         <input type="password" id="confirmPinInput" class="input" placeholder="Enter PIN to confirm" autocomplete="off" style="flex:1;margin-bottom:0">
         <button id="confirmPinBtn" class="btn btn--primary" style="padding:10px 16px">Confirm</button>
-      </div>
+      </div>` : `<div style="margin:6px 0;color:var(--muted);font-size:.72rem;text-align:center">Biometric verification required for all transactions</div>`}
       <button id="confirmCancelBtn" style="width:100%;padding:8px;background:none;border:1px solid #333;border-radius:6px;color:#666;font-size:.82rem;cursor:pointer;">Cancel</button>
       <div id="confirmErr" style="color:#ff6b6b;font-size:.82rem;margin-top:8px;text-align:center;min-height:16px"></div>
     </div>`;
@@ -3268,8 +3272,10 @@ async function _pwaConfirmSend(address, to, amount, token) {
         if (e) e.textContent = 'Wrong PIN';
       }
     };
-    overlay.querySelector('#confirmPinBtn').addEventListener('click', verifyPin);
-    overlay.querySelector('#confirmPinInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') verifyPin(); });
+    const pinBtn = overlay.querySelector('#confirmPinBtn');
+    const pinInput = overlay.querySelector('#confirmPinInput');
+    if (pinBtn) pinBtn.addEventListener('click', verifyPin);
+    if (pinInput) pinInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') verifyPin(); });
   });
 }
 
@@ -3284,6 +3290,9 @@ function showSend(preselectedToken = null, prefillAddr = null) {
     { id: 'bnb',     label: '🔶 BNB',  placeholder: '0x…',        addrKey: 'evm' },
     { id: 'arbitrum',label: '🔵 ARB',  placeholder: '0x…',        addrKey: 'evm' },
     { id: 'base',    label: '⬛ Base', placeholder: '0x…',        addrKey: 'evm' },
+    { id: 'polygon', label: '🟣 POL',  placeholder: '0x…',        addrKey: 'evm' },
+    { id: 'solana',  label: '◎ SOL',   placeholder: 'So…',        addrKey: 'sol' },
+    { id: 'xrp',     label: '✕ XRP',   placeholder: 'r…',         addrKey: 'xrp' },
   ];
 
   render(`
@@ -3343,7 +3352,7 @@ function showSend(preselectedToken = null, prefillAddr = null) {
     }).catch(() => {});
   }
 
-  let btcAddr = '';
+  let btcAddr = '', solAddr = '', xrpAddr = '';
   if (privHex) {
     _fetchBtcAddress(privHex, address).then(a => {
       btcAddr = a;
@@ -3353,13 +3362,20 @@ function showSend(preselectedToken = null, prefillAddr = null) {
       }
     }).catch(() => {});
   }
+  // Fetch SOL/XRP addresses from wallet profile
+  fetch(`${API_WRITE}/wallet_data/${encodeURIComponent(address)}`).then(r => r.json()).then(d => {
+    solAddr = d?.sol_address || d?.addresses?.sol || '';
+    xrpAddr = d?.xrp_address || d?.addresses?.xrp || '';
+  }).catch(() => {});
 
   const getDepositAddr = (netId) => {
     if (netId === 'bitcoin') return btcAddr || '(unlock wallet to see)';
-    if (['ethereum','bnb','arbitrum','base'].includes(netId)) {
+    if (['ethereum','bnb','arbitrum','base','polygon'].includes(netId)) {
       if (cachedEvmAddr && _EVM_BLOCKED_SENDERS.has(cachedEvmAddr.toLowerCase())) return '(address error — contact support)';
       return cachedEvmAddr || '(unlock wallet to see)';
     }
+    if (netId === 'solana') return solAddr || '(SOL address — check wallet profile)';
+    if (netId === 'xrp') return xrpAddr || '(XRP address — check wallet profile)';
     return address;
   };
 
@@ -3395,6 +3411,9 @@ function showSend(preselectedToken = null, prefillAddr = null) {
         bnb:      ['BNB','USDT','USDC','BUSD'],
         arbitrum: ['ETH','USDT','USDC','ARB'],
         base:     ['ETH','USDC','USDT'],
+        polygon:  ['POL','USDT','USDC'],
+        solana:   ['SOL'],
+        xrp:      ['XRP'],
       };
       const tokens = tokensByNet[netId] || ['THR'];
       sel.innerHTML = tokens.map(t => `<option value="${t}"${t === (preselectedToken||tokens[0])?' selected':''}>${t}</option>`).join('');
@@ -3439,21 +3458,66 @@ function showSend(preselectedToken = null, prefillAddr = null) {
     if (!to) { setError('Enter a recipient address'); return; }
     if (!amount || amount <= 0) { setError('Enter a valid amount'); return; }
 
-    // Non-Thronos sends: route to bridge screen for now
-    if (selectedNetwork !== 'thronos') {
-      showBridge(token, 'WBTC');
-      return;
-    }
+    if (!privHex && !_pwaSigningCtx?.privHex) { setError('Wallet is locked — please unlock first'); return; }
 
-    if (!privHex) { setError('Wallet is locked — please unlock first'); return; }
-
-    const confirmed = await _pwaConfirmSend(address, to.toUpperCase(), amount, token);
+    const confirmed = await _pwaConfirmSend(address, to, amount, token);
     if (!confirmed) return;
 
     const btn = document.getElementById('sendBtn');
     btn.disabled = true; btn.textContent = 'Sending…'; setError(null);
     try {
-      const result = await sendToken(address, to.toUpperCase(), amount, token, privHex);
+      let result;
+      if (selectedNetwork === 'thronos') {
+        result = await sendToken(address, to.toUpperCase(), amount, token, privHex);
+      } else if (['ethereum','bnb','arbitrum','base','polygon'].includes(selectedNetwork)) {
+        if (!cachedEvmAddr) throw new Error('EVM address not available — unlock wallet first');
+        const guard = await _pwaEvmSendGuard(selectedNetwork, cachedEvmAddr);
+        if (!guard.ok) throw new Error(guard.userMsg);
+        const nonce = await _pwaEvmRpc(selectedNetwork, 'eth_getTransactionCount', [cachedEvmAddr, 'latest']);
+        const gasPrice = await _pwaEvmRpc(selectedNetwork, 'eth_gasPrice', []);
+        const nativeTokens = { ethereum:'ETH', bnb:'BNB', arbitrum:'ETH', base:'ETH', polygon:'POL' };
+        const isNative = token === nativeTokens[selectedNetwork] || token === 'ETH';
+        let txData = '0x', txTo = to, txValue = 0n, gasLimit = 21000n;
+        if (!isNative) {
+          const tkCfg = (_EVM_TOKENS[selectedNetwork] || {})[token];
+          if (!tkCfg) throw new Error(`Token ${token} not configured for ${selectedNetwork}`);
+          txData = _pwaEncodeErc20Transfer(to, amount, tkCfg.decimals);
+          txTo = tkCfg.contract;
+          gasLimit = 65000n;
+        } else {
+          txValue = BigInt(Math.round(amount * 1e18));
+        }
+        const txHash = await _pwaEvmSignAndBroadcast({
+          network: selectedNetwork, from: cachedEvmAddr, to: txTo,
+          value: txValue, data: txData, gasLimit, gasPrice, nonce,
+        });
+        result = { txid: txHash };
+      } else if (selectedNetwork === 'bitcoin') {
+        result = await sendToken(address, to, amount, 'BTC', privHex);
+      } else if (selectedNetwork === 'solana' || selectedNetwork === 'xrp') {
+        const ws = window.walletSession;
+        if (!ws || !ws.buildWalletActionIntent || !ws.signWalletActionIntent) {
+          throw new Error('Wallet session required for this chain');
+        }
+        const chain = selectedNetwork === 'solana' ? 'sol' : 'xrp';
+        const payload = { to: to.trim(), token, amount: String(amount), chain };
+        const intent = await ws.buildWalletActionIntent(
+          'cross_chain_transfer',
+          { from_thr: address, wallet_id: address, chain, asset: token, amount: String(amount), recipient: to.trim() },
+          payload
+        );
+        const { signature, public_key } = await ws.signWalletActionIntent(intent);
+        const r = await fetch(`${API_WRITE}/api/wallet/v1/transfer`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ intent, signature, public_key, payload }),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || d.error) throw new Error(d.error || d.message || 'Transfer failed');
+        result = d;
+      } else {
+        throw new Error('Unsupported network');
+      }
       setSuccess(`Sent! TX: ${result.tx_hash || result.txid || result.tx || 'submitted'}`);
       btn.textContent = 'Sent ✓';
       setTimeout(showWallet, 3000);
@@ -5107,7 +5171,7 @@ function _pwaEncodeErc20Transfer(toAddress, amount, decimals) {
 }
 
 async function _pwaEvmRpc(network, method, params) {
-  const rpcKey = {ethereum:'eth',bnb:'bnb',arbitrum:'arb',base:'base'}[network];
+  const rpcKey = {ethereum:'eth',bnb:'bnb',arbitrum:'arb',base:'base',polygon:'poly'}[network];
   const rpc = rpcKey ? _CC_RPC[rpcKey] : null;
   if (!rpc) throw new Error('unknown_network');
   const r = await fetch(rpc, {
@@ -5185,7 +5249,7 @@ async function _pwaEvmSignAndBroadcast({ network, from, to, value=0n, data='0x',
 function pwaOpenEvmAssetActions(network, evmAddr, tokenSym) {
   const existing = document.getElementById('pwaEvmActionSheet');
   if (existing) existing.remove();
-  const netLabel = {ethereum:'Ethereum',bnb:'BNB Chain',arbitrum:'Arbitrum',base:'Base'}[network] || network;
+  const netLabel = {ethereum:'Ethereum',bnb:'BNB Chain',arbitrum:'Arbitrum',base:'Base',polygon:'Polygon'}[network] || network;
   const tokenLabel = tokenSym || 'Assets';
   const hasPool = !!_EVM_POOL_IDS[network];
   const overlay = document.createElement('div');
@@ -5278,7 +5342,7 @@ async function pwaOpenEvmSendModal(network, evmAddr, tokenSym) {
 
   const existing = document.getElementById('pwaEvmSendModal');
   if (existing) existing.remove();
-  const netLabel = {ethereum:'Ethereum',bnb:'BNB Chain',arbitrum:'Arbitrum',base:'Base'}[network] || network;
+  const netLabel = {ethereum:'Ethereum',bnb:'BNB Chain',arbitrum:'Arbitrum',base:'Base',polygon:'Polygon'}[network] || network;
   const nativeSym = {ethereum:'ETH',bnb:'BNB',arbitrum:'ETH',base:'ETH'}[network] || 'ETH';
   const sendSym = tokenSym || nativeSym;
 

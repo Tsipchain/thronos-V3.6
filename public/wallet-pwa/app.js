@@ -3384,10 +3384,10 @@ function showSend(preselectedToken = null, prefillAddr = null) {
           ${preselectedToken && preselectedToken !== 'THR' ? `<option value="${escHtml(preselectedToken)}" selected>${escHtml(preselectedToken)}</option>` : ''}
         </select>
         <!-- Recipient -->
-        <label style="color:var(--muted);font-size:.82rem;margin-bottom:2px;display:block">Recipient address</label>
-        <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px">
-          <input type="text" id="toAddr" class="input" placeholder="THR… or 0x…" value="${escHtml(prefillAddr||'')}" autocomplete="off" autocorrect="off" spellcheck="false" style="flex:1;margin-bottom:0;padding:10px 12px;font-family:monospace;font-size:.85rem;border:1px solid #7c5cbf40;background:#0d0a1a">
-          <button id="scanAddrBtn" class="btn btn--ghost" style="padding:6px 8px;font-size:.85rem;flex-shrink:0" title="Scan QR">📷</button>
+        <label style="color:#b08cf8;font-size:.85rem;margin-bottom:4px;display:block;font-weight:600">Recipient address</label>
+        <div style="display:flex;gap:4px;align-items:center;margin-bottom:10px">
+          <input type="text" id="toAddr" class="input" placeholder="THR… or 0x…" value="${escHtml(prefillAddr||'')}" autocomplete="off" autocorrect="off" spellcheck="false" style="flex:1;margin-bottom:0;padding:12px 14px;font-family:'Courier New',monospace;font-size:.95rem;letter-spacing:.3px;border:2px solid #7c5cbf;border-radius:8px;background:#0d0a1a;color:#e8e0ff;min-height:44px">
+          <button id="scanAddrBtn" class="btn btn--ghost" style="padding:4px 6px;font-size:.7rem;flex-shrink:0;line-height:1;min-width:28px;min-height:28px;border-radius:6px" title="Scan QR">📷</button>
         </div>
         <!-- Amount -->
         <label style="color:var(--muted);font-size:.82rem">Amount</label>
@@ -3559,26 +3559,7 @@ function showSend(preselectedToken = null, prefillAddr = null) {
       } else if (selectedNetwork === 'bitcoin') {
         result = await sendToken(address, to, amount, 'BTC', privHex);
       } else if (selectedNetwork === 'solana' || selectedNetwork === 'xrp') {
-        const ws = window.walletSession;
-        if (!ws || !ws.buildWalletActionIntent || !ws.signWalletActionIntent) {
-          throw new Error('Wallet session required for this chain');
-        }
-        const chain = selectedNetwork === 'solana' ? 'sol' : 'xrp';
-        const payload = { to: to.trim(), token, amount: String(amount), chain };
-        const intent = await ws.buildWalletActionIntent(
-          'cross_chain_transfer',
-          { from_thr: address, wallet_id: address, chain, asset: token, amount: String(amount), recipient: to.trim() },
-          payload
-        );
-        const { signature, public_key } = await ws.signWalletActionIntent(intent);
-        const r = await fetch(`${API_WRITE}/api/wallet/v1/transfer`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ intent, signature, public_key, payload }),
-        });
-        const d = await r.json().catch(() => ({}));
-        if (!r.ok || d.error) throw new Error(d.error || d.message || 'Transfer failed');
-        result = d;
+        result = await _pwaSendSignedIntent(address, to.trim(), amount, token);
       } else {
         throw new Error('Unsupported network');
       }

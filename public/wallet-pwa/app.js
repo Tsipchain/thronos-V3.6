@@ -129,6 +129,79 @@ async function assertWebAuthn(credIdHex) {
   });
 }
 
+// ─── Unified Transaction Approval Gate ────────────────────────────────────────
+// Every wallet action that touches funds (send, swap, NFT, connect, token
+// creation, pool deposit, withdraw) MUST pass through this gate.
+// Biometric / passkey is REQUIRED — no PIN fallback, no confirm() fallback.
+// If no passkey is registered the action is blocked until the user sets one up.
+
+async function requireTxApproval({ action, lines, address }) {
+  const addr = address || getActiveAddr();
+  const fid = addr ? LS.getObj(`thr_fid_${addr}`) : null;
+  const hasFid = !!(fid?.credId);
+
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'thr-tx-approval-overlay';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.88);z-index:10001;display:flex;align-items:center;justify-content:center;padding:16px;';
+
+    const detailRows = (lines || []).map(
+      l => `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #1a1535">
+        <span style="color:var(--muted);font-size:.78rem">${escHtml(l.label)}</span>
+        <span style="color:#fff;font-size:.85rem;font-weight:600;text-align:right;max-width:60%;word-break:break-all">${escHtml(String(l.value))}</span>
+      </div>`
+    ).join('');
+
+    overlay.innerHTML = `
+    <div style="background:#13112a;border:1px solid #2a2050;border-radius:12px;padding:20px;width:100%;max-width:400px;">
+      <div style="font-weight:700;color:#b08cf8;margin-bottom:16px;font-size:15px;text-align:center;">
+        🔐 ${escHtml(action || 'Transaction')} Approval
+      </div>
+      <div style="background:#0d0a1a;border:1px solid #2a2050;border-radius:8px;padding:14px;margin-bottom:16px;">
+        ${detailRows}
+      </div>
+      ${hasFid ? `
+        <button id="txApproveFidBtn" class="btn btn--faceid" style="width:100%;margin-bottom:8px">${fidSvg()} Confirm with Biometric</button>
+        <div style="margin:6px 0;color:var(--muted);font-size:.72rem;text-align:center">Biometric verification required for all transactions</div>
+      ` : `
+        <div style="background:#1a1020;border:1px solid #f8446c44;border-radius:8px;padding:14px;margin-bottom:12px;text-align:center">
+          <div style="color:#f8446c;font-weight:600;margin-bottom:6px">Biometric Not Set Up</div>
+          <div style="color:var(--muted);font-size:.78rem">You must register Face ID / Touch ID / passkey before approving transactions.</div>
+          <button id="txApproveSetupBtn" class="btn btn--primary" style="margin-top:10px;padding:8px 20px;font-size:.82rem">Set Up Biometric Now</button>
+        </div>
+      `}
+      <button id="txApproveCancelBtn" style="width:100%;padding:8px;background:none;border:1px solid #333;border-radius:6px;color:#666;font-size:.82rem;cursor:pointer;">Cancel</button>
+      <div id="txApproveErr" style="color:#ff6b6b;font-size:.82rem;margin-top:8px;text-align:center;min-height:16px"></div>
+    </div>`;
+
+    document.body.appendChild(overlay);
+    const cleanup = (result) => { overlay.remove(); resolve(result); };
+
+    overlay.querySelector('#txApproveCancelBtn').addEventListener('click', () => cleanup(false));
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) cleanup(false); });
+
+    if (hasFid) {
+      overlay.querySelector('#txApproveFidBtn').addEventListener('click', async () => {
+        try {
+          await assertWebAuthn(fid.credId);
+          cleanup(true);
+        } catch {
+          const errEl = overlay.querySelector('#txApproveErr');
+          if (errEl) errEl.textContent = 'Biometric verification failed or cancelled';
+        }
+      });
+    } else {
+      const setupBtn = overlay.querySelector('#txApproveSetupBtn');
+      if (setupBtn) {
+        setupBtn.addEventListener('click', async () => {
+          cleanup(false);
+          if (typeof showFaceIdSetup === 'function') showFaceIdSetup(addr);
+        });
+      }
+    }
+  });
+}
+
 // ─── Multi-account storage ────────────────────────────────────────────────────
 // Schema:
 //   thr_accounts  → JSON: [{ address, kit: string, label?: string }]
@@ -2336,29 +2409,21 @@ async function _checkWcRequests(address, sessionId) {
 }
 
 async function _approveWcRequest(requestId, address) {
-  // Get session key (Face ID unlocks it)
+  const approved = await requireTxApproval({
+    action: 'dApp Connect',
+    address,
+    lines: [{ label: 'Request', value: requestId }],
+  });
+  if (!approved) return;
+
   const sessionKey = sessionStorage.getItem(`thr_sk_${address}`);
   if (!sessionKey) {
-    // Try Face ID unlock first
-    const fidData = localStorage.getItem(`thr_fid_${address}`);
-    if (fidData) {
-      try {
-        const parsed = JSON.parse(fidData);
-        const cred = await navigator.credentials.get({
-          publicKey: {
-            challenge: crypto.getRandomValues(new Uint8Array(32)),
-            rpId: location.hostname === 'localhost' ? 'localhost' : 'thronoschain.org',
-            allowCredentials: [{ type: 'public-key', id: Uint8Array.from(atob(parsed.credId), c => c.charCodeAt(0)) }],
-            userVerification: 'required',
-            timeout: 60000,
-          }
-        });
-        if (!cred) { alert('Face ID failed. Please unlock wallet first.'); return; }
-        alert('Face ID verified — fetching signing key…');
-      } catch(e) { alert('Face ID error: ' + e.message); return; }
-    } else {
-      alert('Wallet locked. Please unlock with PIN or Face ID first.'); return;
+    const reqArea = document.getElementById('wcRequestArea');
+    if (reqArea) {
+      const el = reqArea.querySelector(`[onclick*="${requestId}"]`)?.closest('div[style]');
+      if (el) el.querySelector('div:last-child').innerHTML = '<span style="color:#f88">Wallet locked — unlock first.</span>';
     }
+    return;
   }
 
   try {
@@ -2374,9 +2439,19 @@ async function _approveWcRequest(requestId, address) {
         if (el) { el.style.border = '1px solid #4a8a2a'; el.querySelector('div:last-child').innerHTML = '✅ Approved & signed'; }
       }
     } else {
-      alert('Approval failed: ' + (d.error || 'unknown'));
+      const reqArea = document.getElementById('wcRequestArea');
+      if (reqArea) {
+        const el = reqArea.querySelector(`[onclick*="${requestId}"]`)?.closest('div[style]');
+        if (el) el.querySelector('div:last-child').innerHTML = `<span style="color:#f88">Failed: ${d.error || 'unknown'}</span>`;
+      }
     }
-  } catch(e) { alert('Network error: ' + e.message); }
+  } catch(e) {
+    const reqArea = document.getElementById('wcRequestArea');
+    if (reqArea) {
+      const el = reqArea.querySelector(`[onclick*="${requestId}"]`)?.closest('div[style]');
+      if (el) el.querySelector('div:last-child').innerHTML = `<span style="color:#f88">Network error</span>`;
+    }
+  }
 }
 
 async function _rejectWcRequest(requestId, address) {
@@ -3214,68 +3289,13 @@ async function _stopMusic() {
 }
 
 async function _pwaConfirmSend(address, to, amount, token) {
-  return new Promise((resolve) => {
-    const fid = LS.getObj(`thr_fid_${address}`);
-    const hasFid = !!(fid?.credId);
-
-    const overlay = document.createElement('div');
-    overlay.id = 'pwaConfirmSendModal';
-    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.88);z-index:10001;display:flex;align-items:center;justify-content:center;padding:16px;';
-    overlay.innerHTML = `
-    <div style="background:#13112a;border:1px solid #2a2050;border-radius:12px;padding:20px;width:100%;max-width:400px;">
-      <div style="font-weight:700;color:#b08cf8;margin-bottom:16px;font-size:15px;text-align:center;">Confirm Transaction</div>
-      <div style="background:#0d0a1a;border:1px solid #2a2050;border-radius:8px;padding:14px;margin-bottom:16px;">
-        <div style="color:var(--muted);font-size:.75rem;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">You are about to send</div>
-        <div style="font-size:1.4rem;font-weight:700;color:#fff;margin-bottom:8px">${escHtml(String(amount))} ${escHtml(token)}</div>
-        <div style="color:var(--muted);font-size:.75rem;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">To</div>
-        <div style="font-family:monospace;color:#b08cf8;font-size:.85rem;word-break:break-all">${escHtml(to)}</div>
-      </div>
-      ${hasFid ? `<button id="confirmFidBtn" class="btn btn--faceid" style="width:100%;margin-bottom:8px">${fidSvg()} Confirm with Biometric</button>` : ''}
-      ${!hasFid ? `<div style="display:flex;gap:8px;margin-bottom:8px">
-        <input type="password" id="confirmPinInput" class="input" placeholder="Enter PIN to confirm" autocomplete="off" style="flex:1;margin-bottom:0">
-        <button id="confirmPinBtn" class="btn btn--primary" style="padding:10px 16px">Confirm</button>
-      </div>` : `<div style="margin:6px 0;color:var(--muted);font-size:.72rem;text-align:center">Biometric verification required for all transactions</div>`}
-      <button id="confirmCancelBtn" style="width:100%;padding:8px;background:none;border:1px solid #333;border-radius:6px;color:#666;font-size:.82rem;cursor:pointer;">Cancel</button>
-      <div id="confirmErr" style="color:#ff6b6b;font-size:.82rem;margin-top:8px;text-align:center;min-height:16px"></div>
-    </div>`;
-
-    document.body.appendChild(overlay);
-    const cleanup = (result) => { overlay.remove(); resolve(result); };
-
-    overlay.querySelector('#confirmCancelBtn').addEventListener('click', () => cleanup(false));
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) cleanup(false); });
-
-    if (hasFid) {
-      overlay.querySelector('#confirmFidBtn').addEventListener('click', async () => {
-        try {
-          await assertWebAuthn(fid.credId);
-          cleanup(true);
-        } catch {
-          const errEl = overlay.querySelector('#confirmErr');
-          if (errEl) errEl.textContent = 'Face ID verification failed or cancelled';
-        }
-      });
-    }
-
-    const verifyPin = async () => {
-      const pin = overlay.querySelector('#confirmPinInput').value.trim();
-      if (!pin) { const e = overlay.querySelector('#confirmErr'); if (e) e.textContent = 'Enter your PIN'; return; }
-      try {
-        const acc = getAccounts().find(a => a.address === address);
-        if (!acc) throw new Error('no account');
-        const kit = typeof acc.kit === 'string' ? JSON.parse(acc.kit) : acc.kit;
-        const encBlob = kit.encrypted_private_key_backup ?? kit.wallet_v1_encrypted_priv ?? kit.encrypted_private_key ?? kit.enc_key;
-        await decryptBlob(encBlob, pin);
-        cleanup(true);
-      } catch {
-        const e = overlay.querySelector('#confirmErr');
-        if (e) e.textContent = 'Wrong PIN';
-      }
-    };
-    const pinBtn = overlay.querySelector('#confirmPinBtn');
-    const pinInput = overlay.querySelector('#confirmPinInput');
-    if (pinBtn) pinBtn.addEventListener('click', verifyPin);
-    if (pinInput) pinInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') verifyPin(); });
+  return requireTxApproval({
+    action: 'Send',
+    address,
+    lines: [
+      { label: 'Amount', value: `${amount} ${token}` },
+      { label: 'To', value: to },
+    ],
   });
 }
 
@@ -3687,8 +3707,19 @@ async function showSwap(preselectedIn = null) {
     const amtIn = parseFloat(document.getElementById('amountIn').value);
     const minOut = lastQuote.amount_out * 0.97; // 3% slippage tolerance
 
+    const approved = await requireTxApproval({
+      action: 'Swap',
+      address,
+      lines: [
+        { label: 'From', value: `${amtIn} ${tokenIn}` },
+        { label: 'To (est.)', value: `${Number(lastQuote.amount_out).toFixed(6)} ${tokenOut}` },
+        { label: 'Slippage', value: '3%' },
+      ],
+    });
+    if (!approved) return;
+
     const btn = document.getElementById('swapExecBtn');
-    btn.disabled = true; btn.textContent = 'Approving…';
+    btn.disabled = true; btn.textContent = 'Swapping…';
     setSwapErr(null); setSwapOk(null);
 
     try {
@@ -4457,6 +4488,17 @@ async function showWithdraw(address) {
         return renderPage('Wallet is locked. Unlock with PIN or biometric first.', { token, chain: destChain });
       }
 
+      const wdApproved = await requireTxApproval({
+        action: 'Withdraw',
+        address,
+        lines: [
+          { label: 'Amount', value: `${amount} ${token}` },
+          { label: 'Chain', value: destChain },
+          { label: 'To', value: destAddr },
+        ],
+      });
+      if (!wdApproved) return;
+
       submitting = true;
       document.getElementById('wdSubmitBtn').textContent = 'Signing…';
       document.getElementById('wdSubmitBtn').disabled = true;
@@ -4899,8 +4941,20 @@ async function showCreateToken() {
       errEl.style.display = ''; return;
     }
 
+    const tokenApproved = await requireTxApproval({
+      action: 'Create Token',
+      address,
+      lines: [
+        { label: 'Name', value: name },
+        { label: 'Symbol', value: symbol },
+        { label: 'Supply', value: supply.toLocaleString() },
+        { label: 'Decimals', value: String(isNaN(decimals) ? 8 : decimals) },
+      ],
+    });
+    if (!tokenApproved) return;
+
     const btn = document.getElementById('tokCreateBtn');
-    btn.disabled = true; btn.textContent = 'Approving…';
+    btn.disabled = true; btn.textContent = 'Creating…';
     try {
       const effDecimals = isNaN(decimals) ? 8 : decimals;
       if (!ws || !ws.buildWalletActionIntent) {
@@ -4998,7 +5052,12 @@ async function buyNFT(nftId) {
   if (ws && ws.isLocked && ws.isLocked()) {
     alert('Unlock wallet with biometric/passkey to approve this action.'); return;
   }
-  if (!confirm('Buy this NFT?')) return;
+  const approved = await requireTxApproval({
+    action: 'Buy NFT',
+    address,
+    lines: [{ label: 'NFT', value: nftId }],
+  });
+  if (!approved) return;
   try {
     if (!ws || !ws.buildWalletActionIntent) { alert('Unlock wallet with biometric/passkey to approve this action.'); return; }
     const buyPayload = { nft_id: nftId };
@@ -5075,8 +5134,19 @@ function showMintNFT() {
       errEl.style.display = ''; return;
     }
 
+    const mintApproved = await requireTxApproval({
+      action: 'Mint NFT',
+      address,
+      lines: [
+        { label: 'Name', value: name },
+        { label: 'Price', value: `${price} THR` },
+        { label: 'Royalties', value: `${royalties}%` },
+      ],
+    });
+    if (!mintApproved) return;
+
     const btn = overlay.querySelector('#nftMintBtn');
-    btn.disabled = true; btn.textContent = 'Approving…';
+    btn.disabled = true; btn.textContent = 'Minting…';
     try {
       let image_data_url = '';
       if (file) image_data_url = await readFileAsDataUrl(file);
@@ -5594,32 +5664,19 @@ async function pwaOpenEvmSendModal(network, evmAddr, tokenSym) {
       if (resultEl) resultEl.innerHTML = '<span style="color:#f88">Click "Estimate Gas" first.</span>'; return;
     }
 
-    // ── Final biometric/passkey confirmation before broadcast ───────────────
-    // User-presence check right at send time — required even if wallet is unlocked.
-    // Uses the platform authenticator (Face ID / Touch ID / Windows Hello / passkey).
-    // If no WebAuthn credential is registered, requires PIN re-entry via the
-    // legacy unlock prompt. Broadcast is blocked until confirmation succeeds.
-    const thrForAuth = _pwaSigningCtx?.address || '';
-    const fid = thrForAuth ? LS.getObj(`thr_fid_${thrForAuth}`) : null;
-    if (fid?.credId) {
-      if (resultEl) resultEl.innerHTML = '<span style="color:#8af">Confirm with biometric / passkey…</span>';
-      try {
-        await assertWebAuthn(fid.credId);
-      } catch (biomErr) {
-        if (resultEl) resultEl.innerHTML = `<span style="color:#f88">Biometric confirmation cancelled or failed — send aborted.</span>`;
-        return;
-      }
-    } else {
-      const confirmed = confirm(
-        `Confirm external send:\n\n` +
-        `Amount: ${amt} ${tokenSym || sendSym}\n` +
-        `To: ${toAddr}\n\n` +
-        `No biometric registered on this device — proceeding uses your unlocked wallet key. Continue?`
-      );
-      if (!confirmed) {
-        if (resultEl) resultEl.innerHTML = '<span style="color:#f88">Send cancelled by user.</span>';
-        return;
-      }
+    // ── Biometric/passkey confirmation before broadcast — REQUIRED ──────────
+    const evmApproved = await requireTxApproval({
+      action: 'External Send',
+      address: _pwaSigningCtx?.address || '',
+      lines: [
+        { label: 'Amount', value: `${amt} ${tokenSym || sendSym}` },
+        { label: 'To', value: toAddr },
+        { label: 'Network', value: network },
+      ],
+    });
+    if (!evmApproved) {
+      if (resultEl) resultEl.innerHTML = '<span style="color:#f88">Send cancelled — biometric approval required.</span>';
+      return;
     }
 
     if (resultEl) resultEl.innerHTML = '<span style="color:#8af">Signing and broadcasting…</span>';
@@ -5785,29 +5842,19 @@ async function pwaOpenPoolDepositModal(network, evmAddr) {
       return;
     }
 
-    // ── Biometric / passkey confirmation — same pattern as external EVM send ──
-    const fid = LS.getObj(`thr_fid_${thrAddr}`);
-    if (fid?.credId) {
-      if (resultEl) resultEl.innerHTML = '<span style="color:#8af">Confirm deposit with biometric / passkey…</span>';
-      try {
-        await assertWebAuthn(fid.credId);
-      } catch (biomErr) {
-        if (resultEl) resultEl.innerHTML = '<span style="color:#f88">Biometric confirmation cancelled — deposit aborted.</span>';
-        return;
-      }
-    } else {
-      const confirmed = confirm(
-        `Confirm pool deposit (both sides):\n\n` +
-        `External: ${amt} ${asset}\n` +
-        `THR:      ${thrAmt}\n` +
-        `Pool: ${poolId}\n` +
-        `Vault: ${vaultAddr}\n\n` +
-        `No biometric registered on this device — proceeding uses your unlocked wallet key. Continue?`
-      );
-      if (!confirmed) {
-        if (resultEl) resultEl.innerHTML = '<span style="color:#f88">Deposit cancelled by user.</span>';
-        return;
-      }
+    // ── Biometric / passkey confirmation — REQUIRED ──
+    const poolApproved = await requireTxApproval({
+      action: 'Pool Deposit',
+      address: thrAddr,
+      lines: [
+        { label: 'External', value: `${amt} ${asset}` },
+        { label: 'THR', value: String(thrAmt) },
+        { label: 'Pool', value: poolId },
+      ],
+    });
+    if (!poolApproved) {
+      if (resultEl) resultEl.innerHTML = '<span style="color:#f88">Deposit cancelled — biometric approval required.</span>';
+      return;
     }
 
     if (resultEl) resultEl.innerHTML = '<span style="color:#8af">Estimating gas…</span>';
@@ -5957,25 +6004,24 @@ async function handle3FAApproval(approvalId, action) {
   const deviceId = localStorage.getItem('thr_device_id') || '';
   if (!addr || !deviceId) return;
 
-  const endpoint = action === 'deny' ? '/api/3fa/approval/deny' : '/api/3fa/approval/approve';
-
-  if (action !== 'deny') {
-    try {
-      const fidId = localStorage.getItem('thr_fid_' + addr);
-      if (fidId) {
-        await navigator.credentials.get({
-          publicKey: {
-            challenge: new TextEncoder().encode(approvalId),
-            allowCredentials: [{ type: 'public-key', id: Uint8Array.from(atob(fidId), c => c.charCodeAt(0)) }],
-            userVerification: 'required',
-            timeout: 60000,
-          },
-        });
-      }
-    } catch (_) { /* biometric optional — fall through */ }
+  if (action === 'deny') {
+    const resp = await fetch('/api/3fa/approval/deny', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ approval_id: approvalId, device_id: deviceId }),
+    });
+    return resp.json();
   }
 
-  const resp = await fetch(endpoint, {
+  const approved = await requireTxApproval({
+    action: '3FA Approval',
+    address: addr,
+    lines: [{ label: 'Approval ID', value: approvalId }],
+  });
+  if (!approved) return { ok: false, error: 'biometric_denied' };
+
+  const resp = await fetch('/api/3fa/approval/approve', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
@@ -5991,25 +6037,18 @@ if ('serviceWorker' in navigator) {
       if (user_action === 'approve' || user_action === 'deny') {
         await handle3FAApproval(approval_id, user_action);
       } else {
-        const overlay = document.createElement('div');
-        overlay.id = 'tfa-overlay';
-        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:9999;display:flex;align-items:center;justify-content:center;';
         const details = e.data.details || {};
-        overlay.innerHTML = `
-          <div style="background:#1a1a2e;border:1px solid #7c5cbf;border-radius:12px;padding:24px;max-width:360px;text-align:center;">
-            <h3 style="color:#fff;margin:0 0 12px;">Transaction Approval</h3>
-            <p style="color:#ccc;">${details.action || 'Transaction'} ${details.amount ? details.amount + ' THR' : ''}</p>
-            ${details.to ? `<p style="color:#888;font-size:12px;">To: ${details.to}</p>` : ''}
-            <div style="display:flex;gap:12px;justify-content:center;margin-top:16px;">
-              <button onclick="window._tfa_resolve('approve')" style="padding:10px 24px;background:#23ff6b;color:#000;border:none;border-radius:8px;font-weight:bold;cursor:pointer;">Approve</button>
-              <button onclick="window._tfa_resolve('deny')" style="padding:10px 24px;background:#f44;color:#fff;border:none;border-radius:8px;cursor:pointer;">Deny</button>
-            </div>
-          </div>`;
-        document.body.appendChild(overlay);
-        window._tfa_resolve = async (action) => {
-          overlay.remove();
-          await handle3FAApproval(approval_id, action);
-        };
+        const tfaLines = [];
+        if (details.action) tfaLines.push({ label: 'Action', value: details.action });
+        if (details.amount) tfaLines.push({ label: 'Amount', value: `${details.amount} THR` });
+        if (details.to) tfaLines.push({ label: 'To', value: details.to });
+        tfaLines.push({ label: 'Approval ID', value: approval_id });
+
+        const approved = await requireTxApproval({
+          action: details.action || 'Transaction',
+          lines: tfaLines,
+        });
+        await handle3FAApproval(approval_id, approved ? 'approve' : 'deny');
       }
     }
   });

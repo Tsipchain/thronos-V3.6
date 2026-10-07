@@ -502,33 +502,77 @@ async function fetchHistory(address) {
   } catch { return []; }
 }
 
-// V1-compatible send: signed intent required — no private key sent to server
 async function sendToken(from, to, amount, token) {
   const ws = window.walletSession;
   const tok = (token || 'THR').toUpperCase();
 
-  if (!ws || !ws.buildWalletActionIntent || !ws.signWalletActionIntent) {
-    throw new Error('Unlock wallet with biometric/passkey to approve this action.');
-  }
-  if (ws.isLocked && ws.isLocked()) {
-    throw new Error('Unlock wallet with biometric/passkey to approve this action.');
+  if (ws && ws.buildWalletActionIntent && ws.signWalletActionIntent && !(ws.isLocked && ws.isLocked())) {
+    const payload = { to: to.trim(), token: tok, amount: String(amount) };
+    const intent = await ws.buildWalletActionIntent(
+      'internal_transfer',
+      { from_thr: from, wallet_id: from, chain: 'thronos', asset: tok, amount: String(amount), recipient: to.trim() },
+      payload
+    );
+    const { signature, public_key } = await ws.signWalletActionIntent(intent);
+    const r = await fetch(`${API_WRITE}/api/wallet/v1/transfer`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ intent, signature, public_key, payload }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok && !d.error) return d;
+    throw new Error(d.error || d.message || 'send_failed');
   }
 
-  const payload = { to: to.trim(), token: tok, amount: String(amount) };
-  const intent = await ws.buildWalletActionIntent(
-    'internal_transfer',
-    { from_thr: from, wallet_id: from, chain: 'thronos', asset: tok, amount: String(amount), recipient: to.trim() },
-    payload
-  );
-  const { signature, public_key } = await ws.signWalletActionIntent(intent);
-  const r = await fetch(`${API_WRITE}/api/wallet/v1/transfer`, {
+  if (!_pwaSigningCtx?.privHex) {
+    throw new Error('Wallet is locked — unlock with biometric/passkey first.');
+  }
+  return _pwaSendSignedIntent(from, to.trim(), amount, tok);
+}
+
+async function _pwaSendSignedIntent(from, recipient, amount, asset) {
+  const { secp256k1, sha256 } = await _loadNobleLibs();
+  const privBytes = hexToBytes(_pwaSigningCtx.privHex.replace(/^0x/, ''));
+  const pubBytes = secp256k1.getPublicKey(privBytes, true);
+
+  const intent = {
+    amount: String(amount),
+    asset: asset,
+    asset_origin_chain: 'thronos',
+    created_at: new Date().toISOString(),
+    fee_asset: 'THR',
+    from_thr: from,
+    nonce: bytesToHex(crypto.getRandomValues(new Uint8Array(16))),
+    recipient: recipient,
+    type: 'thronos_internal_transfer',
+    version: '1',
+  };
+
+  const fields = ['amount','asset','asset_origin_chain','created_at',
+                  'fee_asset','from_thr','nonce','recipient','type','version'];
+  const canonical = '{' + fields.map(k => `"${k}":${JSON.stringify(String(intent[k]))}`).join(',') + '}';
+  const msgBytes = new TextEncoder().encode(canonical);
+  const hash = sha256(msgBytes);
+
+  let sig;
+  if (typeof secp256k1.sign === 'function') {
+    sig = secp256k1.sign(hash, privBytes, { lowS: true });
+  } else {
+    sig = await secp256k1.signAsync(hash, privBytes, { lowS: true });
+  }
+
+  const r = await fetch(`${API_WRITE}/api/wallet/internal-transfer`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ intent, signature, public_key, payload }),
+    body: JSON.stringify({
+      intent,
+      signature: sig.toDERHex(),
+      public_key: bytesToHex(pubBytes),
+    }),
   });
   const d = await r.json().catch(() => ({}));
-  if (r.ok && !d.error) return d;
-  throw new Error(d.error || d.message || 'send_failed');
+  if (r.ok && d.ok !== false) return d;
+  throw new Error(d.error || d.detail || d.message || 'send_failed');
 }
 
 // ─── DOM helpers ──────────────────────────────────────────────────────────────
@@ -3340,10 +3384,10 @@ function showSend(preselectedToken = null, prefillAddr = null) {
           ${preselectedToken && preselectedToken !== 'THR' ? `<option value="${escHtml(preselectedToken)}" selected>${escHtml(preselectedToken)}</option>` : ''}
         </select>
         <!-- Recipient -->
-        <label style="color:var(--muted);font-size:.82rem">Recipient address</label>
-        <div style="display:flex;gap:8px;align-items:center;margin-bottom:4px">
-          <input type="text" id="toAddr" class="input" placeholder="THR…" value="${escHtml(prefillAddr||'')}" autocomplete="off" autocorrect="off" spellcheck="false" style="flex:1;margin-bottom:0">
-          <button id="scanAddrBtn" class="btn btn--ghost" style="padding:10px 12px;font-size:1.1rem" title="Scan QR">📷</button>
+        <label style="color:var(--muted);font-size:.82rem;margin-bottom:2px;display:block">Recipient address</label>
+        <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px">
+          <input type="text" id="toAddr" class="input" placeholder="THR… or 0x…" value="${escHtml(prefillAddr||'')}" autocomplete="off" autocorrect="off" spellcheck="false" style="flex:1;margin-bottom:0;padding:10px 12px;font-family:monospace;font-size:.85rem;border:1px solid #7c5cbf40;background:#0d0a1a">
+          <button id="scanAddrBtn" class="btn btn--ghost" style="padding:6px 8px;font-size:.85rem;flex-shrink:0" title="Scan QR">📷</button>
         </div>
         <!-- Amount -->
         <label style="color:var(--muted);font-size:.82rem">Amount</label>
@@ -3695,12 +3739,11 @@ async function showSwap(preselectedIn = null) {
 
   document.getElementById('swapExecBtn').addEventListener('click', async () => {
     if (!lastQuote) { setSwapErr('Get a quote first'); return; }
-    const ws = window.walletSession;
-    if (ws && ws.isLocked && ws.isLocked()) {
-      setSwapErr('Unlock wallet with biometric/passkey to approve this action.'); return;
-    }
-    if (!_pwaSigningCtx?.privHex && !(ws && !ws.isLocked())) {
-      setSwapErr('Unlock wallet to approve this swap.'); return;
+    if (!_pwaSigningCtx?.privHex) {
+      const ws = window.walletSession;
+      if (!ws || (ws.isLocked && ws.isLocked())) {
+        setSwapErr('Unlock wallet with biometric/passkey to approve this action.'); return;
+      }
     }
     const tokenIn = document.getElementById('tokenIn').value;
     const tokenOut = document.getElementById('tokenOut').value;
@@ -3723,23 +3766,50 @@ async function showSwap(preselectedIn = null) {
     setSwapErr(null); setSwapOk(null);
 
     try {
-      if (!ws || !ws.buildWalletActionIntent) {
-        setSwapErr('Unlock wallet with biometric/passkey to approve this action.'); btn.disabled = false; btn.textContent = 'Swap Now'; return;
-      }
-      // Signed intent — no private key sent to server
+      const ws = window.walletSession;
       const payload = { token_in: tokenIn, token_out: tokenOut, amount_in: amtIn, min_amount_out: minOut };
-      const intent = await ws.buildWalletActionIntent(
-        'swap',
-        { from_thr: address, wallet_id: address, chain: 'thronos', asset: tokenIn, amount: String(amtIn), recipient: tokenOut },
-        payload
-      );
-      const { signature, public_key } = await ws.signWalletActionIntent(intent);
-      const body = { intent, signature, public_key, payload };
-      btn.textContent = 'Swapping…';
-      const r = await fetch(`${API_WRITE}/api/wallet/v1/swap`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-      });
-      const d = await r.json().catch(() => ({}));
+      let r, d;
+
+      if (ws && ws.buildWalletActionIntent && !(ws.isLocked && ws.isLocked())) {
+        const intent = await ws.buildWalletActionIntent(
+          'swap',
+          { from_thr: address, wallet_id: address, chain: 'thronos', asset: tokenIn, amount: String(amtIn), recipient: tokenOut },
+          payload
+        );
+        const { signature, public_key } = await ws.signWalletActionIntent(intent);
+        r = await fetch(`${API_WRITE}/api/wallet/v1/swap`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ intent, signature, public_key, payload }),
+        });
+      } else if (_pwaSigningCtx?.privHex) {
+        const { secp256k1, sha256 } = await _loadNobleLibs();
+        const privBytes = hexToBytes(_pwaSigningCtx.privHex.replace(/^0x/, ''));
+        const pubBytes = secp256k1.getPublicKey(privBytes, true);
+        const nonce = bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
+        const ts = new Date().toISOString();
+        const sigPayload = { action: 'swap', canonical_v1_address: address, nonce, payload: {}, timestamp: ts };
+        const sigJson = JSON.stringify(sigPayload, Object.keys(sigPayload).sort());
+        const hash = sha256(new TextEncoder().encode(sigJson));
+        let sig;
+        if (typeof secp256k1.sign === 'function') {
+          sig = secp256k1.sign(hash, privBytes, { lowS: true });
+        } else {
+          sig = await secp256k1.signAsync(hash, privBytes, { lowS: true });
+        }
+        const sigHex = sig.toCompactHex();
+        r = await fetch(`${API_WRITE}/api/swap/execute`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...payload, trader_thr: address, canonical_v1_address: address,
+            action: 'swap', nonce, timestamp: ts,
+            signature: sigHex, public_key: bytesToHex(pubBytes),
+          }),
+        });
+      } else {
+        throw new Error('wallet_locked');
+      }
+
+      d = await r.json().catch(() => ({}));
       if (r.ok && d.status === 'success') {
         setSwapOk(`✅ Swapped! Received ${Number(d.amount_out).toLocaleString(undefined, {maximumFractionDigits:8})} ${tokenOut}`);
         btn.textContent = 'Swap Now';

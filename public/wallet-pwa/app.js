@@ -2355,50 +2355,66 @@ async function _handleLoginQr(uri, address) {
     return;
   }
 
-  const ws = window.walletSession;
-  if (!ws || !ws.signLoginChallenge) {
-    alert('Unlock wallet with biometric/passkey to approve login.');
-    return;
-  }
-  if (ws.isLocked && ws.isLocked()) {
-    alert('Wallet is locked. Unlock with biometric/passkey first.');
-    return;
-  }
-
   const challengeResponse = {
-    type: 'thronos_api_login',
-    version: '1',
+    audience: audience,
     challenge_id: challengeId,
     nonce: nonce,
-    audience: audience,
     timestamp: ts || String(Math.floor(Date.now() / 1000)),
+    type: 'thronos_api_login',
+    version: '1',
   };
 
-  try {
-    const { signature, public_key } = await ws.signLoginChallenge(challengeResponse);
+  let signature, public_key;
 
+  const ws = window.walletSession;
+  if (ws && ws.signLoginChallenge && !(ws.isLocked && ws.isLocked())) {
+    try {
+      const result = await ws.signLoginChallenge(challengeResponse);
+      signature = result.signature;
+      public_key = result.public_key;
+    } catch (e) {
+      if (e.message !== 'wallet_locked') { alert('Login signing failed: ' + e.message); return; }
+    }
+  }
+
+  if (!signature && _pwaSigningCtx?.privHex) {
+    const approved = await requireTxApproval({ action: 'Login', address, lines: [{ label: 'Audience', value: audience }] });
+    if (!approved) return;
+    try {
+      const { secp256k1, sha256 } = await _loadNobleLibs();
+      const privBytes = hexToBytes(_pwaSigningCtx.privHex.replace(/^0x/, ''));
+      const pubBytes = secp256k1.getPublicKey(privBytes, true);
+      const fields = Object.keys(challengeResponse).sort();
+      const canonical = '{' + fields.map(k => `"${k}":${JSON.stringify(String(challengeResponse[k]))}`).join(',') + '}';
+      const hash = sha256(new TextEncoder().encode(canonical));
+      const sig = typeof secp256k1.sign === 'function'
+        ? secp256k1.sign(hash, privBytes, { lowS: true })
+        : await secp256k1.signAsync(hash, privBytes, { lowS: true });
+      signature = sig.toDERHex();
+      public_key = bytesToHex(pubBytes);
+    } catch (e) { alert('Signing failed: ' + e.message); return; }
+  }
+
+  if (!signature) {
+    alert('Wallet is locked — unlock first to approve login.');
+    return;
+  }
+
+  try {
     const resp = await fetch(`${API_WRITE}/api/auth/verify`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({
-        challenge_response: challengeResponse,
-        signature,
-        public_key,
-      }),
+      body: JSON.stringify({ challenge_response: challengeResponse, signature, public_key }),
     });
     const data = await resp.json();
     if (data.ok) {
-      alert(`Logged in as ${data.address.slice(0, 14)}...\nPledge: ${data.pledge_ok ? 'Active' : 'Not pledged'}\nRedirecting to: ${data.route}`);
+      alert(`Logged in as ${(data.address || address).slice(0, 14)}...\nPledge: ${data.pledge_ok ? 'Active' : 'Not pledged'}`);
     } else {
       alert('Login failed: ' + (data.detail || data.error || 'Unknown error'));
     }
   } catch (e) {
-    if (e.message === 'wallet_locked') {
-      alert('Wallet is locked. Unlock with biometric/passkey to approve login.');
-    } else {
-      alert('Login signing failed: ' + e.message);
-    }
+    alert('Login request failed: ' + e.message);
   }
 }
 

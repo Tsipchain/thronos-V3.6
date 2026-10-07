@@ -9994,6 +9994,93 @@ def api_v2_wallet_history():
     }), 200
 
 
+_auth_challenges = {}
+
+@app.route("/api/auth/challenge", methods=["POST"])
+def api_auth_challenge():
+    import uuid, time as _time
+    cid = uuid.uuid4().hex
+    nonce = uuid.uuid4().hex
+    ts = str(int(_time.time()))
+    audience = request.host_url.rstrip("/")
+    expires_in = 120
+    _auth_challenges[cid] = {
+        "nonce": nonce, "audience": audience, "ts": ts,
+        "expires_at": _time.time() + expires_in, "consumed": False,
+        "address": None,
+    }
+    for old_id in [k for k, v in _auth_challenges.items() if _time.time() > v["expires_at"] + 60]:
+        _auth_challenges.pop(old_id, None)
+    qr_uri = f"thronos://login?challenge_id={cid}&nonce={nonce}&audience={audience}&ts={ts}"
+    return jsonify({"ok": True, "challenge": {"challenge_id": cid}, "qr_uri": qr_uri, "expires_in": expires_in})
+
+@app.route("/api/auth/challenge/status/<challenge_id>")
+def api_auth_challenge_status(challenge_id):
+    import time as _time
+    ch = _auth_challenges.get(challenge_id)
+    if not ch:
+        return jsonify({"ok": False, "error": "challenge_expired"}), 404
+    if _time.time() > ch["expires_at"]:
+        _auth_challenges.pop(challenge_id, None)
+        return jsonify({"ok": False, "error": "challenge_expired"}), 410
+    if ch["consumed"]:
+        session["wallet_address"] = ch["address"]
+        return jsonify({"ok": True, "consumed": True, "address": ch["address"]})
+    return jsonify({"ok": True, "consumed": False})
+
+@app.route("/api/auth/verify", methods=["POST"])
+def api_auth_verify():
+    import time as _time
+    data = request.get_json() or {}
+    cr = data.get("challenge_response", {})
+    sig_hex = data.get("signature", "")
+    pubkey_hex = data.get("public_key", "")
+    cid = cr.get("challenge_id", "")
+    ch = _auth_challenges.get(cid)
+    if not ch:
+        return jsonify({"ok": False, "error": "challenge_expired"}), 404
+    if _time.time() > ch["expires_at"]:
+        _auth_challenges.pop(cid, None)
+        return jsonify({"ok": False, "error": "challenge_expired"}), 410
+    if ch["consumed"]:
+        return jsonify({"ok": False, "error": "challenge_already_consumed"}), 409
+    if cr.get("nonce") != ch["nonce"]:
+        return jsonify({"ok": False, "error": "nonce_mismatch"}), 400
+    fields = sorted(cr.keys())
+    canonical = "{" + ",".join(f'"{k}":{json.dumps(str(cr[k]))}' for k in fields) + "}"
+    try:
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.exceptions import InvalidSignature
+        pub_bytes = bytes.fromhex(pubkey_hex)
+        sig_bytes = bytes.fromhex(sig_hex)
+        pub_obj = ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256K1(), pub_bytes)
+        pub_obj.verify(sig_bytes, canonical.encode("utf-8"), ec.ECDSA(hashes.SHA256()))
+    except InvalidSignature:
+        return jsonify({"ok": False, "error": "invalid_signature"}), 403
+    except Exception as exc:
+        return jsonify({"ok": False, "error": f"signature_error: {exc}"}), 400
+    try:
+        import wallet_v1_production_final as wallet_v1_prod
+        ok, err = wallet_v1_prod.verify_publickey_matches_address({"from": "", "publicKey": pubkey_hex})
+        address = wallet_v1_prod.public_key_to_address(pubkey_hex) if hasattr(wallet_v1_prod, "public_key_to_address") else ""
+    except Exception:
+        address = ""
+    if not address:
+        address = "THR" + pubkey_hex[:40]
+    ch["consumed"] = True
+    ch["address"] = address
+    ledger = load_json(LEDGER_FILE, {})
+    pledge_ok = float(ledger.get(address, 0)) > 0
+    return jsonify({"ok": True, "address": address, "pledge_ok": pledge_ok, "route": "/dashboard"})
+
+@app.route("/api/auth/session")
+def api_auth_session():
+    addr = session.get("wallet_address")
+    if not addr:
+        return jsonify({"ok": False, "error": "no_session"}), 401
+    return jsonify({"ok": True, "address": addr, "route": "/dashboard"})
+
 @app.route("/login")
 def login_page():
     """Login with Thronos Wallet — QR code login page."""

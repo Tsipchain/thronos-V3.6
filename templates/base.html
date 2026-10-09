@@ -7436,6 +7436,22 @@ async function openHeaderWalletModal(){
     }
 
     if (walletState === 'missing_signing_key') {
+        // If user has a PIN (set during QR connect), do PIN unlock instead of import
+        if (addr && pin) {
+            const entered = prompt('🔐 Enter PIN to unlock wallet');
+            if (entered === null) return;
+            if (entered === pin) {
+                walletSession.setBound(true);
+                walletSession.setQrSession(true);
+                setWalletOpen(true);
+                showWalletContentSection();
+                loadWalletBalances(true);
+                updateWalletUI();
+            } else {
+                alert('Wrong PIN');
+            }
+            return;
+        }
         setWalletOpen(true);
         showWalletLoginForm();
         setTimeout(() => {
@@ -9329,8 +9345,20 @@ async function startQrWalletLogin() {
                     const sessData = await sessResp.json();
                     if (sessData.ok && sessData.address) {
                         walletSession.setAddress(sessData.address);
-                        walletSession.setBound(true);
                         walletSession.setQrSession(true);
+
+                        // Prompt for PIN on this device (3FA: website=PIN, PWA=biometric)
+                        const existingPin = walletSession.getPin();
+                        if (!existingPin) {
+                            const pinVal = prompt('🔐 Set a PIN for this device\n\nThis PIN will be used to authorize transactions on this browser.\nYour PWA handles biometric signing (3FA).');
+                            if (pinVal && pinVal.trim().length >= 4) {
+                                walletSession.setPin(pinVal.trim());
+                            } else if (pinVal !== null) {
+                                alert('PIN must be at least 4 characters. You can set it later from wallet settings.');
+                            }
+                        }
+
+                        walletSession.setBound(true);
                         updateWalletUI();
                         showWalletContentSection();
                         loadWalletBalances(true);

@@ -7477,19 +7477,8 @@ async function openHeaderWalletModal(){
         return;
     }
 
-    // No wallet at all → send to pledge to create one
-    const hasV1Stored = !!(localStorage.getItem('wallet_v1_address'));
-    if (!addr && !hasV1Stored) {
-        if (window.location.pathname === '/pledge') {
-            const pledgeForm = document.getElementById('pledgeForm') || document.querySelector('.pledge-form');
-            if (pledgeForm) pledgeForm.scrollIntoView({behavior: 'smooth'});
-        } else {
-            window.location.href = '/pledge';
-        }
-        return;
-    }
-
-    // Has wallet data but not bound → show modal with QR + login form
+    // No wallet locally or not bound → show QR login (primary connect method)
+    // Pledge is only for NEW wallet registration, not for connecting existing wallets
     setWalletOpen(true);
     if(!walletSession.isBound()){
         showWalletLoginForm();

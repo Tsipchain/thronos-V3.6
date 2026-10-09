@@ -58,7 +58,7 @@ import fcntl
 import requests
 import redis
 from urllib.parse import urlparse
-from flask import Flask, request, jsonify, send_from_directory, render_template, render_template_string, url_for, send_file, Response, make_response, redirect
+from flask import Flask, request, jsonify, send_from_directory, render_template, render_template_string, url_for, send_file, Response, make_response, redirect, session
 
 try:
     from flask_cors import CORS
@@ -156,6 +156,7 @@ from ai_models_config import base_model_config
 from ai_interaction_ledger import compute_model_stats, create_ai_transfer_from_ledger_entry
 
 app = Flask(__name__)
+app.secret_key = os.getenv("FLASK_SECRET_KEY", os.urandom(32).hex())
 # Allow thronoschain.org (Vercel CDN + Plesk branding site) and all subdomains,
 # plus the Railway/Render service URLs and localhost for development.
 # Uses wildcard fallback when flask_cors is unavailable.

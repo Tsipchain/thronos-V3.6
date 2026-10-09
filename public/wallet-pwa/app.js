@@ -502,7 +502,7 @@ async function fetchHistory(address) {
   } catch { return []; }
 }
 
-async function sendToken(from, to, amount, token) {
+async function sendToken(from, to, amount, token, privKeyOverride) {
   const ws = window.walletSession;
   const tok = (token || 'THR').toUpperCase();
 
@@ -524,6 +524,9 @@ async function sendToken(from, to, amount, token) {
     throw new Error(d.error || d.message || 'send_failed');
   }
 
+  if (privKeyOverride && !_pwaSigningCtx?.privHex) {
+    _pwaSigningCtx = { address: from, privHex: privKeyOverride };
+  }
   if (!_pwaSigningCtx?.privHex) {
     throw new Error('Wallet is locked — unlock with biometric/passkey first.');
   }
@@ -1273,6 +1276,12 @@ async function promptFaceID(address, privHex) {
   document.getElementById('skipFID').addEventListener('click', () => showWallet());
 }
 
+function showFaceIdSetup(addr) {
+  const { privHex } = unlocked.get(addr) || {};
+  if (privHex) { promptFaceID(addr, privHex); return; }
+  showUnlock();
+}
+
 function fidSvg() {
   return `<svg class="faceid-symbol" viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="1.8">
     <rect x="1" y="1" width="8" height="8" rx="2"/><rect x="19" y="1" width="8" height="8" rx="2"/>
@@ -1514,9 +1523,9 @@ async function showWallet() {
       </div>
 
       <!-- Address bar -->
-      <div style="display:flex;align-items:center;justify-content:space-between;background:#0d0a1a;border-radius:8px;padding:8px 12px;margin-bottom:10px">
-        <span id="addrLine" style="font-family:monospace;font-size:.8rem;color:var(--accent);cursor:pointer" title="Tap to copy">${shortAddr(address)}</span>
-        <button onclick="document.getElementById('copyAddrBtn').click()" style="background:none;border:1px solid var(--accent);color:var(--accent);font-size:.7rem;padding:2px 8px;border-radius:4px;cursor:pointer" id="copyAddrBtn">Copy</button>
+      <div style="display:flex;align-items:center;justify-content:space-between;background:#0d0a1a;border:1px solid #2a2050;border-radius:10px;padding:12px 14px;margin-bottom:10px">
+        <span id="addrLine" style="font-family:'Courier New',monospace;font-size:.95rem;color:var(--accent);cursor:pointer;letter-spacing:.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0" title="Tap to copy full address">${address}</span>
+        <button onclick="document.getElementById('copyAddrBtn').click()" style="background:#1a1040;border:1px solid var(--accent);color:var(--accent);font-size:.78rem;padding:5px 12px;border-radius:6px;cursor:pointer;margin-left:8px;flex-shrink:0;font-weight:600" id="copyAddrBtn">Copy</button>
       </div>
 
       <!-- Balances + Token list -->
@@ -1612,7 +1621,7 @@ async function showWallet() {
 
   const setAddrBarValue = (full) => {
     const lineEl = document.getElementById('addrLine');
-    if (lineEl) lineEl.textContent = full ? shortAddr(full) : '(unlock wallet to see)';
+    if (lineEl) lineEl.textContent = full || '(unlock wallet to see)';
     const copyBtn = document.getElementById('copyAddrBtn');
     if (copyBtn) copyBtn.dataset.fullAddr = full || '';
   };
@@ -5248,6 +5257,26 @@ function showMintNFT() {
   });
 }
 
+// ─── Auto-update toast ───────────────────────────────────────────────────────
+
+let _updateToastShown = false;
+function _showUpdateToast() {
+  if (_updateToastShown) return;
+  _updateToastShown = true;
+  const toast = document.createElement('div');
+  toast.style.cssText = 'position:fixed;bottom:16px;left:16px;right:16px;z-index:20000;background:linear-gradient(135deg,#1a1040,#0d0a1a);border:1px solid #7c5cbf;border-radius:12px;padding:14px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px;box-shadow:0 8px 32px rgba(0,0,0,.6);';
+  toast.innerHTML = `
+    <div style="color:#e8e0ff;font-size:.88rem;flex:1">
+      <div style="font-weight:700;margin-bottom:2px">Update available</div>
+      <div style="color:#b08cf8;font-size:.78rem">Tap refresh to get the latest version</div>
+    </div>
+    <button id="updateRefreshBtn" style="background:#7c5cbf;border:none;color:#fff;padding:8px 18px;border-radius:8px;font-weight:700;font-size:.85rem;cursor:pointer;flex-shrink:0">Refresh</button>
+    <button id="updateDismissBtn" style="background:none;border:none;color:#666;font-size:1.1rem;cursor:pointer;padding:4px 6px;flex-shrink:0">✕</button>`;
+  document.body.appendChild(toast);
+  toast.querySelector('#updateRefreshBtn').addEventListener('click', () => location.reload());
+  toast.querySelector('#updateDismissBtn').addEventListener('click', () => toast.remove());
+}
+
 // ─── Extra CSS for new components (injected once) ────────────────────────────
 
 function injectExtraStyles() {
@@ -6002,7 +6031,24 @@ async function pwaOpenPoolDepositModal(network, evmAddr) {
 
 async function boot() {
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/wallet-pwa/sw.js', { scope: '/wallet-pwa/' }).catch(() => {});
+    const reg = await navigator.serviceWorker.register('/wallet-pwa/sw.js', { scope: '/wallet-pwa/' }).catch(() => null);
+    if (reg) {
+      reg.addEventListener('updatefound', () => {
+        const nw = reg.installing;
+        if (!nw) return;
+        nw.addEventListener('statechange', () => {
+          if (nw.state === 'activated' && navigator.serviceWorker.controller) {
+            _showUpdateToast();
+          }
+        });
+      });
+      // Check for SW updates now and every 10 minutes
+      reg.update().catch(() => {});
+      setInterval(() => reg.update().catch(() => {}), 10 * 60 * 1000);
+    }
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (document.visibilityState === 'visible') _showUpdateToast();
+    });
   }
   injectExtraStyles();
 
@@ -6028,6 +6074,8 @@ window.buyNFT = buyNFT;
 window.pwaOpenEvmAssetActions = pwaOpenEvmAssetActions;
 window.pwaOpenEvmSendModal = pwaOpenEvmSendModal;
 window.pwaOpenPoolDepositModal = pwaOpenPoolDepositModal;
+window.showFaceIdSetup = showFaceIdSetup;
+window.showPools = typeof showPools === 'function' ? showPools : () => {};
 
 // ─── 3FA Push Notification Registration & Approval Handling ─────────────────
 

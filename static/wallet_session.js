@@ -14,6 +14,8 @@
   const VERIFIED_LEGACY_SOURCE_ADDRESS = 'THR79ca94a7eb70a6aa99d12d7fdb01446ef246301a';
   const VERIFIED_CANONICAL_V1_ADDRESS = 'THR683318ACF083723B3EDFE6C0A30AD62670F00353';
 
+  const QR_SESSION_KEY = 'wallet_qr_session';
+
   const SESSION_UNLOCK_KEY = 'thr_v1_session_unlock';
   const SESSION_UNLOCK_TTL = 30 * 60 * 1000; // 30 minutes
 
@@ -73,6 +75,8 @@
   function readJson(key){ try { return JSON.parse(localStorage.getItem(key) || '{}'); } catch(_) { return {}; } }
   function setBound(v){ localStorage.setItem(BOUND_KEY, v ? '1' : '0'); }
   function isBound(){ return localStorage.getItem(BOUND_KEY) === '1'; }
+  function setQrSession(v){ try { if(v) sessionStorage.setItem(QR_SESSION_KEY,'1'); else sessionStorage.removeItem(QR_SESSION_KEY); } catch(_){} }
+  function isQrSession(){ try { return sessionStorage.getItem(QR_SESSION_KEY)==='1'; } catch(_){ return false; } }
   function isLocked(){ return localStorage.getItem(LOCK_KEY) === '1'; }
 
   function normalizeAddress(addr){ return (addr || '').toString().trim(); }
@@ -151,9 +155,8 @@
       return 'no_active_wallet';
     }
 
-    // Active address exists - check key material
     if (!hasEncrypted) {
-      // No signing key stored locally
+      if (isQrSession() && isBound()) return 'qr_connected';
       return 'active_wallet_no_key';
     }
 
@@ -1180,8 +1183,10 @@
     // Check for encrypted signing material
     const hasEncryptedKey = !!localStorage.getItem(V1_ENCRYPTED_KEY);
 
-    // If no encrypted key material at all
-    if (!hasEncryptedKey) return 'missing_signing_key';
+    if (!hasEncryptedKey) {
+      if (isQrSession() && isBound()) return 'connected_readonly';
+      return 'missing_signing_key';
+    }
 
     // If encrypted key exists, check if it's unlocked in memory
     if (unlockedPrivateKeyHex) return 'signing_ready';
@@ -1239,7 +1244,7 @@
     }
   }
 
-  function disconnect(){ setBound(false); localStorage.setItem(LOCK_KEY, '1'); unlockedPrivateKeyHex = null; }
+  function disconnect(){ setBound(false); setQrSession(false); localStorage.setItem(LOCK_KEY, '1'); unlockedPrivateKeyHex = null; }
   function forgetDevice(){ [ADDRESS_KEY,SEND_SECRET_KEY,SEND_SEED_KEY,SEND_SEED_COMPAT_KEY,PIN_KEY,BOUND_KEY,LOCK_KEY,V1_ENCRYPTED_KEY,V1_PUBLIC_KEY,V1_ADDRESS_KEY,MIGRATION_META_KEY].forEach(k => localStorage.removeItem(k)); unlockedPrivateKeyHex = null; }
   function clearSession(){ forgetDevice(); }
   function saveSession({address, sendSeed, pin, bound} = {}){ setAddress(address || ''); setSendSeed(sendSeed || ''); setPin(pin || ''); setBound(bound !== undefined ? !!bound : !!(address && sendSeed)); if (address || sendSeed) localStorage.setItem(LOCK_KEY, '0'); }
@@ -1440,7 +1445,7 @@
     getCredentialLookupAddress, getSendSeed, setSendSeed, getSendSecret, setSendSecret,
     hasSigningMaterial, hasRuntimeSigningMaterial, getWalletAuthDiagnostics, logWalletAuthDiagnostics,
     getPin, setPin, isLocked, lockWallet, lock: lockWallet, unlockWallet, unlock: unlockWallet, unlock,
-    setCustomUnlockHandler, isBound, setBound, disconnect, forgetDevice, clearSession, saveSession, requirePin, confirmUserPresence,
+    setCustomUnlockHandler, isBound, setBound, isQrSession, setQrSession, disconnect, forgetDevice, clearSession, saveSession, requirePin, confirmUserPresence,
     isUnlockedFor,
     getDebugState, restoreToMigratedWallet, resetActiveWalletPointers, clearAllWalletData, isValidThrAddress,
     persistActiveUserAddress, isSystemWalletAddress,

@@ -3409,10 +3409,10 @@ function showSend(preselectedToken = null, prefillAddr = null) {
           ${preselectedToken && preselectedToken !== 'THR' ? `<option value="${escHtml(preselectedToken)}" selected>${escHtml(preselectedToken)}</option>` : ''}
         </select>
         <!-- Recipient -->
-        <label style="color:#b08cf8;font-size:.85rem;margin-bottom:4px;display:block;font-weight:600">Recipient address</label>
-        <div style="display:flex;gap:4px;align-items:center;margin-bottom:10px">
-          <input type="text" id="toAddr" class="input" placeholder="THR… or 0x…" value="${escHtml(prefillAddr||'')}" autocomplete="off" autocorrect="off" spellcheck="false" style="flex:1;margin-bottom:0;padding:12px 14px;font-family:'Courier New',monospace;font-size:.95rem;letter-spacing:.3px;border:2px solid #7c5cbf;border-radius:8px;background:#0d0a1a;color:#e8e0ff;min-height:44px">
-          <button id="scanAddrBtn" class="btn btn--ghost" style="padding:4px 6px;font-size:.7rem;flex-shrink:0;line-height:1;min-width:28px;min-height:28px;border-radius:6px" title="Scan QR">📷</button>
+        <label style="color:#b08cf8;font-size:.88rem;margin-bottom:6px;display:block;font-weight:600">Recipient address</label>
+        <div style="display:flex;gap:8px;align-items:stretch;margin-bottom:12px">
+          <input type="text" id="toAddr" class="input" placeholder="THR… or 0x…" value="${escHtml(prefillAddr||'')}" autocomplete="off" autocorrect="off" spellcheck="false" style="flex:1;margin-bottom:0;padding:14px 14px;font-family:'Courier New',monospace;font-size:1rem;letter-spacing:.3px;border:2px solid #7c5cbf;border-radius:10px;background:#0d0a1a;color:#e8e0ff;min-height:52px">
+          <button id="scanAddrBtn" class="btn btn--ghost" style="padding:10px 14px;font-size:1.3rem;flex-shrink:0;line-height:1;min-width:52px;min-height:52px;border-radius:10px;border:2px solid #7c5cbf;background:#1a1040;display:flex;align-items:center;justify-content:center" title="Scan QR">📷</button>
         </div>
         <!-- Amount -->
         <label style="color:var(--muted);font-size:.82rem">Amount</label>
@@ -3836,19 +3836,17 @@ async function showSwap(preselectedIn = null) {
 
 const HISTORY_FILTERS = [
   { key: 'all', label: 'All' },
+  { key: 'sent', label: '📤 Sent' },
+  { key: 'received', label: '📥 Received' },
   { key: 'thr_transfer', label: 'THR' },
   { key: 'token_transfer', label: 'Tokens' },
-  { key: 'deposits', label: '📥 Deposits' },
   { key: 'swap', label: 'Swaps' },
   { key: 'liquidity', label: '💧 Liquidity' },
   { key: 'evm_sends', label: '🔄 EVM Transfers' },
-  { key: 'mining_reward', label: 'Mining' },
   { key: 'pledge', label: 'Pledges' },
   { key: 'crosschain', label: 'Cross-Chain' },
-  { key: 'rpc-crosschain', label: 'RPC / Cross-chain' },
   { key: 'bridge', label: 'Bridge' },
-  { key: 'mint', label: 'Mint' },
-  { key: 'burn', label: 'Burn' },
+  { key: 'mining_reward', label: 'Mining' },
 ];
 
 // Event types that belong to "pledge" filter category
@@ -3928,45 +3926,76 @@ function _parseTxDate(ts) {
 }
 
 const _EVENT_TYPE_LABELS = {
-  pool_add_liquidity_intent_created:        '💧 LP intent created',
-  pool_add_liquidity_external_tx_confirmed: '✅ External deposit confirmed',
-  pool_add_liquidity_lp_minted:             '🌱 LP shares minted',
-  pledge_usdt_bnb_confirmed:                '💵 USDT pledge confirmed',
-  crosschain_deposit_detected:              '📥 Cross-chain deposit',
-  crosschain_transfer_received:             '📥 Cross-chain transfer received',
-  crosschain_transfer_sent:                 '📤 Cross-chain transfer sent',
-  bridge_deposit_detected:                  '⚡ Bridge deposit',
-  pool_deposit:                             '💧 Pool In · THR',
+  thr_transfer:                             '💎 THR Transfer',
+  token_transfer:                           '🪙 Token Transfer',
+  token_send:                               '📤 Sent',
+  token_receive:                            '📥 Received',
+  evm_token_send:                           '📤 EVM Send',
+  evm_token_receive:                        '📥 EVM Received',
+  internal_transfer:                        '🔄 Internal Transfer',
+  transfer:                                 '🔄 Transfer',
+  pool_add_liquidity_intent_created:        '💧 LP Intent Created',
+  pool_add_liquidity_external_tx_confirmed: '✅ External Deposit Confirmed',
+  pool_add_liquidity_lp_minted:             '🌱 LP Shares Minted',
+  pool_deposit:                             '💧 Pool Deposit',
   pool_external_deposit_detected:           '🌉 External Pool Deposit',
   pool_withdraw_intent:                     '⏳ Withdrawal Intent',
-  pool_out:                                 '↩ Pool Out',
-  pool_seed:                                '💧 Pool seeded',
-  pool_withdraw:                            '↩ Pool Out',
-  pool_add_liquidity:                       '💧 Add liquidity',
+  pool_out:                                 '↩ Pool Withdrawal',
+  pool_seed:                                '💧 Pool Seeded',
+  pool_withdraw:                            '↩ Pool Withdrawal',
+  pool_add_liquidity:                       '💧 Add Liquidity',
+  swap:                                     '🔄 Swap',
+  pledge:                                   '🔒 Pledge',
+  pledge_usdt_bnb_confirmed:                '💵 USDT Pledge Confirmed',
+  crosschain_deposit_detected:              '📥 Cross-chain Deposit',
+  crosschain_deposit_confirmed:             '✅ Cross-chain Confirmed',
+  crosschain_transfer_received:             '📥 Cross-chain Received',
+  crosschain_transfer_sent:                 '📤 Cross-chain Sent',
+  crosschain_withdraw:                      '🔄 Cross-chain Withdrawal',
+  crosschain_withdrawal_requested:          '📤 Withdrawal Requested',
+  crosschain_withdrawal_fee_charged:        '🔥 Withdrawal Fee',
+  bridge_deposit_detected:                  '⚡ Bridge Deposit',
+  bridge:                                   '⚡ Bridge',
   external_withdrawal_request:              '📤 External Withdrawal',
   crosschain_withdrawal_request:            '📤 External Withdrawal',
-  pledge:                                   '🔒 Pledge',
-  token_receive:                            '📥 Received',
-  token_send:                               '📤 Sent',
-  evm_token_receive:                        '📥 EVM Deposit',
-  crosschain_deposit_confirmed:             '✅ Cross-chain deposit confirmed',
-  crosschain_withdraw:                      '🔄 Cross-chain withdrawal',
-  crosschain_withdrawal_requested:          '📤 Withdrawal requested',
-  crosschain_withdrawal_fee_charged:        '🔥 Withdrawal fee',
-  gateway_payout:                           '💰 Gateway payout',
-  bridge:                                   '⚡ Bridge',
+  gateway_payout:                           '💰 Gateway Payout',
+  gateway_withdrawal:                       '📤 Gateway Withdrawal',
+  mining_reward:                            '⛏️ Mining Reward',
+  staking_reward:                           '🏦 Staking Reward',
+  music_tip:                                '🎵 Music Tip',
+  music_purchase:                           '🎵 Music Purchase',
+  ai_credit:                                '🤖 AI Credit',
+  ai_payment:                               '🤖 AI Payment',
+  iot_event:                                '📡 IoT Event',
+  iot_payment:                              '📡 IoT Payment',
+  l2e_reward:                               '🎓 L2E Reward',
+  t2e_reward:                               '📋 T2E Reward',
+  nft_mint:                                 '🖼 NFT Mint',
+  nft_transfer:                             '🖼 NFT Transfer',
+  nft_sale:                                 '🖼 NFT Sale',
+  parking_payment:                          '🅿 Parking Payment',
+  parking_refund:                           '🅿 Parking Refund',
+  vault_deposit:                            '🔐 Vault Deposit',
+  vault_withdraw:                           '🔐 Vault Withdrawal',
+  mint:                                     '🌱 Mint',
+  burn:                                     '🔥 Burn',
+  fee:                                      '💸 Fee',
 };
+
+function _shortAddr(a) { return a && a.length > 12 ? a.slice(0,6) + '…' + a.slice(-4) : (a || ''); }
 
 function _renderHistoryRow(tx) {
   const kind = tx.event_type || tx.kind || tx.type || tx.category || 'transfer';
-  const label = tx.category_label || _EVENT_TYPE_LABELS[kind] || kind.replace(/_/g, ' ');
-  const direction = tx.direction || (kind === 'swap' ? 'swap' : 'out');
-  const symbol = (tx.asset_symbol || tx.symbol || 'THR').toUpperCase();
+  const icon = tx.icon || '';
+  const label = tx.event_name || tx.category_label || _EVENT_TYPE_LABELS[kind] || kind.replace(/_/g, ' ');
+  const direction = tx._direction || tx.direction || (kind === 'swap' ? 'swap' : 'out');
+  const symbol = (tx.asset_symbol || tx.asset || tx.symbol || 'THR').toUpperCase();
   const amount = tx.display_amount !== undefined ? tx.display_amount : (tx.amount_in !== undefined ? tx.amount_in : tx.amount);
   const date = _parseTxDate(tx.timestamp);
   const dateStr = date ? date.toLocaleString() : (tx.timestamp || '—');
   const status = tx.status || (tx.reject_reason ? 'failed' : 'confirmed');
   const statusColor = status === 'failed' || status === 'rejected' ? '#ff6b6b' : (status === 'pending' ? '#ffb347' : '#00ff66');
+  const domainLabel = tx.domain && tx.domain !== 'unknown' && tx.domain !== 'thr' ? tx.domain : '';
 
   let amountHtml;
   if (kind === 'swap' && tx.amount_out !== undefined) {
@@ -3982,23 +4011,26 @@ function _renderHistoryRow(tx) {
     amountHtml = `<span style="color:${color}">${sign}${Number(amount || 0).toLocaleString(undefined,{maximumFractionDigits:6})} ${symbol}</span>`;
   }
 
+  const counterparty = tx.to || tx.from || tx.counterparty || '';
+  const cpLabel = direction === 'in' ? 'From' : (direction === 'out' ? 'To' : '');
+  const cpHtml = counterparty && cpLabel ? `<div style="font-size:.7rem;color:var(--muted);">${cpLabel}: <span style="font-family:'Courier New',monospace;color:#b08cf8">${_shortAddr(counterparty)}</span></div>` : '';
+
   const feeHtml = tx.fee_burned ? `<div style="font-size:.72rem;color:var(--muted)">Fee: ${Number(tx.fee_burned).toLocaleString(undefined,{maximumFractionDigits:6})} THR</div>` : '';
   const noteHtml = tx.note ? `<div style="font-size:.72rem;color:var(--muted);margin-top:2px">${tx.note}</div>` : '';
   const networkLabel = tx.network_label || (tx.chain ? tx.chain.toUpperCase() : '');
-  const netBadge = networkLabel ? `<span style="font-size:.68rem;color:var(--muted);margin-top:1px">${networkLabel}</span>` : '';
+  const netBadge = networkLabel ? `<span style="font-size:.68rem;background:#1a1040;border:1px solid #2a2050;border-radius:4px;padding:1px 5px;color:var(--muted)">${networkLabel}</span>` : '';
+  const domainBadge = domainLabel ? `<span style="font-size:.68rem;background:#0d1a10;border:1px solid #1a3020;border-radius:4px;padding:1px 5px;color:#7cc88f">${domainLabel}</span>` : '';
 
-  // Build explorer links from event fields
   const links = [];
   const chain = tx.chain || '';
   const expBase = EXPLORER_BASES[chain];
 
-  // Internal Thronos viewer link — always available if we have an internal txid
-  if (tx.internal_txid) {
-    const thrUrl = `https://api.thronoschain.org/viewer?tx=${encodeURIComponent(tx.internal_txid)}`;
+  if (tx.internal_txid || tx.tx_id || tx.txid) {
+    const txid = tx.internal_txid || tx.tx_id || tx.txid;
+    const thrUrl = `https://api.thronoschain.org/viewer?tx=${encodeURIComponent(txid)}`;
     links.push(`<a href="${thrUrl}" target="_blank" rel="noopener" style="font-size:.68rem;color:#b08cf8;text-decoration:none">Thronos ↗</a>`);
   }
 
-  // External chain explorer link
   if (tx.external_txid && expBase) {
     const url = expBase.tx.replace('{txid}', tx.external_txid);
     links.push(`<a href="${url}" target="_blank" rel="noopener" style="font-size:.68rem;color:#b08cf8;text-decoration:none">${expBase.label} ↗</a>`);
@@ -4009,14 +4041,18 @@ function _renderHistoryRow(tx) {
   }
   const linkHtml = links.length ? `<div style="display:flex;gap:6px">${links.join('')}</div>` : '';
 
+  const dirIcon = direction === 'in' ? '📥' : (direction === 'out' ? '📤' : '🔄');
+  const displayLabel = icon ? `${icon} ${label}` : `${dirIcon} ${label}`;
+
   return `<div class="card" style="padding:10px 12px;margin-bottom:8px">
     <div style="display:flex;justify-content:space-between;align-items:flex-start">
-      <div>
-        <div style="font-size:.85rem;font-weight:700;color:#fff;text-transform:capitalize">${label}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:.85rem;font-weight:700;color:#fff">${displayLabel}</div>
         <div style="font-size:.72rem;color:var(--muted)">${dateStr}</div>
-        ${netBadge}
+        ${cpHtml}
+        <div style="display:flex;gap:4px;margin-top:3px;flex-wrap:wrap">${netBadge}${domainBadge}</div>
       </div>
-      <div style="text-align:right;font-size:.85rem;font-weight:700">${amountHtml}</div>
+      <div style="text-align:right;font-size:.85rem;font-weight:700;flex-shrink:0;margin-left:8px">${amountHtml}</div>
     </div>
     <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px">
       <div>${feeHtml}${noteHtml}</div>
@@ -4072,51 +4108,58 @@ async function showHistory(address) {
     });
   }
 
+  function _detectDirection(tx, walletAddr) {
+    if (tx.direction) return tx.direction;
+    const norm = (walletAddr || '').toUpperCase();
+    const from = (tx.from || tx.sender || '').toUpperCase();
+    const to = (tx.to || tx.recipient || '').toUpperCase();
+    if (to && to === norm) return 'in';
+    if (from && from === norm) return 'out';
+    const kind = (tx.event_type || tx.kind || '').toLowerCase();
+    if (kind.includes('receive') || kind.includes('deposit') || kind.includes('reward') || kind.includes('payout') || kind.includes('_in')) return 'in';
+    if (kind.includes('send') || kind.includes('withdraw') || kind.includes('_out') || kind.includes('burn') || kind.includes('fee')) return 'out';
+    if (kind === 'swap') return 'swap';
+    return '';
+  }
+
   function renderList() {
     const el = document.getElementById('historyBody');
     if (!el) return;
-    // Filter by active category
     let filtered = allTx;
     if (activeFilter !== 'all') {
       const et = tx => tx.event_type || tx.kind || tx.type || tx.category || '';
-      if (activeFilter === 'pledge') {
+      if (activeFilter === 'sent') {
+        filtered = allTx.filter(tx => tx._direction === 'out');
+      } else if (activeFilter === 'received') {
+        filtered = allTx.filter(tx => tx._direction === 'in');
+      } else if (activeFilter === 'pledge') {
         filtered = allTx.filter(tx => _PLEDGE_EVENT_TYPES.has(et(tx)));
-      } else if (activeFilter === 'deposits') {
-        filtered = allTx.filter(tx =>
-          _DEPOSIT_FILTER_TYPES.has(et(tx)) ||
-          (tx.direction === 'in' && !_PLEDGE_EVENT_TYPES.has(et(tx)))
-        );
       } else if (activeFilter === 'liquidity') {
         filtered = allTx.filter(tx =>
           _LIQUIDITY_FILTER_TYPES.has(et(tx)) ||
-          (tx.domain === 'liquidity') ||
-          (tx._raw_category === 'liquidity')
+          (tx.domain === 'liquidity')
         );
       } else if (activeFilter === 'crosschain') {
-        filtered = allTx.filter(tx => _CROSSCHAIN_FILTER_TYPES.has(et(tx)));
-      } else if (activeFilter === 'rpc-crosschain') {
         filtered = allTx.filter(tx =>
           _CROSSCHAIN_FILTER_TYPES.has(et(tx)) ||
-          _PLEDGE_EVENT_TYPES.has(et(tx)) ||
-          (_LIQUIDITY_FILTER_TYPES.has(et(tx)) && (tx.chain || '').toLowerCase() !== 'thronos') ||
-          (tx.domain === 'rpc-crosschain')
+          (tx.chain && tx.chain.toLowerCase() !== 'thronos')
         );
       } else if (activeFilter === 'evm_sends') {
         filtered = allTx.filter(tx => {
           const typ = et(tx).toLowerCase();
-          return typ === 'evm_token_send' || typ === 'evm_token_receive' || typ === 'token_send' || typ === 'token_receive';
+          return typ.startsWith('evm_') || typ === 'token_send' || typ === 'token_receive';
         });
+      } else if (activeFilter === 'bridge') {
+        filtered = allTx.filter(tx => et(tx).toLowerCase().includes('bridge'));
       } else {
-        filtered = allTx.filter(tx => et(tx) === activeFilter);
+        filtered = allTx.filter(tx => et(tx) === activeFilter || (tx.domain || '') === activeFilter);
       }
     }
-    // Network filter: strict — only show events whose chain matches the selected network.
-    // Exception: if chain field is empty/missing (legacy events), show on Thronos view only.
     const netChains = HISTORY_CHAIN_MAP[activeNetwork] || [];
     if (netChains.length) {
       filtered = filtered.filter(tx => {
         const c = (tx.chain || '').toLowerCase();
-        if (!c) return activeNetwork === 'thronos'; // legacy events with no chain → Thronos only
+        if (!c) return activeNetwork === 'thronos';
         return netChains.includes(c);
       });
     }
@@ -4136,26 +4179,29 @@ async function showHistory(address) {
     const el = document.getElementById('historyBody');
     if (el) el.innerHTML = '<p style="color:var(--muted);text-align:center;padding:20px">Loading history…</p>';
     try {
-      // Load from both legacy endpoint and new v1 wallet history endpoint and merge
-      const [legacyTx, v1Res] = await Promise.allSettled([
+      const [normRes, legacyTx, v1Res] = await Promise.allSettled([
+        fetch(`${API_BASE}/api/wallet/history/normalized?address=${encodeURIComponent(address)}&limit=500&category=all&domain=all&chain=all`).then(r => r.json()).catch(() => null),
         fetchHistory(address),
         fetch(`${API_BASE}/api/wallet/history/${encodeURIComponent(address)}?limit=200`).then(r => r.json()).catch(() => null),
       ]);
+      const normalized = (normRes.status === 'fulfilled' && normRes.value?.ok) ? (normRes.value.events || normRes.value.history || []) : [];
       const legacy = legacyTx.status === 'fulfilled' ? (legacyTx.value || []) : [];
       const v1 = (v1Res.status === 'fulfilled' && v1Res.value?.ok) ? (v1Res.value.history || []) : [];
-      // Merge: v1 events have event_type/chain/network_label; normalize kind for filter compat
-      const v1Normalized = v1.map(e => ({
+      const v1Mapped = v1.map(e => ({
         ...e,
         kind: e.event_type || e.kind || 'transfer',
-        category: e.event_type || e.kind,
         asset_symbol: e.asset || e.asset_symbol,
       }));
-      // Deduplicate by id
+
       const seen = new Set();
       allTx = [];
-      for (const tx of [...v1Normalized, ...legacy]) {
-        const id = tx.id || tx.tx_id || tx.txid || JSON.stringify(tx).slice(0, 60);
-        if (!seen.has(id)) { seen.add(id); allTx.push(tx); }
+      for (const tx of [...normalized, ...v1Mapped, ...legacy]) {
+        const eid = tx.id || tx.event_id || tx.tx_id || tx.txid || '';
+        const dedupKey = eid || `${tx.event_type || tx.kind || ''}|${tx.timestamp || ''}|${Number(tx.amount || 0).toFixed(4)}|${tx.from || ''}|${tx.to || ''}`;
+        if (seen.has(dedupKey)) continue;
+        if (dedupKey) seen.add(dedupKey);
+        tx._direction = _detectDirection(tx, address);
+        allTx.push(tx);
       }
       renderList();
     } catch (e) {

@@ -1,4 +1,4 @@
-const CACHE = 'thr-wallet-pwa-v3';
+const CACHE = 'thr-wallet-pwa-v4';
 
 const PRECACHE = [
   '/wallet-pwa/',

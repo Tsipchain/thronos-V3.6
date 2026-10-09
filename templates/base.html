@@ -7428,6 +7428,13 @@ async function openHeaderWalletModal(){
         return;
     }
 
+    if (walletState === 'connected_readonly') {
+        setWalletOpen(true);
+        showWalletContentSection();
+        loadWalletBalances(true);
+        return;
+    }
+
     if (walletState === 'missing_signing_key') {
         setWalletOpen(true);
         showWalletLoginForm();
@@ -7526,6 +7533,9 @@ function switchWalletV1Mode(){
     if (window.walletV1LastStatus && window.walletV1LastStatus.modal_state) {
         console.log('[SwitchMode] Using server modal_state:', window.walletV1LastStatus.modal_state, '(was client state:', modalState + ')');
         modalState = window.walletV1LastStatus.modal_state;
+    }
+    if (walletSession.isQrSession && walletSession.isQrSession() && walletSession.isBound() && modalState === 'active_wallet_no_key') {
+        modalState = 'qr_connected';
     }
     const hasPledge = walletSession.hasPledgeOrMigrationSource ? walletSession.hasPledgeOrMigrationSource() : false;
     const allowWebCreate = window.WALLET_V1_ALLOW_WEB_CREATE === true || window.WALLET_V1_ALLOW_WEB_CREATE === '1';
@@ -9320,6 +9330,7 @@ async function startQrWalletLogin() {
                     if (sessData.ok && sessData.address) {
                         walletSession.setAddress(sessData.address);
                         walletSession.setBound(true);
+                        walletSession.setQrSession(true);
                         updateWalletUI();
                         showWalletContentSection();
                         loadWalletBalances(true);

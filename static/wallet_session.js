@@ -75,8 +75,8 @@
   function readJson(key){ try { return JSON.parse(localStorage.getItem(key) || '{}'); } catch(_) { return {}; } }
   function setBound(v){ localStorage.setItem(BOUND_KEY, v ? '1' : '0'); }
   function isBound(){ return localStorage.getItem(BOUND_KEY) === '1'; }
-  function setQrSession(v){ try { if(v) sessionStorage.setItem(QR_SESSION_KEY,'1'); else sessionStorage.removeItem(QR_SESSION_KEY); } catch(_){} }
-  function isQrSession(){ try { return sessionStorage.getItem(QR_SESSION_KEY)==='1'; } catch(_){ return false; } }
+  function setQrSession(v){ try { if(v) localStorage.setItem(QR_SESSION_KEY,'1'); else localStorage.removeItem(QR_SESSION_KEY); } catch(_){} }
+  function isQrSession(){ try { return localStorage.getItem(QR_SESSION_KEY)==='1'; } catch(_){ return false; } }
   function isLocked(){ return localStorage.getItem(LOCK_KEY) === '1'; }
 
   function normalizeAddress(addr){ return (addr || '').toString().trim(); }
@@ -1245,7 +1245,7 @@
   }
 
   function disconnect(){ setBound(false); setQrSession(false); localStorage.setItem(LOCK_KEY, '1'); unlockedPrivateKeyHex = null; }
-  function forgetDevice(){ [ADDRESS_KEY,SEND_SECRET_KEY,SEND_SEED_KEY,SEND_SEED_COMPAT_KEY,PIN_KEY,BOUND_KEY,LOCK_KEY,V1_ENCRYPTED_KEY,V1_PUBLIC_KEY,V1_ADDRESS_KEY,MIGRATION_META_KEY].forEach(k => localStorage.removeItem(k)); unlockedPrivateKeyHex = null; }
+  function forgetDevice(){ [ADDRESS_KEY,SEND_SECRET_KEY,SEND_SEED_KEY,SEND_SEED_COMPAT_KEY,PIN_KEY,BOUND_KEY,LOCK_KEY,V1_ENCRYPTED_KEY,V1_PUBLIC_KEY,V1_ADDRESS_KEY,MIGRATION_META_KEY,QR_SESSION_KEY].forEach(k => localStorage.removeItem(k)); unlockedPrivateKeyHex = null; }
   function clearSession(){ forgetDevice(); }
   function saveSession({address, sendSeed, pin, bound} = {}){ setAddress(address || ''); setSendSeed(sendSeed || ''); setPin(pin || ''); setBound(bound !== undefined ? !!bound : !!(address && sendSeed)); if (address || sendSeed) localStorage.setItem(LOCK_KEY, '0'); }
   function requirePin(actionLabel = 'continue'){ const stored = getPin(); if(!stored) return true; const entered = prompt(`Enter wallet PIN to ${actionLabel}`); if(entered === null) return false; if(entered !== stored){ alert('Wrong PIN.'); return false; } return true; }

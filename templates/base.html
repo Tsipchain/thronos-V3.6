@@ -2965,7 +2965,10 @@ async function loadWalletBalances(force = false) {
                 Failed to load balances
             </div>
         `;
-        setDisconnectedUI();
+        // Don't disconnect QR-connected sessions on balance fetch failure
+        if (!(walletSession.isQrSession && walletSession.isQrSession())) {
+            setDisconnectedUI();
+        }
     } finally {
         // PR-5a: Clear load guard
         window.__walletLoadInProgress = false;
@@ -7511,6 +7514,35 @@ async function submitHeaderWalletLogin(){
 }
 
 function switchWalletV1Mode(){
+    // QR connected wallets don't need mode panels — go straight to balances
+    if (walletSession.isQrSession && walletSession.isQrSession() && walletSession.isBound()) {
+        const unlockElQr = document.getElementById('walletV1UnlockMode');
+        const migrateElQr = document.getElementById('walletV1MigrateMode');
+        const restoreElQr = document.getElementById('walletV1RestoreMode');
+        const createElQr = document.getElementById('walletV1CreateMode');
+        const importElQr = document.getElementById('walletV1ImportMode');
+        const adminSignerElQr = document.getElementById('walletV1AdminGenerateSignerMode');
+        const pledgePanelQr = document.getElementById('walletV1PledgeActivationPanel');
+        const modeSelectQr = document.getElementById('walletWidgetMode');
+        const modeLabelQr = document.querySelector('label[for="walletWidgetMode"]');
+        const addrLabelQr = document.getElementById('walletWidgetAddrLabel');
+        const addrInputQr = document.getElementById('walletWidgetThrAddress');
+        if (unlockElQr) unlockElQr.style.display = 'none';
+        if (migrateElQr) migrateElQr.style.display = 'none';
+        if (restoreElQr) restoreElQr.style.display = 'none';
+        if (createElQr) createElQr.style.display = 'none';
+        if (importElQr) importElQr.style.display = 'none';
+        if (adminSignerElQr) adminSignerElQr.style.display = 'none';
+        if (pledgePanelQr) pledgePanelQr.style.display = 'none';
+        if (modeSelectQr) modeSelectQr.style.display = 'none';
+        if (modeLabelQr) modeLabelQr.style.display = 'none';
+        if (addrLabelQr) addrLabelQr.style.display = 'none';
+        if (addrInputQr) addrInputQr.style.display = 'none';
+        document.querySelectorAll('[data-wallet-state-msg]').forEach(m => m.remove());
+        showWalletContentSection();
+        return;
+    }
+
     let mode = document.getElementById('walletWidgetMode')?.value || 'create';
     const unlockEl = document.getElementById('walletV1UnlockMode');
     const migrateEl = document.getElementById('walletV1MigrateMode');
@@ -8738,6 +8770,13 @@ function detectMissingSigningKeyState(){
 }
 
 function showWalletLoginForm(){
+    // QR connected wallets bypass login form entirely
+    if (walletSession.isQrSession && walletSession.isQrSession() && walletSession.isBound()) {
+        showWalletContentSection();
+        loadWalletBalances();
+        return;
+    }
+
     const loginSection = document.getElementById('walletLoginSection');
     const contentSection = document.getElementById('walletContentSection');
     if(loginSection){
@@ -9334,6 +9373,7 @@ async function startQrWalletLogin() {
                     const sessData = await sessResp.json();
                     if (sessData.ok && sessData.address) {
                         walletSession.setAddress(sessData.address);
+                        localStorage.setItem('wallet_v1_address', sessData.address);
                         walletSession.setQrSession(true);
 
                         // Prompt for PIN on this device (3FA: website=PIN, PWA=biometric)

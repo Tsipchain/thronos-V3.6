@@ -2,12 +2,16 @@ name: Cross-Chain Wallet Assets Checks
 
 on:
   push:
-    branches: ["feat/arbitrum-usdc-asset-logos"]
+    branches: ["feat/arbitrum-usdc-asset-logos", "fix/unified-chain-history-dedup"]
   pull_request:
     paths:
+      - "server.py"
       - "public/wallet-pwa/app.js"
+      - "tests/test_wallet_history_dedup.mjs"
       - "thronos-wallet-app/src/components/CrossChainAssetIcon.tsx"
       - "thronos-wallet-app/src/screens/HomeScreen.tsx"
+      - "thronos-wallet-app/src/screens/HistoryScreen.tsx"
+      - "thronos-wallet-app/src/services/api.ts"
       - "thronos-wallet-app/src/services/crossChain.ts"
       - ".github/workflows/cross-chain-wallet-assets.yml"
 
@@ -25,6 +29,19 @@ jobs:
           node-version: "20"
       - name: Parse wallet PWA JavaScript
         run: node --check public/wallet-pwa/app.js
+      - name: Test chain-aware wallet history deduplication
+        run: node tests/test_wallet_history_dedup.mjs
+
+  server-syntax:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile server without executing runtime imports
+        run: python -m py_compile server.py
 
   mobile-typecheck:
     runs-on: ubuntu-latest
@@ -47,11 +64,11 @@ jobs:
           npx tsc --noEmit --pretty false > /tmp/wallet-tsc.log 2>&1
           tsc_status=$?
           cat /tmp/wallet-tsc.log
-          if grep -E 'src/(components/CrossChainAssetIcon|screens/HomeScreen|services/crossChain)\\.tsx?' /tmp/wallet-tsc.log; then
-            echo "TypeScript errors found in files changed by this PR."
+          if grep -E 'src/(components/CrossChainAssetIcon|screens/(HomeScreen|HistoryScreen)|services/(crossChain|api))\.tsx?' /tmp/wallet-tsc.log; then
+            echo "TypeScript errors found in files changed by this work."
             exit 1
           fi
           if [ "$tsc_status" -ne 0 ]; then
-            echo "::warning::Project-wide TypeScript still reports pre-existing errors outside this PR's changed files."
+            echo "::warning::Project-wide TypeScript still reports existing errors outside the changed wallet files."
           fi
-          echo "No TypeScript errors reported for CrossChainAssetIcon, HomeScreen, or crossChain balance service."
+          echo "No TypeScript errors reported in the changed wallet components, screens, or services."

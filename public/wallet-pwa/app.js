@@ -373,7 +373,7 @@ async function _fetchErc20(evmAddr, tokenContract, rpcUrl, decimals) {
     if (d.error || !d.result || d.result === '0x' || d.result === '0x' + '0'.repeat(64)) return null;
     // Use BigInt to avoid precision loss on 256-bit ERC20 balances
     const raw = BigInt(d.result);
-    if (raw === 0n) return null;
+    if (raw === 0n) return 0;
     const divisor = BigInt(10 ** decimals);
     const whole = Number(raw / divisor);
     const frac  = Number(raw % divisor) / (10 ** decimals);

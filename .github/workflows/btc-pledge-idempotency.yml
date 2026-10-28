@@ -1,0 +1,28 @@
+name: BTC Pledge Idempotency Tests
+
+on:
+  push:
+    branches: ["fix/btc-pledge-idempotency"]
+  pull_request:
+    paths:
+      - "server.py"
+      - "btc_pledge_idempotency.py"
+      - "tests/test_btc_pledge_idempotency.py"
+      - ".github/workflows/btc-pledge-idempotency.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  btc-pledge-idempotency:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run transactional BTC pledge idempotency tests
+        run: python -m unittest discover -s tests -p "test_btc_pledge_idempotency.py" -v

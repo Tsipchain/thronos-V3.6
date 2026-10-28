@@ -1,0 +1,29 @@
+name: BTC Withdrawal Safety Tests
+
+on:
+  pull_request:
+    paths:
+      - "btc_bridge_withdrawal.py"
+      - "tests/test_btc_bridge_withdrawal_safety.py"
+      - ".github/workflows/btc-withdrawal-safety-tests.yml"
+  push:
+    branches:
+      - "fix/btc-withdrawal-no-simulated-success"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  btc-withdrawal-safety:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run BTC withdrawal safety tests
+        run: python -m unittest discover -s tests -p "test_btc_bridge_withdrawal_safety.py" -v

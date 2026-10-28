@@ -7,6 +7,7 @@ import { CONFIG } from '../constants/config';
 const USDT_BNB = '0x55d398326f99059fF775485246999027B3197955';   // 18 dec
 const USDT_ARB = '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9';   // 6 dec
 const USDC_BASE = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';  // 6 dec
+const USDC_ARB = '0xaf88d065e77c8cC2239327C5EDb3A432268e5831';  // 6 dec — native Circle USDC
 
 export async function fetchBtcAddress(privateKeyHex: string): Promise<string> {
   try {
@@ -86,10 +87,11 @@ export interface ChainBalances {
   usdtBnb: number | null;
   usdtArb: number | null;
   usdcBase: number | null;
+  usdcArb: number | null;
 }
 
 export async function fetchAllChainBalances(evmAddr: string, btcAddr: string): Promise<ChainBalances> {
-  const [btc, eth, bnb, arb, base, usdtBnb, usdtArb, usdcBase] = await Promise.allSettled([
+  const [btc, eth, bnb, arb, base, usdtBnb, usdtArb, usdcBase, usdcArb] = await Promise.allSettled([
     fetchBtcBalance(btcAddr),
     fetchEvmNative(evmAddr, CONFIG.RPC.ETH),
     fetchEvmNative(evmAddr, CONFIG.RPC.BSC),
@@ -98,10 +100,11 @@ export async function fetchAllChainBalances(evmAddr: string, btcAddr: string): P
     fetchErc20(evmAddr, USDT_BNB, CONFIG.RPC.BSC, 18),
     fetchErc20(evmAddr, USDT_ARB, CONFIG.RPC.ARBITRUM, 6),
     fetchErc20(evmAddr, USDC_BASE, 'https://mainnet.base.org', 6),
+    fetchErc20(evmAddr, USDC_ARB, CONFIG.RPC.ARBITRUM, 6),
   ]);
   const v = (r: PromiseSettledResult<number | null>) => r.status === 'fulfilled' ? r.value : null;
   return {
     btc: v(btc), eth: v(eth), bnb: v(bnb), arb: v(arb), base: v(base),
-    usdtBnb: v(usdtBnb), usdtArb: v(usdtArb), usdcBase: v(usdcBase),
+    usdtBnb: v(usdtBnb), usdtArb: v(usdtArb), usdcBase: v(usdcBase), usdcArb: v(usdcArb),
   };
 }

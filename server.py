@@ -24854,6 +24854,11 @@ _POOL_CONFIGS: dict = {
         "external_asset": "USDC", "internal_asset": "THR", "internal_fee_asset": "THR",
         "base_apy": 5.0,
     },
+    "arbitrum-usdc": {
+        "pool_id": "arbitrum-usdc", "pair": "THR-USDC", "chain": "arbitrum",
+        "external_asset": "USDC", "internal_asset": "THR", "internal_fee_asset": "THR",
+        "base_apy": 5.0,
+    },
 }
 _AMM_WORKER_NAME = "pythia_amm_worker"
 _THR_USD_RATE    = 0.0042   # fallback; stablecoin external assets valued at $1

@@ -48371,6 +48371,55 @@ if is_master():
 
 print(f"[STARTUP] {NODE_ROLE.upper()} node initialization complete.\n")
 
+# ─── Earn Center: wallet-bound identity and transactional reward ledger ──────
+# This registration deliberately has no payout worker and no live CPX callback.
+# A reward cannot become paid until a separate, audited settlement path supplies
+# a real chain transaction identifier.
+def _verify_earn_wallet_proof(proof: dict) -> tuple[bool, str, str]:
+    """Verify a short-lived signed wallet proof used only to open Earn sessions."""
+    wallet = str(proof.get("wallet") or "").strip().upper()
+    nonce = str(proof.get("nonce") or "").strip()
+    issued_at = proof.get("issued_at")
+    signature = str(proof.get("signature") or "").strip()
+    public_key = str(proof.get("public_key") or "").strip()
+    if not wallet or not nonce or not signature or not public_key:
+        return False, "", "invalid_earn_auth_proof"
+    if proof.get("purpose") != "thronos_earn_auth" or str(proof.get("version")) != "1":
+        return False, "", "invalid_earn_auth_purpose"
+    try:
+        issued_at = int(issued_at)
+        if abs(int(time.time()) - issued_at) > 300:
+            return False, "", "earn_auth_proof_expired"
+        message = json.dumps({
+            "issued_at": issued_at, "nonce": nonce, "purpose": "thronos_earn_auth",
+            "version": "1", "wallet": wallet,
+        }, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import ec
+        public_key_obj = ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256K1(), bytes.fromhex(public_key))
+        public_key_obj.verify(bytes.fromhex(signature), message, ec.ECDSA(hashes.SHA256()))
+        import wallet_v1_production_final as wallet_v1_prod
+        binding_ok, _ = wallet_v1_prod.verify_publickey_matches_address({"from": wallet, "publicKey": public_key})
+        if not binding_ok:
+            return False, "", "earn_auth_key_address_mismatch"
+    except Exception:
+        return False, "", "invalid_earn_auth_signature"
+    return True, wallet, ""
+
+
+try:
+    _earn_identity_key = os.getenv("EARN_IDENTITY_KEY", "").strip()
+    if _earn_identity_key and os.getenv("EARN_CENTER_ENABLED", "0") == "1" and is_master():
+        from services.earn_center import EarnStore, register_earn_routes
+        _earn_db_path = os.getenv("EARN_DB_PATH", os.path.join(DATA_DIR, "earn_center.db"))
+        _earn_store = EarnStore(_earn_db_path, _earn_identity_key)
+        register_earn_routes(app, _earn_store, _verify_earn_wallet_proof)
+        logger.info("Earn Center routes registered; CPX postbacks remain disabled")
+    else:
+        logger.info("Earn Center routes disabled: requires master role, EARN_CENTER_ENABLED=1 and EARN_IDENTITY_KEY")
+except Exception as _earn_init_error:
+    logger.error("Earn Center initialization failed: %s", _earn_init_error)
+
 if __name__ == "__main__":
     host = os.getenv("HOST", "0.0.0.0")
     port = int(_strip_env_quotes(os.getenv("PORT", "8000")))

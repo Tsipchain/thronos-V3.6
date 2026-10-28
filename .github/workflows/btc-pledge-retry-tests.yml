@@ -1,0 +1,31 @@
+name: BTC Pledge Retry Regression Tests
+
+on:
+  pull_request:
+    paths:
+      - "btc_pledge_watcher.py"
+      - "tests/test_btc_pledge_watcher_retry.py"
+      - ".github/workflows/btc-pledge-retry-tests.yml"
+  push:
+    branches:
+      - "fix/btc-pledge-durable-retries"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  btc-pledge-retry:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install test dependency
+        run: python -m pip install --disable-pip-version-check requests
+      - name: Run BTC pledge retry tests
+        run: python -m unittest discover -s tests -p "test_btc_pledge_watcher_retry.py" -v

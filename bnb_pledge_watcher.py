@@ -53,6 +53,7 @@ BSC_LOGS_CHUNK_SIZE = int(os.getenv("BSC_LOGS_CHUNK_SIZE", "500"))   # max block
 # State file to track processed transactions
 PROCESSED_TXS_FILE = os.path.join(DATA_DIR, "bnb_pledge_processed.json")
 LAST_SCANNED_BLOCK_FILE = os.path.join(DATA_DIR, "bnb_last_scanned_block.json")
+UNRESOLVED_TXS_FILE = os.path.join(DATA_DIR, "bnb_unresolved_txs.json")
 
 # User registry file (maps BNB addresses to THR addresses)
 # Format: {"bnb_address_lowercase": {"thr_address": "THR...", "registered_at": timestamp}}
@@ -105,6 +106,30 @@ def save_last_scanned_block(block: int):
             json.dump({'block': block, 'timestamp': time.time()}, f, indent=2)
     except Exception as e:
         logger.error(f"Failed to save last scanned block: {e}")
+
+
+def load_unresolved_txs() -> List[Dict]:
+    """Load persisted unresolved transactions that couldn't be matched to a registered user."""
+    try:
+        if os.path.exists(UNRESOLVED_TXS_FILE):
+            with open(UNRESOLVED_TXS_FILE, 'r') as f:
+                return json.load(f)
+        return []
+    except Exception as e:
+        logger.error(f"Failed to load unresolved txs: {e}")
+        return []
+
+
+def save_unresolved_txs(txs: List[Dict]):
+    """Save unresolved transactions for retry beyond the backfill window."""
+    try:
+        os.makedirs(os.path.dirname(UNRESOLVED_TXS_FILE), exist_ok=True)
+        tmp = UNRESOLVED_TXS_FILE + ".tmp"
+        with open(tmp, 'w') as f:
+            json.dump(txs, f, indent=2)
+        os.replace(tmp, UNRESOLVED_TXS_FILE)
+    except Exception as e:
+        logger.error(f"Failed to save unresolved txs: {e}")
 
 
 def load_user_registry() -> Dict:
@@ -431,63 +456,74 @@ def watch_bnb_pledges():
     logger.info(f"Master node: {MASTER_NODE_URL}")
 
     processed_txs = load_processed_txs()
+    processed_set = set(processed_txs)
+    unresolved_txs = load_unresolved_txs()
     had_processing_failure = False
 
-    # Get new USDT transfers to the vault
     vault_transfers, last_safe_block = get_vault_transfers()
 
-    for transfer in vault_transfers:
+    new_unresolved = []
+
+    def try_process(transfer):
+        nonlocal had_processing_failure
         txhash = transfer.get("txhash", "")
+        if txhash in processed_set:
+            return True
 
-        # Skip if already processed
-        if txhash in processed_txs:
-            logger.debug(f"Skipping already-processed tx: {txhash}")
-            continue
-
-        # Get USDT amount
         usdt_amount = float(transfer.get("amount", 0))
         if usdt_amount < MIN_USDT_PLEDGE:
             logger.warning(f"Amount below minimum in tx {txhash}: {usdt_amount} USDT")
             processed_txs.append(txhash)
-            continue
+            processed_set.add(txhash)
+            return True
 
-        # Resolve user from BNB address
         bnb_address = transfer.get("from", "")
         user_info = resolve_user_from_bnb_address(bnb_address)
         if not user_info:
-            # Do NOT mark as processed — leave for admin reprocess once user registers BNB address.
-            # Log with structured info so admin can manually reprocess.
             logger.warning(
                 f"[UNRESOLVED] Cannot resolve user for BNB address {bnb_address} in tx {txhash}. "
-                f"Amount: {usdt_amount} USDT. Will retry next cycle. "
-                f"Use POST /api/admin/bnb-watcher/reprocess to force process after user registers."
+                f"Amount: {usdt_amount} USDT. Persisted for retry."
             )
+            new_unresolved.append({
+                "txhash": txhash, "from": bnb_address,
+                "amount": usdt_amount, "first_seen": time.time(),
+            })
             had_processing_failure = True
-            continue
+            return False
 
-        # Create USDT pledge transaction on master node
         if create_usdt_pledge_transaction(user_info, usdt_amount, txhash, bnb_address):
             logger.info(f"Successfully processed USDT pledge: {txhash}")
             processed_txs.append(txhash)
+            processed_set.add(txhash)
+            return True
         else:
             logger.error(f"Failed to process USDT pledge: {txhash}")
             had_processing_failure = True
-            # Don't mark as processed so we can retry later
+            return False
 
-    # Always save processed txs and advance the block checkpoint.
-    # Unresolved addresses are retried next cycle via re-scan; they must NOT
-    # block checkpoint advancement or every future deposit stalls.
+    for utx in unresolved_txs:
+        if utx.get("txhash") not in processed_set:
+            try_process(utx)
+
+    for transfer in vault_transfers:
+        txhash = transfer.get("txhash", "")
+        if txhash not in processed_set and txhash not in {u["txhash"] for u in new_unresolved}:
+            try_process(transfer)
+
     save_processed_txs(processed_txs)
+    save_unresolved_txs(new_unresolved)
+
     if last_safe_block > 0:
         save_last_scanned_block(last_safe_block)
         if had_processing_failure:
             logger.warning(
-                "Some transfers had failures (unresolved address or API error). "
-                "Block checkpoint still advanced — unresolved txs will be retried "
-                "via backfill window on the next cycle."
+                f"Some transfers had failures. {len(new_unresolved)} unresolved tx(s) persisted for retry."
             )
 
-    logger.info(f"Watcher cycle complete. Processed {len(vault_transfers)} USDT transfers. Last scanned block: {last_safe_block}")
+    logger.info(
+        f"Watcher cycle complete. Scanned {len(vault_transfers)} transfers, "
+        f"{len(new_unresolved)} unresolved. Last block: {last_safe_block}"
+    )
 
 
 # Export the watcher function to be called by the scheduler

@@ -34514,13 +34514,23 @@ def api_pledge_bnb_register():
 
     registry_file = os.path.join(DATA_DIR, "bnb_user_registry.json")
     registry = load_json(registry_file, {})
+
+    if bnb_address in registry:
+        return jsonify(ok=False, error="bnb_address_already_registered",
+                       message="This BNB address is already registered. Use your existing claim token."), 409
+
+    claim_token = secrets.token_urlsafe(32)
+    claim_token_hash = hashlib.sha256(claim_token.encode()).hexdigest()
+
     registry[bnb_address] = {
-        "thr_address":   thr_address,
-        "registered_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "thr_address":      thr_address,
+        "registered_at":    time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "claim_token_hash": claim_token_hash,
     }
     save_json(registry_file, registry)
 
-    return jsonify(ok=True, thr_address=thr_address, bnb_address=bnb_address, vault_address=BNB_PLEDGE_VAULT), 200
+    return jsonify(ok=True, thr_address=thr_address, bnb_address=bnb_address,
+                   vault_address=BNB_PLEDGE_VAULT, claim_token=claim_token), 200
 
 
 _USDT_PLEDGE_LOCK_DIR = os.path.join(DATA_DIR, "locks")
@@ -34551,9 +34561,9 @@ def process_usdt_pledge_credit(thr_address, bnb_address, usdt_amount, bnb_txid, 
         if not bypass_minimum and usdt_amount < MIN_USDT_PLEDGE:
             return False, {}, f"below_minimum_pledge (minimum {MIN_USDT_PLEDGE} USDT)"
 
-        # Acquire per-tx file lock to prevent concurrent duplicate credits
         os.makedirs(_USDT_PLEDGE_LOCK_DIR, exist_ok=True)
-        lock_path = os.path.join(_USDT_PLEDGE_LOCK_DIR, f"pledge_{bnb_txid[:16]}.lock")
+        safe_txid = re.sub(r"[^a-zA-Z0-9]", "", bnb_txid)
+        lock_path = os.path.join(_USDT_PLEDGE_LOCK_DIR, f"pledge_{safe_txid}.lock")
         lock_fd = open(lock_path, "w")
         try:
             fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -34569,10 +34579,6 @@ def process_usdt_pledge_credit(thr_address, bnb_address, usdt_amount, bnb_txid, 
         finally:
             fcntl.flock(lock_fd, fcntl.LOCK_UN)
             lock_fd.close()
-            try:
-                os.unlink(lock_path)
-            except OSError:
-                pass
 
     except Exception as e:
         logger.error("[usdt_pledge] process_usdt_pledge_credit failed: %s", str(e), exc_info=True)
@@ -34910,13 +34916,6 @@ def api_pledge_bnb_check_manual():
         )
 
         if success:
-            pledges = load_json(PLEDGE_CHAIN, [])
-            pledge = next(
-                (p for p in pledges if p.get("bnb_address") == bnb_address and p.get("pledge_type") == "usdt_bnb"),
-                None
-            )
-            send_seed = pledge.get("send_seed") if pledge else None
-
             return jsonify(
                 ok=True,
                 status="verified",
@@ -34924,7 +34923,6 @@ def api_pledge_bnb_check_manual():
                 amount_usdt=found_amount,
                 thr_amount=found_amount * get_usdt_thr_rate_dynamic(),
                 tx_hash=tx_hash,
-                send_secret=send_seed
             ), 200
         else:
             return jsonify(
@@ -35006,7 +35004,6 @@ def api_pledge_bnb_verify():
         return jsonify(
             ok=True, status="verified",
             thr_address=existing.get("thr_address"),
-            send_secret=existing.get("send_seed"),
         ), 200
 
     # Not yet confirmed — scan BSC for USDT transfers from this address to vault
@@ -35085,7 +35082,6 @@ def api_pledge_bnb_verify():
             return jsonify(
                 ok=True, status="pending_payment",
                 thr_address=registered_thr,
-                send_secret=None,
                 message="No confirmed USDT transfer found yet. BSC needs ~15 confirmations.",
             ), 200
 
@@ -35096,29 +35092,16 @@ def api_pledge_bnb_verify():
         )
 
         if success:
-            pledges = load_json(PLEDGE_CHAIN, [])
-            pledge = next(
-                (p for p in pledges if p.get("bnb_address") == bnb_address and p.get("pledge_type") == "usdt_bnb"),
-                None
-            )
             return jsonify(
                 ok=True, status="verified",
                 thr_address=registered_thr,
-                send_secret=pledge.get("send_seed") if pledge else None,
                 amount_usdt=found_amount,
                 tx_hash=found_tx,
             ), 200
         elif error == "duplicate_tx_already_processed":
-            # Already processed — return existing pledge
-            pledges = load_json(PLEDGE_CHAIN, [])
-            pledge = next(
-                (p for p in pledges if p.get("bnb_address") == bnb_address and p.get("pledge_type") == "usdt_bnb"),
-                None
-            )
             return jsonify(
                 ok=True, status="verified",
                 thr_address=registered_thr,
-                send_secret=pledge.get("send_seed") if pledge else None,
                 amount_usdt=found_amount,
                 tx_hash=found_tx,
             ), 200
@@ -35149,7 +35132,6 @@ def api_pledge_bnb_status():
     )
 
     if not entry:
-        # Check registry — address is registered but watcher hasn't confirmed yet
         registry_file = os.path.join(DATA_DIR, "bnb_user_registry.json")
         registry = load_json(registry_file, {})
         if bnb_address in registry:
@@ -35157,24 +35139,97 @@ def api_pledge_bnb_status():
                 ok=True,
                 status="pending_payment",
                 thr_address=registry[bnb_address].get("thr_address"),
-                send_secret=None,
                 pending_confirmation=True,
             ), 200
         return jsonify(ok=False, error="not_found"), 404
 
-    send_secret = None
-    if not entry.get("pending_confirmation", True):
-        send_secret = entry.get("send_seed")
-
-    status = "verified" if send_secret else "pending_confirmation"
+    confirmed = not entry.get("pending_confirmation", True)
+    status = "verified" if confirmed else "pending_confirmation"
     return jsonify(
         ok=True,
         status=status,
         thr_address=entry.get("thr_address"),
         pledge_hash=entry.get("pledge_hash"),
         pdf_filename=entry.get("pdf_filename"),
-        send_secret=send_secret,
         pending_confirmation=entry.get("pending_confirmation", True),
+    ), 200
+
+
+_CLAIM_RATE_LIMIT = {}
+_CLAIM_RATE_LOCK = threading.Lock()
+
+
+def _check_claim_rate_limit(key: str) -> bool:
+    now = time.time()
+    with _CLAIM_RATE_LOCK:
+        entries = _CLAIM_RATE_LIMIT.get(key, [])
+        entries = [t for t in entries if now - t < 60]
+        if len(entries) >= 5:
+            _CLAIM_RATE_LIMIT[key] = entries
+            return False
+        entries.append(now)
+        _CLAIM_RATE_LIMIT[key] = entries
+        return True
+
+
+@app.route("/api/pledge/bnb/claim", methods=["POST"])
+def api_pledge_bnb_claim():
+    """
+    Retrieve send_seed using the single-use claim token issued at registration.
+
+    POST body: { "bnb_address": "0x...", "claim_token": "<token>" }
+
+    The claim token is the ONLY credential that can retrieve send_seed.
+    It was returned once at registration time.
+    """
+    client_ip = request.remote_addr or "unknown"
+    if not _check_claim_rate_limit(client_ip):
+        return jsonify(ok=False, error="rate_limited", retry_after=60), 429
+
+    data = request.get_json() or {}
+    bnb_address = (data.get("bnb_address") or "").strip().lower()
+    claim_token = (data.get("claim_token") or "").strip()
+
+    if not re.match(r"^0x[a-f0-9]{40}$", bnb_address):
+        return jsonify(ok=False, error="invalid_bnb_address"), 400
+    if not claim_token:
+        return jsonify(ok=False, error="missing_claim_token"), 400
+
+    registry_file = os.path.join(DATA_DIR, "bnb_user_registry.json")
+    registry = load_json(registry_file, {})
+
+    if bnb_address not in registry:
+        return jsonify(ok=False, error="bnb_address_not_registered"), 404
+
+    entry = registry[bnb_address]
+    stored_hash = entry.get("claim_token_hash", "")
+
+    if not stored_hash or not hmac.compare_digest(
+        hashlib.sha256(claim_token.encode()).hexdigest(), stored_hash
+    ):
+        return jsonify(ok=False, error="invalid_claim_token"), 403
+
+    pledges = load_json(PLEDGE_CHAIN, [])
+    pledge = next(
+        (p for p in pledges if p.get("bnb_address") == bnb_address
+         and p.get("pledge_type") == "usdt_bnb"
+         and not p.get("pending_confirmation", True)),
+        None,
+    )
+
+    if not pledge:
+        return jsonify(
+            ok=True, status="pending_payment",
+            thr_address=entry.get("thr_address"),
+            message="Pledge not yet confirmed. Check back after payment.",
+        ), 200
+
+    return jsonify(
+        ok=True, status="verified",
+        thr_address=pledge.get("thr_address"),
+        send_secret=pledge.get("send_seed"),
+        pledge_hash=pledge.get("pledge_hash"),
+        pdf_filename=pledge.get("pdf_filename"),
     ), 200
 
 
@@ -48602,6 +48657,9 @@ def api_cpx_login():
 def api_cpx_link_wallet():
     if not _CPX_AVAILABLE:
         return jsonify(ok=False, error="cpx_not_configured"), 503
+    if os.getenv("CPX_WALLET_ONBOARDING", "").strip() != "1":
+        return jsonify(ok=False, error="wallet_onboarding_blocked",
+                       message="Wallet onboarding is not yet enabled. Awaiting funding source approval."), 503
     data = request.get_json() or {}
     email = (data.get("email") or "").strip()
     password = data.get("password") or ""
@@ -48684,6 +48742,11 @@ def api_cpx_postback():
     if not trans_id or not user_id:
         logger.warning("CPX postback missing trans_id or user_id")
         return "0", 400
+
+    cpx_live = os.getenv("CPX_POSTBACK_LIVE", "").strip()
+    if cpx_live != "1":
+        logger.info("CPX postback received but CPX_POSTBACK_LIVE != 1 — credits blocked. trans_id=%s", trans_id)
+        return "0", 503
 
     if not verify_cpx_signature(trans_id, secure_hash):
         logger.warning("CPX postback signature mismatch: trans_id=%s", trans_id)

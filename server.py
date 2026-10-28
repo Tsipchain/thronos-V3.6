@@ -48914,6 +48914,43 @@ try:
 except Exception as _earn_acct_err:
     logger.error("Earn Account initialization failed: %s", _earn_acct_err)
 
+# ─── Fiat Course Purchase (webhook-verified Stripe, no browser claims) ────
+_course_purchase_store = None
+try:
+    if os.getenv("COURSE_PURCHASE_ENABLED", "0") == "1" and is_master():
+        from services.course_purchase import CoursePurchaseStore, register_course_purchase_routes
+        _cp_db = os.path.join(DATA_DIR, "course_purchase.db")
+        _course_purchase_store = CoursePurchaseStore(_cp_db)
+
+        def _get_stripe():
+            return stripe
+
+        def _get_earn_store():
+            return globals().get("_earn_acct_store")
+
+        def _get_course(cid):
+            return next((c for c in load_courses() if c.get("id") == cid), None)
+
+        def _get_course_fn():
+            return _get_course
+
+        def _stripe_webhook_secret_fn():
+            return STRIPE_WEBHOOK_SECRET
+
+        register_course_purchase_routes(
+            app,
+            _course_purchase_store,
+            get_stripe=_get_stripe,
+            get_earn_store=_get_earn_store,
+            get_course_fn=_get_course_fn,
+            stripe_webhook_secret_fn=_stripe_webhook_secret_fn,
+        )
+        logger.info("Course Purchase routes registered (fiat, webhook-verified)")
+    else:
+        logger.info("Course Purchase routes disabled: requires COURSE_PURCHASE_ENABLED=1")
+except Exception as _cp_init_err:
+    logger.error("Course Purchase initialization failed: %s", _cp_init_err)
+
 # ─── Legacy wallet-first Earn Center (kept gated, not active by default) ──
 try:
     _earn_identity_key_legacy = os.getenv("EARN_IDENTITY_KEY", "").strip()

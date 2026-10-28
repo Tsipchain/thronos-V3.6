@@ -48374,7 +48374,7 @@ print(f"[STARTUP] {NODE_ROLE.upper()} node initialization complete.\n")
 # ─── Earn beta entry point ──────────────────────────────────────────────────
 @app.get("/earn")
 def earn_beta_page():
-    """Wallet-first CPX beta entry. The iframe URL is never client-composed."""
+    """Earn beta entry — account-first (email/password). No wallet required."""
     return render_template("earn_beta.html")
 
 # ─── Earn Center: wallet-bound identity and transactional reward ledger ──────
@@ -48413,16 +48413,31 @@ def _verify_earn_wallet_proof(proof: dict) -> tuple[bool, str, str]:
     return True, wallet, ""
 
 
+# ─── Account-first Earn (email/password, no wallet required) ─────────────
 try:
     _earn_identity_key = os.getenv("EARN_IDENTITY_KEY", "").strip()
-    if _earn_identity_key and os.getenv("EARN_CENTER_ENABLED", "0") == "1" and is_master():
+    if _earn_identity_key and os.getenv("EARN_ACCOUNT_ENABLED", "0") == "1" and is_master():
+        from services.earn_account import EarnAccountStore, register_earn_account_routes
+        _earn_acct_db = os.getenv("EARN_ACCOUNT_DB_PATH", os.path.join(DATA_DIR, "earn_account.db"))
+        _earn_acct_store = EarnAccountStore(_earn_acct_db, _earn_identity_key)
+        register_earn_account_routes(app, _earn_acct_store)
+        logger.info("Earn Account routes registered (account-first beta)")
+    else:
+        logger.info("Earn Account routes disabled: requires master role, EARN_ACCOUNT_ENABLED=1 and EARN_IDENTITY_KEY")
+except Exception as _earn_acct_err:
+    logger.error("Earn Account initialization failed: %s", _earn_acct_err)
+
+# ─── Legacy wallet-first Earn Center (kept gated, not active by default) ──
+try:
+    _earn_identity_key_legacy = os.getenv("EARN_IDENTITY_KEY", "").strip()
+    if _earn_identity_key_legacy and os.getenv("EARN_CENTER_ENABLED", "0") == "1" and is_master():
         from services.earn_center import EarnStore, register_earn_routes
         _earn_db_path = os.getenv("EARN_DB_PATH", os.path.join(DATA_DIR, "earn_center.db"))
-        _earn_store = EarnStore(_earn_db_path, _earn_identity_key)
+        _earn_store = EarnStore(_earn_db_path, _earn_identity_key_legacy)
         register_earn_routes(app, _earn_store, _verify_earn_wallet_proof)
-        logger.info("Earn Center routes registered; CPX postbacks remain disabled")
+        logger.info("Earn Center (wallet-first) routes registered; CPX postbacks remain disabled")
     else:
-        logger.info("Earn Center routes disabled: requires master role, EARN_CENTER_ENABLED=1 and EARN_IDENTITY_KEY")
+        logger.info("Earn Center (wallet-first) routes disabled: requires EARN_CENTER_ENABLED=1")
 except Exception as _earn_init_error:
     logger.error("Earn Center initialization failed: %s", _earn_init_error)
 

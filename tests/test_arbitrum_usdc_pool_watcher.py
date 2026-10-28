@@ -22,13 +22,15 @@ class ArbitrumPoolTargetTests(unittest.TestCase):
 
     def test_arbitrum_requires_an_explicit_vault_and_never_uses_bsc_or_base_default(self):
         target = next(t for t in pool.POOL_TARGETS if t["pool_id"] == "arbitrum-usdc")
-        self.assertEqual(target["vault_address"], "")
         self.assertIn("ARBITRUM_POOL_VAULT_ADDRESS", target["vault_env_vars"])
+        if target["vault_address"]:
+            self.assertRegex(target["vault_address"], r"^0x[0-9a-f]{40}$")
         self.assertNotEqual(target["vault_address"], pool._BSC_VAULT)
         self.assertNotEqual(target["vault_address"], pool._BASE_VAULT)
 
     def test_missing_arbitrum_vault_skips_scan_and_never_credits(self):
-        target = next(t for t in pool.POOL_TARGETS if t["pool_id"] == "arbitrum-usdc")
+        target = dict(next(t for t in pool.POOL_TARGETS if t["pool_id"] == "arbitrum-usdc"))
+        target["vault_address"] = ""
         old_targets = pool.POOL_TARGETS
         old_enabled = pool.POOL_WATCHER_ENABLED
         try:

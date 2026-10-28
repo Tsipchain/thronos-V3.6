@@ -53,8 +53,9 @@ POOL_WATCHER_CONFIRMATIONS = int(os.getenv("POOL_WATCHER_CONFIRMATIONS", "15"))
 POOL_WATCHER_BACKFILL      = int(os.getenv("POOL_WATCHER_BACKFILL_BLOCKS", "5000"))
 POOL_LOGS_CHUNK_SIZE       = int(os.getenv("POOL_LOGS_CHUNK_SIZE", "500"))   # max blocks per eth_getLogs call
 
-BSC_RPC_URL  = os.getenv("BSC_RPC_URL", "")
-BASE_RPC_URL = os.getenv("BASE_RPC_URL", "")
+BSC_RPC_URL      = os.getenv("BSC_RPC_URL", "")
+BSC_RPC_LOGS_URL = os.getenv("BSC_RPC_LOGS_URL", "").strip()
+BASE_RPC_URL     = os.getenv("BASE_RPC_URL", "")
 
 # Default token contracts (canonical addresses for mainnet)
 BSC_USDT_CONTRACT  = (
@@ -100,6 +101,8 @@ POOL_TARGETS: List[Dict] = [
         "token_contract":    BSC_USDT_CONTRACT,
         "vault_address":     _BSC_VAULT,
         "rpc_url":           BSC_RPC_URL,
+        "logs_rpc_url":      BSC_RPC_LOGS_URL,
+        "rpc_logs_env_var":  "BSC_RPC_LOGS_URL",
         "source_detail":     "bsc_usdt_pool_watcher",
         "rpc_env_var":       "BSC_RPC_URL",
         "vault_env_vars":    "BSC_POOL_VAULT_ADDRESS / PYTHIA_SYSTEM_EVM_BSC_ADDRESS",
@@ -113,6 +116,8 @@ POOL_TARGETS: List[Dict] = [
         "token_contract":    BASE_USDC_CONTRACT,
         "vault_address":     _BASE_VAULT,
         "rpc_url":           BASE_RPC_URL,
+        "logs_rpc_url":      BASE_RPC_URL,
+        "rpc_logs_env_var":  "BASE_RPC_URL",
         "source_detail":     "base_usdc_pool_watcher",
         "rpc_env_var":       "BASE_RPC_URL",
         "vault_env_vars":    "BASE_POOL_VAULT_ADDRESS / PYTHIA_SYSTEM_EVM_BASE_ADDRESS",
@@ -248,6 +253,7 @@ def get_evm_vault_transfers(
     chain: str,
     decimals: int,
     last_scanned_block: int,
+    logs_rpc_url: Optional[str] = None,
 ) -> Tuple[List[Dict], int]:
     """
     Fetch ERC-20 Transfer events directed to vault_address since last_scanned_block.
@@ -277,7 +283,10 @@ def get_evm_vault_transfers(
         "address": token_contract,
         "topics":  [TRANSFER_EVENT_SIG, None, vault_padded],
     }
-    logs = _get_evm_logs_chunked(rpc_url, chain, filter_base, from_block, safe_block)
+    selected_logs_rpc = (logs_rpc_url or rpc_url).strip()
+    if chain == "bsc" and not logs_rpc_url:
+        logger.warning("[bsc] BSC_RPC_LOGS_URL is not configured; shared RPC endpoints may reject/rate-limit eth_getLogs")
+    logs = _get_evm_logs_chunked(selected_logs_rpc, chain, filter_base, from_block, safe_block)
 
     if logs is None:
         logger.error("[%s] eth_getLogs chunked scan failed — not advancing checkpoint", chain)
@@ -395,8 +404,10 @@ def scan_pool_deposits() -> None:
             continue
 
         last_block = int(state.get("last_scanned_block", {}).get(chain, 0))
+        logs_rpc_url = target.get("logs_rpc_url") or rpc_url
         transfers, safe_block = get_evm_vault_transfers(
-            rpc_url, vault, contract, chain, decimals, last_block
+            rpc_url, vault, contract, chain, decimals, last_block,
+            logs_rpc_url=logs_rpc_url,
         )
 
         chain_failed = False

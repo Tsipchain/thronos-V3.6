@@ -25247,14 +25247,23 @@ def _wallet_normalize_event(event: dict, event_type: str) -> dict:
             scope_meta[_sf] = _sv
 
     event_chain = (event.get("chain") or "thronos").lower()
-    chain_tx_hash = (
-        event.get("tx_hash")
-        or event.get("transaction_hash")
-        or (event.get("external_txid") if event_chain not in ("", "thronos", "thr") else "")
-        or event.get("internal_txid")
-        or event.get("tx_id")
-        or ""
-    )
+    if event_chain in ("", "thronos", "thr"):
+        chain_tx_hash = (
+            event.get("internal_txid")
+            or event.get("tx_id")
+            or event.get("tx_hash")
+            or event.get("id")
+            or ""
+        )
+    else:
+        chain_tx_hash = (
+            event.get("tx_hash")
+            or event.get("transaction_hash")
+            or event.get("external_txid")
+            or event.get("tx_id")
+            or event.get("id")
+            or ""
+        )
 
     return {
         "id":                  event.get("id", ""),
@@ -26486,6 +26495,7 @@ def _collect_normalized_history_from_pool_ledger(
                 ev_scope    = ev.get("transfer_scope") or "internal"
                 ev_settle   = ev.get("settlement_chain") or "thronos"
                 ev_origin   = ev.get("asset_origin_chain") or chain
+                history_chain = ev_settle if ev_scope == "internal" else chain
                 events.append({
                     "id":               ev.get("pool_event_id") or ev.get("id") or "",
                     "thr_address":      ev.get("address") or "",
@@ -26494,9 +26504,9 @@ def _collect_normalized_history_from_pool_ledger(
                     "_raw_category":    "liquidity",
                     "pool_event_id":    ev.get("pool_event_id") or "",
                     "correlation_id":   ev.get("correlation_id") or "",
-                    "internal_txid":    ev.get("internal_txid") or ev.get("intent_id") or "",
-                    "external_txid":    ev.get("external_txid") or ev.get("tx_hash") or "",
-                    "tx_hash":          ev.get("tx_hash") or ev.get("external_txid") or "",
+                    "internal_txid":    ev.get("internal_txid") or ev.get("intent_id") or ev.get("tx_id") or "",
+                    "external_txid":    ev.get("external_txid") or (ev.get("tx_hash") if history_chain != "thronos" else "") or "",
+                    "tx_hash":          (ev.get("tx_hash") or ev.get("external_txid") or "") if history_chain != "thronos" else (ev.get("internal_txid") or ev.get("tx_id") or ""),
                     "intent_id":        ev.get("intent_id") or "",
                     "pool_id":          ev.get("pool_id") or pool_id,
                     "pair":             ev.get("pair") or pool.get("pair") or cfg.get("pair") or "",
@@ -26510,7 +26520,7 @@ def _collect_normalized_history_from_pool_ledger(
                     "fee_asset":        "THR",
                     "fee_chain":        "thronos",
                     "worker":           ev.get("worker") or _AMM_WORKER_NAME,
-                    "chain":            chain,
+                    "chain":            history_chain,
                     "asset":            ev.get("asset") or "",
                     "amount":           float(ev.get("amount") or 0),
                     "direction":        ev.get("direction") or "allocate",
@@ -26627,7 +26637,9 @@ def _collect_normalized_history_from_chain(
                 "pool_event_id":   tx.get("pool_event_id") or tx_meta.get("pool_event_id", ""),
                 "internal_txid":   tx.get("internal_txid") or tx.get("tx_id") or tx.get("id") or "",
                 "external_txid":   tx.get("external_txid") or tx_meta.get("external_txid") or tx.get("tx_hash") or "",
-                "tx_hash":         tx.get("tx_hash") or tx.get("transaction_hash") or tx.get("external_txid") or "",
+                "tx_hash":         tx.get("tx_hash") or tx.get("transaction_hash") or (
+                    tx.get("external_txid") if str(tx.get("chain") or tx.get("network") or "thronos").lower() not in ("", "thronos", "thr") else ""
+                ),
                 "intent_id":       tx.get("intent_id") or tx_meta.get("intent_id") or "",
                 "pool_id":         tx.get("pool_id") or tx_meta.get("pool_id") or "",
                 "pair":            tx.get("pair") or tx_meta.get("pair") or "",

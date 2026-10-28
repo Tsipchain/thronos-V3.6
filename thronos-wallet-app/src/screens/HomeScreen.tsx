@@ -9,6 +9,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS } from '../constants/theme';
+import CrossChainAssetIcon from '../components/CrossChainAssetIcon';
 import { useStore } from '../store/useStore';
 import { getTokenBalances, getNetworkStatus, getTokenPrices } from '../services/api';
 import { shortenAddress, deriveEvmAddress, getPrivateKey } from '../services/wallet';
@@ -88,6 +89,8 @@ export default function HomeScreen() {
   const [copied, setCopied] = useState(false);
   const [networkInfo, setNetworkInfo] = useState<any>(null);
   const [prices, setPrices] = useState<Record<string, { thr: number; usd: number }>>({});
+  const [crossChainBalances, setCrossChainBalances] = useState<ChainBalances | null>(null);
+  const [crossChainLoading, setCrossChainLoading] = useState(true);
 
   const loadBalances = useCallback(async () => {
     if (!wallet.address) return;
@@ -115,11 +118,33 @@ export default function HomeScreen() {
 
   useEffect(() => { loadBalances(); }, [loadBalances]);
 
+  // Read public external-chain balances locally; the private key never leaves SecureStore.
+  const loadCrossChainBalances = useCallback(async () => {
+    setCrossChainLoading(true);
+    try {
+      const privateKey = await getPrivateKey();
+      if (!privateKey) {
+        setCrossChainBalances(null);
+        return;
+      }
+      const evmAddress = deriveEvmAddress(privateKey);
+      const result = await fetchAllChainBalances(evmAddress, '');
+      setCrossChainBalances(result);
+    } catch (error) {
+      console.warn('Failed to load cross-chain assets:', error);
+      setCrossChainBalances(null);
+    } finally {
+      setCrossChainLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void loadCrossChainBalances(); }, [loadCrossChainBalances, wallet.address]);
+
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await loadBalances();
+    await Promise.all([loadBalances(), loadCrossChainBalances()]);
     setRefreshing(false);
-  }, [loadBalances]);
+  }, [loadBalances, loadCrossChainBalances]);
 
   const copyAddress = async () => {
     if (wallet.address) {
@@ -309,6 +334,52 @@ export default function HomeScreen() {
                 </View>
               );
             })
+          )}
+        </View>
+
+        {/* External assets stay separate from the Thronos balance total. */}
+        <View style={styles.section}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: SPACING.sm }}>
+            <Text style={styles.sectionTitle}>CROSS-CHAIN ASSETS</Text>
+            <Text style={{ color: COLORS.textMuted, fontSize: FONT_SIZES.xs }}>BNB · Arbitrum · Base</Text>
+          </View>
+          {crossChainLoading ? (
+            <View style={styles.emptyBox}>
+              <ActivityIndicator color={COLORS.gold} />
+              <Text style={styles.emptyText}>Loading external balances…</Text>
+            </View>
+          ) : !crossChainBalances ? (
+            <View style={styles.emptyBox}>
+              <Ionicons name="cloud-offline-outline" size={28} color={COLORS.textMuted} />
+              <Text style={styles.emptyText}>External balances unavailable</Text>
+              <Text style={{ color: COLORS.textMuted, fontSize: FONT_SIZES.xs, textAlign: 'center' }}>
+                Unlock the wallet and refresh to query public chain RPCs.
+              </Text>
+            </View>
+          ) : (
+            [
+              { id: 'bnb', label: 'BNB Chain · Gas', symbol: 'BNB', network: 'bnb', balance: crossChainBalances.bnb },
+              { id: 'usdt-bnb', label: 'USDT on BNB Chain', symbol: 'USDT', network: 'bnb', balance: crossChainBalances.usdtBnb },
+              { id: 'eth-arb', label: 'Arbitrum One · Gas', symbol: 'ETH', network: 'arbitrum', balance: crossChainBalances.arb },
+              { id: 'usdt-arb', label: 'USDT on Arbitrum', symbol: 'USDT', network: 'arbitrum', balance: crossChainBalances.usdtArb },
+              { id: 'usdc-arb', label: 'USDC on Arbitrum', symbol: 'USDC', network: 'arbitrum', balance: crossChainBalances.usdcArb },
+              { id: 'eth-base', label: 'Base · Gas', symbol: 'ETH', network: 'base', balance: crossChainBalances.base },
+              { id: 'usdc-base', label: 'USDC on Base', symbol: 'USDC', network: 'base', balance: crossChainBalances.usdcBase },
+            ].map((asset) => (
+              <View key={asset.id} style={styles.tokenRow}>
+                <CrossChainAssetIcon symbol={asset.symbol} network={asset.network} size={42} />
+                <View style={styles.tokenInfo}>
+                  <Text style={styles.tokenName}>{asset.label}</Text>
+                  <Text style={styles.tokenEquiv}>{asset.network === 'arbitrum' ? 'Arbitrum One' : asset.network === 'base' ? 'Base Mainnet' : 'BNB Smart Chain'}</Text>
+                </View>
+                <View style={styles.tokenRight}>
+                  <Text style={styles.tokenBalance}>
+                    {asset.balance == null ? '—' : Number(asset.balance).toLocaleString(undefined, { maximumFractionDigits: 6 })} {asset.symbol}
+                  </Text>
+                  <Text style={styles.tokenUsdVal}>{asset.balance == null ? 'Unavailable' : 'On-chain balance'}</Text>
+                </View>
+              </View>
+            ))
           )}
         </View>
 

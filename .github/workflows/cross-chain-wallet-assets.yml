@@ -7,6 +7,7 @@ on:
     paths:
       - "server.py"
       - "public/wallet-pwa/app.js"
+      - "tests/test_wallet_history_dedup.mjs"
       - "thronos-wallet-app/src/components/CrossChainAssetIcon.tsx"
       - "thronos-wallet-app/src/screens/HomeScreen.tsx"
       - "thronos-wallet-app/src/screens/HistoryScreen.tsx"
@@ -28,6 +29,8 @@ jobs:
           node-version: "20"
       - name: Parse wallet PWA JavaScript
         run: node --check public/wallet-pwa/app.js
+      - name: Test chain-aware wallet history deduplication
+        run: node tests/test_wallet_history_dedup.mjs
 
   server-syntax:
     runs-on: ubuntu-latest

@@ -22,6 +22,7 @@ import os
 import json
 import time
 import logging
+import tempfile
 import requests
 from typing import Dict, List, Optional
 from decimal import Decimal
@@ -48,6 +49,9 @@ BTC_API_URL = os.getenv("BTC_API_URL", "https://btc-api.thronoschain.org")
 
 # State file to track processed transactions
 PROCESSED_TXS_FILE = os.path.join(DATA_DIR, "btc_pledge_processed.json")
+# Confirmed deposits that could not yet be attributed or credited are retained here.
+# This allows retries after a deposit leaves the adapter's recent transaction window.
+UNRESOLVED_TXS_FILE = os.path.join(DATA_DIR, "btc_pledge_unresolved.json")
 
 # User registry file (maps BTC addresses to THR addresses and KYC status)
 # Format: {"btc_address": {"thr_address": "THR...", "kyc_verified": bool, "whitelisted_admin": bool}}
@@ -89,14 +93,57 @@ def load_processed_txs() -> List[str]:
         return []
 
 
-def save_processed_txs(txs: List[str]):
-    """Save list of processed transaction IDs"""
+def _save_json_atomic(path: str, value) -> bool:
+    """Atomically replace a JSON state file so a crash cannot leave truncated JSON."""
+    directory = os.path.dirname(path) or "."
+    tmp_path = None
     try:
-        os.makedirs(os.path.dirname(PROCESSED_TXS_FILE), exist_ok=True)
-        with open(PROCESSED_TXS_FILE, 'w') as f:
-            json.dump(txs, f, indent=2)
+        os.makedirs(directory, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            "w", delete=False, dir=directory, prefix=".btc-watcher-", suffix=".tmp"
+        ) as handle:
+            json.dump(value, handle, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+            tmp_path = handle.name
+        os.replace(tmp_path, path)
+        return True
     except Exception as e:
-        logger.error(f"Failed to save processed txs: {e}")
+        logger.error("Failed atomic JSON write for %s: %s", os.path.basename(path), e)
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+        return False
+
+
+def save_processed_txs(txs: List[str]) -> bool:
+    """Atomically persist transaction IDs successfully processed by the master."""
+    unique = list(dict.fromkeys(tx for tx in txs if tx))
+    return _save_json_atomic(PROCESSED_TXS_FILE, unique)
+
+
+def load_unresolved_txs() -> List[Dict]:
+    """Load confirmed BTC deposits waiting for registration or a successful credit."""
+    try:
+        if not os.path.exists(UNRESOLVED_TXS_FILE):
+            return []
+        with open(UNRESOLVED_TXS_FILE, "r") as handle:
+            value = json.load(handle)
+        if not isinstance(value, list):
+            logger.error("BTC unresolved state is not a list; preserving file for manual inspection")
+            return []
+        return [item for item in value if isinstance(item, dict) and item.get("txid") and isinstance(item.get("transaction"), dict)]
+    except Exception as e:
+        logger.error("Failed to load unresolved BTC transactions: %s", e)
+        return []
+
+
+def save_unresolved_txs(entries: List[Dict]) -> bool:
+    """Atomically persist all deposits that still require processing."""
+    ordered = sorted(entries, key=lambda item: str(item.get("txid", "")))
+    return _save_json_atomic(UNRESOLVED_TXS_FILE, ordered)
 
 
 def load_user_registry() -> Dict:
@@ -534,59 +581,173 @@ def create_pledge_transaction(
 
 
 def watch_btc_pledges():
-    """Main watcher loop - poll for new BTC transactions and process them"""
+    """Poll BTC deposits and persist confirmed transactions until safely credited.
+
+    A transaction is marked processed only after the master confirms success.
+    Unknown users and temporary master/API failures remain in a durable retry
+    queue even after they leave the explorer/adapter's recent transaction list.
+    """
     logger.info("Starting BTC pledge watcher...")
     logger.info(f"Watching vault: {BTC_PLEDGE_VAULT}")
     logger.info(f"THR/BTC rate: {THR_BTC_RATE}")
     logger.info(f"Master node: {MASTER_NODE_URL}")
 
-    # Ensure pledge_chain.json is synced from fallback on startup
     sync_pledge_chain_from_fallback()
 
     processed_txs = load_processed_txs()
+    if not isinstance(processed_txs, list):
+        logger.error("BTC processed transaction state is not a list; refusing to process new deposits")
+        return
+    processed_txs = list(dict.fromkeys(txid for txid in processed_txs if txid))
+    processed_set = set(processed_txs)
 
-    # Get new transactions from the vault
-    vault_txs = get_vault_transactions()
+    # Load confirmed transactions that previously could not be resolved/credited.
+    pending_by_txid = {}
+    for item in load_unresolved_txs():
+        txid = str(item.get("txid") or "").strip()
+        transaction = item.get("transaction")
+        if not txid or txid in processed_set or not isinstance(transaction, dict):
+            continue
+        pending_by_txid[txid] = {
+            "txid": txid,
+            "transaction": transaction,
+            "first_seen": item.get("first_seen", time.time()),
+            "attempts": int(item.get("attempts", 0) or 0),
+            "last_reason": item.get("last_reason", "previous_retry"),
+        }
 
+    # Merge fresh observations by txid. Keep the higher confirmation count if
+    # an explorer temporarily returns stale/incomplete data.
+    vault_txs = get_vault_transactions() or []
     for tx in vault_txs:
-        txid = tx.get("txid")
-
-        # Skip if already processed
-        if txid in processed_txs:
+        if not isinstance(tx, dict):
+            continue
+        txid = str(tx.get("txid") or "").strip()
+        if not txid or txid in processed_set:
+            continue
+        try:
+            confirmations = int(tx.get("confirmations", 0) or 0)
+        except (TypeError, ValueError):
+            confirmations = 0
+        # Unconfirmed transactions are seen again through the mempool/chain
+        # adapter on subsequent cycles; do not credit or mark them processed.
+        if confirmations < 1 and txid not in pending_by_txid:
+            logger.debug("Skipping unconfirmed BTC tx: %s", txid)
             continue
 
-        # Skip unconfirmed transactions (require at least 1 confirmation)
-        confirmations = tx.get("confirmations", 0)
-        if confirmations < 1:
-            logger.debug(f"Skipping unconfirmed tx: {txid}")
-            continue
-
-        # Get BTC amount
-        btc_amount = float(tx.get("amount", 0))
-        if btc_amount <= 0:
-            logger.warning(f"Invalid amount in tx {txid}: {btc_amount}")
-            processed_txs.append(txid)
-            continue
-
-        # Resolve user from transaction
-        user_info = resolve_user_from_tx(tx)
-        if not user_info:
-            logger.warning(f"Could not resolve user for tx {txid}")
-            processed_txs.append(txid)
-            continue
-
-        # Create pledge transaction on master node
-        if create_pledge_transaction(user_info, btc_amount, txid):
-            logger.info(f"Successfully processed pledge tx: {txid}")
-            processed_txs.append(txid)
+        current = pending_by_txid.get(txid)
+        if current:
+            previous_tx = current["transaction"]
+            merged_tx = {**previous_tx, **tx}
+            try:
+                merged_tx["confirmations"] = max(
+                    int(previous_tx.get("confirmations", 0) or 0),
+                    int(tx.get("confirmations", 0) or 0),
+                )
+            except (TypeError, ValueError):
+                merged_tx["confirmations"] = int(tx.get("confirmations", 0) or 0)
+            current["transaction"] = merged_tx
         else:
-            logger.error(f"Failed to process pledge tx: {txid}")
-            # Don't mark as processed so we can retry later
+            pending_by_txid[txid] = {
+                "txid": txid,
+                "transaction": tx,
+                "first_seen": time.time(),
+                "attempts": 0,
+                "last_reason": "",
+            }
 
-    # Save processed txs
-    save_processed_txs(processed_txs)
+    newly_processed = []
+    for txid, item in list(pending_by_txid.items()):
+        if txid in processed_set:
+            pending_by_txid.pop(txid, None)
+            continue
 
-    logger.info(f"Watcher cycle complete. Processed {len(vault_txs)} transactions.")
+        tx = item["transaction"]
+        try:
+            confirmations = int(tx.get("confirmations", 0) or 0)
+        except (TypeError, ValueError):
+            confirmations = 0
+        if confirmations < 1:
+            # A persisted transaction was previously confirmed, but the latest
+            # provider response may have been stale. Preserve it for the next cycle.
+            item["last_reason"] = "awaiting_confirmations"
+            continue
+
+        try:
+            btc_amount = float(tx.get("amount", 0))
+        except (TypeError, ValueError):
+            btc_amount = 0.0
+        if btc_amount <= 0:
+            reason = "invalid_amount"
+            item["attempts"] += 1
+            if item.get("last_reason") != reason or item["attempts"] == 1:
+                logger.error("BTC tx %s has invalid amount; retaining for review", txid)
+            item["last_reason"] = reason
+            continue
+
+        try:
+            user_info = resolve_user_from_tx(tx)
+        except Exception as exc:
+            logger.error("BTC user resolution failed for tx %s: %s", txid, exc)
+            user_info = None
+
+        if not user_info:
+            reason = "user_unresolved"
+            item["attempts"] += 1
+            if item.get("last_reason") != reason or item["attempts"] == 1:
+                logger.warning(
+                    "BTC tx %s cannot yet be attributed; keeping it for retry (amount %.8f BTC)",
+                    txid, btc_amount
+                )
+            item["last_reason"] = reason
+            continue
+
+        try:
+            credited = create_pledge_transaction(user_info, btc_amount, txid)
+        except Exception as exc:
+            logger.error("BTC pledge creation raised for tx %s: %s", txid, exc)
+            credited = False
+
+        if credited:
+            logger.info("Successfully processed BTC pledge tx: %s", txid)
+            newly_processed.append(txid)
+            processed_set.add(txid)
+            pending_by_txid.pop(txid, None)
+        else:
+            reason = "master_node_failed"
+            item["attempts"] += 1
+            if item.get("last_reason") != reason or item["attempts"] == 1:
+                logger.warning("Master did not confirm BTC pledge tx %s; retaining for retry", txid)
+            item["last_reason"] = reason
+
+    processed_txs.extend(txid for txid in newly_processed if txid not in processed_txs)
+    processed_saved = save_processed_txs(processed_txs)
+    if not processed_saved:
+        # The server may already have accepted a transaction, so keep it queued
+        # until the processed checkpoint can be durably saved. The master endpoint
+        # must remain idempotent by btc_txid to make this retry safe.
+        for txid in newly_processed:
+            # The transaction has been removed above; retain the latest observed
+            # payload in a retry entry rather than silently dropping recovery state.
+            source_tx = next((tx for tx in vault_txs if tx.get("txid") == txid), None)
+            if source_tx:
+                pending_by_txid[txid] = {
+                    "txid": txid,
+                    "transaction": source_tx,
+                    "first_seen": time.time(),
+                    "attempts": 1,
+                    "last_reason": "processed_checkpoint_write_failed",
+                }
+        logger.critical("BTC processed checkpoint write failed; retained successful txs for reconciliation")
+
+    unresolved_saved = save_unresolved_txs(list(pending_by_txid.values()))
+    if not unresolved_saved:
+        logger.critical("Could not persist unresolved BTC transactions; manual reconciliation is required")
+
+    logger.info(
+        "BTC watcher cycle complete. observed=%d processed_now=%d unresolved=%d",
+        len(vault_txs), len(newly_processed), len(pending_by_txid)
+    )
 
 
 # Export the watcher function to be called by the scheduler

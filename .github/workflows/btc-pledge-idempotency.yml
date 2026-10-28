@@ -26,5 +26,7 @@ jobs:
           python-version: "3.11"
       - name: Install BTC watcher test dependency
         run: python -m pip install --disable-pip-version-check requests
+      - name: Compile BTC pledge production modules
+        run: python -m py_compile server.py btc_pledge_idempotency.py btc_pledge_watcher.py
       - name: Run BTC pledge regression tests
         run: python -m unittest discover -s tests -p "test_btc_pledge_*.py" -v

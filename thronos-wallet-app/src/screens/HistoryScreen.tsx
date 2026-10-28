@@ -462,15 +462,16 @@ export default function HistoryScreen() {
   const [stats, setStats] = useState({ total: 0, volume: 0, services: 0 });
 
   const load = useCallback(async () => {
-    if (!wallet.address) return;
+    const walletAddress = walletAddress;
+    if (!walletAddress) return;
     setLoading(true);
     try {
       let result: any;
       try {
-        result = await getNormalizedWalletHistory(wallet.address, 500);
+        result = await getNormalizedWalletHistory(walletAddress, 500);
       } catch {
         // Legacy endpoint fallback keeps the wallet usable during a history-service outage.
-        result = await getTransactionHistory(wallet.address, 200);
+        result = await getTransactionHistory(walletAddress, 200);
       }
 
       const rawList: any[] = Array.isArray(result)
@@ -478,7 +479,7 @@ export default function HistoryScreen() {
         : (result as any)?.history || (result as any)?.events || (result as any)?.transactions || [];
       const dedupedRaw = dedupeNormalizedHistory(rawList);
       const normalizedAll = dedupedRaw
-        .map((raw: any) => normalizeTx(normalizedEventForWallet(raw), wallet.address))
+        .map((raw: any) => normalizeTx(normalizedEventForWallet(raw), walletAddress))
         .sort((a, b) => b.timestampMs - a.timestampMs);
       const normalized = activeCategory === 'all'
         ? normalizedAll

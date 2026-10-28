@@ -462,7 +462,7 @@ export default function HistoryScreen() {
   const [stats, setStats] = useState({ total: 0, volume: 0, services: 0 });
 
   const load = useCallback(async () => {
-    const walletAddress = walletAddress;
+    const walletAddress = wallet.address;
     if (!walletAddress) return;
     setLoading(true);
     try {

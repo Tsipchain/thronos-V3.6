@@ -30,6 +30,10 @@ from decimal import Decimal
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# This module still has simulation-only THR burn and BTC send methods.
+# Keep live processing disabled until an audited signer/broadcaster is integrated.
+BTC_LIVE_WITHDRAWAL_BACKEND_READY = False
+
 
 @dataclass
 class WithdrawalRequest:
@@ -275,6 +279,17 @@ class BTCBridgeWithdrawal:
         if request.status != 'pending':
             return False, f"Request already {request.status}"
 
+        if not BTC_LIVE_WITHDRAWAL_BACKEND_READY:
+            message = (
+                "BTC withdrawal is not available: secure THR debit and real BTC "
+                "signing/broadcast are not implemented. Request remains pending; "
+                "no funds were moved."
+            )
+            request.error_message = message
+            self._save_withdrawals()
+            logger.warning("Withdrawal %s blocked because live payout backend is not implemented", request_id)
+            return False, message
+
         logger.info(f"Processing withdrawal: {request_id}")
 
         # Step 1: Burn THR tokens
@@ -323,48 +338,16 @@ class BTCBridgeWithdrawal:
         return True, f"Withdrawal completed. BTC txid: {btc_txid}"
 
     def _burn_thr(self, wallet: str, amount: float) -> str:
-        """
-        Burn THR tokens
-        In production, this would interact with the main ledger
-        """
-        # Simulate burning by creating a transaction to a burn address
-        burn_address = "THR_BURN_ADDRESS_0000000000000000000000"
-
-        # Generate transaction ID
-        txid = hashlib.sha256(
-            f"{wallet}{burn_address}{amount}{time.time()}".encode()
-        ).hexdigest()
-
-        # In production, would:
-        # 1. Verify wallet balance
-        # 2. Create burn transaction
-        # 3. Update ledger
-        # 4. Return real txid
-
-        logger.info(f"Burning {amount} THR from {wallet}")
-        return txid
+        """Burn THR through the canonical ledger (not implemented in this module)."""
+        raise NotImplementedError(
+            "Live THR debit/burn adapter is not implemented; refusing to fabricate a burn txid."
+        )
 
     def _send_btc(self, destination: str, amount: float) -> str:
-        """
-        Send Bitcoin to destination address
-        In production, this would use Bitcoin RPC or API
-        """
-        # Simulate BTC transaction
-        # In production, would:
-        # 1. Connect to Bitcoin node
-        # 2. Create transaction from multi-sig wallet
-        # 3. Sign with required keys
-        # 4. Broadcast to network
-        # 5. Return real txid
-
-        txid = hashlib.sha256(
-            f"{self.hot_wallet_btc_address}{destination}{amount}{time.time()}".encode()
-        ).hexdigest()
-
-        logger.info(f"Sending {amount} BTC to {destination}")
-        logger.info(f"Simulated BTC txid: {txid}")
-
-        return txid
+        """Broadcast a signed BTC transaction through an approved secure service."""
+        raise NotImplementedError(
+            "Live Bitcoin signing/broadcast is not implemented; refusing to fabricate a BTC txid."
+        )
 
     def get_withdrawal_status(self, request_id: str) -> Optional[Dict[str, Any]]:
         """Get withdrawal request status"""

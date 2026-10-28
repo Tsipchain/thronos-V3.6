@@ -351,6 +351,8 @@ function normalizedEventForWallet(raw: any): any {
     swap: 'swaps', pledge: 'staking', vault: 'liquidity',
     migration: 'gateway', unknown: 'thr',
   };
+  const isBridgeLifecycle = /^(bridge_|crosschain_|cross_chain_|withdrawal_)/.test(eventType.toLowerCase());
+  const category = isBridgeLifecycle ? 'bridge' : (domainCategory[domain] || raw.category || 'thr');
   const chain = canonicalHistoryChain(raw.chain);
   const direction = raw.direction === 'in' ? 'received'
     : raw.direction === 'out' ? 'sent' : 'related';
@@ -361,7 +363,7 @@ function normalizedEventForWallet(raw: any): any {
     event_type: eventType,
     kind: eventType,
     type: eventType,
-    category: domainCategory[domain] || raw.category || 'thr',
+    category,
     chain,
     asset: raw.asset || raw.token || 'THR',
     symbol: raw.asset || raw.symbol || 'THR',

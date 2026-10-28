@@ -347,29 +347,37 @@ def resolve_user_from_bnb_address(bnb_address: str) -> Optional[Dict]:
     return None
 
 
-def call_master_node_api(endpoint: str, data: Dict) -> Optional[Dict]:
-    """Call master node API with admin authentication"""
-    try:
-        url = f"{MASTER_NODE_URL}{endpoint}"
+def call_master_node_api(endpoint: str, data: Dict, max_retries: int = 3) -> Optional[Dict]:
+    """Call master node API with admin authentication and exponential backoff retry."""
+    url = f"{MASTER_NODE_URL}{endpoint}"
+    data["secret"] = ADMIN_SECRET
 
-        # Add admin secret to the request
-        data["secret"] = ADMIN_SECRET
+    for attempt in range(1, max_retries + 1):
+        try:
+            response = requests.post(url, json=data, timeout=30)
 
-        response = requests.post(
-            url,
-            json=data,
-            timeout=30
-        )
+            if response.status_code in (200, 201):
+                return response.json()
+            elif response.status_code == 400:
+                result = response.json()
+                if result.get("error") in ("duplicate_tx_already_processed", "duplicate_tx_already_processing"):
+                    logger.info(f"Master node: tx already processed (attempt {attempt})")
+                    return result
+                logger.error(f"Master node API 400: {response.text}")
+                return None
+            else:
+                logger.warning(f"Master node API call attempt {attempt}/{max_retries}: HTTP {response.status_code}")
 
-        if response.status_code == 200:
-            return response.json()
-        else:
-            logger.error(f"Master node API call failed: {response.status_code} - {response.text}")
-            return None
+        except Exception as e:
+            logger.warning(f"Master node API call attempt {attempt}/{max_retries}: {e}")
 
-    except Exception as e:
-        logger.error(f"Master node API call exception: {e}")
-        return None
+        if attempt < max_retries:
+            backoff = 2 ** attempt
+            logger.info(f"Retrying in {backoff}s...")
+            time.sleep(backoff)
+
+    logger.error(f"Master node API call failed after {max_retries} attempts: {url}")
+    return None
 
 
 def create_usdt_pledge_transaction(
@@ -466,12 +474,18 @@ def watch_bnb_pledges():
             had_processing_failure = True
             # Don't mark as processed so we can retry later
 
-    # Save processed txs and last scanned block (only if all transfers processed successfully)
+    # Always save processed txs and advance the block checkpoint.
+    # Unresolved addresses are retried next cycle via re-scan; they must NOT
+    # block checkpoint advancement or every future deposit stalls.
     save_processed_txs(processed_txs)
-    if last_safe_block > 0 and not had_processing_failure:
+    if last_safe_block > 0:
         save_last_scanned_block(last_safe_block)
-    elif had_processing_failure:
-        logger.warning("Not advancing last_scanned_block because one or more transfers failed processing")
+        if had_processing_failure:
+            logger.warning(
+                "Some transfers had failures (unresolved address or API error). "
+                "Block checkpoint still advanced — unresolved txs will be retried "
+                "via backfill window on the next cycle."
+            )
 
     logger.info(f"Watcher cycle complete. Processed {len(vault_transfers)} USDT transfers. Last scanned block: {last_safe_block}")
 

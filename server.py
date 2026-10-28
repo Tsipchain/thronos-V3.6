@@ -33971,7 +33971,7 @@ if NODE_ROLE == "master" and SCHEDULER_ENABLED and ENABLE_CHAIN:
     # BNB/USDT Pledge Watcher – polls BSC for USDT vault deposits via eth_getLogs
     # Interval configurable via BNB_WATCHER_INTERVAL_MINUTES (default 30).
     # On-demand checks use /api/pledge/bnb/check-manual with tx_hash instead.
-    _bnb_watcher_interval = int(_strip_env_quotes(os.getenv("BNB_WATCHER_INTERVAL_MINUTES", "30")))
+    _bnb_watcher_interval = int(_strip_env_quotes(os.getenv("BNB_WATCHER_INTERVAL_MINUTES", "5")))
     try:
         from bnb_pledge_watcher import watch_bnb_pledges
         scheduler.add_job(_with_app_context(watch_bnb_pledges), "interval", minutes=_bnb_watcher_interval,
@@ -34518,10 +34518,16 @@ def api_pledge_bnb_register():
     return jsonify(ok=True, thr_address=thr_address, bnb_address=bnb_address, vault_address=BNB_PLEDGE_VAULT), 200
 
 
+_USDT_PLEDGE_LOCK_DIR = os.path.join(DATA_DIR, "locks")
+
+
 def process_usdt_pledge_credit(thr_address, bnb_address, usdt_amount, bnb_txid, source="watcher",
                                bypass_minimum=False, reconciliation_reason=None):
     """
     Shared logic for crediting a USDT pledge to a THR wallet.
+
+    Uses a file lock keyed by bnb_txid to prevent concurrent duplicate credits
+    from the watcher and manual-check paths racing each other.
 
     Args:
         thr_address: THR address to credit
@@ -34540,6 +34546,38 @@ def process_usdt_pledge_credit(thr_address, bnb_address, usdt_amount, bnb_txid, 
         if not bypass_minimum and usdt_amount < MIN_USDT_PLEDGE:
             return False, {}, f"below_minimum_pledge (minimum {MIN_USDT_PLEDGE} USDT)"
 
+        # Acquire per-tx file lock to prevent concurrent duplicate credits
+        os.makedirs(_USDT_PLEDGE_LOCK_DIR, exist_ok=True)
+        lock_path = os.path.join(_USDT_PLEDGE_LOCK_DIR, f"pledge_{bnb_txid[:16]}.lock")
+        lock_fd = open(lock_path, "w")
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (IOError, OSError):
+            lock_fd.close()
+            return False, {}, "duplicate_tx_already_processing"
+
+        try:
+            return _process_usdt_pledge_credit_locked(
+                thr_address, bnb_address, usdt_amount, bnb_txid,
+                source, bypass_minimum, reconciliation_reason,
+            )
+        finally:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            lock_fd.close()
+            try:
+                os.unlink(lock_path)
+            except OSError:
+                pass
+
+    except Exception as e:
+        logger.error("[usdt_pledge] process_usdt_pledge_credit failed: %s", str(e), exc_info=True)
+        return False, {}, str(e)
+
+
+def _process_usdt_pledge_credit_locked(thr_address, bnb_address, usdt_amount, bnb_txid,
+                                       source, bypass_minimum, reconciliation_reason):
+    """Inner credit logic, called while holding the per-tx file lock."""
+    try:
         # Check for duplicate tx in wallet history
         wallet_hist_file = os.path.join(DATA_DIR, "wallet_history.json")
         wallet_hist = load_json(wallet_hist_file, [])
@@ -34895,6 +34933,166 @@ def api_pledge_bnb_check_manual():
     except Exception as e:
         logger.error(f"Manual USDT pledge check failed: {e}", exc_info=True)
         return jsonify(ok=False, error="check_failed", details=str(e)), 500
+
+
+@app.route("/api/pledge/bnb/verify", methods=["POST"])
+def api_pledge_bnb_verify():
+    """
+    On-chain verification of USDT payment for a registered BNB address.
+    Unlike /check-manual (which requires tx_hash), this scans the last N blocks
+    for USDT Transfer events from the sender to the vault — exactly what a user
+    needs when the watcher hasn't detected their payment yet.
+
+    POST body: { "bnb_address": "0x..." }
+    """
+    data = request.get_json() or {}
+    bnb_address = (data.get("bnb_address") or "").strip().lower()
+
+    if not re.match(r"^0x[a-f0-9]{40}$", bnb_address):
+        return jsonify(ok=False, error="invalid_bnb_address"), 400
+
+    # Must be registered
+    registry_file = os.path.join(DATA_DIR, "bnb_user_registry.json")
+    registry = load_json(registry_file, {})
+    if bnb_address not in registry:
+        return jsonify(ok=False, error="bnb_address_not_registered"), 404
+
+    registered_thr = registry[bnb_address].get("thr_address")
+
+    # Already confirmed? Return existing pledge info
+    pledges = load_json(PLEDGE_CHAIN, [])
+    existing = next(
+        (p for p in pledges if p.get("bnb_address") == bnb_address
+         and p.get("pledge_type") == "usdt_bnb"
+         and not p.get("pending_confirmation", True)),
+        None
+    )
+    if existing:
+        return jsonify(
+            ok=True, status="verified",
+            thr_address=existing.get("thr_address"),
+            send_secret=existing.get("send_seed"),
+        ), 200
+
+    # Not yet confirmed — scan BSC for USDT transfers from this address to vault
+    try:
+        import requests as req_lib
+
+        bsc_rpc_config = os.getenv("BSC_RPC_URL", "https://bsc-dataseed.binance.org")
+        bsc_rpc_list = [url.strip() for url in bsc_rpc_config.split(',')]
+        vault_address = (os.getenv("BSC_USDT_PLEDGE_VAULT") or os.getenv("BNB_PLEDGE_VAULT", "")).lower()
+        usdt_contract = (os.getenv("BSC_USDT_CONTRACT") or os.getenv("USDT_BNB_CONTRACT", "0x55d398326f99059ff775485246999027b3197955")).lower()
+        confirmations = int(os.getenv("BSC_CONFIRMATIONS", "15"))
+
+        if not vault_address or not usdt_contract:
+            return jsonify(ok=False, error="vault_not_configured"), 500
+
+        # Get latest block
+        latest_block_hex = None
+        for rpc_url in bsc_rpc_list:
+            try:
+                res = req_lib.post(rpc_url, json={
+                    "jsonrpc": "2.0", "method": "eth_blockNumber", "params": [], "id": 1
+                }, timeout=15)
+                if res.ok:
+                    rdata = res.json()
+                    if rdata.get("result"):
+                        latest_block_hex = rdata["result"]
+                        break
+            except Exception:
+                continue
+
+        if not latest_block_hex:
+            return jsonify(ok=False, error="bsc_rpc_unavailable"), 503
+
+        latest_block = int(latest_block_hex, 16)
+        safe_block = max(0, latest_block - confirmations)
+        # Scan last 5000 blocks (~4 hours on BSC)
+        scan_from = max(0, safe_block - 5000)
+
+        transfer_topic = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+        sender_topic = "0x" + bnb_address[2:].zfill(64)
+        vault_topic = "0x" + vault_address[2:].zfill(64)
+
+        # eth_getLogs for Transfer events: from=sender, to=vault, on USDT contract
+        found_tx = None
+        found_amount = 0
+        for rpc_url in bsc_rpc_list:
+            try:
+                res = req_lib.post(rpc_url, json={
+                    "jsonrpc": "2.0", "method": "eth_getLogs",
+                    "params": [{
+                        "address": usdt_contract,
+                        "fromBlock": hex(scan_from),
+                        "toBlock": hex(safe_block),
+                        "topics": [transfer_topic, sender_topic, vault_topic],
+                    }],
+                    "id": 1
+                }, timeout=30)
+                if res.ok:
+                    rdata = res.json()
+                    logs = rdata.get("result", [])
+                    if isinstance(logs, list):
+                        for log_entry in reversed(logs):
+                            data_hex = log_entry.get("data", "0x")[2:]
+                            if data_hex:
+                                amount = int(data_hex, 16) / 1e18
+                                if amount >= MIN_USDT_PLEDGE:
+                                    found_tx = log_entry.get("transactionHash", "")
+                                    found_amount = amount
+                                    break
+                    if found_tx:
+                        break
+            except Exception:
+                continue
+
+        if not found_tx or found_amount <= 0:
+            return jsonify(
+                ok=True, status="pending_payment",
+                thr_address=registered_thr,
+                send_secret=None,
+                message="No confirmed USDT transfer found yet. BSC needs ~15 confirmations.",
+            ), 200
+
+        # Found a valid USDT transfer — credit the pledge
+        success, result_data, error = process_usdt_pledge_credit(
+            registered_thr, bnb_address, found_amount, found_tx,
+            source="on-chain-verify"
+        )
+
+        if success:
+            pledges = load_json(PLEDGE_CHAIN, [])
+            pledge = next(
+                (p for p in pledges if p.get("bnb_address") == bnb_address and p.get("pledge_type") == "usdt_bnb"),
+                None
+            )
+            return jsonify(
+                ok=True, status="verified",
+                thr_address=registered_thr,
+                send_secret=pledge.get("send_seed") if pledge else None,
+                amount_usdt=found_amount,
+                tx_hash=found_tx,
+            ), 200
+        elif error == "duplicate_tx_already_processed":
+            # Already processed — return existing pledge
+            pledges = load_json(PLEDGE_CHAIN, [])
+            pledge = next(
+                (p for p in pledges if p.get("bnb_address") == bnb_address and p.get("pledge_type") == "usdt_bnb"),
+                None
+            )
+            return jsonify(
+                ok=True, status="verified",
+                thr_address=registered_thr,
+                send_secret=pledge.get("send_seed") if pledge else None,
+                amount_usdt=found_amount,
+                tx_hash=found_tx,
+            ), 200
+        else:
+            return jsonify(ok=False, error="credit_failed", details=error), 500
+
+    except Exception as e:
+        logger.error(f"BNB pledge verify failed: {e}", exc_info=True)
+        return jsonify(ok=False, error="verify_failed"), 500
 
 
 @app.route("/api/pledge/bnb/status", methods=["GET"])

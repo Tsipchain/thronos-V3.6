@@ -9,7 +9,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import * as Clipboard from 'expo-clipboard';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS } from '../constants/theme';
 import { CONFIG } from '../constants/config';
-import { getBnbPledgeQuote, registerBnbAddress, getBnbPledgeStatus, pledgeMigrate } from '../services/api';
+import { getBnbPledgeQuote, registerBnbAddress, getBnbPledgeStatus, verifyBnbPledge, pledgeMigrate } from '../services/api';
 import {
   importWalletFromRecoveryJson, saveAuthSecret,
   isBiometricAvailable, authenticateWithBiometrics, setBiometricEnabled,
@@ -97,11 +97,11 @@ export default function UsdtPledgeScreen({ navigation }: any) {
     }
   }, [bnbAddress, wallet.address, isNewUser]);
 
-  // Step 2 (new users): poll watcher for USDT payment confirmation
+  // Step 2 (new users): verify USDT payment on-chain (scans BSC if watcher hasn't detected it)
   const handleCheckPayment = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await getBnbPledgeStatus(bnbAddress.trim());
+      const res = await verifyBnbPledge(bnbAddress.trim());
       if (res.ok && res.status === 'verified' && res.send_secret) {
         setSecretSeed(res.send_secret);
         if (res.thr_address) setPendingThrAddress(res.thr_address);

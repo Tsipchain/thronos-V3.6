@@ -1088,6 +1088,11 @@ AI_POOL_FILE        = os.path.join(DATA_DIR, "ai_pool.json")  # Phase 4: AI rewa
 NETWORK_POOL_FILE   = os.path.join(DATA_DIR, "network_pool.json")  # Phase 5: Network rewards pool (10% of music telemetry)
 T2E_REWARDS_FILE    = os.path.join(DATA_DIR, "t2e_rewards.json")  # Train-to-Earn rewards for IoT/ASIC miners
 
+# CPX Rewards (survey offerwall) data files
+CPX_ACCOUNTS_FILE       = os.path.join(DATA_DIR, "cpx_accounts.json")
+RPT_LEDGER_FILE         = os.path.join(DATA_DIR, "rpt_ledger.json")
+CPX_TRANSACTIONS_FILE   = os.path.join(DATA_DIR, "cpx_transactions.json")
+
 # Crosschain/event-bus & treasury stability files
 TOKENS_REGISTRY_FILE = os.path.join(DATA_DIR, "tokens_registry.json")
 EVENT_BUS_FILE = os.path.join(DATA_DIR, "crosschain_event_bus.json")
@@ -48535,6 +48540,197 @@ if is_master():
         print("[STARTUP] Transaction log seeded successfully.")
     except Exception as exc:
         logger.warning(f"[STARTUP] TX log seeding skipped: {exc}")
+
+# ---------------------------------------------------------------------------
+# CPX Rewards — Survey Offerwall integration
+# ---------------------------------------------------------------------------
+try:
+    from services.cpx_rewards import (
+        init_cpx_rewards,
+        register_account as cpx_register_account,
+        authenticate_account as cpx_authenticate_account,
+        link_wallet as cpx_link_wallet,
+        get_rpt_balance as cpx_get_rpt_balance,
+        generate_cpx_secure_hash,
+        build_offerwall_url,
+        verify_cpx_signature,
+        process_cpx_callback,
+        get_account_by_ext_user_id,
+        get_transaction_history as cpx_get_transaction_history,
+    )
+    init_cpx_rewards(DATA_DIR)
+    print("[STARTUP] CPX Rewards module initialized.")
+    _CPX_AVAILABLE = True
+except Exception as _cpx_exc:
+    logger.warning(f"[STARTUP] CPX Rewards module failed to load: {_cpx_exc}")
+    _CPX_AVAILABLE = False
+
+
+@app.route("/earn")
+def earn_page():
+    """Earn reward points by completing CPX Research surveys."""
+    server_url = request.host_url.rstrip("/")
+    return render_template("earn.html", server_url=server_url)
+
+
+@app.route(f"{API_BASE_PREFIX}/cpx/register", methods=["POST"])
+def api_cpx_register():
+    if not _CPX_AVAILABLE:
+        return jsonify(ok=False, error="cpx_not_configured"), 503
+    data = request.get_json() or {}
+    email = (data.get("email") or "").strip()
+    password = data.get("password") or ""
+    ip = request.remote_addr or ""
+    result = cpx_register_account(email, password, ip)
+    status_code = 200 if result["ok"] else (429 if result.get("error") == "rate_limited" else 400)
+    return jsonify(**result), status_code
+
+
+@app.route(f"{API_BASE_PREFIX}/cpx/login", methods=["POST"])
+def api_cpx_login():
+    if not _CPX_AVAILABLE:
+        return jsonify(ok=False, error="cpx_not_configured"), 503
+    data = request.get_json() or {}
+    email = (data.get("email") or "").strip()
+    password = data.get("password") or ""
+    result = cpx_authenticate_account(email, password)
+    status_code = 200 if result["ok"] else 401
+    return jsonify(**result), status_code
+
+
+@app.route(f"{API_BASE_PREFIX}/cpx/link-wallet", methods=["POST"])
+def api_cpx_link_wallet():
+    if not _CPX_AVAILABLE:
+        return jsonify(ok=False, error="cpx_not_configured"), 503
+    data = request.get_json() or {}
+    email = (data.get("email") or "").strip()
+    password = data.get("password") or ""
+    thr_address = (data.get("thr_address") or "").strip().upper()
+    result = cpx_link_wallet(email, password, thr_address)
+    status_code = 200 if result["ok"] else 400
+    return jsonify(**result), status_code
+
+
+@app.route(f"{API_BASE_PREFIX}/cpx/balance")
+def api_cpx_balance():
+    if not _CPX_AVAILABLE:
+        return jsonify(ok=False, error="cpx_not_configured"), 503
+    ext_user_id = (request.args.get("ext_user_id") or "").strip()
+    if not ext_user_id:
+        return jsonify(ok=False, error="missing_ext_user_id"), 400
+    result = cpx_get_rpt_balance(ext_user_id)
+    return jsonify(**result), 200
+
+
+@app.route(f"{API_BASE_PREFIX}/cpx/offerwall-url")
+def api_cpx_offerwall_url():
+    if not _CPX_AVAILABLE:
+        return jsonify(ok=False, error="cpx_not_configured"), 503
+    ext_user_id = (request.args.get("ext_user_id") or "").strip()
+    if not ext_user_id:
+        return jsonify(ok=False, error="missing_ext_user_id"), 400
+    try:
+        url = build_offerwall_url(ext_user_id)
+        return jsonify(ok=True, url=url), 200
+    except ValueError as e:
+        return jsonify(ok=False, error=str(e)), 503
+
+
+@app.route(f"{API_BASE_PREFIX}/cpx/history")
+def api_cpx_history():
+    if not _CPX_AVAILABLE:
+        return jsonify(ok=False, error="cpx_not_configured"), 503
+    ext_user_id = (request.args.get("ext_user_id") or "").strip()
+    if not ext_user_id:
+        return jsonify(ok=False, error="missing_ext_user_id"), 400
+    limit = min(int(request.args.get("limit", 50) or 50), 200)
+    txns = cpx_get_transaction_history(ext_user_id, limit)
+    return jsonify(ok=True, transactions=txns), 200
+
+
+@app.route(f"{API_BASE_PREFIX}/cpx/postback", methods=["GET", "POST"])
+def api_cpx_postback():
+    """
+    CPX Research server-to-server postback endpoint.
+
+    Expected parameters (GET or POST):
+      trans_id     – unique CPX transaction ID
+      user_id      – our ext_user_id
+      amount_local – reward in publisher currency (already factor-converted)
+      amount_usd   – reward in USD (informational)
+      status       – 1=credit, 2=reversed
+      secure_hash  – MD5(trans_id + "-" + APP_SECURE_HASH)
+      offer_id     – survey/offer ID (optional)
+      ip_click     – user IP (optional)
+
+    Returns "1" on success (CPX expects this).
+    """
+    if not _CPX_AVAILABLE:
+        return "0", 503
+
+    if request.method == "POST":
+        params = request.form.to_dict() if request.content_type and "form" in request.content_type else (request.get_json() or {})
+    else:
+        params = request.args.to_dict()
+
+    trans_id = (params.get("trans_id") or "").strip()
+    user_id = (params.get("user_id") or "").strip()
+    amount_local_raw = params.get("amount_local", "0")
+    status_raw = params.get("status", "0")
+    secure_hash = (params.get("secure_hash") or "").strip()
+    offer_id = (params.get("offer_id") or "").strip()
+    ip_click = (params.get("ip_click") or "").strip()
+
+    if not trans_id or not user_id:
+        logger.warning("CPX postback missing trans_id or user_id")
+        return "0", 400
+
+    if not verify_cpx_signature(trans_id, secure_hash):
+        logger.warning("CPX postback signature mismatch: trans_id=%s", trans_id)
+        return "0", 403
+
+    try:
+        amount_local = float(amount_local_raw)
+    except (ValueError, TypeError):
+        return "0", 400
+
+    try:
+        status = int(status_raw)
+    except (ValueError, TypeError):
+        return "0", 400
+
+    if status not in (1, 2):
+        return "0", 400
+
+    result = process_cpx_callback(
+        trans_id=trans_id,
+        user_id=user_id,
+        amount_local=amount_local,
+        status=status,
+        offer_id=offer_id,
+        ip_click=ip_click,
+    )
+
+    if result.get("ok"):
+        return "1", 200
+    if result.get("error") == "unknown_user":
+        logger.warning("CPX postback for unknown user: user_id=%s", user_id)
+        return "0", 404
+    return "0", 500
+
+
+@app.route(f"{API_BASE_PREFIX}/cpx/account")
+def api_cpx_account():
+    if not _CPX_AVAILABLE:
+        return jsonify(ok=False, error="cpx_not_configured"), 503
+    ext_user_id = (request.args.get("ext_user_id") or "").strip()
+    if not ext_user_id:
+        return jsonify(ok=False, error="missing_ext_user_id"), 400
+    account = get_account_by_ext_user_id(ext_user_id)
+    if not account:
+        return jsonify(ok=False, error="not_found"), 404
+    return jsonify(ok=True, account=account), 200
+
 
 print(f"[STARTUP] {NODE_ROLE.upper()} node initialization complete.\n")
 

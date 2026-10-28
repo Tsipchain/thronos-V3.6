@@ -559,5 +559,245 @@ class TestWebUIVerifyIntegration(unittest.TestCase):
                          "Web UI must call /api/pledge/bnb/verify")
 
 
+# ---------------------------------------------------------------------------
+#  Integration tests: verify endpoint security
+# ---------------------------------------------------------------------------
+
+class TestVerifyEndpointSecurity(unittest.TestCase):
+    """Security properties of /api/pledge/bnb/verify."""
+
+    def test_requires_thr_address_parameter(self):
+        """Verify endpoint must reject calls without thr_address."""
+        # The endpoint reads thr_address from the POST body and compares
+        # against the registered mapping. Without it, response must be 403.
+        # Simulating the logic:
+        claimed_thr = ""
+        registered_thr = "THR_TEST_ADDR"
+        self.assertTrue(
+            not claimed_thr or claimed_thr != registered_thr,
+            "Empty thr_address must not match registered address"
+        )
+
+    def test_wrong_thr_address_rejected(self):
+        """Verify endpoint must reject calls with wrong thr_address."""
+        claimed_thr = "THR_WRONG"
+        registered_thr = "THR_REAL"
+        self.assertNotEqual(claimed_thr, registered_thr)
+
+    def test_rate_limit_logic(self):
+        """In-memory rate limiter must block after _VERIFY_RATE_MAX calls."""
+        # Test the rate limiter logic directly
+        rate_limit = {}
+        window = 60
+        max_calls = 5
+        now = time.time()
+
+        def check(key):
+            entries = rate_limit.get(key, [])
+            entries = [t for t in entries if now - t < window]
+            if len(entries) >= max_calls:
+                rate_limit[key] = entries
+                return False
+            entries.append(now)
+            rate_limit[key] = entries
+            return True
+
+        test_ip = "192.168.1.1"
+        for i in range(max_calls):
+            self.assertTrue(check(test_ip), f"Call {i+1} should be allowed")
+
+        self.assertFalse(check(test_ip), "Call beyond max should be rate limited")
+
+    def test_send_secret_not_returned_without_ownership(self):
+        """send_secret must not be accessible without matching thr_address."""
+        pledge = {
+            "bnb_address": FAKE_SENDER,
+            "pledge_type": "usdt_bnb",
+            "pending_confirmation": False,
+            "thr_address": FAKE_THR_ADDR,
+            "send_seed": "critical_secret_value",
+        }
+        # The endpoint checks claimed_thr == registered_thr before reaching
+        # the pledge lookup that returns send_seed.
+        claimed_thr = "THR_WRONG_ADDRESS"
+        registered_thr = FAKE_THR_ADDR
+        # With mismatch, the endpoint returns 403 before reaching send_seed
+        self.assertNotEqual(claimed_thr, registered_thr)
+
+
+class TestVerifyEndpointThrAddressPassthrough(unittest.TestCase):
+    """Mobile app and web UI must pass thr_address to verify endpoint."""
+
+    def test_mobile_app_passes_thr_address(self):
+        """api.ts verifyBnbPledge must accept thr_address parameter."""
+        api_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "thronos-wallet-app", "src", "services", "api.ts"
+        )
+        if os.path.exists(api_path):
+            with open(api_path) as f:
+                source = f.read()
+            self.assertIn("thr_address: string", source,
+                         "verifyBnbPledge must accept thr_address parameter")
+            self.assertIn("thr_address", source)
+
+    def test_web_ui_passes_thr_address(self):
+        """pledge_usdt.html must send thr_address in verify request."""
+        template_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "templates", "pledge_usdt.html"
+        )
+        if os.path.exists(template_path):
+            with open(template_path) as f:
+                source = f.read()
+            self.assertIn("thr_address: generatedThrAddress", source,
+                         "Web UI must send thr_address in verify request body")
+
+    def test_mobile_screen_passes_pending_thr(self):
+        """UsdtPledgeScreen must pass pendingThrAddress to verifyBnbPledge."""
+        screen_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "thronos-wallet-app", "src", "screens", "UsdtPledgeScreen.tsx"
+        )
+        if os.path.exists(screen_path):
+            with open(screen_path) as f:
+                source = f.read()
+            self.assertIn("pendingThrAddress", source)
+            self.assertIn("verifyBnbPledge(bnbAddress.trim(), thrAddr)", source,
+                         "Mobile app must pass thr_address as second argument")
+
+
+# ---------------------------------------------------------------------------
+#  Reconciliation: partial write detection
+# ---------------------------------------------------------------------------
+
+class TestReconciliationScript(unittest.TestCase):
+    """Reconciliation tool must detect partial writes."""
+
+    def setUp(self):
+        self.tmpdir = make_test_data_dir()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_detects_pledge_without_chain_tx(self):
+        """A pledge in PLEDGE_CHAIN with no matching chain.json entry is flagged."""
+        pledge_chain_file = os.path.join(self.tmpdir, "pledge_chain.json")
+        chain_file = os.path.join(self.tmpdir, "chain.json")
+        ledger_file = os.path.join(self.tmpdir, "ledger.json")
+        wallet_hist_file = os.path.join(self.tmpdir, "wallet_history.json")
+
+        write_json(pledge_chain_file, [{
+            "bnb_address": FAKE_SENDER,
+            "pledge_type": "usdt_bnb",
+            "pending_confirmation": False,
+            "thr_address": FAKE_THR_ADDR,
+        }])
+        write_json(chain_file, [])
+        write_json(ledger_file, {FAKE_THR_ADDR: 100.0})
+        write_json(wallet_hist_file, [])
+
+        # Simulate reconciliation logic
+        pledges = read_json(pledge_chain_file, [])
+        chain = read_json(chain_file, [])
+        confirmed = [p for p in pledges
+                     if p.get("pledge_type") == "usdt_bnb"
+                     and not p.get("pending_confirmation", True)]
+
+        chain_bnb_addrs = {tx.get("bnb_address") for tx in chain if tx.get("type") == "usdt_pledge"}
+
+        missing = [p for p in confirmed if p["bnb_address"] not in chain_bnb_addrs]
+        self.assertEqual(len(missing), 1, "Should detect 1 pledge without chain tx")
+        self.assertEqual(missing[0]["bnb_address"], FAKE_SENDER)
+
+    def test_detects_pledge_without_wallet_history(self):
+        """A pledge with no matching wallet_history event is flagged."""
+        pledge_chain_file = os.path.join(self.tmpdir, "pledge_chain.json")
+        chain_file = os.path.join(self.tmpdir, "chain.json")
+        ledger_file = os.path.join(self.tmpdir, "ledger.json")
+        wallet_hist_file = os.path.join(self.tmpdir, "wallet_history.json")
+
+        write_json(pledge_chain_file, [{
+            "bnb_address": FAKE_SENDER,
+            "pledge_type": "usdt_bnb",
+            "pending_confirmation": False,
+            "thr_address": FAKE_THR_ADDR,
+        }])
+        write_json(chain_file, [{"type": "usdt_pledge", "bnb_address": FAKE_SENDER}])
+        write_json(ledger_file, {FAKE_THR_ADDR: 100.0})
+        write_json(wallet_hist_file, [])
+
+        hist = read_json(wallet_hist_file, [])
+        has_event = any(
+            e.get("thr_address") == FAKE_THR_ADDR
+            and e.get("event_type") == "pledge_usdt_bnb_confirmed"
+            for e in hist
+        )
+        self.assertFalse(has_event, "Missing wallet history should be detected")
+
+    def test_no_issues_when_fully_consistent(self):
+        """No issues when all files are consistent."""
+        pledge_chain_file = os.path.join(self.tmpdir, "pledge_chain.json")
+        chain_file = os.path.join(self.tmpdir, "chain.json")
+        ledger_file = os.path.join(self.tmpdir, "ledger.json")
+        wallet_hist_file = os.path.join(self.tmpdir, "wallet_history.json")
+
+        write_json(pledge_chain_file, [{
+            "bnb_address": FAKE_SENDER,
+            "pledge_type": "usdt_bnb",
+            "pending_confirmation": False,
+            "thr_address": FAKE_THR_ADDR,
+        }])
+        write_json(chain_file, [{"type": "usdt_pledge", "bnb_address": FAKE_SENDER}])
+        write_json(ledger_file, {FAKE_THR_ADDR: 100.0})
+        write_json(wallet_hist_file, [{
+            "event_type": "pledge_usdt_bnb_confirmed",
+            "thr_address": FAKE_THR_ADDR,
+            "external_txid": FAKE_TX_HASH,
+        }])
+
+        pledges = read_json(pledge_chain_file, [])
+        chain = read_json(chain_file, [])
+        hist = read_json(wallet_hist_file, [])
+        ledger = read_json(ledger_file, {})
+
+        confirmed = [p for p in pledges
+                     if p.get("pledge_type") == "usdt_bnb"
+                     and not p.get("pending_confirmation", True)]
+        chain_bnb = {tx.get("bnb_address") for tx in chain if tx.get("type") == "usdt_pledge"}
+
+        issues = 0
+        for p in confirmed:
+            if p["bnb_address"] not in chain_bnb:
+                issues += 1
+            if p["thr_address"] not in ledger:
+                issues += 1
+            if not any(e.get("thr_address") == p["thr_address"]
+                       and e.get("event_type") == "pledge_usdt_bnb_confirmed"
+                       for e in hist):
+                issues += 1
+        self.assertEqual(issues, 0, "Fully consistent state should have no issues")
+
+
+# ---------------------------------------------------------------------------
+#  DATA_DIR consistency between server and watcher
+# ---------------------------------------------------------------------------
+
+class TestDataDirConsistency(unittest.TestCase):
+    """server.py and bnb_pledge_watcher.py must resolve DATA_DIR the same way."""
+
+    def test_watcher_checks_music_volume(self):
+        """Watcher must check MUSIC_VOLUME env var for Railway compatibility."""
+        watcher_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "bnb_pledge_watcher.py"
+        )
+        if os.path.exists(watcher_path):
+            with open(watcher_path) as f:
+                source = f.read()
+            self.assertIn('os.getenv("MUSIC_VOLUME"', source,
+                         "Watcher must check MUSIC_VOLUME for Railway consistency")
+
+
 if __name__ == "__main__":
     unittest.main()

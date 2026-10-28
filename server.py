@@ -34935,6 +34935,25 @@ def api_pledge_bnb_check_manual():
         return jsonify(ok=False, error="check_failed", details=str(e)), 500
 
 
+_VERIFY_RATE_LIMIT = {}
+_VERIFY_RATE_LOCK = threading.Lock()
+_VERIFY_RATE_WINDOW = 60
+_VERIFY_RATE_MAX = 5
+
+
+def _check_verify_rate_limit(key: str) -> bool:
+    now = time.time()
+    with _VERIFY_RATE_LOCK:
+        entries = _VERIFY_RATE_LIMIT.get(key, [])
+        entries = [t for t in entries if now - t < _VERIFY_RATE_WINDOW]
+        if len(entries) >= _VERIFY_RATE_MAX:
+            _VERIFY_RATE_LIMIT[key] = entries
+            return False
+        entries.append(now)
+        _VERIFY_RATE_LIMIT[key] = entries
+        return True
+
+
 @app.route("/api/pledge/bnb/verify", methods=["POST"])
 def api_pledge_bnb_verify():
     """
@@ -34943,10 +34962,17 @@ def api_pledge_bnb_verify():
     for USDT Transfer events from the sender to the vault — exactly what a user
     needs when the watcher hasn't detected their payment yet.
 
-    POST body: { "bnb_address": "0x..." }
+    POST body: { "bnb_address": "0x...", "thr_address": "THR..." }
+    Requires thr_address to match the registered mapping (ownership proof).
+    Rate limited to 5 requests per minute per IP.
     """
+    client_ip = request.remote_addr or "unknown"
+    if not _check_verify_rate_limit(client_ip):
+        return jsonify(ok=False, error="rate_limited", retry_after=_VERIFY_RATE_WINDOW), 429
+
     data = request.get_json() or {}
     bnb_address = (data.get("bnb_address") or "").strip().lower()
+    claimed_thr = (data.get("thr_address") or "").strip().upper()
 
     if not re.match(r"^0x[a-f0-9]{40}$", bnb_address):
         return jsonify(ok=False, error="invalid_bnb_address"), 400
@@ -34958,6 +34984,10 @@ def api_pledge_bnb_verify():
         return jsonify(ok=False, error="bnb_address_not_registered"), 404
 
     registered_thr = registry[bnb_address].get("thr_address")
+
+    # Ownership check: caller must know which THR address was registered
+    if not claimed_thr or claimed_thr != registered_thr:
+        return jsonify(ok=False, error="thr_address_mismatch"), 403
 
     # Already confirmed? Return existing pledge info
     pledges = load_json(PLEDGE_CHAIN, [])

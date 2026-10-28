@@ -101,7 +101,8 @@ export default function UsdtPledgeScreen({ navigation }: any) {
   const handleCheckPayment = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await verifyBnbPledge(bnbAddress.trim());
+      const thrAddr = pendingThrAddress || wallet.address || '';
+      const res = await verifyBnbPledge(bnbAddress.trim(), thrAddr);
       if (res.ok && res.status === 'verified' && res.send_secret) {
         setSecretSeed(res.send_secret);
         if (res.thr_address) setPendingThrAddress(res.thr_address);

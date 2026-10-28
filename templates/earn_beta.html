@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Thronos Earn Beta{% endblock %}
+{% block content %}
+<style>
+  .earn-beta { max-width: 980px; margin: 32px auto; padding: 0 18px 42px; }
+  .earn-card { background: linear-gradient(145deg,#101827,#182b3d); border:1px solid #2e5874; border-radius:18px; padding:26px; box-shadow:0 12px 45px #0006; }
+  .earn-card h1 { color:#f2c14e; margin:0 0 10px; } .earn-card p { color:#cbd5e1; line-height:1.55; }
+  .earn-action { background:#00a86b; color:#06120e; font-weight:800; padding:13px 19px; border:0; border-radius:10px; cursor:pointer; font-size:15px; }
+  .earn-action:disabled { opacity:.55; cursor:wait; } .earn-status { min-height:24px; margin:16px 0; color:#b8d9ee; }
+  .earn-frame { width:100%; height:850px; border:0; border-radius:12px; background:#fff; display:none; }
+  .earn-note { margin-top:18px; color:#91a7b8; font-size:13px; }
+</style>
+<main class="earn-beta">
+  <section class="earn-card">
+    <h1>Thronos Earn — CPX Beta</h1>
+    <p>Unlock your Thronos Wallet, sign in locally, then choose a survey. Your private key never leaves this device.</p>
+    <button id="earn-start" class="earn-action" type="button">Connect Wallet &amp; View Surveys</button>
+    <div id="earn-status" class="earn-status" role="status"></div>
+    <iframe id="earn-frame" class="earn-frame" title="CPX Research surveys" sandbox="allow-forms allow-scripts allow-same-origin allow-popups"></iframe>
+    <p class="earn-note">Beta notice: survey completion is recorded as a verified Earn receipt. Token conversion and payout remain separately reviewed and are never simulated.</p>
+  </section>
+</main>
+<script>
+(() => {
+  const button = document.getElementById('earn-start'), status = document.getElementById('earn-status'), frame = document.getElementById('earn-frame');
+  const hex = bytes => Array.from(bytes).map(v => v.toString(16).padStart(2,'0')).join('');
+  const derInt = value => { let v = value.replace(/^0+/, '') || '00'; if (parseInt(v.slice(0,2),16) >= 128) v = '00' + v; return (v.length/2).toString(16).padStart(2,'0') + v; };
+  const derSignature = ({r,s}) => { const body = '02' + derInt(r) + '02' + derInt(s); return '30' + (body.length/2).toString(16).padStart(2,'0') + body; };
+  async function authenticate() {
+    if (!window.walletSession || !walletSession.getAddress || !walletSession.signEvmTxHash) throw new Error('Open and unlock your Thronos Wallet first.');
+    const wallet = String(walletSession.getAddress() || '').trim().toUpperCase();
+    const publicKey = String(walletSession.getPublicKey ? walletSession.getPublicKey() : '').trim();
+    if (!wallet.startsWith('THR') || !publicKey) throw new Error('A bound Wallet V1 signer is required.');
+    const proof = {issued_at:Math.floor(Date.now()/1000),nonce:crypto.randomUUID(),purpose:'thronos_earn_auth',version:'1',wallet};
+    const canonical = JSON.stringify(proof);
+    const digest = hex(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(canonical))));
+    const signature = derSignature(await walletSession.signEvmTxHash(digest));
+    const response = await fetch('/api/earn/authenticate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...proof,signature,public_key:publicKey})});
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.ok) throw new Error(data.error || 'Wallet authentication failed.');
+    return data.access_token;
+  }
+  button.addEventListener('click',async () => { button.disabled=true; status.textContent='Authenticating your wallet…'; try { const token=await authenticate(); status.textContent='Loading surveys…'; const response=await fetch('/api/earn/cpx/offerwall',{headers:{Authorization:'Bearer '+token}}); const data=await response.json().catch(()=>({})); if(!response.ok||!data.ok) throw new Error(data.error||'Surveys are not available yet.'); frame.src=data.url; frame.style.display='block'; status.textContent='Connected. Complete a survey to create an Earn receipt.'; } catch(error) { status.textContent=error.message||'Could not start Earn.'; } finally { button.disabled=false; } });
+})();
+</script>
+{% endblock %}

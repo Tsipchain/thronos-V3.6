@@ -48371,6 +48371,12 @@ if is_master():
 
 print(f"[STARTUP] {NODE_ROLE.upper()} node initialization complete.\n")
 
+# ─── Earn beta entry point ──────────────────────────────────────────────────
+@app.get("/earn")
+def earn_beta_page():
+    """Wallet-first CPX beta entry. The iframe URL is never client-composed."""
+    return render_template("earn_beta.html")
+
 # ─── Earn Center: wallet-bound identity and transactional reward ledger ──────
 # This registration deliberately has no payout worker and no live CPX callback.
 # A reward cannot become paid until a separate, audited settlement path supplies

@@ -67,7 +67,7 @@ async function fetchErc20(evmAddr: string, tokenContract: string, rpcUrl: string
     // Use BigInt to avoid precision loss on 256-bit ERC20 balances (e.g., 0.1 USDT = 100000000000000000 wei with 18 decimals)
     const raw = BigInt(d.result);
     // Return null if balance is zero (no token held)
-    if (raw === 0n) return null;
+    if (raw === 0n) return 0;
 
     const divisor = BigInt(10 ** decimals);
     const whole = Number(raw / divisor);

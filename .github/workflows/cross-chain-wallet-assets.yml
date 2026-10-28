@@ -1,0 +1,44 @@
+name: Cross-Chain Wallet Assets Checks
+
+on:
+  push:
+    branches: ["feat/arbitrum-usdc-asset-logos"]
+  pull_request:
+    paths:
+      - "public/wallet-pwa/app.js"
+      - "thronos-wallet-app/src/components/CrossChainAssetIcon.tsx"
+      - "thronos-wallet-app/src/screens/HomeScreen.tsx"
+      - "thronos-wallet-app/src/services/crossChain.ts"
+      - ".github/workflows/cross-chain-wallet-assets.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  pwa-syntax:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Parse wallet PWA JavaScript
+        run: node --check public/wallet-pwa/app.js
+
+  mobile-typecheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: thronos-wallet-app/package-lock.json
+      - name: Install mobile wallet dependencies
+        working-directory: thronos-wallet-app
+        run: npm ci
+      - name: Type-check mobile wallet
+        working-directory: thronos-wallet-app
+        run: npx tsc --noEmit

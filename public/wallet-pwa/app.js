@@ -373,7 +373,7 @@ async function _fetchErc20(evmAddr, tokenContract, rpcUrl, decimals) {
     if (d.error || !d.result || d.result === '0x' || d.result === '0x' + '0'.repeat(64)) return null;
     // Use BigInt to avoid precision loss on 256-bit ERC20 balances
     const raw = BigInt(d.result);
-    if (raw === 0n) return null;
+    if (raw === 0n) return 0;
     const divisor = BigInt(10 ** decimals);
     const whole = Number(raw / divisor);
     const frac  = Number(raw % divisor) / (10 ** decimals);
@@ -391,7 +391,8 @@ const _CC_RPC = {
 };
 const _USDT_BNB  = '0x55d398326f99059fF775485246999027B3197955'; // 18 dec
 const _USDT_ARB  = '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9'; // 6 dec
-const _USDC_BASE = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'; // 6 dec
+const _USDC_BASE = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'; // 6 dec — native Circle USDC
+const _USDC_ARB  = '0xaf88d065e77c8cC2239327C5EDb3A432268e5831'; // 6 dec — native Circle USDC
 
 // EVM asset action config
 const _EVM_CHAIN_IDS = { ethereum: 1, bnb: 56, arbitrum: 42161, base: 8453, polygon: 137 };
@@ -399,7 +400,7 @@ const _USDT_POLY = '0xc2132D05D31c914a87C6611C10748AEb04B58e8F'; // 6 dec
 const _USDC_POLY = '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359'; // 6 dec
 const _EVM_TOKENS = {
   bnb:      { USDT: { contract: _USDT_BNB, decimals: 18 } },
-  arbitrum: { USDT: { contract: _USDT_ARB, decimals: 6  } },
+  arbitrum: { USDT: { contract: _USDT_ARB, decimals: 6 }, USDC: { contract: _USDC_ARB, decimals: 6 } },
   base:     { USDC: { contract: _USDC_BASE, decimals: 6  } },
   polygon:  { USDT: { contract: _USDT_POLY, decimals: 6  }, USDC: { contract: _USDC_POLY, decimals: 6 } },
 };
@@ -477,7 +478,7 @@ let _pwaSigningCtx = null;
 
 async function _fetchAllChainBalances(privHex, btcAddr) {
   const evmAddr = privHex ? await _deriveEvmAddress(privHex) : null;
-  const [btc, eth, bnb, arb, op, base, poly, usdtBnb, usdtArb, usdcBase] = await Promise.allSettled([
+  const [btc, eth, bnb, arb, op, base, poly, usdtBnb, usdtArb, usdcBase, usdcArb] = await Promise.allSettled([
     _fetchBtcBalance(btcAddr),
     _fetchEvmNative(evmAddr, _CC_RPC.eth),
     _fetchEvmNative(evmAddr, _CC_RPC.bnb),
@@ -488,9 +489,10 @@ async function _fetchAllChainBalances(privHex, btcAddr) {
     _fetchErc20(evmAddr, _USDT_BNB, _CC_RPC.bnb, 18),
     _fetchErc20(evmAddr, _USDT_ARB, _CC_RPC.arb, 6),
     _fetchErc20(evmAddr, _USDC_BASE, _CC_RPC.base, 6),
+    _fetchErc20(evmAddr, _USDC_ARB, _CC_RPC.arb, 6),
   ]);
   const v = r => r.status === 'fulfilled' ? r.value : null;
-  return { evmAddr, btc: v(btc), eth: v(eth), bnb: v(bnb), arb: v(arb), op: v(op), base: v(base), poly: v(poly), usdtBnb: v(usdtBnb), usdtArb: v(usdtArb), usdcBase: v(usdcBase) };
+  return { evmAddr, btc: v(btc), eth: v(eth), bnb: v(bnb), arb: v(arb), op: v(op), base: v(base), poly: v(poly), usdtBnb: v(usdtBnb), usdtArb: v(usdtArb), usdcBase: v(usdcBase), usdcArb: v(usdcArb) };
 }
 
 async function fetchHistory(address) {
@@ -1458,6 +1460,29 @@ const HOME_NETWORKS = [
   { id: 'base',     icon: '⬛', label: 'Base' },
 ];
 
+// Wallet-local token marks with a small network badge; no third-party image requests.
+function _renderCrossChainAssetMark(sym, color, network) {
+  const token = String(sym || '?').toUpperCase();
+  let mark = '';
+  if (token === 'USDC') {
+    mark = '<circle cx="20" cy="20" r="17" fill="#2775ca"/><circle cx="20" cy="20" r="12" fill="none" stroke="#fff" stroke-width="2"/><text x="20" y="26" text-anchor="middle" font-size="17" font-weight="700" fill="#fff">$</text>';
+  } else if (token === 'USDT') {
+    mark = '<circle cx="20" cy="20" r="17" fill="#26a17b"/><path d="M8 10H32M20 10V31M12 16C14 19 26 19 28 16" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>';
+  } else if (token === 'BNB') {
+    mark = '<circle cx="20" cy="20" r="17" fill="#f3ba2f"/><path d="M20 5L25 10L20 15L15 10ZM10 15L15 20L10 25L5 20ZM30 15L35 20L30 25L25 20ZM20 25L25 30L20 35L15 30ZM20 16L24 20L20 24L16 20Z" fill="#fff"/>';
+  } else if (token === 'ETH') {
+    mark = '<circle cx="20" cy="20" r="17" fill="#627eea"/><path d="M20 4L10 21L20 26L30 21ZM20 28L10 23L20 36L30 23Z" fill="#fff" fill-opacity=".95"/>';
+  } else if (token === 'BTC') {
+    mark = '<circle cx="20" cy="20" r="17" fill="#f7931a"/><text x="20" y="26" text-anchor="middle" font-size="18" font-weight="700" fill="#fff">₿</text>';
+  } else {
+    mark = '<circle cx="20" cy="20" r="17" fill="' + color + '"/><text x="20" y="25" text-anchor="middle" font-size="14" font-weight="700" fill="#fff">' + escHtml(token.slice(0, 1)) + '</text>';
+  }
+  const net = ({ bnb: 'BNB', arbitrum: 'ARB', base: 'BASE', ethereum: 'ETH', bitcoin: 'BTC' })[String(network || '').toLowerCase()] || '';
+  const badgeColor = net === 'ARB' ? '#28a0f0' : net === 'BASE' ? '#0052ff' : net === 'BNB' ? '#f3ba2f' : '#64748b';
+  const badge = net ? '<span style="position:absolute;right:-5px;bottom:-3px;min-width:20px;height:14px;padding:0 2px;border-radius:5px;background:' + badgeColor + ';border:1px solid #0d0b18;display:flex;align-items:center;justify-content:center;color:#fff;font-size:7px;font-weight:800;letter-spacing:-.2px">' + net + '</span>' : '';
+  return '<span style="position:relative;width:36px;height:36px;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;margin-right:1px"><svg width="34" height="34" viewBox="0 0 40 40" aria-hidden="true">' + mark + '</svg>' + badge + '</span>';
+}
+
 // evmMeta: { network, sym, addr } — if set the row becomes tappable for EVM actions
 function _renderHomeAssetRow(icon, label, sym, val, color, addr, evmMeta) {
   const fmt = v => {
@@ -1474,8 +1499,10 @@ function _renderHomeAssetRow(icon, label, sym, val, color, addr, evmMeta) {
     ? ` data-evm-net="${evmMeta.network}" data-evm-sym="${escHtml(evmMeta.sym)}" data-evm-addr="${escHtml(evmMeta.addr)}"`
     : '';
   const tapStyle = evmMeta ? ';cursor:pointer' : '';
+  const rowNetwork = evmMeta?.network || (/BNB/i.test(label) ? 'bnb' : /Arbitrum/i.test(label) ? 'arbitrum' : /Base/i.test(label) ? 'base' : /Bitcoin/i.test(label) ? 'bitcoin' : /Ethereum/i.test(label) ? 'ethereum' : '');
+  const assetMark = _renderCrossChainAssetMark(sym, color, rowNetwork);
   return `<div${tapClass}${tapData} style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid #ffffff10${tapStyle}">
-    <div style="width:28px;height:28px;border-radius:50%;background:${color}33;border:1px solid ${color};display:flex;align-items:center;justify-content:center;font-size:.8rem;flex-shrink:0">${icon}</div>
+    ${assetMark}
     <div style="flex:1;min-width:0">
       <div style="font-size:.88rem;font-weight:600;color:#fff">${escHtml(label)} <span style="color:var(--muted);font-size:.75rem">${sym}</span></div>
       ${addr ? `<div style="font-size:.7rem;color:var(--muted);font-family:monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${addr.slice(0,10)}…${addr.slice(-5)}</div>` : ''}
@@ -1763,7 +1790,9 @@ async function showWallet() {
     } else if (netId === 'arbitrum') {
       rows = _renderHomeAssetRow('🔵', 'Arbitrum', 'ETH', bal.arb, '#28a0f0', derivedUserEvmAddr)
            + _renderHomeAssetRow('₮', 'USDT on Arbitrum', 'USDT', bal.usdtArb, '#26a17b', derivedUserEvmAddr,
-               { network: 'arbitrum', sym: 'USDT', addr: derivedUserEvmAddr });
+               { network: 'arbitrum', sym: 'USDT', addr: derivedUserEvmAddr })
+           + _renderHomeAssetRow('$', 'USDC on Arbitrum', 'USDC', bal.usdcArb, '#2775ca', derivedUserEvmAddr,
+               { network: 'arbitrum', sym: 'USDC', addr: derivedUserEvmAddr });
     } else if (netId === 'base') {
       rows = _renderHomeAssetRow('⬛', 'Base', 'ETH', bal.base, '#0052ff', derivedUserEvmAddr)
            + _renderHomeAssetRow('$', 'USDC on Base', 'USDC', bal.usdcBase, '#2775ca', derivedUserEvmAddr,
@@ -2601,6 +2630,7 @@ async function showMultiChain() {
       { icon:'⬛',label:'Optimism',          sym:'ETH',  val:bal.op,       color:'#ff0420', net:'optimism', addr:bal.evmAddr },
       { icon:'⬛',label:'Base',              sym:'ETH',  val:bal.base,     color:'#0052ff', net:'base',     addr:bal.evmAddr },
       { icon:'$', label:'USDC on Base',      sym:'USDC', val:bal.usdcBase, color:'#2775ca', net:'base',     addr:bal.evmAddr },
+      { icon:'$', label:'USDC on Arbitrum',   sym:'USDC', val:bal.usdcArb,  color:'#2775ca', net:'arbitrum', addr:bal.evmAddr },
     ];
 
     el.innerHTML = chains.map(c => `

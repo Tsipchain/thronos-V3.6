@@ -2,10 +2,13 @@ name: Cross-Chain Wallet Assets Checks
 
 on:
   push:
-    branches: ["feat/arbitrum-usdc-asset-logos", "fix/unified-chain-history-dedup"]
+    branches: ["feat/arbitrum-usdc-asset-logos", "fix/unified-chain-history-dedup", "feat/arbitrum-usdc-pool-watcher"]
   pull_request:
     paths:
       - "server.py"
+      - "pool_deposit_watcher.py"
+      - "tests/test_arbitrum_usdc_pool_watcher.py"
+      - "tests/test_bsc_dedicated_logs_rpc.py"
       - "public/wallet-pwa/app.js"
       - "tests/test_wallet_history_dedup.mjs"
       - "thronos-wallet-app/src/components/CrossChainAssetIcon.tsx"
@@ -40,8 +43,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Compile server without executing runtime imports
-        run: python -m py_compile server.py
+      - name: Install watcher test dependency
+        run: python -m pip install --disable-pip-version-check requests
+      - name: Compile server and pool watcher without running services
+        run: python -m py_compile server.py pool_deposit_watcher.py
+      - name: Test dedicated BSC logs RPC routing
+        run: python -m unittest discover -s tests -p "test_bsc_dedicated_logs_rpc.py" -v
+      - name: Test Arbitrum native USDC pool watcher
+        run: python -m unittest discover -s tests -p "test_arbitrum_usdc_pool_watcher.py" -v
 
   mobile-typecheck:
     runs-on: ubuntu-latest

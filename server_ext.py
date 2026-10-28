@@ -34,14 +34,6 @@ try:
 except Exception as exc:  # pragma: no cover
     app.logger.warning("[WalletV1] routes NOT loaded: %s", exc)
 
-# L2E EDU Bridge — receives attendance events from thronos-edupresence
-try:
-    from services.l2e_edu import l2e_edu_bp
-    app.register_blueprint(l2e_edu_bp)
-    app.logger.info("[L2E-EDU] Blueprint registered at /api/l2e/edu")
-except Exception as exc:  # pragma: no cover
-    app.logger.warning("[L2E-EDU] Blueprint NOT loaded: %s", exc)
-
 # Physical Assets Registry — physical-asset lifecycle, NFT bridge, claim/transfer
 try:
     import physical_assets_service as _pa_svc

@@ -565,11 +565,12 @@ async function checkPayment() {
         document.getElementById('checkPaymentBtn').disabled = true;
         document.getElementById('checkPaymentBtn').textContent = '⏳ Checking...';
 
-        const checkRes = await fetch('/api/pledge/bnb/check-manual', {
+        const checkRes = await fetch('/api/pledge/bnb/verify', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                bnb_address: connectedAddress
+                bnb_address: connectedAddress,
+                thr_address: generatedThrAddress
             })
         });
 

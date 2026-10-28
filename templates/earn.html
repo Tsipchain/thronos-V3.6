@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Earn Rewards — Thronos</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#0a0e17;--card:#111827;--accent:#00c8ff;--accent2:#00ff66;--text:#e2e8f0;--muted:#94a3b8;--border:#1e293b;--danger:#ff6b6b}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;min-height:100vh}
+.header{background:var(--card);border-bottom:1px solid var(--border);padding:16px 20px;display:flex;align-items:center;justify-content:space-between}
+.logo{font-size:1.4rem;font-weight:700;background:linear-gradient(135deg,var(--accent),var(--accent2));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.balance-pill{background:rgba(0,200,255,.1);border:1px solid rgba(0,200,255,.3);border-radius:20px;padding:6px 16px;font-size:.85rem;color:var(--accent)}
+.balance-pill span{font-weight:700}
+
+/* Auth form */
+.auth-container{max-width:420px;margin:60px auto;padding:0 20px}
+.auth-card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:32px}
+.auth-card h2{text-align:center;margin-bottom:8px;font-size:1.3rem}
+.auth-card .subtitle{text-align:center;color:var(--muted);font-size:.85rem;margin-bottom:24px}
+.form-group{margin-bottom:16px}
+.form-group label{display:block;font-size:.8rem;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px}
+.form-group input{width:100%;padding:12px 16px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:.95rem;outline:none;transition:border-color .2s}
+.form-group input:focus{border-color:var(--accent)}
+.btn{width:100%;padding:12px;border:none;border-radius:8px;font-size:.95rem;font-weight:600;cursor:pointer;transition:opacity .2s}
+.btn:hover{opacity:.85}
+.btn-primary{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#000}
+.btn-outline{background:transparent;border:1px solid var(--border);color:var(--text);margin-top:8px}
+.error-msg{color:var(--danger);font-size:.85rem;text-align:center;margin-top:12px;min-height:20px}
+.toggle-auth{text-align:center;margin-top:16px;font-size:.85rem;color:var(--muted)}
+.toggle-auth a{color:var(--accent);cursor:pointer;text-decoration:none}
+
+/* Earn dashboard */
+.earn-container{max-width:800px;margin:0 auto;padding:20px}
+.stats-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:20px}
+.stat-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px;text-align:center}
+.stat-card .value{font-size:1.6rem;font-weight:700;color:var(--accent)}
+.stat-card .label{font-size:.75rem;color:var(--muted);margin-top:4px;text-transform:uppercase;letter-spacing:.5px}
+.offerwall-frame{width:100%;border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--card);min-height:500px}
+.offerwall-frame iframe{width:100%;height:600px;border:none}
+.section-title{font-size:1.1rem;font-weight:600;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--border)}
+.history-item{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--border)}
+.history-item:last-child{border-bottom:none}
+.history-item .desc{font-size:.9rem}
+.history-item .time{font-size:.75rem;color:var(--muted)}
+.history-item .amount{font-weight:700}
+.amount-credit{color:var(--accent2)}
+.amount-debit{color:var(--danger)}
+.empty-state{text-align:center;padding:40px;color:var(--muted);font-size:.9rem}
+.cpx-disabled{text-align:center;padding:60px 20px;color:var(--muted)}
+.cpx-disabled h3{color:var(--text);margin-bottom:8px}
+.logout-btn{background:transparent;border:1px solid var(--border);color:var(--muted);padding:6px 14px;border-radius:8px;cursor:pointer;font-size:.8rem}
+.logout-btn:hover{border-color:var(--danger);color:var(--danger)}
+.wallet-link-card{background:rgba(0,255,102,.05);border:1px solid rgba(0,255,102,.2);border-radius:12px;padding:16px;margin-bottom:20px;font-size:.9rem}
+.wallet-link-card a{color:var(--accent2)}
+@media(max-width:640px){
+  .stats-row{grid-template-columns:1fr}
+  .offerwall-frame iframe{height:480px}
+  .header{padding:12px 16px}
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="logo">Thronos Earn</div>
+  <div id="headerRight"></div>
+</div>
+
+<!-- Auth Screen -->
+<div id="authScreen" class="auth-container" style="display:none">
+  <div class="auth-card">
+    <h2 id="authTitle">Create Account</h2>
+    <p class="subtitle">Earn reward points by completing surveys</p>
+    <form id="authForm" onsubmit="return false">
+      <div class="form-group">
+        <label>Email</label>
+        <input type="email" id="authEmail" placeholder="your@email.com" required autocomplete="email">
+      </div>
+      <div class="form-group">
+        <label>Password</label>
+        <input type="password" id="authPassword" placeholder="Min 8 characters" required minlength="8" autocomplete="current-password">
+      </div>
+      <button class="btn btn-primary" id="authSubmit" onclick="handleAuth()">Create Account</button>
+    </form>
+    <div class="error-msg" id="authError"></div>
+    <div class="toggle-auth">
+      <span id="toggleText">Already have an account?</span>
+      <a id="toggleLink" onclick="toggleAuthMode()">Log in</a>
+    </div>
+  </div>
+</div>
+
+<!-- Earn Dashboard -->
+<div id="earnScreen" style="display:none">
+  <div class="earn-container">
+    <div id="walletLinkBanner"></div>
+
+    <div class="stats-row">
+      <div class="stat-card">
+        <div class="value" id="rptBalance">0</div>
+        <div class="label">RPT Balance</div>
+      </div>
+      <div class="stat-card">
+        <div class="value" id="rptEarned">0</div>
+        <div class="label">Total Earned</div>
+      </div>
+      <div class="stat-card">
+        <div class="value" id="rptSpent">0</div>
+        <div class="label">Total Spent</div>
+      </div>
+    </div>
+
+    <div id="offerwallSection">
+      <div class="section-title">Complete Surveys to Earn RPT</div>
+      <div class="offerwall-frame" id="offerwallFrame"></div>
+    </div>
+
+    <div style="margin-top:24px">
+      <div class="section-title">Recent Rewards</div>
+      <div id="historyList"><div class="empty-state">No rewards yet. Complete a survey above to start earning!</div></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = '{{ server_url }}';
+let authMode = 'register';
+let session = null;
+
+function showAuth() {
+  document.getElementById('authScreen').style.display = 'block';
+  document.getElementById('earnScreen').style.display = 'none';
+  document.getElementById('headerRight').innerHTML = '';
+}
+
+function showEarn() {
+  document.getElementById('authScreen').style.display = 'none';
+  document.getElementById('earnScreen').style.display = 'block';
+  document.getElementById('headerRight').innerHTML =
+    '<div style="display:flex;align-items:center;gap:12px">' +
+    '<div class="balance-pill"><span id="headerBalance">0</span> RPT</div>' +
+    '<button class="logout-btn" onclick="logout()">Logout</button></div>';
+  loadDashboard();
+}
+
+function toggleAuthMode() {
+  authMode = authMode === 'register' ? 'login' : 'register';
+  document.getElementById('authTitle').textContent = authMode === 'register' ? 'Create Account' : 'Log In';
+  document.getElementById('authSubmit').textContent = authMode === 'register' ? 'Create Account' : 'Log In';
+  document.getElementById('toggleText').textContent = authMode === 'register' ? 'Already have an account?' : "Don't have an account?";
+  document.getElementById('toggleLink').textContent = authMode === 'register' ? 'Log in' : 'Sign up';
+  document.getElementById('authError').textContent = '';
+}
+
+async function handleAuth() {
+  const email = document.getElementById('authEmail').value.trim();
+  const password = document.getElementById('authPassword').value;
+  const errEl = document.getElementById('authError');
+  errEl.textContent = '';
+
+  if (!email || !password) { errEl.textContent = 'Please fill in all fields'; return; }
+  if (password.length < 8) { errEl.textContent = 'Password must be at least 8 characters'; return; }
+
+  const endpoint = authMode === 'register' ? '/api/cpx/register' : '/api/cpx/login';
+  try {
+    const res = await fetch(API + endpoint, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ email, password })
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      const msgs = {
+        account_exists: 'Account already exists. Try logging in.',
+        invalid_credentials: 'Invalid email or password.',
+        invalid_email: 'Please enter a valid email address.',
+        password_too_short: 'Password must be at least 8 characters.',
+        rate_limited: 'Too many attempts. Please wait a moment.',
+        missing_fields: 'Please fill in all fields.',
+      };
+      errEl.textContent = msgs[data.error] || data.error || 'Something went wrong';
+      return;
+    }
+    session = { ext_user_id: data.ext_user_id, email };
+    try { localStorage.setItem('cpx_session', JSON.stringify(session)); } catch(e) {}
+    showEarn();
+  } catch(e) {
+    errEl.textContent = 'Network error. Please try again.';
+  }
+}
+
+async function loadDashboard() {
+  if (!session) return;
+  // Load balance
+  try {
+    const res = await fetch(API + '/api/cpx/balance?ext_user_id=' + encodeURIComponent(session.ext_user_id));
+    const data = await res.json();
+    if (data.ok) {
+      document.getElementById('rptBalance').textContent = (data.balance || 0).toLocaleString();
+      document.getElementById('rptEarned').textContent = (data.total_earned || 0).toLocaleString();
+      document.getElementById('rptSpent').textContent = (data.total_spent || 0).toLocaleString();
+      const hb = document.getElementById('headerBalance');
+      if (hb) hb.textContent = (data.balance || 0).toLocaleString();
+    }
+  } catch(e) {}
+
+  // Load offerwall
+  try {
+    const res = await fetch(API + '/api/cpx/offerwall-url?ext_user_id=' + encodeURIComponent(session.ext_user_id));
+    const data = await res.json();
+    if (data.ok && data.url) {
+      document.getElementById('offerwallFrame').innerHTML =
+        '<iframe src="' + data.url + '" sandbox="allow-scripts allow-same-origin allow-popups allow-forms" loading="lazy"></iframe>';
+    } else {
+      document.getElementById('offerwallFrame').innerHTML =
+        '<div class="cpx-disabled"><h3>Surveys Coming Soon</h3><p>The survey offerwall is being configured. Check back soon!</p></div>';
+    }
+  } catch(e) {
+    document.getElementById('offerwallFrame').innerHTML =
+      '<div class="cpx-disabled"><h3>Temporarily Unavailable</h3><p>Please try again later.</p></div>';
+  }
+
+  // Load history
+  try {
+    const res = await fetch(API + '/api/cpx/history?ext_user_id=' + encodeURIComponent(session.ext_user_id));
+    const data = await res.json();
+    if (data.ok && data.transactions && data.transactions.length > 0) {
+      const html = data.transactions.map(tx => {
+        const isCredit = tx.status === 1;
+        const sign = isCredit ? '+' : '-';
+        const cls = isCredit ? 'amount-credit' : 'amount-debit';
+        const desc = isCredit ? 'Survey Reward' : 'Reversed';
+        const time = tx.processed_at ? new Date(tx.processed_at).toLocaleDateString() : '';
+        return '<div class="history-item"><div><div class="desc">' + desc +
+          '</div><div class="time">' + time + '</div></div>' +
+          '<div class="amount ' + cls + '">' + sign + tx.amount + ' RPT</div></div>';
+      }).join('');
+      document.getElementById('historyList').innerHTML = html;
+    }
+  } catch(e) {}
+}
+
+function logout() {
+  session = null;
+  try { localStorage.removeItem('cpx_session'); } catch(e) {}
+  showAuth();
+}
+
+// Check for saved session on load
+(function init() {
+  try {
+    const saved = localStorage.getItem('cpx_session');
+    if (saved) {
+      session = JSON.parse(saved);
+      if (session && session.ext_user_id) { showEarn(); return; }
+    }
+  } catch(e) {}
+  showAuth();
+})();
+</script>
+</body>
+</html>

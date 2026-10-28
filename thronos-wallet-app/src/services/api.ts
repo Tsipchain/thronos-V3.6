@@ -286,6 +286,10 @@ export async function getBnbPledgeStatus(bnb_address: string): Promise<{ ok: boo
   return request(`/api/pledge/bnb/status?bnb=${encodeURIComponent(bnb_address)}`);
 }
 
+export async function verifyBnbPledge(bnb_address: string, thr_address: string): Promise<{ ok: boolean; status?: string; thr_address?: string; send_secret?: string; error?: string }> {
+  return request('/api/pledge/bnb/verify', { method: 'POST', body: JSON.stringify({ bnb_address, thr_address }) });
+}
+
 export async function pledgeMigrate(params: { send_secret: string; pin: string }): Promise<{ ok: boolean; canonical_v1_address?: string; recovery_kit?: string; pdf_url?: string; error?: string }> {
   return request('/api/wallet/v1/pledge-migrate', { method: 'POST', body: JSON.stringify(params) });
 }

@@ -49,7 +49,7 @@ MIN_USDT_PLEDGE = float(os.getenv("MIN_USDT_PLEDGE", "10"))
 USDT_PLEDGE_POOL_SPLIT = float(os.getenv("USDT_PLEDGE_POOL_SPLIT", "0.5"))
 MASTER_NODE_URL = os.getenv("MASTER_NODE_URL", "http://localhost:5000")
 ADMIN_SECRET = os.getenv("ADMIN_SECRET", "CHANGE_ME_NOW")
-DATA_DIR = os.getenv("DATA_DIR", "./data")
+DATA_DIR = os.getenv("MUSIC_VOLUME", os.getenv("DATA_DIR", "./data"))
 BSC_CONFIRMATIONS = int(os.getenv("BSC_CONFIRMATIONS", "15"))  # only scan confirmed blocks
 BSC_BACKFILL_BLOCKS = int(os.getenv("BSC_BACKFILL_BLOCKS", "5000"))  # max backfill on startup
 BSC_LOGS_CHUNK_SIZE = int(os.getenv("BSC_LOGS_CHUNK_SIZE", "500"))   # max blocks per eth_getLogs call
@@ -57,6 +57,7 @@ BSC_LOGS_CHUNK_SIZE = int(os.getenv("BSC_LOGS_CHUNK_SIZE", "500"))   # max block
 # State file to track processed transactions
 PROCESSED_TXS_FILE = os.path.join(DATA_DIR, "bnb_pledge_processed.json")
 LAST_SCANNED_BLOCK_FILE = os.path.join(DATA_DIR, "bnb_last_scanned_block.json")
+UNRESOLVED_TXS_FILE = os.path.join(DATA_DIR, "bnb_unresolved_txs.json")
 
 # User registry file (maps BNB addresses to THR addresses)
 # Format: {"bnb_address_lowercase": {"thr_address": "THR...", "registered_at": timestamp}}
@@ -109,6 +110,30 @@ def save_last_scanned_block(block: int):
             json.dump({'block': block, 'timestamp': time.time()}, f, indent=2)
     except Exception as e:
         logger.error(f"Failed to save last scanned block: {e}")
+
+
+def load_unresolved_txs() -> List[Dict]:
+    """Load persisted unresolved transactions that couldn't be matched to a registered user."""
+    try:
+        if os.path.exists(UNRESOLVED_TXS_FILE):
+            with open(UNRESOLVED_TXS_FILE, 'r') as f:
+                return json.load(f)
+        return []
+    except Exception as e:
+        logger.error(f"Failed to load unresolved txs: {e}")
+        return []
+
+
+def save_unresolved_txs(txs: List[Dict]):
+    """Save unresolved transactions for retry beyond the backfill window."""
+    try:
+        os.makedirs(os.path.dirname(UNRESOLVED_TXS_FILE), exist_ok=True)
+        tmp = UNRESOLVED_TXS_FILE + ".tmp"
+        with open(tmp, 'w') as f:
+            json.dump(txs, f, indent=2)
+        os.replace(tmp, UNRESOLVED_TXS_FILE)
+    except Exception as e:
+        logger.error(f"Failed to save unresolved txs: {e}")
 
 
 def load_user_registry() -> Dict:
@@ -368,29 +393,37 @@ def resolve_user_from_bnb_address(bnb_address: str) -> Optional[Dict]:
     return None
 
 
-def call_master_node_api(endpoint: str, data: Dict) -> Optional[Dict]:
-    """Call master node API with admin authentication"""
-    try:
-        url = f"{MASTER_NODE_URL}{endpoint}"
+def call_master_node_api(endpoint: str, data: Dict, max_retries: int = 3) -> Optional[Dict]:
+    """Call master node API with admin authentication and exponential backoff retry."""
+    url = f"{MASTER_NODE_URL}{endpoint}"
+    data["secret"] = ADMIN_SECRET
 
-        # Add admin secret to the request
-        data["secret"] = ADMIN_SECRET
+    for attempt in range(1, max_retries + 1):
+        try:
+            response = requests.post(url, json=data, timeout=30)
 
-        response = requests.post(
-            url,
-            json=data,
-            timeout=30
-        )
+            if response.status_code in (200, 201):
+                return response.json()
+            elif response.status_code == 400:
+                result = response.json()
+                if result.get("error") in ("duplicate_tx_already_processed", "duplicate_tx_already_processing"):
+                    logger.info(f"Master node: tx already processed (attempt {attempt})")
+                    return result
+                logger.error(f"Master node API 400: {response.text}")
+                return None
+            else:
+                logger.warning(f"Master node API call attempt {attempt}/{max_retries}: HTTP {response.status_code}")
 
-        if response.status_code == 200:
-            return response.json()
-        else:
-            logger.error(f"Master node API call failed: {response.status_code} - {response.text}")
-            return None
+        except Exception as e:
+            logger.warning(f"Master node API call attempt {attempt}/{max_retries}: {e}")
 
-    except Exception as e:
-        logger.error(f"Master node API call exception: {e}")
-        return None
+        if attempt < max_retries:
+            backoff = 2 ** attempt
+            logger.info(f"Retrying in {backoff}s...")
+            time.sleep(backoff)
+
+    logger.error(f"Master node API call failed after {max_retries} attempts: {url}")
+    return None
 
 
 def create_usdt_pledge_transaction(
@@ -444,57 +477,74 @@ def watch_bnb_pledges():
     logger.info(f"Master node: {MASTER_NODE_URL}")
 
     processed_txs = load_processed_txs()
+    processed_set = set(processed_txs)
+    unresolved_txs = load_unresolved_txs()
     had_processing_failure = False
 
-    # Get new USDT transfers to the vault
     vault_transfers, last_safe_block = get_vault_transfers()
 
-    for transfer in vault_transfers:
+    new_unresolved = []
+
+    def try_process(transfer):
+        nonlocal had_processing_failure
         txhash = transfer.get("txhash", "")
+        if txhash in processed_set:
+            return True
 
-        # Skip if already processed
-        if txhash in processed_txs:
-            logger.debug(f"Skipping already-processed tx: {txhash}")
-            continue
-
-        # Get USDT amount
         usdt_amount = float(transfer.get("amount", 0))
         if usdt_amount < MIN_USDT_PLEDGE:
             logger.warning(f"Amount below minimum in tx {txhash}: {usdt_amount} USDT")
             processed_txs.append(txhash)
-            continue
+            processed_set.add(txhash)
+            return True
 
-        # Resolve user from BNB address
         bnb_address = transfer.get("from", "")
         user_info = resolve_user_from_bnb_address(bnb_address)
         if not user_info:
-            # Do NOT mark as processed — leave for admin reprocess once user registers BNB address.
-            # Log with structured info so admin can manually reprocess.
             logger.warning(
                 f"[UNRESOLVED] Cannot resolve user for BNB address {bnb_address} in tx {txhash}. "
-                f"Amount: {usdt_amount} USDT. Will retry next cycle. "
-                f"Use POST /api/admin/bnb-watcher/reprocess to force process after user registers."
+                f"Amount: {usdt_amount} USDT. Persisted for retry."
             )
+            new_unresolved.append({
+                "txhash": txhash, "from": bnb_address,
+                "amount": usdt_amount, "first_seen": time.time(),
+            })
             had_processing_failure = True
-            continue
+            return False
 
-        # Create USDT pledge transaction on master node
         if create_usdt_pledge_transaction(user_info, usdt_amount, txhash, bnb_address):
             logger.info(f"Successfully processed USDT pledge: {txhash}")
             processed_txs.append(txhash)
+            processed_set.add(txhash)
+            return True
         else:
             logger.error(f"Failed to process USDT pledge: {txhash}")
             had_processing_failure = True
-            # Don't mark as processed so we can retry later
+            return False
 
-    # Save processed txs and last scanned block (only if all transfers processed successfully)
+    for utx in unresolved_txs:
+        if utx.get("txhash") not in processed_set:
+            try_process(utx)
+
+    for transfer in vault_transfers:
+        txhash = transfer.get("txhash", "")
+        if txhash not in processed_set and txhash not in {u["txhash"] for u in new_unresolved}:
+            try_process(transfer)
+
     save_processed_txs(processed_txs)
-    if last_safe_block > 0 and not had_processing_failure:
-        save_last_scanned_block(last_safe_block)
-    elif had_processing_failure:
-        logger.warning("Not advancing last_scanned_block because one or more transfers failed processing")
+    save_unresolved_txs(new_unresolved)
 
-    logger.info(f"Watcher cycle complete. Processed {len(vault_transfers)} USDT transfers. Last scanned block: {last_safe_block}")
+    if last_safe_block > 0:
+        save_last_scanned_block(last_safe_block)
+        if had_processing_failure:
+            logger.warning(
+                f"Some transfers had failures. {len(new_unresolved)} unresolved tx(s) persisted for retry."
+            )
+
+    logger.info(
+        f"Watcher cycle complete. Scanned {len(vault_transfers)} transfers, "
+        f"{len(new_unresolved)} unresolved. Last block: {last_safe_block}"
+    )
 
 
 # Export the watcher function to be called by the scheduler

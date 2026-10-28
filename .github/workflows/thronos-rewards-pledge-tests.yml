@@ -1,0 +1,42 @@
+name: Thronos Pledge and CPX Regression Tests
+
+on:
+  pull_request:
+    paths:
+      - "server.py"
+      - "bnb_pledge_watcher.py"
+      - "services/cpx_rewards.py"
+      - "scripts/reconcile_pledges.py"
+      - "tests/test_usdt_pledge_flow.py"
+      - "tests/test_cpx_rewards.py"
+      - "tests/test_pledge_endpoints.py"
+      - ".github/workflows/thronos-rewards-pledge-tests.yml"
+  push:
+    branches:
+      - "claude/dazzling-planck-37qpxk"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pledge-cpx-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install test dependencies
+        run: python -m pip install --disable-pip-version-check Flask requests
+      - name: Compile changed Python modules
+        run: python -m py_compile server.py bnb_pledge_watcher.py services/cpx_rewards.py scripts/reconcile_pledges.py
+      - name: Run USDT pledge regression tests
+        run: python -m unittest discover -s tests -p "test_usdt_pledge_flow.py" -v
+      - name: Run CPX rewards regression tests
+        run: python -m unittest discover -s tests -p "test_cpx_rewards.py" -v
+      - name: Run pledge endpoint regression tests
+        run: python -m unittest discover -s tests -p "test_pledge_endpoints.py" -v

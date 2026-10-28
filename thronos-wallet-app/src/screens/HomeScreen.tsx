@@ -263,7 +263,7 @@ export default function HomeScreen() {
 
         {/* Multi-Chain Selector */}
         <View style={styles.chainSelector}>
-          {(['thronos', 'bitcoin', 'ethereum', 'bsc', 'solana'] as const).map((chain) => {
+          {(['thronos', 'bitcoin', 'ethereum'] as const).map((chain) => {
             const active = wallet.activeChain === chain;
             const labels: Record<string, string> = { thronos: 'THR', bitcoin: 'BTC', ethereum: 'ETH', bsc: 'BSC', solana: 'SOL' };
             const icons: Record<string, keyof typeof Ionicons.glyphMap> = {

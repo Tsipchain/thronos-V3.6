@@ -1,6 +1,11 @@
 """
-Thronos L2E — EDU Bridge Blueprint
-Receives attendance & completion events from thronos-edupresence service.
+Thronos L2E — EDU Bridge Blueprint (Hardened)
+
+Receives attendance and completion events from thronos-edupresence.
+All endpoints fail closed: no EDU_API_KEY = 503, unknown mapping = 403.
+No automatic certificate issuance or reward minting.  Completion events
+create auditable eligibility records only.
+
 Mount in server.py:
     from services.l2e_edu import l2e_edu_bp
     app.register_blueprint(l2e_edu_bp)
@@ -9,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import logging
 import os
 import sqlite3
@@ -23,26 +29,62 @@ logger = logging.getLogger(__name__)
 l2e_edu_bp = Blueprint("l2e_edu", __name__, url_prefix="/api/l2e/edu")
 
 # ---------------------------------------------------------------------------
-# Config
+# Config — all defaults are fail-closed
 # ---------------------------------------------------------------------------
 
 EDU_API_KEY: str = os.environ.get("EDU_API_KEY", "")
 EDU_DB_PATH: str = os.environ.get("EDU_DB_PATH", "/app/data/l2e_edu.db")
-ATTENDANCE_THRESHOLD_PCT: int = int(os.environ.get("L2E_ATTENDANCE_THRESHOLD_PCT", "80"))
+ATTENDANCE_THRESHOLD_PCT: int = int(
+    os.environ.get("L2E_ATTENDANCE_THRESHOLD_PCT", "80")
+)
 
-# URL of the main chain's own L2E certificate API (self-referencing for auto-issue)
-SELF_L2E_API_BASE: str = os.environ.get("SELF_API_BASE", "http://localhost:8000")
-AUTO_ISSUE_CERTS: bool = os.environ.get("EDU_AUTO_ISSUE_CERTS", "true").lower() in {"1", "true", "yes"}
+# Allowed tenant→course→classroom mappings (JSON string).
+# Format: {"tenant_id": {"course_id": ["classroom_id", ...]}}
+# Empty or unparseable = reject all bridge events.
+_ALLOWED_MAPPINGS_RAW: str = os.environ.get("EDU_ALLOWED_MAPPINGS", "")
+
+
+def _load_allowed_mappings() -> dict[str, dict[str, list[str]]]:
+    if not _ALLOWED_MAPPINGS_RAW:
+        return {}
+    try:
+        parsed = json.loads(_ALLOWED_MAPPINGS_RAW)
+        if not isinstance(parsed, dict):
+            return {}
+        return parsed
+    except (json.JSONDecodeError, TypeError):
+        logger.warning("EDU_ALLOWED_MAPPINGS is not valid JSON — rejecting all")
+        return {}
+
+
+ALLOWED_MAPPINGS: dict[str, dict[str, list[str]]] = _load_allowed_mappings()
+
+
+def _is_mapping_allowed(tenant_id: str, course_id: str, classroom_id: str) -> bool:
+    if not ALLOWED_MAPPINGS:
+        return False
+    tenant_courses = ALLOWED_MAPPINGS.get(tenant_id)
+    if not tenant_courses or not isinstance(tenant_courses, dict):
+        return False
+    classrooms = tenant_courses.get(course_id)
+    if classrooms is None:
+        return False
+    if isinstance(classrooms, list):
+        return classroom_id in classrooms
+    return False
+
 
 # ---------------------------------------------------------------------------
 # Database helpers
 # ---------------------------------------------------------------------------
+
 
 def _get_db() -> sqlite3.Connection:
     Path(EDU_DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(EDU_DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
 
@@ -60,12 +102,18 @@ def _init_db() -> None:
                 student_ref     TEXT    NOT NULL,
                 student_hash    TEXT    NOT NULL,
                 thr_wallet      TEXT    NOT NULL DEFAULT '',
-                tax_id          TEXT    NOT NULL DEFAULT '',
                 status          TEXT    NOT NULL,
                 method          TEXT    NOT NULL DEFAULT '',
                 attestation     TEXT    NOT NULL DEFAULT '',
                 received_at     TEXT    NOT NULL
             );
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_edu_att_idempotent
+                ON edu_attendance_events(
+                    tenant_id, course_id, classroom_id,
+                    lesson_id, student_ref
+                );
+
             CREATE INDEX IF NOT EXISTS idx_edu_att_course
                 ON edu_attendance_events(course_id, student_ref);
 
@@ -77,15 +125,13 @@ def _init_db() -> None:
                 student_ref     TEXT    NOT NULL,
                 student_hash    TEXT    NOT NULL,
                 thr_wallet      TEXT    NOT NULL DEFAULT '',
-                tax_id          TEXT    NOT NULL DEFAULT '',
                 attendance_pct  REAL    NOT NULL,
                 reward_eligible INTEGER NOT NULL DEFAULT 0,
                 cert_eligible   INTEGER NOT NULL DEFAULT 0,
-                certificate_id  TEXT    NOT NULL DEFAULT '',
-                l2e_cert_issued INTEGER NOT NULL DEFAULT 0,
                 completed_at    TEXT    NOT NULL,
                 processed_at    TEXT    NOT NULL DEFAULT ''
             );
+
             CREATE UNIQUE INDEX IF NOT EXISTS idx_edu_comp_uniq
                 ON edu_completions(course_id, student_ref);
         """)
@@ -94,8 +140,9 @@ def _init_db() -> None:
 _init_db()
 
 # ---------------------------------------------------------------------------
-# Auth
+# Auth — fail closed when EDU_API_KEY is empty
 # ---------------------------------------------------------------------------
+
 
 def _require_api_key(f):
     @wraps(f)
@@ -104,7 +151,7 @@ def _require_api_key(f):
             logger.warning("EDU_API_KEY not configured — refusing request")
             return jsonify({"ok": False, "error": "service not configured"}), 503
         provided = request.headers.get("X-EDU-API-Key", "")
-        if not hmac.compare_digest(provided, EDU_API_KEY):
+        if not provided or not hmac.compare_digest(provided, EDU_API_KEY):
             return jsonify({"ok": False, "error": "unauthorized"}), 401
         return f(*args, **kwargs)
     return decorated
@@ -114,6 +161,7 @@ def _require_api_key(f):
 # POST /api/l2e/edu/attendance
 # ---------------------------------------------------------------------------
 
+
 @l2e_edu_bp.route("/attendance", methods=["POST"])
 @_require_api_key
 def receive_attendance():
@@ -121,51 +169,76 @@ def receive_attendance():
     if not data:
         return jsonify({"ok": False, "error": "invalid JSON"}), 400
 
-    required = {"tenant_id", "l2e_course_id", "classroom_id", "lesson_id",
-                "lesson_date", "students"}
+    required = {
+        "tenant_id", "l2e_course_id", "classroom_id",
+        "lesson_id", "lesson_date", "students",
+    }
     missing = required - set(data.keys())
     if missing:
-        return jsonify({"ok": False, "error": f"missing fields: {missing}"}), 400
+        return jsonify({"ok": False, "error": f"missing fields: {sorted(missing)}"}), 400
 
-    now = datetime.now(timezone.utc).isoformat()
-    tenant_id    = data["tenant_id"]
-    course_id    = data["l2e_course_id"]
-    classroom_id = data["classroom_id"]
-    lesson_id    = data["lesson_id"]
-    lesson_date  = data["lesson_date"]
-    lesson_title = data.get("lesson_title", "")
-    students     = data["students"]
+    tenant_id = str(data["tenant_id"]).strip()
+    course_id = str(data["l2e_course_id"]).strip()
+    classroom_id = str(data["classroom_id"]).strip()
+    lesson_id = str(data["lesson_id"]).strip()
+    lesson_date = str(data["lesson_date"]).strip()
+    lesson_title = str(data.get("lesson_title", "")).strip()
+    students = data["students"]
 
     if not isinstance(students, list):
         return jsonify({"ok": False, "error": "students must be a list"}), 400
 
-    rows = [(
-        tenant_id, course_id, classroom_id, lesson_id, lesson_date, lesson_title,
-        s.get("student_external_ref", ""), s.get("student_name_hash", ""),
-        s.get("thr_wallet", ""), s.get("tax_id", ""),
-        s.get("attendance_status", "absent"), s.get("confirmation_method", ""),
-        s.get("attestation_hash", ""), now,
-    ) for s in students]
+    if not _is_mapping_allowed(tenant_id, course_id, classroom_id):
+        return jsonify({
+            "ok": False,
+            "error": "unknown tenant/course/classroom mapping",
+        }), 403
+
+    now = datetime.now(timezone.utc).isoformat()
+    inserted = 0
+    skipped = 0
 
     with _get_db() as conn:
-        conn.executemany(
-            """
-            INSERT INTO edu_attendance_events
-                (tenant_id, course_id, classroom_id, lesson_id, lesson_date,
-                 lesson_title, student_ref, student_hash, thr_wallet, tax_id,
-                 status, method, attestation, received_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """,
-            rows,
-        )
+        for s in students:
+            ref = str(s.get("student_external_ref", "")).strip()
+            if not ref:
+                continue
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO edu_attendance_events
+                        (tenant_id, course_id, classroom_id, lesson_id,
+                         lesson_date, lesson_title, student_ref, student_hash,
+                         thr_wallet, status, method, attestation, received_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    """,
+                    (
+                        tenant_id, course_id, classroom_id, lesson_id,
+                        lesson_date, lesson_title,
+                        ref,
+                        str(s.get("student_name_hash", "")),
+                        str(s.get("thr_wallet", "")),
+                        str(s.get("attendance_status", "absent")),
+                        str(s.get("confirmation_method", "")),
+                        str(s.get("attestation_hash", "")),
+                        now,
+                    ),
+                )
+                inserted += 1
+            except sqlite3.IntegrityError:
+                skipped += 1
 
-    logger.info("L2E EDU: recorded %d rows | course=%s lesson=%s", len(rows), course_id, lesson_id)
-    return jsonify({"ok": True, "recorded": len(rows)}), 201
+    logger.info(
+        "L2E EDU attendance: course=%s lesson=%s inserted=%d skipped=%d",
+        course_id, lesson_id, inserted, skipped,
+    )
+    return jsonify({"ok": True, "recorded": inserted, "duplicates_skipped": skipped}), 201
 
 
 # ---------------------------------------------------------------------------
 # POST /api/l2e/edu/complete
 # ---------------------------------------------------------------------------
+
 
 @l2e_edu_bp.route("/complete", methods=["POST"])
 @_require_api_key
@@ -177,158 +250,93 @@ def receive_completion():
     required = {"tenant_id", "l2e_course_id", "classroom_id", "students"}
     missing = required - set(data.keys())
     if missing:
-        return jsonify({"ok": False, "error": f"missing fields: {missing}"}), 400
+        return jsonify({"ok": False, "error": f"missing fields: {sorted(missing)}"}), 400
 
-    tenant_id    = data["tenant_id"]
-    course_id    = data["l2e_course_id"]
-    classroom_id = data["classroom_id"]
-    completed_at = data.get("completed_at", datetime.now(timezone.utc).isoformat())
-    students     = data["students"]
-    now          = datetime.now(timezone.utc).isoformat()
+    tenant_id = str(data["tenant_id"]).strip()
+    course_id = str(data["l2e_course_id"]).strip()
+    classroom_id = str(data["classroom_id"]).strip()
+    completed_at = str(
+        data.get("completed_at", datetime.now(timezone.utc).isoformat())
+    ).strip()
+    students = data["students"]
+    now = datetime.now(timezone.utc).isoformat()
 
     if not isinstance(students, list):
         return jsonify({"ok": False, "error": "students must be a list"}), 400
 
+    if not _is_mapping_allowed(tenant_id, course_id, classroom_id):
+        return jsonify({
+            "ok": False,
+            "error": "unknown tenant/course/classroom mapping",
+        }), 403
+
     eligible_count = 0
-    cert_ids: dict[str, str] = {}
-    issued_certs: list[dict] = []
 
     with _get_db() as conn:
         for s in students:
-            ref            = s.get("student_external_ref", "")
-            name_hash      = s.get("student_name_hash", "")
-            thr_wallet     = s.get("thr_wallet", "")
-            tax_id         = s.get("tax_id", "")
+            ref = str(s.get("student_external_ref", "")).strip()
+            name_hash = str(s.get("student_name_hash", ""))
+            thr_wallet = str(s.get("thr_wallet", ""))
             attendance_pct = float(s.get("attendance_pct", 0))
-            reward_elig    = bool(s.get("reward_eligible", False))
-            cert_eligible  = attendance_pct >= ATTENDANCE_THRESHOLD_PCT
+            cert_eligible = attendance_pct >= ATTENDANCE_THRESHOLD_PCT
 
-            cert_id = ""
             if cert_eligible:
                 eligible_count += 1
-                cert_id = _generate_certificate_id(tenant_id, course_id, ref, completed_at)
-                cert_ids[ref] = cert_id
-                issued_certs.append({
-                    "student_ref": ref, "tax_id": tax_id, "thr_wallet": thr_wallet,
-                    "course_id": course_id, "cert_id": cert_id,
-                    "attendance_pct": attendance_pct,
-                })
 
             conn.execute(
                 """
                 INSERT INTO edu_completions
                     (tenant_id, course_id, classroom_id, student_ref,
-                     student_hash, thr_wallet, tax_id, attendance_pct,
-                     reward_eligible, cert_eligible, certificate_id,
+                     student_hash, thr_wallet, attendance_pct,
+                     reward_eligible, cert_eligible,
                      completed_at, processed_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(course_id, student_ref) DO UPDATE SET
                     attendance_pct  = excluded.attendance_pct,
-                    reward_eligible = excluded.reward_eligible,
+                    reward_eligible = 0,
                     cert_eligible   = excluded.cert_eligible,
-                    certificate_id  = excluded.certificate_id,
                     processed_at    = excluded.processed_at
                 """,
-                (tenant_id, course_id, classroom_id, ref, name_hash, thr_wallet, tax_id,
-                 attendance_pct, int(reward_elig), int(cert_eligible), cert_id,
-                 completed_at, now),
+                (
+                    tenant_id, course_id, classroom_id, ref, name_hash,
+                    thr_wallet, attendance_pct,
+                    0, int(cert_eligible),
+                    completed_at, now,
+                ),
             )
 
-    logger.info("L2E EDU: completion | course=%s eligible=%d/%d", course_id, eligible_count, len(students))
-
-    # Auto-push eligible students into the main chain L2E certificate pipeline
-    if AUTO_ISSUE_CERTS and issued_certs:
-        _push_to_l2e_certificate_pipeline(course_id, issued_certs)
+    logger.info(
+        "L2E EDU completion: course=%s eligible=%d/%d",
+        course_id, eligible_count, len(students),
+    )
 
     return jsonify({
         "ok": True,
         "course_id": course_id,
         "students_total": len(students),
-        "students_eligible": eligible_count,
-        "certificates": cert_ids,
+        "students_cert_eligible": eligible_count,
     }), 201
-
-
-# ---------------------------------------------------------------------------
-# POST /api/l2e/edu/complete  — auto-push to existing L2E certificate pipeline
-# ---------------------------------------------------------------------------
-
-def _push_to_l2e_certificate_pipeline(course_id: str, issued_certs: list[dict]) -> None:
-    """
-    For each eligible student, ensure they have an L2E enrollment with
-    certificate_eligibility=True, then auto-approve and issue.
-    Uses the main chain's own internal REST API (loopback).
-    """
-    import urllib.request
-    import urllib.error
-    import json
-
-    base = SELF_L2E_API_BASE.rstrip("/")
-    # Use the internal admin key (same EDU_API_KEY or dedicated APP_AI_KEY)
-    admin_key = os.environ.get("APP_AI_KEY", EDU_API_KEY)
-
-    for cert in issued_certs:
-        learner_id = cert["tax_id"] or cert["student_ref"]
-        if not learner_id:
-            continue
-        try:
-            # 1. Approve certificate
-            _internal_post(
-                f"{base}/api/v1/courses/{course_id}/certificates/{learner_id}/approve",
-                {"actor_role": "system", "issuer_identity": "thronos-edupresence",
-                 "approval_reason": f"Auto-approved: attendance {cert['attendance_pct']:.0f}%"},
-                admin_key,
-            )
-            # 2. Issue certificate
-            resp = _internal_post(
-                f"{base}/api/v1/courses/{course_id}/certificates/{learner_id}/issue",
-                {"issuer_identity": "thronos-edupresence",
-                 "actor_role": "system"},
-                admin_key,
-            )
-            issued_id = (resp or {}).get("certificate_id", "")
-            if issued_id:
-                # Store the issued L2E cert ID back in our DB
-                with _get_db() as conn:
-                    conn.execute(
-                        "UPDATE edu_completions SET l2e_cert_issued=1, certificate_id=? "
-                        "WHERE course_id=? AND student_ref=?",
-                        (issued_id, course_id, cert["student_ref"]),
-                    )
-                logger.info("L2E EDU: issued cert %s for student %s course %s",
-                            issued_id, learner_id, course_id)
-        except Exception as exc:
-            logger.warning("L2E EDU: cert auto-issue failed for %s: %s", learner_id, exc)
-
-
-def _internal_post(url: str, payload: dict, api_key: str) -> dict | None:
-    import urllib.request
-    import json
-    body = json.dumps(payload).encode()
-    req = urllib.request.Request(
-        url, data=body,
-        headers={"Content-Type": "application/json",
-                 "X-Internal-API-Key": api_key},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=8) as r:
-            return json.loads(r.read())
-    except Exception:
-        return None
 
 
 # ---------------------------------------------------------------------------
 # GET /api/l2e/edu/course/<course_id>/completions
 # GET /api/l2e/edu/course/<course_id>/attendance
+#
+# Returns only opaque references — no raw tax_id, no PII.
 # ---------------------------------------------------------------------------
+
 
 @l2e_edu_bp.route("/course/<course_id>/completions", methods=["GET"])
 @_require_api_key
 def get_course_completions(course_id: str):
     with _get_db() as conn:
         rows = conn.execute(
-            "SELECT * FROM edu_completions WHERE course_id=? ORDER BY attendance_pct DESC",
+            """
+            SELECT student_ref, student_hash, attendance_pct,
+                   cert_eligible, completed_at, processed_at
+            FROM edu_completions WHERE course_id=?
+            ORDER BY attendance_pct DESC
+            """,
             (course_id,),
         ).fetchall()
     return jsonify({"ok": True, "completions": [dict(r) for r in rows]})
@@ -340,7 +348,7 @@ def get_course_attendance(course_id: str):
     with _get_db() as conn:
         rows = conn.execute(
             """
-            SELECT student_ref, student_hash, thr_wallet,
+            SELECT student_ref, student_hash,
                    COUNT(*) AS total_lessons,
                    SUM(CASE WHEN status='present' THEN 1 ELSE 0 END) AS present_count
             FROM edu_attendance_events WHERE course_id=?
@@ -349,14 +357,3 @@ def get_course_attendance(course_id: str):
             (course_id,),
         ).fetchall()
     return jsonify({"ok": True, "attendance": [dict(r) for r in rows]})
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _generate_certificate_id(tenant_id: str, course_id: str,
-                              student_ref: str, completed_at: str) -> str:
-    raw = f"{tenant_id}|{course_id}|{student_ref}|{completed_at}"
-    digest = hashlib.sha256(raw.encode()).hexdigest()[:20].upper()
-    return f"CERT-EDU-{digest}"

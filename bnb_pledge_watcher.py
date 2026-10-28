@@ -36,6 +36,10 @@ logger = logging.getLogger(__name__)
 
 # Environment configuration
 BSC_RPC_URL = os.getenv("BSC_RPC_URL", "https://bsc-dataseed.binance.org")
+# Dedicated third-party RPC for eth_getLogs. Public community endpoints may rate-limit
+# historical log filters; set this to an authenticated provider URL in Railway.
+BSC_RPC_LOGS_URL = os.getenv("BSC_RPC_LOGS_URL", "").strip()
+_WARNED_NO_BSC_LOGS_RPC = False
 # Vault address: prefer BSC_USDT_PLEDGE_VAULT, fall back to BNB_PLEDGE_VAULT (legacy)
 BNB_PLEDGE_VAULT = (os.getenv("BSC_USDT_PLEDGE_VAULT") or os.getenv("BNB_PLEDGE_VAULT", "")).lower()
 # USDT contract: prefer BSC_USDT_CONTRACT, fall back to USDT_BNB_CONTRACT (legacy)
@@ -125,13 +129,30 @@ def _format_block_number(block: int) -> str:
 
 
 def bsc_rpc_call(method: str, params: List = None) -> Optional[Dict]:
-    """Make a JSON-RPC call to Binance Smart Chain node with fallback RPCs"""
-    if not BSC_RPC_URL:
-        logger.warning("BSC_RPC_URL not configured, skipping RPC call")
+    """Make a BSC JSON-RPC call, using a dedicated provider for eth_getLogs when configured."""
+    global _WARNED_NO_BSC_LOGS_RPC
+
+    # eth_getLogs should use a provider that explicitly supports historical log queries.
+    # Keep the existing endpoint list as a backward-compatible fallback, but make the
+    # missing dedicated configuration visible and never treat a failed scan as success.
+    configured_logs_rpc = method == "eth_getLogs" and bool(BSC_RPC_LOGS_URL)
+    if method == "eth_getLogs" and not BSC_RPC_LOGS_URL and not _WARNED_NO_BSC_LOGS_RPC:
+        logger.warning(
+            "BSC_RPC_LOGS_URL is not configured; eth_getLogs will try BSC_RPC_URL "
+            "and may be rate-limited/disabled by shared public RPC endpoints"
+        )
+        _WARNED_NO_BSC_LOGS_RPC = True
+
+    selected_rpc = BSC_RPC_LOGS_URL if configured_logs_rpc else BSC_RPC_URL
+    if not selected_rpc:
+        logger.warning("%s not configured, skipping RPC call", "BSC_RPC_LOGS_URL" if method == "eth_getLogs" else "BSC_RPC_URL")
         return None
 
     # Parse multiple RPCs separated by comma
-    rpc_urls = [url.strip() for url in BSC_RPC_URL.split(',')]
+    rpc_urls = [url.strip() for url in selected_rpc.split(',') if url.strip()]
+    if not rpc_urls:
+        logger.warning("No valid RPC URLs configured for %s", method)
+        return None
 
     payload = {
         "jsonrpc": "2.0",

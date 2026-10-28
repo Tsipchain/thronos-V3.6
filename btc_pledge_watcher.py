@@ -81,16 +81,20 @@ def sync_pledge_chain_from_fallback():
         logger.warning(f"Could not sync pledge chain from fallback: {e}")
 
 
-def load_processed_txs() -> List[str]:
-    """Load list of already processed transaction IDs"""
+def load_processed_txs() -> Optional[List[str]]:
+    """Load processed transaction IDs; fail closed if persisted state is corrupt."""
+    if not os.path.exists(PROCESSED_TXS_FILE):
+        return []
     try:
-        if os.path.exists(PROCESSED_TXS_FILE):
-            with open(PROCESSED_TXS_FILE, 'r') as f:
-                return json.load(f)
-        return []
+        with open(PROCESSED_TXS_FILE, "r") as handle:
+            value = json.load(handle)
+        if not isinstance(value, list) or any(not isinstance(txid, str) for txid in value):
+            logger.critical("BTC processed transaction state is invalid; refusing to continue")
+            return None
+        return value
     except Exception as e:
-        logger.error(f"Failed to load processed txs: {e}")
-        return []
+        logger.critical("Could not read BTC processed transaction state; refusing to continue: %s", e)
+        return None
 
 
 def _save_json_atomic(path: str, value) -> bool:
@@ -124,20 +128,26 @@ def save_processed_txs(txs: List[str]) -> bool:
     return _save_json_atomic(PROCESSED_TXS_FILE, unique)
 
 
-def load_unresolved_txs() -> List[Dict]:
-    """Load confirmed BTC deposits waiting for registration or a successful credit."""
+def load_unresolved_txs() -> Optional[List[Dict]]:
+    """Load confirmed BTC deposits waiting for registration or successful credit."""
+    if not os.path.exists(UNRESOLVED_TXS_FILE):
+        return []
     try:
-        if not os.path.exists(UNRESOLVED_TXS_FILE):
-            return []
         with open(UNRESOLVED_TXS_FILE, "r") as handle:
             value = json.load(handle)
         if not isinstance(value, list):
-            logger.error("BTC unresolved state is not a list; preserving file for manual inspection")
-            return []
-        return [item for item in value if isinstance(item, dict) and item.get("txid") and isinstance(item.get("transaction"), dict)]
+            logger.critical("BTC unresolved state is invalid; refusing to overwrite it")
+            return None
+        valid = []
+        for item in value:
+            if not isinstance(item, dict) or not item.get("txid") or not isinstance(item.get("transaction"), dict):
+                logger.critical("BTC unresolved state contains an invalid entry; refusing to overwrite it")
+                return None
+            valid.append(item)
+        return valid
     except Exception as e:
-        logger.error("Failed to load unresolved BTC transactions: %s", e)
-        return []
+        logger.critical("Could not read BTC unresolved transaction state; refusing to continue: %s", e)
+        return None
 
 
 def save_unresolved_txs(entries: List[Dict]) -> bool:
@@ -595,15 +605,19 @@ def watch_btc_pledges():
     sync_pledge_chain_from_fallback()
 
     processed_txs = load_processed_txs()
-    if not isinstance(processed_txs, list):
-        logger.error("BTC processed transaction state is not a list; refusing to process new deposits")
+    if processed_txs is None:
+        logger.critical("BTC watcher stopped because processed state could not be trusted")
         return
     processed_txs = list(dict.fromkeys(txid for txid in processed_txs if txid))
     processed_set = set(processed_txs)
 
     # Load confirmed transactions that previously could not be resolved/credited.
+    stored_unresolved = load_unresolved_txs()
+    if stored_unresolved is None:
+        logger.critical("BTC watcher stopped because unresolved state could not be trusted")
+        return
     pending_by_txid = {}
-    for item in load_unresolved_txs():
+    for item in stored_unresolved:
         txid = str(item.get("txid") or "").strip()
         transaction = item.get("transaction")
         if not txid or txid in processed_set or not isinstance(transaction, dict):
@@ -657,6 +671,7 @@ def watch_btc_pledges():
             }
 
     newly_processed = []
+    newly_processed_entries = {}
     for txid, item in list(pending_by_txid.items()):
         if txid in processed_set:
             pending_by_txid.pop(txid, None)
@@ -712,6 +727,11 @@ def watch_btc_pledges():
             logger.info("Successfully processed BTC pledge tx: %s", txid)
             newly_processed.append(txid)
             processed_set.add(txid)
+            newly_processed_entries[txid] = {
+                **item,
+                "transaction": dict(tx),
+                "last_reason": "processed_checkpoint_pending",
+            }
             pending_by_txid.pop(txid, None)
         else:
             reason = "master_node_failed"
@@ -727,17 +747,10 @@ def watch_btc_pledges():
         # until the processed checkpoint can be durably saved. The master endpoint
         # must remain idempotent by btc_txid to make this retry safe.
         for txid in newly_processed:
-            # The transaction has been removed above; retain the latest observed
-            # payload in a retry entry rather than silently dropping recovery state.
-            source_tx = next((tx for tx in vault_txs if tx.get("txid") == txid), None)
-            if source_tx:
-                pending_by_txid[txid] = {
-                    "txid": txid,
-                    "transaction": source_tx,
-                    "first_seen": time.time(),
-                    "attempts": 1,
-                    "last_reason": "processed_checkpoint_write_failed",
-                }
+            pending = dict(newly_processed_entries[txid])
+            pending["attempts"] = int(pending.get("attempts", 0) or 0) + 1
+            pending["last_reason"] = "processed_checkpoint_write_failed"
+            pending_by_txid[txid] = pending
         logger.critical("BTC processed checkpoint write failed; retained successful txs for reconciliation")
 
     unresolved_saved = save_unresolved_txs(list(pending_by_txid.values()))

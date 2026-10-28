@@ -1121,6 +1121,20 @@ if register_dormant_asset_routes is not None:
     except Exception as _e:
         print(f'[Dormant Asset System] routes not registered: {_e}')
 
+# Account-first Earn is a master-owned service.  Register it only on the
+# writer node so the SQLite ledger remains on the persistent master volume.
+if os.environ.get("EARN_ACCOUNT_ENABLED", "").strip().lower() in ("1", "true", "yes") and is_master():
+    try:
+        from services.earn_account import EarnAccountStore, register_earn_account_routes
+        _earn_acct_store = EarnAccountStore(
+            os.path.join(DATA_DIR, "earn_accounts.db"),
+            os.environ.get("EARN_IDENTITY_KEY", ""),
+        )
+        register_earn_account_routes(app, _earn_acct_store)
+        logger.info("Earn Account routes registered on master")
+    except Exception as _earn_account_init_error:
+        logger.error("Earn Account initialization failed: %s", _earn_account_init_error)
+
 # --------------------------------------------------------------------------
 # AI demo usage tracking
 #
@@ -48423,7 +48437,14 @@ def _verify_earn_wallet_proof(proof: dict) -> tuple[bool, str, str]:
 
 try:
     _earn_identity_key = os.getenv("EARN_IDENTITY_KEY", "").strip()
-    if _earn_identity_key and os.getenv("EARN_CENTER_ENABLED", "0") == "1" and is_master():
+    _earn_acct_active = (
+        os.environ.get("EARN_ACCOUNT_ENABLED", "").strip().lower() in ("1", "true", "yes")
+        and is_master()
+    )
+    # EARN_ACCOUNT_ENABLED supersedes legacy Earn routes on the Master only.
+    if _earn_acct_active:
+        logger.info("Legacy Earn Center skipped: Account-first Earn owns the callback route")
+    elif _earn_identity_key and os.getenv("EARN_CENTER_ENABLED", "0") == "1" and is_master():
         from services.earn_center import EarnStore, register_earn_routes
         _earn_db_path = os.getenv("EARN_DB_PATH", os.path.join(DATA_DIR, "earn_center.db"))
         _earn_store = EarnStore(_earn_db_path, _earn_identity_key)

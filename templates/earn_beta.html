@@ -2,45 +2,145 @@
 {% block title %}Thronos Earn Beta{% endblock %}
 {% block content %}
 <style>
-  .earn-beta { max-width: 980px; margin: 32px auto; padding: 0 18px 42px; }
+  .earn-beta { max-width: 520px; margin: 32px auto; padding: 0 18px 42px; }
   .earn-card { background: linear-gradient(145deg,#101827,#182b3d); border:1px solid #2e5874; border-radius:18px; padding:26px; box-shadow:0 12px 45px #0006; }
-  .earn-card h1 { color:#f2c14e; margin:0 0 10px; } .earn-card p { color:#cbd5e1; line-height:1.55; }
-  .earn-action { background:#00a86b; color:#06120e; font-weight:800; padding:13px 19px; border:0; border-radius:10px; cursor:pointer; font-size:15px; }
-  .earn-action:disabled { opacity:.55; cursor:wait; } .earn-status { min-height:24px; margin:16px 0; color:#b8d9ee; }
-  .earn-frame { width:100%; height:850px; border:0; border-radius:12px; background:#fff; display:none; }
-  .earn-note { margin-top:18px; color:#91a7b8; font-size:13px; }
+  .earn-card h1 { color:#f2c14e; margin:0 0 6px; font-size:22px; } .earn-card p { color:#cbd5e1; line-height:1.55; font-size:14px; }
+  .earn-form { display:flex; flex-direction:column; gap:10px; margin-top:14px; }
+  .earn-input { background:#0b1220; border:1px solid #2e5874; border-radius:8px; color:#e2e8f0; padding:11px 13px; font-size:14px; }
+  .earn-input:focus { outline:none; border-color:#f2c14e; }
+  .earn-action { background:#00a86b; color:#06120e; font-weight:800; padding:12px 18px; border:0; border-radius:10px; cursor:pointer; font-size:14px; margin-top:4px; }
+  .earn-action:disabled { opacity:.55; cursor:wait; }
+  .earn-toggle { color:#7fb8d8; font-size:13px; cursor:pointer; background:none; border:none; text-decoration:underline; margin-top:6px; }
+  .earn-status { min-height:24px; margin:12px 0; color:#b8d9ee; font-size:13px; }
+  .earn-status.error { color:#f87171; }
+  .earn-frame { width:100%; height:850px; border:0; border-radius:12px; background:#fff; display:none; margin-top:12px; }
+  .earn-balance-bar { background:#0b1220; border:1px solid #2e5874; border-radius:10px; padding:14px; margin-top:14px; display:none; }
+  .earn-balance-bar .label { color:#7fb8d8; font-size:12px; } .earn-balance-bar .value { color:#f2c14e; font-size:20px; font-weight:700; }
+  .earn-history { margin-top:12px; display:none; }
+  .earn-history h3 { color:#e2e8f0; font-size:14px; margin:0 0 8px; }
+  .earn-history-list { max-height:240px; overflow-y:auto; }
+  .earn-history-item { background:#0b1220; border:1px solid #1e3a50; border-radius:8px; padding:10px 12px; margin-bottom:6px; display:flex; justify-content:space-between; align-items:center; }
+  .earn-history-item .src { color:#cbd5e1; font-size:13px; } .earn-history-item .amt { color:#00a86b; font-weight:700; font-size:14px; }
+  .earn-history-item .st { font-size:11px; padding:2px 7px; border-radius:4px; }
+  .st-pending { background:#92400e33; color:#fbbf24; } .st-confirmed { background:#065f4633; color:#34d399; }
+  .st-payable { background:#1e40af33; color:#60a5fa; } .st-reversed { background:#7f1d1d33; color:#f87171; }
+  .earn-note { margin-top:14px; color:#91a7b8; font-size:12px; }
 </style>
 <main class="earn-beta">
   <section class="earn-card">
-    <h1>Thronos Earn — CPX Beta</h1>
-    <p>Unlock your Thronos Wallet, sign in locally, then choose a survey. Your private key never leaves this device.</p>
-    <button id="earn-start" class="earn-action" type="button">Connect Wallet &amp; View Surveys</button>
+    <h1>Thronos Earn — Beta</h1>
+    <p id="earn-subtitle">Create an Earn Account or sign in. No wallet required.</p>
+
+    <!-- Auth form -->
+    <div id="earn-auth">
+      <div class="earn-form">
+        <input id="earn-email" class="earn-input" type="email" placeholder="Email" autocomplete="email">
+        <input id="earn-pw" class="earn-input" type="password" placeholder="Password (8+ characters)" autocomplete="current-password">
+        <button id="earn-submit" class="earn-action" type="button">Sign In</button>
+        <button id="earn-switch" class="earn-toggle" type="button">Need an account? Register</button>
+      </div>
+    </div>
+
+    <!-- Authenticated view -->
+    <div id="earn-main" style="display:none">
+      <div class="earn-balance-bar" id="earn-balance-bar">
+        <div class="label">THC Balance (available)</div>
+        <div class="value" id="earn-balance-value">—</div>
+      </div>
+      <button id="earn-surveys" class="earn-action" style="margin-top:14px" type="button">Open Surveys</button>
+      <button id="earn-logout" class="earn-toggle" type="button">Sign out</button>
+      <div class="earn-history" id="earn-history">
+        <h3>Recent Activity</h3>
+        <div class="earn-history-list" id="earn-history-list"></div>
+      </div>
+    </div>
+
     <div id="earn-status" class="earn-status" role="status"></div>
     <iframe id="earn-frame" class="earn-frame" title="CPX Research surveys" sandbox="allow-forms allow-scripts allow-same-origin allow-popups"></iframe>
-    <p class="earn-note">Beta notice: survey completion is recorded as a verified Earn receipt. Token conversion and payout remain separately reviewed and are never simulated.</p>
+    <p class="earn-note">Beta notice: survey completion is recorded as a verified Earn receipt. THC conversion, BTC payout, and wallet linking are not yet active.</p>
   </section>
 </main>
 <script>
 (() => {
-  const button = document.getElementById('earn-start'), status = document.getElementById('earn-status'), frame = document.getElementById('earn-frame');
-  const hex = bytes => Array.from(bytes).map(v => v.toString(16).padStart(2,'0')).join('');
-  const derInt = value => { let v = value.replace(/^0+/, '') || '00'; if (parseInt(v.slice(0,2),16) >= 128) v = '00' + v; return (v.length/2).toString(16).padStart(2,'0') + v; };
-  const derSignature = ({r,s}) => { const body = '02' + derInt(r) + '02' + derInt(s); return '30' + (body.length/2).toString(16).padStart(2,'0') + body; };
-  async function authenticate() {
-    if (!window.walletSession || !walletSession.getAddress || !walletSession.signEvmTxHash) throw new Error('Open and unlock your Thronos Wallet first.');
-    const wallet = String(walletSession.getAddress() || '').trim().toUpperCase();
-    const publicKey = String(walletSession.getPublicKey ? walletSession.getPublicKey() : '').trim();
-    if (!wallet.startsWith('THR') || !publicKey) throw new Error('A bound Wallet V1 signer is required.');
-    const proof = {issued_at:Math.floor(Date.now()/1000),nonce:crypto.randomUUID(),purpose:'thronos_earn_auth',version:'1',wallet};
-    const canonical = JSON.stringify(proof);
-    const digest = hex(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(canonical))));
-    const signature = derSignature(await walletSession.signEvmTxHash(digest));
-    const response = await fetch('/api/earn/authenticate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...proof,signature,public_key:publicKey})});
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok || !data.ok) throw new Error(data.error || 'Wallet authentication failed.');
-    return data.access_token;
+  const $ = id => document.getElementById(id);
+  const authSection = $('earn-auth'), mainSection = $('earn-main');
+  const emailInput = $('earn-email'), pwInput = $('earn-pw');
+  const submitBtn = $('earn-submit'), switchBtn = $('earn-switch');
+  const status = $('earn-status'), frame = $('earn-frame');
+  const balanceBar = $('earn-balance-bar'), balanceValue = $('earn-balance-value');
+  const historySection = $('earn-history'), historyList = $('earn-history-list');
+  let isRegister = false, token = null;
+
+  function setStatus(msg, isError) { status.textContent = msg; status.className = 'earn-status' + (isError ? ' error' : ''); }
+
+  switchBtn.addEventListener('click', () => {
+    isRegister = !isRegister;
+    submitBtn.textContent = isRegister ? 'Create Account' : 'Sign In';
+    switchBtn.textContent = isRegister ? 'Already have an account? Sign In' : 'Need an account? Register';
+    pwInput.placeholder = isRegister ? 'Choose a password (8+ characters)' : 'Password (8+ characters)';
+    pwInput.autocomplete = isRegister ? 'new-password' : 'current-password';
+  });
+
+  submitBtn.addEventListener('click', async () => {
+    const email = emailInput.value.trim(), pw = pwInput.value;
+    if (!email || !pw) { setStatus('Enter email and password.', true); return; }
+    submitBtn.disabled = true; setStatus(isRegister ? 'Creating account…' : 'Signing in…');
+    try {
+      const endpoint = isRegister ? '/api/earn/register' : '/api/earn/login';
+      const res = await fetch(endpoint, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({email, password: pw}) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) throw new Error(data.error || 'Request failed.');
+      if (isRegister) { setStatus('Account created. Signing in…'); isRegister = false; switchBtn.click(); }
+      if (data.access_token) { token = data.access_token; showMain(); }
+      else if (isRegister) { setStatus('Account created. Please sign in.'); }
+    } catch (e) {
+      const msg = (e.message || '').replace(/_/g, ' ');
+      setStatus(msg.charAt(0).toUpperCase() + msg.slice(1), true);
+    } finally { submitBtn.disabled = false; }
+  });
+
+  $('earn-logout').addEventListener('click', async () => {
+    if (token) await fetch('/api/earn/logout', { method:'POST', headers:{'Authorization':'Bearer '+token} }).catch(()=>{});
+    token = null; mainSection.style.display = 'none'; authSection.style.display = ''; frame.style.display = 'none';
+    setStatus('Signed out.');
+  });
+
+  $('earn-surveys').addEventListener('click', async () => {
+    if (!token) return;
+    setStatus('Loading surveys…');
+    try {
+      const res = await fetch('/api/earn/cpx/offerwall', { headers:{'Authorization':'Bearer '+token} });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) throw new Error(data.error || 'Surveys unavailable.');
+      frame.src = data.url; frame.style.display = 'block';
+      setStatus('Connected. Complete a survey to earn THC.');
+    } catch (e) { setStatus(e.message || 'Could not load surveys.', true); }
+  });
+
+  async function showMain() {
+    authSection.style.display = 'none'; mainSection.style.display = '';
+    setStatus('');
+    try {
+      const bRes = await fetch('/api/earn/balance', { headers:{'Authorization':'Bearer '+token} });
+      const bData = await bRes.json().catch(() => ({}));
+      if (bRes.ok && bData.ok) { balanceBar.style.display = ''; balanceValue.textContent = bData.available.toFixed(2) + ' THC'; }
+    } catch (_) {}
+    try {
+      const hRes = await fetch('/api/earn/history', { headers:{'Authorization':'Bearer '+token} });
+      const hData = await hRes.json().catch(() => ({}));
+      if (hRes.ok && hData.ok && hData.entries.length) {
+        historySection.style.display = ''; historyList.innerHTML = '';
+        hData.entries.slice(0, 20).forEach(e => {
+          const div = document.createElement('div'); div.className = 'earn-history-item';
+          div.innerHTML = '<div><span class="src">' + (e.source||'').replace(/_/g,' ') + '</span></div>'
+            + '<div><span class="amt">+' + Number(e.amount).toFixed(2) + '</span> <span class="st st-' + e.state + '">' + e.state + '</span></div>';
+          historyList.appendChild(div);
+        });
+      }
+    } catch (_) {}
   }
-  button.addEventListener('click',async () => { button.disabled=true; status.textContent='Authenticating your wallet…'; try { const token=await authenticate(); status.textContent='Loading surveys…'; const response=await fetch('/api/earn/cpx/offerwall',{headers:{Authorization:'Bearer '+token}}); const data=await response.json().catch(()=>({})); if(!response.ok||!data.ok) throw new Error(data.error||'Surveys are not available yet.'); frame.src=data.url; frame.style.display='block'; status.textContent='Connected. Complete a survey to create an Earn receipt.'; } catch(error) { status.textContent=error.message||'Could not start Earn.'; } finally { button.disabled=false; } });
+
+  pwInput.addEventListener('keydown', e => { if (e.key === 'Enter') submitBtn.click(); });
 })();
 </script>
 {% endblock %}

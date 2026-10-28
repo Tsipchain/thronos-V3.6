@@ -119,6 +119,26 @@ class BtcPledgeWatcherRetryTests(unittest.TestCase):
         create.assert_called_once_with(user, self.tx["amount"], self.tx["txid"])
         self.assertEqual(self._read_json(watcher.PROCESSED_TXS_FILE, []).count(self.tx["txid"]), 1)
 
+    def test_corrupt_processed_state_fails_closed(self):
+        with open(watcher.PROCESSED_TXS_FILE, "w") as handle:
+            handle.write("{bad-json")
+        fresh = unittest.mock.Mock(return_value=[self.tx])
+        with patch.object(watcher, "sync_pledge_chain_from_fallback"):
+            with patch.object(watcher, "get_vault_transactions", fresh):
+                watcher.watch_btc_pledges()
+        fresh.assert_not_called()
+
+    def test_corrupt_unresolved_state_fails_closed_without_overwriting_it(self):
+        with open(watcher.UNRESOLVED_TXS_FILE, "w") as handle:
+            handle.write("{bad-json")
+        fresh = unittest.mock.Mock(return_value=[self.tx])
+        with patch.object(watcher, "sync_pledge_chain_from_fallback"):
+            with patch.object(watcher, "get_vault_transactions", fresh):
+                watcher.watch_btc_pledges()
+        fresh.assert_not_called()
+        with open(watcher.UNRESOLVED_TXS_FILE) as handle:
+            self.assertEqual(handle.read(), "{bad-json")
+
 
 if __name__ == "__main__":
     unittest.main()

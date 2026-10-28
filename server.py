@@ -1032,6 +1032,7 @@ def call_ai_core(path: str, payload: dict, timeout: int = 30, method: str = "POS
 LEDGER_FILE         = os.path.join(DATA_DIR, "ledger.json")
 WBTC_LEDGER_FILE    = os.path.join(DATA_DIR, "wbtc_ledger.json")
 CHAIN_FILE          = os.path.join(DATA_DIR, "phantom_tx_chain.json")
+BTC_PLEDGE_LOCK_FILE = os.path.join(DATA_DIR, "btc_pledge_idempotency.lock")
 PLEDGE_CHAIN        = os.path.join(DATA_DIR, "pledge_chain.json")
 LAST_BLOCK_FILE     = os.path.join(DATA_DIR, "last_block.json")
 WHITELIST_FILE      = os.path.join(DATA_DIR, "free_pledge_whitelist.json")
@@ -34212,515 +34213,176 @@ def admin_mint():
 
 
 # ─── PR-183: BTC PLEDGE & WALLET ACTIVATION ENDPOINTS ───────────────────────────
+from btc_pledge_idempotency import (
+    credit_btc_pledge_once,
+    record_existing_btc_pledge_without_credit,
+)
+
+
 @app.route("/api/btc/pledge", methods=["POST"])
 def api_btc_pledge():
+    """Idempotently credit THR after the BTC watcher confirms an inbound deposit.
+
+    The SQLite THR balance and unique btc_txid journal commit together. The
+    phantom chain JSON is a recoverable materialized view.
     """
-    Create a BTC pledge transaction (called by BTC watcher on Node 2)
-
-    Requires ADMIN_SECRET for authentication.
-
-    Expected payload:
-    {
-        "secret": "ADMIN_SECRET",
-        "type": "btc_pledge",
-        "thr_address": "THR...",
-        "btc_address": "1...",
-        "btc_amount": 0.1,
-        "thr_amount": 3333.33,
-        "btc_txid": "abc123...",
-        "kyc_verified": true/false,
-        "whitelisted_admin": true/false,
-        "timestamp": 1234567890
-    }
-    """
-    data = request.get_json() or {}
-    secret = data.get("secret")
-
-    if secret != ADMIN_SECRET:
+    data = request.get_json(silent=True) or {}
+    if data.get("secret") != ADMIN_SECRET:
         return jsonify(ok=False, error="Unauthorized"), 403
 
-    # Validate required fields
-    thr_address = data.get("thr_address")
-    btc_address = data.get("btc_address")
-    btc_amount = data.get("btc_amount", 0)
-    thr_amount = data.get("thr_amount", 0)
-    btc_txid = data.get("btc_txid")
+    thr_address = str(data.get("thr_address") or "").strip()
+    btc_address = str(data.get("btc_address") or "").strip()
+    btc_txid = str(data.get("btc_txid") or "").strip().lower()
+
+    try:
+        btc_amount = Decimal(str(data.get("btc_amount", 0)))
+        thr_amount = Decimal(str(data.get("thr_amount", 0)))
+    except Exception:
+        return jsonify(ok=False, error="Invalid pledge amounts"), 400
 
     if not all([thr_address, btc_address, btc_txid]):
         return jsonify(ok=False, error="Missing required fields"), 400
+    if not re.fullmatch(r"[0-9a-f]{64}", btc_txid):
+        return jsonify(ok=False, error="Invalid BTC transaction id"), 400
+    if not btc_amount.is_finite() or not thr_amount.is_finite() or btc_amount <= 0 or thr_amount <= 0:
+        return jsonify(ok=False, error="Invalid pledge amounts"), 400
 
-    if btc_amount <= 0 or thr_amount <= 0:
-        return jsonify(ok=False, error="Invalid amounts"), 400
+    btc_amount_value = round(float(btc_amount), 8)
+    thr_amount_value = round(float(thr_amount), 6)
+    if btc_amount_value <= 0 or thr_amount_value <= 0:
+        return jsonify(ok=False, error="Pledge amount rounds to zero"), 400
 
-    # Credit THR to the user's wallet
-    ledger = load_json(LEDGER_FILE, {})
-    current_balance = float(ledger.get(thr_address, 0.0))
-    new_balance = round(current_balance + thr_amount, 6)
-    ledger[thr_address] = new_balance
-    save_json(LEDGER_FILE, ledger)
+    # Do not use JSON-only balance updates for live BTC deposit credits.
+    if not USE_SQLITE_LEDGER:
+        return jsonify(ok=False, error="transactional_btc_pledge_storage_required"), 503
 
-    # Create pledge transaction on the chain
-    chain = load_json(CHAIN_FILE, [])
-    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
-    tx_id = f"BTC_PLEDGE-{int(time.time())}-{secrets.token_hex(4)}"
-
-    tx = {
-        "type": "btc_pledge",
-        "tx_id": tx_id,
-        "from": btc_address,
-        "to": thr_address,
-        "thr_address": thr_address,
-        "btc_address": btc_address,
-        "btc_amount": round(btc_amount, 8),
-        "thr_amount": round(thr_amount, 6),
-        "btc_txid": btc_txid,
-        "kyc_verified": data.get("kyc_verified", False),
-        "whitelisted_admin": data.get("whitelisted_admin", False),
-        "timestamp": ts,
-        "status": "confirmed"
-    }
-
-    chain.append(tx)
-    save_json(CHAIN_FILE, chain)
-
-    # Update last_block summary
-    update_last_block(tx, is_block=False)
-
-    # Broadcast to peers
     try:
-        broadcast_tx(tx)
-    except Exception:
-        pass
+        os.makedirs(DATA_DIR, exist_ok=True)
+        with open(BTC_PLEDGE_LOCK_FILE, "a+", encoding="utf-8") as lock_handle:
+            fcntl.flock(lock_handle, fcntl.LOCK_EX)
 
-    return jsonify(
-        ok=True,
-        tx_id=tx_id,
-        thr_address=thr_address,
-        new_balance=new_balance,
-        btc_txid=btc_txid
-    ), 201
+            chain = load_json(CHAIN_FILE, [])
+            if not isinstance(chain, list):
+                logger.error("[btc_pledge] chain state is not a list; refusing credit")
+                return jsonify(ok=False, error="btc_pledge_chain_state_invalid"), 503
 
-
-def get_confirmed_pledge_count() -> int:
-    """Count confirmed pledges (both BTC and USDT) for dynamic price calculation."""
-    try:
-        pledges = load_json(PLEDGE_CHAIN, [])
-        return sum(1 for p in pledges if not p.get("pending_confirmation", True))
-    except Exception:
-        return 0
-
-
-def get_thr_price_usd() -> float:
-    """Current THR price in USD: starts at THR_INITIAL_PRICE_USD, +5% per 100 confirmed pledges."""
-    count = get_confirmed_pledge_count()
-    steps = count // THR_PRICE_STEP_PLEDGES
-    return round(THR_INITIAL_PRICE_USD * ((1 + THR_PRICE_STEP_PCT) ** steps), 6)
-
-
-def get_usdt_thr_rate_dynamic() -> float:
-    """THR per 1 USDT at current dynamic price (inverse of USD price)."""
-    price = get_thr_price_usd()
-    if price <= 0:
-        return 1.0 / THR_INITIAL_PRICE_USD
-    return round(1.0 / price, 8)
-
-
-def _seed_usdt_thr_pool(usdt_amount: float, thr_amount: float) -> dict | None:
-    """
-    Pair fresh USDT pledge inflow with newly-minted THR into the THR/USDT
-    liquidity pool (auto-created if missing). Mirrors the existing
-    BTC-bridge behavior of seeding pool liquidity from external deposits —
-    no user balance is debited since this capital is new to the chain.
-
-    Writes to the legacy ``pools.json`` (Thronos-native THR/USDT pair).
-    The Pythia cross-chain bsc-usdt pool is credited separately via the
-    autolock threshold in ``_autolock_pledge_to_pythia_pool``.
-    """
-    try:
-        pools = load_pools()
-        pool = None
-        for p in pools:
-            a = (p.get("token_a") or "").upper()
-            b = (p.get("token_b") or "").upper()
-            if {a, b} == {"THR", "USDT"}:
-                pool = p
-                break
-        if pool is None:
-            pool = {
-                "id": f"pool-thr-usdt-{secrets.token_hex(4)}",
-                "token_a": "THR",
-                "token_b": "USDT",
-                "reserves_a": 0.0,
-                "reserves_b": 0.0,
-                "fee_bps": 30,
-                "created_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
-                "auto_seeded": True,
-            }
-            pools.append(pool)
-        pool["reserves_a"] = round(float(pool.get("reserves_a", 0.0) or 0.0) + thr_amount, 6)
-        pool["reserves_b"] = round(float(pool.get("reserves_b", 0.0) or 0.0) + usdt_amount, 6)
-        save_pools(pools)
-
-        # ── Pledge → Pythia pool auto-lock ────────────────────────────────────
-        # Accumulate pledge inflows into a running counter. When it crosses the
-        # PLEDGE_POOL_AUTOLOCK_THRESHOLD_USDT threshold, atomically lock the
-        # threshold amount into the Pythia bsc-usdt pool's external_reserve
-        # (accounting only — on-chain USDT still lives in BSC_USDT_PLEDGE_VAULT
-        # until an admin sweep moves it to the pool vault). The event is
-        # recorded in wallet history under SYSTEM_PYTHIA_ACTIONS for audit.
-        try:
-            _autolock_pledge_to_pythia_pool(usdt_amount)
-        except Exception as autolock_err:
-            app.logger.warning("[pledge_autolock] failed: %s", autolock_err)
-
-        return pool
-    except Exception:
-        app.logger.exception("Failed to seed THR/USDT pool from pledge")
-        return None
-
-
-PLEDGE_POOL_AUTOLOCK_THRESHOLD_USDT = float(_strip_env_quotes(
-    os.getenv("PLEDGE_POOL_AUTOLOCK_THRESHOLD_USDT", "1000000")
-))
-_PLEDGE_POOL_ACCUMULATOR_FILE = os.path.join(DATA_DIR, "pledge_pool_accumulator.json")
-
-
-def _autolock_pledge_to_pythia_pool(usdt_amount: float) -> None:
-    """Accumulate pledge inflows and auto-lock to Pythia bsc-usdt pool when
-    threshold is reached. Threshold-based (default 1M USDT). Reuses the same
-    pool_liquidity_ledger + pool_add_liquidity_lp_minted event as the watcher
-    path — no new accounting model."""
-    if usdt_amount <= 0 or PLEDGE_POOL_AUTOLOCK_THRESHOLD_USDT <= 0:
-        return
-    acc_state = load_json(_PLEDGE_POOL_ACCUMULATOR_FILE, {"accumulated_usdt": 0.0, "lock_count": 0})
-    if not isinstance(acc_state, dict):
-        acc_state = {"accumulated_usdt": 0.0, "lock_count": 0}
-    accumulated = float(acc_state.get("accumulated_usdt") or 0) + usdt_amount
-
-    # Process each threshold crossing (in case of a large single pledge)
-    while accumulated >= PLEDGE_POOL_AUTOLOCK_THRESHOLD_USDT:
-        locked = PLEDGE_POOL_AUTOLOCK_THRESHOLD_USDT
-        accumulated -= locked
-        acc_state["lock_count"] = int(acc_state.get("lock_count", 0)) + 1
-
-        lock_event_id = f"PLEDGE-LOCK-{int(time.time())}-{secrets.token_hex(4).upper()}"
-        now_iso = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
-
-        # Credit Pythia bsc-usdt pool external_reserve (same helpers as watcher path)
-        try:
-            ledger = _load_pool_ledger()
-            pool   = ledger.setdefault("bsc-usdt", {
-                "pool_id": "bsc-usdt", "external_reserve": 0.0, "thr_reserve": 0.0, "events": [],
-            })
-            pool["external_reserve"] = round(float(pool.get("external_reserve") or 0) + locked, 8)
-            pool["last_updated"]     = now_iso
-            pool.setdefault("events", []).append({
-                "pool_event_id":  lock_event_id,
-                "event_type":     "pledge_vault_pool_autolock",
-                "address":        PYTHIA_SYSTEM_THR_ADDRESS,
-                "pool_id":        "bsc-usdt",
-                "side":           "external",
-                "asset":          "USDT",
-                "amount":         locked,
-                "direction":      "allocate",
-                "status":         "confirmed",
-                "source":         "pledge_vault_autolock",
-                "chain":          "bsc",
-                "worker":         _AMM_WORKER_NAME,
-                "timestamp":      int(time.time()),
-                "timestamp_iso":  now_iso,
-                "threshold_usdt": PLEDGE_POOL_AUTOLOCK_THRESHOLD_USDT,
-                "lock_count":     acc_state["lock_count"],
-            })
-            _save_pool_ledger(ledger)
-        except Exception as ledger_err:
-            app.logger.warning("[pledge_autolock] ledger credit failed: %s", ledger_err)
-
-        # System audit event
-        try:
-            add_wallet_history_event(
-                thr_address="SYSTEM_PYTHIA_ACTIONS",
-                event_type="pledge_vault_pool_autolock",
-                chain="bsc",
-                asset="USDT",
-                amount=locked,
-                status="confirmed",
-                direction="system",
-                internal_txid=lock_event_id,
-                network_label="BNB Chain",
-                note=f"Pledge accumulator reached {PLEDGE_POOL_AUTOLOCK_THRESHOLD_USDT} USDT → locked into bsc-usdt pool (lock #{acc_state['lock_count']})",
+            existing = next(
+                (item for item in chain if isinstance(item, dict) and str(item.get("btc_txid", "")).lower() == btc_txid),
+                None,
             )
-        except Exception as hist_err:
-            app.logger.warning("[pledge_autolock] history append failed: %s", hist_err)
-
-        app.logger.info("[pledge_autolock] locked %.2f USDT into bsc-usdt pool (lock #%d, event=%s)",
-                        locked, acc_state["lock_count"], lock_event_id)
-
-    acc_state["accumulated_usdt"]      = round(accumulated, 6)
-    acc_state["last_updated"]          = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
-    acc_state["threshold_usdt"]        = PLEDGE_POOL_AUTOLOCK_THRESHOLD_USDT
-    save_json(_PLEDGE_POOL_ACCUMULATOR_FILE, acc_state)
-
-
-@app.route("/api/pledge/bnb/quote")
-def api_pledge_bnb_quote():
-    """Return current USDT-on-BNB-Chain pledge requirements (mobile/PWA only)."""
-    dynamic_rate = get_usdt_thr_rate_dynamic()
-    thr_price = get_thr_price_usd()
-    pledge_count = get_confirmed_pledge_count()
-    return jsonify(
-        ok=True,
-        vault_address=BNB_PLEDGE_VAULT,
-        token_contract=USDT_BNB_CONTRACT,
-        chain="bnb",
-        min_usdt=MIN_USDT_PLEDGE,
-        usdt_thr_rate=dynamic_rate,
-        thr_price_usd=thr_price,
-        thr_per_min_pledge=round(MIN_USDT_PLEDGE * dynamic_rate, 6),
-        pledge_count=pledge_count,
-        next_level_at=((pledge_count // THR_PRICE_STEP_PLEDGES) + 1) * THR_PRICE_STEP_PLEDGES,
-    ), 200
-
-
-@app.route("/api/pledge/bnb/register", methods=["POST"])
-def api_pledge_bnb_register():
-    """
-    Register the BNB-chain (BSC) address a user will send USDT from.
-
-    Stores the mapping in bnb_user_registry.json so the watcher knows
-    which THR address to credit when USDT arrives from this BNB address.
-
-    For new users (no thr_address supplied) a provisional THR address is
-    generated here.  The pledge record + send_seed + PDF are created LATER
-    by /api/usdt/pledge when the watcher confirms the USDT payment.
-    """
-    data = request.get_json() or {}
-    thr_address = (data.get("thr_address") or "").strip().upper()
-    bnb_address = (data.get("bnb_address") or "").strip().lower()
-
-    if not re.match(r"^0x[a-f0-9]{40}$", bnb_address):
-        return jsonify(ok=False, error="invalid_bnb_address"), 400
-    if thr_address and not validate_thr_address(thr_address):
-        return jsonify(ok=False, error="invalid_thr_address"), 400
-
-    if not thr_address:
-        timestamp   = str(int(time.time() * 1000))
-        thr_address = generate_thr_address(bnb_address, timestamp)
-
-    registry_file = os.path.join(DATA_DIR, "bnb_user_registry.json")
-    registry = load_json(registry_file, {})
-    registry[bnb_address] = {
-        "thr_address":   thr_address,
-        "registered_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
-    }
-    save_json(registry_file, registry)
-
-    return jsonify(ok=True, thr_address=thr_address, bnb_address=bnb_address, vault_address=BNB_PLEDGE_VAULT), 200
-
-
-def process_usdt_pledge_credit(thr_address, bnb_address, usdt_amount, bnb_txid, source="watcher",
-                               bypass_minimum=False, reconciliation_reason=None):
-    """
-    Shared logic for crediting a USDT pledge to a THR wallet.
-
-    Args:
-        thr_address: THR address to credit
-        bnb_address: BNB sender address
-        usdt_amount: amount in USDT
-        bnb_txid: BSC transaction hash
-        source: "watcher" or "admin" for logging
-
-    Returns:
-        (success: bool, result_data: dict, error_msg: str or None)
-    """
-    try:
-        # Validation
-        if not all([thr_address, bnb_address, bnb_txid]):
-            return False, {}, "Missing required fields"
-        if not bypass_minimum and usdt_amount < MIN_USDT_PLEDGE:
-            return False, {}, f"below_minimum_pledge (minimum {MIN_USDT_PLEDGE} USDT)"
-
-        # Check for duplicate tx in wallet history
-        wallet_hist_file = os.path.join(DATA_DIR, "wallet_history.json")
-        wallet_hist = load_json(wallet_hist_file, [])
-        if any(evt.get("external_txid") == bnb_txid for evt in wallet_hist):
-            return False, {}, "duplicate_tx_already_processed"
-
-        dynamic_rate = get_usdt_thr_rate_dynamic()
-        thr_amount = round(usdt_amount * dynamic_rate, 6)
-        pool_usdt = round(usdt_amount * USDT_PLEDGE_POOL_SPLIT, 6)
-        pool_thr = round(pool_usdt * dynamic_rate, 6)
-
-        ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
-
-        # Generate send_seed + PDF + pledge record now that payment is confirmed.
-        pledges = load_json(PLEDGE_CHAIN, [])
-        existing_pledge = next(
-            (p for p in pledges if p.get("bnb_address") == bnb_address and p.get("pledge_type") == "usdt_bnb"),
-            None
-        )
-        if not existing_pledge:
-            pledge_text    = "USDT/BNB Pledge — Thronos Network"
-            phash          = hashlib.sha256((bnb_address + pledge_text).encode()).hexdigest()
-            send_seed      = secrets.token_hex(16)
-            send_seed_hash = hashlib.sha256(send_seed.encode()).hexdigest()
-            auth_string    = f"{send_seed}:auth"
-            send_auth_hash = hashlib.sha256(auth_string.encode()).hexdigest()
-            chain_for_height = load_json(CHAIN_FILE, [])
-            height = len(chain_for_height)
-
-            try:
-                pdf_name = create_secure_pdf_contract(
-                    bnb_address, pledge_text, thr_address, phash, height,
-                    send_seed, CONTRACTS_DIR, None
+            if existing:
+                same_payload = (
+                    existing.get("btc_address") == btc_address
+                    and existing.get("thr_address") == thr_address
+                    and round(float(existing.get("btc_amount", 0)), 8) == btc_amount_value
+                    and round(float(existing.get("thr_amount", 0)), 6) == thr_amount_value
                 )
-            except Exception as _pdf_err:
-                logger.error(f"USDT pledge PDF generation failed: {_pdf_err}")
-                pdf_name = f"pledge_{thr_address}.pdf"
+                if not same_payload:
+                    return jsonify(ok=False, error="btc_txid_payload_conflict"), 409
 
-            pledge_entry = {
-                "bnb_address":          bnb_address,
-                "pledge_type":          "usdt_bnb",
-                "pledge_text":          pledge_text,
-                "timestamp":            ts,
-                "pledge_hash":          phash,
-                "thr_address":          thr_address,
-                "send_seed":            send_seed,
-                "send_seed_hash":       send_seed_hash,
-                "send_auth_hash":       send_auth_hash,
-                "has_passphrase":       False,
-                "pending_confirmation": False,
-                "pdf_filename":         pdf_name,
+                conn = _get_ledger_db_connection()
+                try:
+                    adopted = record_existing_btc_pledge_without_credit(
+                        conn,
+                        btc_txid=btc_txid,
+                        btc_address=btc_address,
+                        thr_address=thr_address,
+                        btc_amount=btc_amount_value,
+                        thr_amount=thr_amount_value,
+                        tx_record=existing,
+                    )
+                finally:
+                    conn.close()
+
+                if adopted.get("status") == "conflict":
+                    return jsonify(ok=False, error=adopted.get("reason", "btc_txid_payload_conflict")), 409
+                atomic_write_json(LEDGER_FILE, adopted["ledger"])
+                return jsonify(
+                    ok=True, created=False, duplicate=True,
+                    tx_id=existing.get("tx_id"), thr_address=thr_address,
+                    new_balance=adopted["new_balance"], btc_txid=btc_txid,
+                    message="BTC pledge already credited; duplicate request ignored",
+                ), 200
+
+            ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+            tx = {
+                "type": "btc_pledge",
+                "tx_id": f"BTC_PLEDGE-{int(time.time())}-{secrets.token_hex(4)}",
+                "from": btc_address,
+                "to": thr_address,
+                "thr_address": thr_address,
+                "btc_address": btc_address,
+                "btc_amount": btc_amount_value,
+                "thr_amount": thr_amount_value,
+                "btc_txid": btc_txid,
+                "kyc_verified": bool(data.get("kyc_verified", False)),
+                "whitelisted_admin": bool(data.get("whitelisted_admin", False)),
+                "timestamp": ts,
+                "status": "confirmed",
             }
-            if reconciliation_reason:
-                pledge_entry["reconciliation_reason"] = reconciliation_reason
-                pledge_entry["source"] = source
-            pledges.append(pledge_entry)
-            save_json(PLEDGE_CHAIN, pledges)
-        else:
-            # Already confirmed — just clear the flag if it was pending
-            if existing_pledge.get("pending_confirmation"):
-                existing_pledge["pending_confirmation"] = False
-                save_json(PLEDGE_CHAIN, pledges)
 
-        # Credit THR to the user's wallet
-        ledger = load_json(LEDGER_FILE, {})
-        current_balance = float(ledger.get(thr_address, 0.0))
-        new_balance = round(current_balance + thr_amount, 6)
-        ledger[thr_address] = new_balance
-        save_json(LEDGER_FILE, ledger)
+            conn = _get_ledger_db_connection()
+            try:
+                credit = credit_btc_pledge_once(
+                    conn,
+                    btc_txid=btc_txid,
+                    btc_address=btc_address,
+                    thr_address=thr_address,
+                    btc_amount=btc_amount_value,
+                    thr_amount=thr_amount_value,
+                    tx_record=tx,
+                )
+            finally:
+                conn.close()
 
-        # Seed THR/USDT pool with half the pledge (new external capital, no debit)
-        _seed_usdt_thr_pool(pool_usdt, pool_thr)
+            if credit.get("status") == "conflict":
+                return jsonify(ok=False, error=credit.get("reason", "btc_txid_payload_conflict")), 409
 
-        # Record pledge in balance buckets (locked, not withdrawable)
-        try:
-            _update_address_bucket(thr_address, "pledge_reserve_balance", pool_usdt)
-            _add_pledge_pool_floor("USDT", pool_usdt)
-        except Exception as _bucket_err:
-            logger.warning("[usdt_pledge] bucket update failed (non-fatal): %s", _bucket_err)
+            # DB journal + balance already committed atomically. On retry after
+            # a crash, the journal returns the original tx and prevents a 2nd credit.
+            atomic_write_json(LEDGER_FILE, credit["ledger"])
+            committed_tx = credit["tx_record"]
+            chain = load_json(CHAIN_FILE, [])
+            if not isinstance(chain, list):
+                logger.error("[btc_pledge] chain state invalid after credit")
+                return jsonify(ok=False, error="btc_pledge_chain_state_invalid_after_credit"), 503
 
-        # Create pledge transaction on the chain
-        chain = load_json(CHAIN_FILE, [])
-        tx_id = f"USDT_PLEDGE-{int(time.time())}-{secrets.token_hex(4)}"
-
-        tx = {
-            "type": "usdt_pledge",
-            "tx_id": tx_id,
-            "from": bnb_address,
-            "to": thr_address,
-            "thr_address": thr_address,
-            "bnb_address": bnb_address,
-            "usdt_amount": usdt_amount,
-            "thr_amount": thr_amount,
-            "pool_usdt_seeded": pool_usdt,
-            "pool_thr_seeded": pool_thr,
-            "bnb_txid": bnb_txid,
-            "timestamp": ts,
-            "status": "confirmed",
-        }
-
-        chain.append(tx)
-        save_json(CHAIN_FILE, chain)
-        update_last_block(tx, is_block=False)
-
-        try:
-            broadcast_tx(tx)
-        except Exception:
-            pass
-
-        # Add wallet history events
-        current_ts = time.time()
-
-        # 1. Primary pledge event: USDT-on-BSC confirmed (visible on BNB network in history)
-        add_wallet_history_event(
-            thr_address=thr_address,
-            event_type="pledge_usdt_bnb_confirmed",
-            chain="bsc",
-            asset="USDT",
-            amount=usdt_amount,
-            status="confirmed",
-            direction="in",
-            internal_txid=tx_id,
-            external_txid=bnb_txid,
-            token_contract=USDT_BNB_CONTRACT,
-            token_standard="BEP20",
-            network_label="BNB Smart Chain",
-            external_from=bnb_address,
-            external_to=BNB_PLEDGE_VAULT,
-            timestamp=current_ts,
-            note=reconciliation_reason or "",
-        )
-
-        # 2. Record THR credit (internal Thronos transaction)
-        add_wallet_history_event(
-            thr_address=thr_address,
-            event_type="token_receive",
-            chain="thronos",
-            asset="THR",
-            amount=thr_amount,
-            status="credited",
-            direction="in",
-            internal_txid=tx_id,
-            external_txid=bnb_txid,
-            token_standard="native",
-            network_label="Thronos",
-            timestamp=current_ts,
-        )
-
-        # 3. Record pool seed event (if pool received funds)
-        if pool_thr > 0:
-            add_wallet_history_event(
-                thr_address=thr_address,
-                event_type="pool_seed",
-                chain="thronos",
-                asset="THR",
-                amount=pool_thr,
-                status="pool_seeded",
-                direction="pool",
-                internal_txid=tx_id,
-                token_standard="native",
-                network_label="Thronos",
-                timestamp=current_ts,
+            chain_existing = next(
+                (item for item in chain if isinstance(item, dict) and str(item.get("btc_txid", "")).lower() == btc_txid),
+                None,
             )
+            if chain_existing is None:
+                chain.append(committed_tx)
+                save_json(CHAIN_FILE, chain)
+                try:
+                    update_last_block(committed_tx, is_block=False)
+                except Exception as exc:
+                    logger.error("[btc_pledge] last_block update failed for %s: %s", committed_tx.get("tx_id"), exc)
+                try:
+                    broadcast_tx(committed_tx)
+                except Exception as exc:
+                    logger.warning("[btc_pledge] broadcast failed for %s: %s", committed_tx.get("tx_id"), exc)
+            elif (
+                chain_existing.get("tx_id") != committed_tx.get("tx_id")
+                or chain_existing.get("thr_address") != thr_address
+                or chain_existing.get("btc_address") != btc_address
+                or round(float(chain_existing.get("btc_amount", 0)), 8) != btc_amount_value
+                or round(float(chain_existing.get("thr_amount", 0)), 6) != thr_amount_value
+            ):
+                logger.error("[btc_pledge] DB journal/chain mismatch for BTC txid %s", btc_txid)
+                return jsonify(ok=False, error="btc_txid_registry_mismatch"), 409
 
-        result_data = {
-            "tx_id": tx_id,
-            "thr_address": thr_address,
-            "new_balance": new_balance,
-            "bnb_txid": bnb_txid,
-            "pool_usdt_seeded": pool_usdt,
-            "pool_thr_seeded": pool_thr,
-        }
+            is_new_credit = credit.get("status") == "created"
+            return jsonify(
+                ok=True, created=is_new_credit, duplicate=not is_new_credit,
+                tx_id=committed_tx.get("tx_id"), thr_address=thr_address,
+                new_balance=credit["new_balance"], btc_txid=btc_txid,
+                message="BTC pledge credited" if is_new_credit else "BTC pledge already credited; duplicate request ignored",
+            ), 201 if is_new_credit else 200
 
-        logger.info("[usdt_pledge] %s processed tx %s -> THR %s (amount: %f USDT, source: %s)",
-                   bnb_address, bnb_txid, thr_address, usdt_amount, source)
-
-        return True, result_data, None
-
-    except Exception as e:
-        logger.error("[usdt_pledge] process_usdt_pledge_credit failed: %s", str(e), exc_info=True)
-        return False, {}, str(e)
+    except Exception as exc:
+        logger.error("[btc_pledge] transaction failed: %s", exc, exc_info=True)
+        return jsonify(ok=False, error="btc_pledge_processing_failed"), 500
 
 
 @app.route("/api/usdt/pledge", methods=["POST"])

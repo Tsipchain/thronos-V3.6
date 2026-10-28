@@ -55,7 +55,46 @@ class BtcPledgeWatcherRetryTests(unittest.TestCase):
         except FileNotFoundError:
             return default
 
+    def test_confirmations_use_block_heights_not_elapsed_time(self):
+        self.assertEqual(
+            watcher._calculate_confirmations({"confirmed": True, "block_height": 100}, 112),
+            13,
+        )
+
+    def test_confirmations_fail_closed_when_tip_height_is_unavailable(self):
+        self.assertEqual(
+            watcher._calculate_confirmations({"confirmed": True, "block_height": 100}, None),
+            0,
+        )
+
+    def test_unconfirmed_bitcoin_transaction_has_zero_confirmations(self):
+        self.assertEqual(
+            watcher._calculate_confirmations({"confirmed": False, "block_height": 100}, 112),
+            0,
+        )
+
+    def test_invalid_or_future_block_height_has_zero_confirmations(self):
+        self.assertEqual(
+            watcher._calculate_confirmations({"confirmed": True, "block_height": 120}, 112),
+            0,
+        )
+        self.assertEqual(
+            watcher._calculate_confirmations({"confirmed": True}, 112),
+            0,
+        )
+
+    def test_fetch_tip_height_uses_adapter_endpoint_and_returns_integer(self):
+        with patch.object(watcher.requests, "get") as get:
+            response = get.return_value
+            response.json.return_value = 123456
+            response.raise_for_status.return_value = None
+            self.assertEqual(watcher._fetch_tip_height("https://adapter.example/api"), 123456)
+            get.assert_called_once_with(
+                "https://adapter.example/api/blocks/tip/height", timeout=10
+            )
+
     def test_unresolved_user_is_not_marked_processed(self):
+
         self._run_cycle([self.tx], lambda _tx: None, lambda *_: True)
 
         processed = self._read_json(watcher.PROCESSED_TXS_FILE, [])

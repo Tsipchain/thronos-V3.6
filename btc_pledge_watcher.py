@@ -272,6 +272,32 @@ def get_vault_transactions() -> List[Dict]:
     return []
 
 
+def _fetch_tip_height(base_url: str) -> Optional[int]:
+    """Fetch current Bitcoin tip height; never infer confirmations from wall-clock time."""
+    try:
+        response = requests.get(f"{base_url.rstrip('/')}/blocks/tip/height", timeout=10)
+        response.raise_for_status()
+        tip_height = int(response.json())
+        return tip_height if tip_height > 0 else None
+    except Exception as exc:
+        logger.warning("Could not obtain Bitcoin tip height from %s: %s", base_url, exc)
+        return None
+
+
+def _calculate_confirmations(status: Dict, tip_height: Optional[int]) -> int:
+    """Calculate confirmations from block inclusion height and actual chain tip."""
+    if not isinstance(status, dict) or not status.get("confirmed") or tip_height is None:
+        return 0
+    try:
+        block_height = int(status.get("block_height"))
+        tip = int(tip_height)
+    except (TypeError, ValueError):
+        return 0
+    if block_height < 1 or tip < block_height:
+        return 0
+    return tip - block_height + 1
+
+
 def _fetch_vault_txs_adapter(vault_address: str) -> List[Dict]:
     """Fetch incoming transactions to vault using the Thronos BTC API adapter."""
     base_url = BTC_API_URL.rstrip("/")
@@ -279,7 +305,10 @@ def _fetch_vault_txs_adapter(vault_address: str) -> List[Dict]:
     seen_txids = set()
     user_registry = load_user_registry()
 
-    # The adapter mirrors blockstream.info API format
+    # Use the actual Bitcoin tip; do not estimate confirmations from elapsed time.
+    tip_height = _fetch_tip_height(f"{base_url}/api")
+
+    # The adapter mirrors blockstream.info API format.
     # Try confirmed transactions
     resp = requests.get(
         f"{base_url}/api/address/{vault_address}/txs",
@@ -311,9 +340,7 @@ def _fetch_vault_txs_adapter(vault_address: str) -> List[Dict]:
         status = raw_tx.get("status", {})
         confirmed = status.get("confirmed", False)
         block_time = status.get("block_time", 0)
-        confirmations = 0
-        if confirmed and block_time:
-            confirmations = max(1, int((time.time() - block_time) / 600))
+        confirmations = _calculate_confirmations(status, tip_height)
 
         for vout in raw_tx.get("vout", []):
             addr = vout.get("scriptpubkey_address", "")
@@ -349,6 +376,9 @@ def _fetch_vault_txs_blockstream(vault_address: str) -> List[Dict]:
     """Fetch incoming transactions to vault using blockstream.info API."""
     BLOCKSTREAM_URL = "https://blockstream.info/api"
     all_txs = []
+
+    # Fetch current chain tip once; fail closed if the tip cannot be fetched.
+    tip_height = _fetch_tip_height(BLOCKSTREAM_URL)
 
     # Fetch confirmed transactions (paginated)
     last_seen = None
@@ -391,10 +421,7 @@ def _fetch_vault_txs_blockstream(vault_address: str) -> List[Dict]:
         status = raw_tx.get("status", {})
         confirmed = status.get("confirmed", False)
         block_time = status.get("block_time", 0)
-        confirmations = 0
-        if confirmed and block_time:
-            # Estimate confirmations from block time
-            confirmations = max(1, int((time.time() - block_time) / 600))
+        confirmations = _calculate_confirmations(status, tip_height)
 
         # Find vouts that pay to the vault address
         for vout in raw_tx.get("vout", []):

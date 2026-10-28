@@ -1,0 +1,32 @@
+name: BTC Pledge Idempotency Tests
+
+on:
+  push:
+    branches: ["fix/btc-pledge-idempotency"]
+  pull_request:
+    paths:
+      - "server.py"
+      - "btc_pledge_idempotency.py"
+      - "tests/test_btc_pledge_idempotency.py"
+      - ".github/workflows/btc-pledge-idempotency.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  btc-pledge-idempotency:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install BTC watcher test dependency
+        run: python -m pip install --disable-pip-version-check requests
+      - name: Compile BTC pledge production modules
+        run: python -m py_compile server.py btc_pledge_idempotency.py btc_pledge_watcher.py
+      - name: Run BTC pledge regression tests
+        run: python -m unittest discover -s tests -p "test_btc_pledge_*.py" -v

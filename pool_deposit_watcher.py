@@ -2,8 +2,9 @@
 Pool Deposit Watcher Service
 
 Monitors Pythia AMM pool vaults for real external on-chain deposits:
-  - BSC:  USDT (BEP20) transfers to the BSC pool vault
-  - Base: USDC (ERC20) transfers to the Base pool vault
+  - BSC:      USDT (BEP20) transfers to the BSC pool vault
+  - Base:     USDC (ERC20) transfers to the Base pool vault
+  - Arbitrum: USDC (ERC20) transfers to the Arbitrum pool vault
 
 On a confirmed deposit the watcher calls the master node's internal
 POST /api/admin/pools/watcher/credit-external-deposit endpoint to write
@@ -18,15 +19,20 @@ POOL_WATCHER_CONFIRMATIONS     blocks to wait for finality (default: 15)
 POOL_WATCHER_BACKFILL_BLOCKS   max blocks to scan back on startup (default: 5000)
 
 BSC_RPC_URL                    Binance Smart Chain JSON-RPC endpoint
+BSC_RPC_LOGS_URL               Dedicated BSC eth_getLogs RPC endpoint
 BASE_RPC_URL                   Base chain JSON-RPC endpoint
+ARBITRUM_RPC_URL               Arbitrum One JSON-RPC endpoint
 
 BSC_USDT_CONTRACT              BEP20 USDT contract (default: canonical BEP20 USDT)
 BASE_USDC_CONTRACT             ERC20 USDC contract on Base (default: canonical Base USDC)
+ARBITRUM_USDC_CONTRACT         Native Circle USDC on Arbitrum One
 
 BSC_POOL_VAULT_ADDRESS         BSC vault to watch (preferred)
 PYTHIA_SYSTEM_EVM_BSC_ADDRESS  fallback vault if BSC_POOL_VAULT_ADDRESS not set
 BASE_POOL_VAULT_ADDRESS        Base vault to watch (preferred)
 PYTHIA_SYSTEM_EVM_BASE_ADDRESS fallback vault if BASE_POOL_VAULT_ADDRESS not set
+ARBITRUM_POOL_VAULT_ADDRESS    Arbitrum vault to watch (preferred)
+PYTHIA_SYSTEM_EVM_ARBITRUM_ADDRESS fallback vault if configured
 
 MASTER_NODE_URL                local master node URL for crediting (default: http://localhost:5000)
 ADMIN_SECRET                   shared admin token
@@ -55,7 +61,8 @@ POOL_LOGS_CHUNK_SIZE       = int(os.getenv("POOL_LOGS_CHUNK_SIZE", "500"))   # m
 
 BSC_RPC_URL      = os.getenv("BSC_RPC_URL", "")
 BSC_RPC_LOGS_URL = os.getenv("BSC_RPC_LOGS_URL", "").strip()
-BASE_RPC_URL     = os.getenv("BASE_RPC_URL", "")
+BASE_RPC_URL     = os.getenv("BASE_RPC_URL", "").strip()
+ARBITRUM_RPC_URL = os.getenv("ARBITRUM_RPC_URL", "https://arb1.arbitrum.io/rpc").strip()
 
 # Default token contracts (canonical addresses for mainnet)
 BSC_USDT_CONTRACT  = (
@@ -63,6 +70,9 @@ BSC_USDT_CONTRACT  = (
 ).lower()
 BASE_USDC_CONTRACT = (
     os.getenv("BASE_USDC_CONTRACT") or "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+).lower()
+ARBITRUM_USDC_CONTRACT = (
+    os.getenv("ARBITRUM_USDC_CONTRACT") or "0xaf88d065e77c8cc2239327c5edb3a432268e5831"
 ).lower()
 
 # Pool vault addresses — prefer explicit var, fall back to Pythia system EVM address,
@@ -79,6 +89,14 @@ _BASE_VAULT = (
     os.getenv("PYTHIA_SYSTEM_EVM_BASE_ADDRESS") or
     _BASE_VAULT_DEFAULT
 ).lower()
+
+# Arbitrum must use an explicitly configured vault. Never reuse the Base/BSC
+# fallback address, because that could credit transfers sent to an unrelated vault.
+_ARBITRUM_VAULT = (
+    os.getenv("ARBITRUM_POOL_VAULT_ADDRESS") or
+    os.getenv("PYTHIA_SYSTEM_EVM_ARBITRUM_ADDRESS") or
+    ""
+).strip().lower()
 
 MASTER_NODE_URL = os.getenv("MASTER_NODE_URL", "http://localhost:5000")
 ADMIN_SECRET    = os.getenv("ADMIN_SECRET", "CHANGE_ME_NOW")
@@ -122,6 +140,21 @@ POOL_TARGETS: List[Dict] = [
         "rpc_env_var":       "BASE_RPC_URL",
         "vault_env_vars":    "BASE_POOL_VAULT_ADDRESS / PYTHIA_SYSTEM_EVM_BASE_ADDRESS",
         "contract_env_var":  "BASE_USDC_CONTRACT",
+    },
+    {
+        "pool_id":           "arbitrum-usdc",
+        "chain":             "arbitrum",
+        "asset":             "USDC",
+        "decimals":          6,
+        "token_contract":    ARBITRUM_USDC_CONTRACT,
+        "vault_address":     _ARBITRUM_VAULT,
+        "rpc_url":           ARBITRUM_RPC_URL,
+        "logs_rpc_url":      ARBITRUM_RPC_URL,
+        "rpc_logs_env_var":  "ARBITRUM_RPC_URL",
+        "source_detail":     "arbitrum_usdc_pool_watcher",
+        "rpc_env_var":       "ARBITRUM_RPC_URL",
+        "vault_env_vars":    "ARBITRUM_POOL_VAULT_ADDRESS / PYTHIA_SYSTEM_EVM_ARBITRUM_ADDRESS",
+        "contract_env_var":  "ARBITRUM_USDC_CONTRACT",
     },
 ]
 

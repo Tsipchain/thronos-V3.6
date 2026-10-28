@@ -154,6 +154,7 @@ from llm_registry import (
 from ai_models_config import base_model_config
 # CRITICAL FIX #6: Import compute_model_stats and create_ai_transfer_from_ledger_entry from ai_interaction_ledger
 from ai_interaction_ledger import compute_model_stats, create_ai_transfer_from_ledger_entry
+from services.l2e_edu import l2e_edu_bp
 
 app = Flask(__name__)
 # Allow thronoschain.org (Vercel CDN + Plesk branding site) and all subdomains,
@@ -177,6 +178,8 @@ try:
 except Exception:
     # SECURITY: Never fall back to allow-all origins — Phase 0 hardening
     CORS(app, origins=_CORS_ORIGINS)
+
+app.register_blueprint(l2e_edu_bp)
 
 # Background worker infrastructure for async block processing and broadcasting
 _BLOCK_PROCESS_QUEUE = queue.Queue(maxsize=100)

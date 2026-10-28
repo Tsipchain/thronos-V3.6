@@ -4205,34 +4205,129 @@ async function showHistory(address) {
     el.innerHTML = sorted.map(_renderHistoryRow).join('');
   }
 
+  function _walletHistoryChain(value) {
+    const chain = String(value || 'thronos').toLowerCase();
+    return ({ bnb: 'bsc', binance: 'bsc', binance_smart_chain: 'bsc', bitcoin: 'btc', ethereum: 'eth', arb: 'arbitrum', thr: 'thronos' })[chain] || chain;
+  }
+
+  function _walletHistoryPriority(raw) {
+    const type = String(raw.original_event_type || raw.event_type || raw.kind || raw.type || '').toLowerCase();
+    const chain = _walletHistoryChain(raw.chain);
+    const status = String(raw.status || '').toLowerCase();
+    if (type === 'pool_add_liquidity_lp_minted') return 130;
+    if (type === 'pool_add_liquidity') return 120;
+    if (type === 'pool_add_liquidity_external_tx_confirmed') return chain === 'thronos' ? 100 : 120;
+    if (type === 'pool_add_liquidity_intent_created') return status === 'pending' ? 5 : 15;
+    if (type === 'crosschain_withdrawal_failed') return 140;
+    if (type === 'crosschain_withdrawal_confirmed' || type === 'crosschain_withdraw') return 130;
+    if (type === 'crosschain_withdrawal_broadcasted') return 110;
+    if (type === 'crosschain_withdrawal_signed') return 95;
+    if (type === 'crosschain_withdrawal_fee_charged') return 50;
+    if (type === 'crosschain_withdrawal_requested') return 10;
+    if (status === 'failed' || status === 'manual_review') return 125;
+    if (status === 'confirmed' || status === 'sent' || status === 'credited') return 80;
+    return 20;
+  }
+
+  // Collapse lifecycle/source duplicates within one chain, but keep the two
+  // sides of a cross-chain action separate because they are different chain events.
+  function _dedupeUnifiedWalletHistory(events) {
+    const groups = new Map();
+    for (const raw of events || []) {
+      if (!raw || typeof raw !== 'object') continue;
+      const type = String(raw.original_event_type || raw.event_type || raw.kind || raw.type || '').toLowerCase();
+      const domain = String(raw.domain || '').toLowerCase();
+      const chain = _walletHistoryChain(raw.chain);
+      const link = raw.intent_id || raw.internal_txid || raw.pool_event_id || '';
+      const isPool = type.startsWith('pool_add_liquidity') || type === 'pool_add_liquidity' || domain === 'liquidity';
+      const withdrawalId = raw.withdrawal_id || '';
+      const bridgeId = raw.bridge_id || raw.correlation_id || '';
+      const hash = String(raw.tx_hash || (chain !== 'thronos' ? raw.external_txid : '') || '').toLowerCase();
+      const asset = String(raw.asset || raw.token || raw.asset_symbol || '').toUpperCase();
+      const direction = String(raw.direction || '').toLowerCase();
+      let key = '';
+      if (isPool && link) {
+        key = chain + '|pool|' + String(raw.pool_id || '') + '|' + String(link);
+      } else if (withdrawalId && type.includes('withdraw')) {
+        key = chain + '|withdrawal|' + String(withdrawalId);
+      } else if (bridgeId && (type.includes('bridge') || type.includes('crosschain'))) {
+        key = chain + '|bridge|' + String(bridgeId);
+      } else if (hash) {
+        const log = raw.log_index ?? raw.logIndex ?? '';
+        key = chain + '|tx|' + hash + '|' + (log !== '' ? String(log) : asset + '|' + direction);
+      } else {
+        const id = raw.id || raw.event_id || raw.tx_id || raw.internal_txid || '';
+        key = id ? chain + '|id|' + String(id)
+          : chain + '|fallback|' + type + '|' + String(raw.timestamp || '') + '|' + asset + '|' + Number(raw.amount || 0).toFixed(6) + '|' + String(raw.external_from || raw.from || '') + '|' + String(raw.external_to || raw.to || '');
+      }
+
+      const existing = groups.get(key);
+      if (!existing) {
+        groups.set(key, raw);
+        continue;
+      }
+      const currentWins = _walletHistoryPriority(raw) > _walletHistoryPriority(existing);
+      const winner = currentWins ? raw : existing;
+      const loser = currentWins ? existing : raw;
+      groups.set(key, {
+        ...loser,
+        ...winner,
+        meta: { ...(loser.meta || {}), ...(winner.meta || {}) },
+        metadata: { ...(loser.metadata || {}), ...(winner.metadata || {}) },
+      });
+    }
+
+    return Array.from(groups.values()).map((raw) => {
+      const eventType = raw.original_event_type || raw.event_type || raw.kind || raw.type || 'transfer';
+      return {
+        ...raw,
+        event_type: eventType,
+        kind: eventType,
+        asset_symbol: raw.asset || raw.asset_symbol || raw.token || 'THR',
+        tx_hash: raw.tx_hash || (raw.chain && _walletHistoryChain(raw.chain) !== 'thronos' ? raw.external_txid : '') || '',
+        hash: raw.tx_hash || raw.id || '',
+        from: raw.external_from || raw.from || raw.sender || '',
+        to: raw.external_to || raw.to || raw.recipient || '',
+        chain: _walletHistoryChain(raw.chain),
+      };
+    });
+  }
+
   async function loadHistory() {
     const el = document.getElementById('historyBody');
     if (el) el.innerHTML = '<p style="color:var(--muted);text-align:center;padding:20px">Loading history…</p>';
     try {
-      const [normRes, legacyTx, v1Res] = await Promise.allSettled([
-        fetch(`${API_BASE}/api/wallet/history/normalized?address=${encodeURIComponent(address)}&limit=500&category=all&domain=all&chain=all`).then(r => r.json()).catch(() => null),
-        fetchHistory(address),
-        fetch(`${API_BASE}/api/wallet/history/${encodeURIComponent(address)}?limit=200`).then(r => r.json()).catch(() => null),
-      ]);
-      const normalized = (normRes.status === 'fulfilled' && normRes.value?.ok) ? (normRes.value.events || normRes.value.history || []) : [];
-      const legacy = legacyTx.status === 'fulfilled' ? (legacyTx.value || []) : [];
-      const v1 = (v1Res.status === 'fulfilled' && v1Res.value?.ok) ? (v1Res.value.history || []) : [];
-      const v1Mapped = v1.map(e => ({
-        ...e,
-        kind: e.event_type || e.kind || 'transfer',
-        asset_symbol: e.asset || e.asset_symbol,
-      }));
+      let historyPayload = null;
+      try {
+        const response = await fetch(`${API_BASE}/api/wallet/history/normalized?address=${encodeURIComponent(address)}&limit=500&category=all&domain=all&chain=all`);
+        if (response.ok) {
+          const payload = await response.json();
+          if (payload?.ok) historyPayload = payload;
+        }
+      } catch {}
 
-      const seen = new Set();
-      allTx = [];
-      for (const tx of [...normalized, ...v1Mapped, ...legacy]) {
-        const eid = tx.id || tx.event_id || tx.tx_id || tx.txid || '';
-        const dedupKey = eid || `${tx.event_type || tx.kind || ''}|${tx.timestamp || ''}|${Number(tx.amount || 0).toFixed(4)}|${tx.from || ''}|${tx.to || ''}`;
-        if (seen.has(dedupKey)) continue;
-        if (dedupKey) seen.add(dedupKey);
-        tx._direction = _detectDirection(tx, address);
-        allTx.push(tx);
+      let sourceEvents = [];
+      if (historyPayload) {
+        // This endpoint is the canonical aggregate across wallet, pool, pledge,
+        // bridge, and chain-ledger sources. Do not append the legacy feeds on
+        // success: doing so recreates duplicates for the same economic action.
+        sourceEvents = historyPayload.history || historyPayload.events || [];
+      } else {
+        // Compatibility fallback only when the normalized endpoint is unavailable.
+        const [legacyTx, v1Res] = await Promise.allSettled([
+          fetchHistory(address),
+          fetch(`${API_BASE}/api/wallet/history/${encodeURIComponent(address)}?limit=200`).then(r => r.json()).catch(() => null),
+        ]);
+        const legacy = legacyTx.status === 'fulfilled' ? (legacyTx.value || []) : [];
+        const v1 = (v1Res.status === 'fulfilled' && v1Res.value?.ok) ? (v1Res.value.history || []) : [];
+        sourceEvents = [
+          ...v1.map(e => ({ ...e, kind: e.event_type || e.kind || 'transfer', asset_symbol: e.asset || e.asset_symbol })),
+          ...legacy,
+        ];
       }
+
+      allTx = _dedupeUnifiedWalletHistory(sourceEvents)
+        .map(tx => ({ ...tx, _direction: _detectDirection(tx, address) }));
       renderList();
     } catch (e) {
       const el2 = document.getElementById('historyBody');

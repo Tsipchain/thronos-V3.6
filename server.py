@@ -24624,6 +24624,11 @@ def _collect_normalized_history_from_pledges(
                 "_source":          "pledge_chain",
                 "pledge_id":        pid,
                 "correlation_id":   p.get("correlation_id") or "",
+                "internal_txid":    p.get("internal_txid") or p.get("thr_txid") or "",
+                "external_txid":    p.get("external_txid") or p.get("txid") or p.get("tx_hash") or "",
+                "tx_hash":          p.get("tx_hash") or p.get("external_txid") or p.get("txid") or "",
+                "token_contract":   p.get("token_contract") or p.get("contract") or "",
+                "network_label":    p.get("network_label") or "",
                 "transfer_scope":   "cross_chain",   # pledge always spans chains
                 "asset_origin_chain": p.get("chain") or p.get("send_chain") or "bsc",
                 "source_wallet_id": p.get("sender_wallet_id") or p.get("from_wallet_id") or "",
@@ -25227,12 +25232,38 @@ def _wallet_normalize_event(event: dict, event_type: str) -> dict:
         if _v:
             linkage[_fld] = _v
 
-    # Optional scope metadata (pass through when present in source record)
+    # Pass through linkage and transaction metadata so wallets can display the
+    # real source-chain hash and deduplicate event phases without guessing.
     scope_meta: dict = {}
-    for _sf in ("source_wallet_id", "target_wallet_id", "asset_origin_chain"):
+    for _sf in (
+        "source_wallet_id", "target_wallet_id", "asset_origin_chain",
+        "internal_txid", "external_txid", "tx_hash", "intent_id",
+        "pool_id", "pair", "lp_shares", "token_contract", "token_standard",
+        "external_from", "external_to", "network_label", "log_index",
+        "block_number", "explorer_url",
+    ):
         _sv = event.get(_sf)
-        if _sv:
+        if _sv not in (None, ""):
             scope_meta[_sf] = _sv
+
+    event_chain = (event.get("chain") or "thronos").lower()
+    if event_chain in ("", "thronos", "thr"):
+        chain_tx_hash = (
+            event.get("internal_txid")
+            or event.get("tx_id")
+            or event.get("tx_hash")
+            or event.get("id")
+            or ""
+        )
+    else:
+        chain_tx_hash = (
+            event.get("tx_hash")
+            or event.get("transaction_hash")
+            or event.get("external_txid")
+            or event.get("tx_id")
+            or event.get("id")
+            or ""
+        )
 
     return {
         "id":                  event.get("id", ""),
@@ -25248,6 +25279,7 @@ def _wallet_normalize_event(event: dict, event_type: str) -> dict:
         "direction":           direction,
         "status":              status,
         "timestamp":           event.get("timestamp", 0),
+        "tx_hash":             chain_tx_hash,
         "transfer_scope":      transfer_scope,
         "settlement_chain":    settlement_chain,
         **fee_meta,
@@ -26463,6 +26495,7 @@ def _collect_normalized_history_from_pool_ledger(
                 ev_scope    = ev.get("transfer_scope") or "internal"
                 ev_settle   = ev.get("settlement_chain") or "thronos"
                 ev_origin   = ev.get("asset_origin_chain") or chain
+                history_chain = ev_settle if ev_scope == "internal" else chain
                 events.append({
                     "id":               ev.get("pool_event_id") or ev.get("id") or "",
                     "thr_address":      ev.get("address") or "",
@@ -26471,6 +26504,18 @@ def _collect_normalized_history_from_pool_ledger(
                     "_raw_category":    "liquidity",
                     "pool_event_id":    ev.get("pool_event_id") or "",
                     "correlation_id":   ev.get("correlation_id") or "",
+                    "internal_txid":    ev.get("internal_txid") or ev.get("intent_id") or ev.get("tx_id") or "",
+                    "external_txid":    ev.get("external_txid") or (ev.get("tx_hash") if history_chain != "thronos" else "") or "",
+                    "tx_hash":          (ev.get("tx_hash") or ev.get("external_txid") or "") if history_chain != "thronos" else (ev.get("internal_txid") or ev.get("tx_id") or ""),
+                    "intent_id":        ev.get("intent_id") or "",
+                    "pool_id":          ev.get("pool_id") or pool_id,
+                    "pair":             ev.get("pair") or pool.get("pair") or cfg.get("pair") or "",
+                    "lp_shares":        ev.get("lp_shares") or 0,
+                    "token_contract":   ev.get("token_contract") or "",
+                    "external_from":    ev.get("external_from") or ev.get("from_address") or "",
+                    "external_to":      ev.get("external_to") or ev.get("to_address") or "",
+                    "log_index":        ev.get("log_index") if ev.get("log_index") is not None else ev.get("logIndex"),
+                    "block_number":     ev.get("block_number") if ev.get("block_number") is not None else ev.get("blockNumber"),
                     "source":           ev.get("source") or "pool_ledger",
                     "source_detail":    ev.get("source_detail") or "",
                     "transfer_scope":   ev_scope,
@@ -26479,7 +26524,7 @@ def _collect_normalized_history_from_pool_ledger(
                     "fee_asset":        "THR",
                     "fee_chain":        "thronos",
                     "worker":           ev.get("worker") or _AMM_WORKER_NAME,
-                    "chain":            chain,
+                    "chain":            history_chain,
                     "asset":            ev.get("asset") or "",
                     "amount":           float(ev.get("amount") or 0),
                     "direction":        ev.get("direction") or "allocate",
@@ -26594,6 +26639,22 @@ def _collect_normalized_history_from_chain(
                 "bridge_id":       tx.get("bridge_id") or tx_meta.get("bridge_id", ""),
                 "withdrawal_id":   tx.get("withdrawal_id") or tx_meta.get("withdrawal_id", ""),
                 "pool_event_id":   tx.get("pool_event_id") or tx_meta.get("pool_event_id", ""),
+                "internal_txid":   tx.get("internal_txid") or tx.get("tx_id") or tx.get("id") or "",
+                "external_txid":   tx.get("external_txid") or tx_meta.get("external_txid") or tx.get("tx_hash") or "",
+                "tx_hash":         tx.get("tx_hash") or tx.get("transaction_hash") or (
+                    tx.get("external_txid") if str(tx.get("chain") or tx.get("network") or "thronos").lower() not in ("", "thronos", "thr") else ""
+                ),
+                "intent_id":       tx.get("intent_id") or tx_meta.get("intent_id") or "",
+                "pool_id":         tx.get("pool_id") or tx_meta.get("pool_id") or "",
+                "pair":            tx.get("pair") or tx_meta.get("pair") or "",
+                "lp_shares":       tx.get("lp_shares") or tx.get("lp_shares_minted") or tx_meta.get("lp_shares") or 0,
+                "token_contract":  tx.get("token_contract") or tx_meta.get("token_contract") or "",
+                "token_standard":  tx.get("token_standard") or tx_meta.get("token_standard") or "",
+                "external_from":   tx.get("external_from") or tx_meta.get("external_from") or "",
+                "external_to":     tx.get("external_to") or tx_meta.get("external_to") or "",
+                "network_label":   tx.get("network_label") or "",
+                "log_index":       tx.get("log_index") or tx.get("logIndex"),
+                "block_number":    tx.get("block_number") or tx.get("blockNumber"),
                 "chain":           tx.get("chain") or tx.get("network") or "thronos",
                 "asset":           asset,
                 "amount":          amount,
@@ -48309,6 +48370,61 @@ if is_master():
         logger.warning(f"[STARTUP] TX log seeding skipped: {exc}")
 
 print(f"[STARTUP] {NODE_ROLE.upper()} node initialization complete.\n")
+
+# ─── Earn beta entry point ──────────────────────────────────────────────────
+@app.get("/earn")
+def earn_beta_page():
+    """Wallet-first CPX beta entry. The iframe URL is never client-composed."""
+    return render_template("earn_beta.html")
+
+# ─── Earn Center: wallet-bound identity and transactional reward ledger ──────
+# This registration deliberately has no payout worker and no live CPX callback.
+# A reward cannot become paid until a separate, audited settlement path supplies
+# a real chain transaction identifier.
+def _verify_earn_wallet_proof(proof: dict) -> tuple[bool, str, str]:
+    """Verify a short-lived signed wallet proof used only to open Earn sessions."""
+    wallet = str(proof.get("wallet") or "").strip().upper()
+    nonce = str(proof.get("nonce") or "").strip()
+    issued_at = proof.get("issued_at")
+    signature = str(proof.get("signature") or "").strip()
+    public_key = str(proof.get("public_key") or "").strip()
+    if not wallet or not nonce or not signature or not public_key:
+        return False, "", "invalid_earn_auth_proof"
+    if proof.get("purpose") != "thronos_earn_auth" or str(proof.get("version")) != "1":
+        return False, "", "invalid_earn_auth_purpose"
+    try:
+        issued_at = int(issued_at)
+        if abs(int(time.time()) - issued_at) > 300:
+            return False, "", "earn_auth_proof_expired"
+        message = json.dumps({
+            "issued_at": issued_at, "nonce": nonce, "purpose": "thronos_earn_auth",
+            "version": "1", "wallet": wallet,
+        }, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import ec
+        public_key_obj = ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256K1(), bytes.fromhex(public_key))
+        public_key_obj.verify(bytes.fromhex(signature), message, ec.ECDSA(hashes.SHA256()))
+        import wallet_v1_production_final as wallet_v1_prod
+        binding_ok, _ = wallet_v1_prod.verify_publickey_matches_address({"from": wallet, "publicKey": public_key})
+        if not binding_ok:
+            return False, "", "earn_auth_key_address_mismatch"
+    except Exception:
+        return False, "", "invalid_earn_auth_signature"
+    return True, wallet, ""
+
+
+try:
+    _earn_identity_key = os.getenv("EARN_IDENTITY_KEY", "").strip()
+    if _earn_identity_key and os.getenv("EARN_CENTER_ENABLED", "0") == "1" and is_master():
+        from services.earn_center import EarnStore, register_earn_routes
+        _earn_db_path = os.getenv("EARN_DB_PATH", os.path.join(DATA_DIR, "earn_center.db"))
+        _earn_store = EarnStore(_earn_db_path, _earn_identity_key)
+        register_earn_routes(app, _earn_store, _verify_earn_wallet_proof)
+        logger.info("Earn Center routes registered; CPX postbacks remain disabled")
+    else:
+        logger.info("Earn Center routes disabled: requires master role, EARN_CENTER_ENABLED=1 and EARN_IDENTITY_KEY")
+except Exception as _earn_init_error:
+    logger.error("Earn Center initialization failed: %s", _earn_init_error)
 
 if __name__ == "__main__":
     host = os.getenv("HOST", "0.0.0.0")

@@ -82,6 +82,21 @@ export async function getTransactionHistory(address: string, limit = 50, categor
   return request(`/api/wallet/history?${params}`);
 }
 
+/**
+ * Alias-aware, cross-domain wallet history. Prefer this feed for the wallet UI
+ * because it includes pledge, pool, bridge, and external-chain event metadata.
+ */
+export async function getNormalizedWalletHistory(address: string, limit = 500): Promise<any> {
+  const params = new URLSearchParams({
+    address,
+    limit: String(Math.max(1, Math.min(500, limit))),
+    category: 'all',
+    domain: 'all',
+    chain: 'all',
+  });
+  return request(`/api/wallet/history/normalized?${params}`);
+}
+
 export async function getTransactionsByCategory(address: string, category = 'all', limit = 50): Promise<{ transactions: any[] }> {
   return request(`/api/v1/address/${address}/history?category=${category}&limit=${limit}`);
 }

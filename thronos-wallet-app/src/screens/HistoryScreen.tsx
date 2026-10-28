@@ -8,7 +8,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS } from '../constants/theme';
 import { useStore } from '../store/useStore';
-import { getTransactionHistory, getTransactionsByCategory } from '../services/api';
+import { getTransactionHistory, getNormalizedWalletHistory } from '../services/api';
 
 const { width: SCREEN_W } = Dimensions.get('window');
 
@@ -266,7 +266,7 @@ function normalizeTx(raw: any, walletAddr: string): Transaction {
   const symbol = (raw.symbol || raw.asset_symbol || raw.token_symbol || raw.token || 'THR').toUpperCase();
   const amount = safeFloat(raw.display_amount ?? raw.amount);
   const fee = safeFloat(raw.fee_burned ?? raw.fee ?? raw.meta?.fee ?? raw.meta?.fee_burned);
-  const hash = raw.tx_id || raw.hash || raw.id || raw.bridge_id || '';
+  const hash = raw.tx_hash || raw.hash || raw.tx_id || raw.id || raw.bridge_id || '';
   const tsMs = parseTimestamp(raw.timestamp);
   const status = raw.pending ? 'pending' : (raw.status || 'confirmed');
   const chain = raw.chain || raw.network || 'thronos';
@@ -313,10 +313,137 @@ function normalizeTx(raw: any, walletAddr: string): Transaction {
       pool_id: raw.pool_id,
       lp_shares: raw.lp_shares,
       pair: raw.pair,
+      intent_id: raw.intent_id,
+      internal_txid: raw.internal_txid,
+      external_txid: raw.external_txid,
+      tx_hash: raw.tx_hash,
+      withdrawal_id: raw.withdrawal_id,
+      bridge_id: raw.bridge_id,
+      correlation_id: raw.correlation_id,
+      pool_event_id: raw.pool_event_id,
+      token_contract: raw.token_contract,
+      token_standard: raw.token_standard,
+      network_label: raw.network_label,
+      log_index: raw.log_index,
+      block_number: raw.block_number,
       external_from: raw.external_from,
       external_to: raw.external_to,
     },
   };
+}
+
+function canonicalHistoryChain(value: any): string {
+  const chain = String(value || 'thronos').toLowerCase();
+  const aliases: Record<string, string> = {
+    bnb: 'bsc', binance: 'bsc', binance_smart_chain: 'bsc',
+    bitcoin: 'btc', ethereum: 'eth', arb: 'arbitrum', thr: 'thronos',
+  };
+  return aliases[chain] || chain;
+}
+
+function normalizedEventForWallet(raw: any): any {
+  const eventType = String(raw.original_event_type || raw.event_type || raw.kind || raw.type || 'transfer');
+  const domain = String(raw.domain || '').toLowerCase();
+  const domainCategory: Record<string, string> = {
+    thr: 'thr', token: 'tokens', music: 'music', ai: 'ai_credits',
+    iot: 'iot', l2e: 'l2e', t2e: 'l2e', parking: 'gateway',
+    nft: 'nft', liquidity: 'liquidity', gateway: 'gateway',
+    swap: 'swaps', pledge: 'staking', vault: 'liquidity',
+    migration: 'gateway', unknown: 'thr',
+  };
+  const isBridgeLifecycle = /^(bridge_|crosschain_|cross_chain_|withdrawal_)/.test(eventType.toLowerCase());
+  const category = isBridgeLifecycle ? 'bridge' : (domainCategory[domain] || raw.category || 'thr');
+  const chain = canonicalHistoryChain(raw.chain);
+  const direction = raw.direction === 'in' ? 'received'
+    : raw.direction === 'out' ? 'sent' : 'related';
+  const chainHash = raw.tx_hash || (chain !== 'thronos' ? raw.external_txid : '')
+    || raw.internal_txid || raw.id || '';
+  return {
+    ...raw,
+    event_type: eventType,
+    kind: eventType,
+    type: eventType,
+    category,
+    chain,
+    asset: raw.asset || raw.token || 'THR',
+    symbol: raw.asset || raw.symbol || 'THR',
+    token_symbol: raw.asset || raw.token_symbol || '',
+    tx_hash: chainHash,
+    tx_id: chainHash,
+    hash: chainHash,
+    from: raw.external_from || raw.from || raw.sender || '',
+    to: raw.external_to || raw.to || raw.recipient || '',
+    direction,
+  };
+}
+
+function historyEventPriority(raw: any): number {
+  const type = String(raw.original_event_type || raw.event_type || raw.kind || raw.type || '').toLowerCase();
+  const chain = canonicalHistoryChain(raw.chain);
+  const status = String(raw.status || '').toLowerCase();
+  if (type === 'pool_add_liquidity_lp_minted') return 130;
+  if (type === 'pool_add_liquidity') return 120;
+  if (type === 'pool_add_liquidity_external_tx_confirmed') return chain === 'thronos' ? 100 : 120;
+  if (type === 'pool_add_liquidity_intent_created') return status === 'pending' ? 5 : 15;
+  if (type === 'crosschain_withdrawal_failed') return 140;
+  if (type === 'crosschain_withdrawal_confirmed' || type === 'crosschain_withdraw') return 130;
+  if (type === 'crosschain_withdrawal_broadcasted') return 110;
+  if (type === 'crosschain_withdrawal_signed') return 95;
+  if (type === 'crosschain_withdrawal_fee_charged') return 50;
+  if (type === 'crosschain_withdrawal_requested') return 10;
+  if (status === 'failed' || status === 'manual_review') return 125;
+  if (status === 'confirmed' || status === 'sent' || status === 'credited') return 80;
+  return 20;
+}
+
+/** Collapse the multiple lifecycle records for one chain-side action, while
+ * keeping source and destination chain records separate. */
+function dedupeNormalizedHistory(events: any[]): any[] {
+  const groups = new Map<string, any>();
+  for (const raw of events) {
+    if (!raw || typeof raw !== 'object') continue;
+    const type = String(raw.original_event_type || raw.event_type || raw.kind || raw.type || '').toLowerCase();
+    const domain = String(raw.domain || '').toLowerCase();
+    const chain = canonicalHistoryChain(raw.chain);
+    const link = raw.intent_id || raw.internal_txid || raw.pool_event_id || '';
+    const isPoolLifecycle = type.startsWith('pool_add_liquidity') || type === 'pool_add_liquidity' || domain === 'liquidity';
+    const withdrawalId = raw.withdrawal_id || '';
+    const bridgeId = raw.bridge_id || raw.correlation_id || '';
+    const hash = String(raw.tx_hash || (chain !== 'thronos' ? raw.external_txid : '') || '').toLowerCase();
+    const asset = String(raw.asset || raw.token || '').toUpperCase();
+    const direction = String(raw.direction || '').toLowerCase();
+    let key = '';
+    if (isPoolLifecycle && link) {
+      key = `${chain}|pool|${raw.pool_id || ''}|${link}`;
+    } else if (withdrawalId && type.includes('withdraw')) {
+      key = `${chain}|withdrawal|${withdrawalId}`;
+    } else if (bridgeId && (type.includes('bridge') || type.includes('crosschain'))) {
+      key = `${chain}|bridge|${bridgeId}`;
+    } else if (hash) {
+      const log = raw.log_index ?? raw.logIndex ?? '';
+      key = `${chain}|tx|${hash}|${log !== '' ? log : asset + '|' + direction}`;
+    } else {
+      const id = raw.id || raw.event_id || raw.tx_id || raw.internal_txid || '';
+      key = id ? `${chain}|id|${id}`
+        : `${chain}|fallback|${type}|${raw.timestamp || ''}|${asset}|${Number(raw.amount || 0).toFixed(6)}|${raw.external_from || raw.from || ''}|${raw.external_to || raw.to || ''}`;
+    }
+
+    const existing = groups.get(key);
+    if (!existing) {
+      groups.set(key, raw);
+      continue;
+    }
+    const existingWins = historyEventPriority(existing) >= historyEventPriority(raw);
+    const winner = existingWins ? existing : raw;
+    const loser = existingWins ? raw : existing;
+    groups.set(key, {
+      ...loser,
+      ...winner,
+      meta: { ...(loser.meta || {}), ...(winner.meta || {}) },
+      metadata: { ...(loser.metadata || {}), ...(winner.metadata || {}) },
+    });
+  }
+  return [...groups.values()];
 }
 
 function getCategoryDef(key: string): CategoryDef {
@@ -337,22 +464,28 @@ export default function HistoryScreen() {
   const [stats, setStats] = useState({ total: 0, volume: 0, services: 0 });
 
   const load = useCallback(async () => {
-    if (!wallet.address) return;
+    const walletAddress = wallet.address;
+    if (!walletAddress) return;
     setLoading(true);
     try {
-      const result = activeCategory === 'all'
-        ? await getTransactionHistory(wallet.address, 200)
-        : await getTransactionsByCategory(wallet.address, activeCategory, 200);
+      let result: any;
+      try {
+        result = await getNormalizedWalletHistory(walletAddress, 500);
+      } catch {
+        // Legacy endpoint fallback keeps the wallet usable during a history-service outage.
+        result = await getTransactionHistory(walletAddress, 200);
+      }
 
-      // Handle various API response shapes
       const rawList: any[] = Array.isArray(result)
         ? result
-        : (result as any)?.transactions || (result as any)?.history || [];
-
-      // Normalize every transaction
-      const normalized = rawList
-        .map((raw: any) => normalizeTx(raw, wallet.address))
+        : (result as any)?.history || (result as any)?.events || (result as any)?.transactions || [];
+      const dedupedRaw = dedupeNormalizedHistory(rawList);
+      const normalizedAll = dedupedRaw
+        .map((raw: any) => normalizeTx(normalizedEventForWallet(raw), walletAddress))
         .sort((a, b) => b.timestampMs - a.timestampMs);
+      const normalized = activeCategory === 'all'
+        ? normalizedAll
+        : normalizedAll.filter((tx) => tx.category === activeCategory);
 
       setAllTxs(normalized);
       setRecentTxs(normalized.slice(0, 50));

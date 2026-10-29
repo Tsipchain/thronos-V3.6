@@ -137,11 +137,15 @@
       const res = await fetch('/api/earn/cpx/offerwall', { headers: earnAuthHeaders() });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ok) throw new Error(data.error || 'Surveys unavailable.');
-      frame.src = data.url; frame.style.display = 'block';
+      // Some CPX survey providers deliberately reject nested frames.  On a
+      // phone, use a first-party browser navigation instead: Android Back
+      // returns here and the HttpOnly Earn session remains intact.
       if (window.matchMedia('(max-width: 700px)').matches) {
-        frame.classList.add('is-mobile-survey');
-        surveyClose.classList.add('is-visible');
+        setStatus('Opening surveys…');
+        window.location.assign(data.url);
+        return;
       }
+      frame.src = data.url; frame.style.display = 'block';
       setStatus('Connected. Complete a survey to earn THC.');
     } catch (e) { setStatus(e.message || 'Could not load surveys.', true); }
   });

@@ -913,7 +913,7 @@ REPLICA_EXTERNAL_URL = os.getenv("PUBLIC_URL", os.getenv("REPLICA_EXTERNAL_URL",
 ADMIN_SECRET = os.getenv("ADMIN_SECRET", "CHANGE_ME_NOW")
 
 # EDU quiz identity secret — signs student/teacher tokens for server-side auth
-EDU_QUIZ_SECRET = os.getenv("EDU_QUIZ_SECRET", "dev-quiz-secret-change-me")
+EDU_QUIZ_SECRET = os.getenv("EDU_QUIZ_SECRET", "")
 
 # Asset CDN base for public URLs (used for token/NFT images)
 ASSET_CDN_BASE = os.getenv("ASSET_CDN_BASE", "https://thrchain.vercel.app").rstrip("/")
@@ -40006,60 +40006,73 @@ def api_v1_create_quiz(course_id: str):
 
 # ─── EDU Token Helpers (server-side identity verification) ───────────
 
-def create_edu_student_token(student_id, secret=None):
-    """Issue an HMAC-SHA256 signed token binding a student identity.
-    Token format: <student_id>:<expiry_ts>:<signature>
-    Valid for 24 hours."""
+def create_edu_student_token(student_id, course_id="*", secret=None):
+    """Issue an HMAC-SHA256 signed token binding a student to a course.
+    Token format: <student_id>:<course_id>:<expiry_ts>:<signature>
+    Valid for 24 hours. Returns None if secret is not configured."""
     sec = secret or EDU_QUIZ_SECRET
-    expiry = int(time.time()) + 86400
-    payload = f"{student_id}:{expiry}"
-    sig = hmac.new(sec.encode(), payload.encode(), hashlib.sha256).hexdigest()
-    return f"{student_id}:{expiry}:{sig}"
-
-
-def verify_edu_student_token(token, secret=None):
-    """Verify a student token and return the student_id, or None if invalid/expired."""
-    sec = secret or EDU_QUIZ_SECRET
-    parts = (token or "").split(":")
-    if len(parts) != 3:
+    if not sec:
         return None
-    student_id, expiry_str, sig = parts
+    expiry = int(time.time()) + 86400
+    payload = f"{student_id}:{course_id}:{expiry}"
+    sig = hmac.new(sec.encode(), payload.encode(), hashlib.sha256).hexdigest()
+    return f"{student_id}:{course_id}:{expiry}:{sig}"
+
+
+def verify_edu_student_token(token, expected_course_id=None, secret=None):
+    """Verify a student token and return the student_id, or None if invalid/expired.
+    If expected_course_id is given, the token's course must match it or be '*'."""
+    sec = secret or EDU_QUIZ_SECRET
+    if not sec:
+        return None
+    parts = (token or "").split(":")
+    if len(parts) != 4:
+        return None
+    student_id, course_id, expiry_str, sig = parts
     try:
         expiry = int(expiry_str)
     except ValueError:
         return None
     if time.time() > expiry:
         return None
-    expected = hmac.new(sec.encode(), f"{student_id}:{expiry_str}".encode(), hashlib.sha256).hexdigest()
+    expected = hmac.new(sec.encode(), f"{student_id}:{course_id}:{expiry_str}".encode(), hashlib.sha256).hexdigest()
     if not hmac.compare_digest(sig, expected):
+        return None
+    if expected_course_id and course_id != "*" and course_id != expected_course_id:
         return None
     return student_id
 
 
-def create_edu_teacher_token(teacher_id, secret=None):
-    """Issue an HMAC-SHA256 signed token binding a teacher identity. Valid 24h."""
+def create_edu_teacher_token(teacher_id, course_id="*", secret=None):
+    """Issue an HMAC-SHA256 signed token binding a teacher to a course. Valid 24h."""
     sec = secret or EDU_QUIZ_SECRET
+    if not sec:
+        return None
     expiry = int(time.time()) + 86400
-    payload = f"teacher:{teacher_id}:{expiry}"
+    payload = f"teacher:{teacher_id}:{course_id}:{expiry}"
     sig = hmac.new(sec.encode(), payload.encode(), hashlib.sha256).hexdigest()
-    return f"teacher:{teacher_id}:{expiry}:{sig}"
+    return f"teacher:{teacher_id}:{course_id}:{expiry}:{sig}"
 
 
-def verify_edu_teacher_token(token, secret=None):
+def verify_edu_teacher_token(token, expected_course_id=None, secret=None):
     """Verify a teacher token and return the teacher_id, or None if invalid/expired."""
     sec = secret or EDU_QUIZ_SECRET
-    parts = (token or "").split(":")
-    if len(parts) != 4 or parts[0] != "teacher":
+    if not sec:
         return None
-    _, teacher_id, expiry_str, sig = parts
+    parts = (token or "").split(":")
+    if len(parts) != 5 or parts[0] != "teacher":
+        return None
+    _, teacher_id, course_id, expiry_str, sig = parts
     try:
         expiry = int(expiry_str)
     except ValueError:
         return None
     if time.time() > expiry:
         return None
-    expected = hmac.new(sec.encode(), f"teacher:{teacher_id}:{expiry_str}".encode(), hashlib.sha256).hexdigest()
+    expected = hmac.new(sec.encode(), f"teacher:{teacher_id}:{course_id}:{expiry_str}".encode(), hashlib.sha256).hexdigest()
     if not hmac.compare_digest(sig, expected):
+        return None
+    if expected_course_id and course_id != "*" and course_id != expected_course_id:
         return None
     return teacher_id
 
@@ -40073,7 +40086,8 @@ def _require_teacher_or_admin(course, request_obj):
     teacher_token = request_obj.headers.get("X-Teacher-Token", "")
     if not teacher_token:
         return (None, (jsonify(status="error", message="Teacher token or admin secret required"), 401))
-    teacher_id = verify_edu_teacher_token(teacher_token)
+    course_id = course.get("id")
+    teacher_id = verify_edu_teacher_token(teacher_token, expected_course_id=course_id)
     if not teacher_id:
         return (None, (jsonify(status="error", message="Invalid or expired teacher token"), 401))
     if teacher_id != course.get("teacher"):
@@ -40084,29 +40098,25 @@ def _require_teacher_or_admin(course, request_obj):
 @app.route("/api/v1/courses/<string:course_id>/quiz/submit", methods=["POST"])
 def api_v1_submit_quiz(course_id: str):
     """Submit quiz answers and get score. Records passing status."""
+    if not EDU_QUIZ_SECRET:
+        return jsonify(status="error", message="EDU_QUIZ_SECRET not configured"), 503
+
     data = request.get_json() or {}
     student_thr = (data.get("student_thr") or "").strip()
     learner_id = (data.get("learner_id") or "").strip()
     answers = data.get("answers", {})
 
-    # Server-side identity verification via X-Student-Token
+    # Server-side identity verification via X-Student-Token (required for all users)
     student_token = request.headers.get("X-Student-Token", "")
-    if student_token:
-        verified_id = verify_edu_student_token(student_token)
-        if not verified_id:
-            return jsonify(status="error", message="Invalid or expired student token"), 401
-        body_id = student_thr or learner_id
-        if body_id and body_id != verified_id:
-            return jsonify(status="error", message="Token identity mismatch"), 403
-        student = verified_id
-    elif student_thr:
-        # Wallet-based identity: the wallet address IS the identity (backward compat)
-        student = student_thr
-    elif learner_id:
-        # Wallet-less learner without token — require token for tamper protection
-        return jsonify(status="error", message="X-Student-Token header required for wallet-less submission"), 401
-    else:
-        return jsonify(status="error", message="Student or learner_id required"), 400
+    if not student_token:
+        return jsonify(status="error", message="X-Student-Token header required"), 401
+    verified_id = verify_edu_student_token(student_token, expected_course_id=course_id)
+    if not verified_id:
+        return jsonify(status="error", message="Invalid, expired, or wrong-course student token"), 401
+    body_id = student_thr or learner_id
+    if body_id and body_id != verified_id:
+        return jsonify(status="error", message="Token identity mismatch"), 403
+    student = verified_id
 
     # Get quiz
     quiz = get_course_quiz(course_id)

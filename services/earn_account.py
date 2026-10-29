@@ -47,6 +47,7 @@ _SESSION_COOKIE = "thr_earn_session"
 _RATE_WINDOW = 900
 _RATE_MAX_ATTEMPTS = 5
 _RATE_LOCKOUT = 1800
+_WALLET_CHALLENGE_TTL = 300
 
 _THC_TRANSITIONS = {
     "pending":   {"confirmed", "reversed"},
@@ -197,6 +198,31 @@ class EarnAccountStore:
 
                 CREATE INDEX IF NOT EXISTS idx_cpx_receipts_user
                     ON cpx_receipts(earn_user_id);
+
+                -- A wallet link is a cryptographic identity binding, never a
+                -- user-supplied address claim.  One wallet and one Earn
+                -- account are intentionally a 1:1 relation for this beta.
+                CREATE TABLE IF NOT EXISTS earn_wallet_links (
+                    wallet_address TEXT PRIMARY KEY,
+                    earn_user_id   TEXT NOT NULL UNIQUE
+                        REFERENCES earn_accounts(earn_user_id),
+                    public_key     TEXT NOT NULL,
+                    linked_at      INTEGER NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS earn_wallet_challenges (
+                    challenge_id   TEXT PRIMARY KEY,
+                    purpose        TEXT NOT NULL,
+                    earn_user_id   TEXT
+                        REFERENCES earn_accounts(earn_user_id),
+                    wallet_address TEXT NOT NULL,
+                    nonce          TEXT NOT NULL UNIQUE,
+                    expires_at     INTEGER NOT NULL,
+                    consumed_at    INTEGER
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_earn_wallet_challenges_expiry
+                    ON earn_wallet_challenges(expires_at);
             """)
         finally:
             con.close()
@@ -385,6 +411,162 @@ class EarnAccountStore:
                 ),
             )
             return new_token, expires
+
+    # ── Wallet proof / account linking ───────────────────────────────────
+
+    @staticmethod
+    def _wallet_address(wallet_address: str) -> str:
+        wallet_address = (wallet_address or "").strip().upper()
+        if not re.fullmatch(r"THR[A-F0-9]{40}", wallet_address):
+            raise EarnError("invalid_wallet_address")
+        return wallet_address
+
+    def _create_wallet_challenge(
+        self, *, purpose: str, wallet_address: str, earn_user_id: str | None,
+    ) -> dict[str, str]:
+        wallet_address = self._wallet_address(wallet_address)
+        if purpose not in ("link", "login"):
+            raise EarnError("invalid_wallet_challenge")
+        now = int(time.time())
+        challenge = {
+            "action": "earn_wallet_link" if purpose == "link" else "earn_wallet_login",
+            "challenge_id": "ewc_" + secrets.token_urlsafe(18),
+            "wallet_address": wallet_address,
+            "nonce": secrets.token_urlsafe(24),
+            "expires_at": str(now + _WALLET_CHALLENGE_TTL),
+        }
+        with self._tx() as con:
+            con.execute("DELETE FROM earn_wallet_challenges WHERE expires_at < ?", (now,))
+            con.execute(
+                """INSERT INTO earn_wallet_challenges
+                   (challenge_id, purpose, earn_user_id, wallet_address,
+                    nonce, expires_at, consumed_at)
+                   VALUES (?,?,?,?,?,?,NULL)""",
+                (
+                    challenge["challenge_id"], purpose, earn_user_id,
+                    wallet_address, challenge["nonce"], int(challenge["expires_at"]),
+                ),
+            )
+        return challenge
+
+    def wallet_link_challenge(
+        self, earn_user_id: str, wallet_address: str,
+    ) -> dict[str, str]:
+        return self._create_wallet_challenge(
+            purpose="link", wallet_address=wallet_address, earn_user_id=earn_user_id,
+        )
+
+    def wallet_login_challenge(self, wallet_address: str) -> dict[str, str]:
+        return self._create_wallet_challenge(
+            purpose="login", wallet_address=wallet_address, earn_user_id=None,
+        )
+
+    def wallet_challenge_for_proof(
+        self, *, challenge_id: str, purpose: str, wallet_address: str,
+        earn_user_id: str | None = None,
+    ) -> dict[str, str]:
+        wallet_address = self._wallet_address(wallet_address)
+        now = int(time.time())
+        with self._tx() as con:
+            row = con.execute(
+                """SELECT * FROM earn_wallet_challenges
+                   WHERE challenge_id = ? AND purpose = ?
+                     AND wallet_address = ? AND consumed_at IS NULL
+                     AND expires_at >= ?""",
+                (challenge_id, purpose, wallet_address, now),
+            ).fetchone()
+            if not row or (earn_user_id is not None and row["earn_user_id"] != earn_user_id):
+                raise EarnError("invalid_or_expired_wallet_challenge")
+            return {
+                "action": "earn_wallet_link" if purpose == "link" else "earn_wallet_login",
+                "challenge_id": row["challenge_id"],
+                "wallet_address": row["wallet_address"],
+                "nonce": row["nonce"],
+                "expires_at": str(row["expires_at"]),
+            }
+
+    def complete_wallet_link(
+        self, *, challenge_id: str, earn_user_id: str, wallet_address: str,
+        public_key: str,
+    ) -> dict[str, str]:
+        wallet_address = self._wallet_address(wallet_address)
+        now = int(time.time())
+        with self._tx() as con:
+            challenge = con.execute(
+                """SELECT * FROM earn_wallet_challenges
+                   WHERE challenge_id = ? AND purpose = 'link'
+                     AND earn_user_id = ? AND wallet_address = ?
+                     AND consumed_at IS NULL AND expires_at >= ?""",
+                (challenge_id, earn_user_id, wallet_address, now),
+            ).fetchone()
+            if not challenge:
+                raise EarnError("invalid_or_expired_wallet_challenge")
+            existing_wallet = con.execute(
+                "SELECT earn_user_id FROM earn_wallet_links WHERE wallet_address = ?",
+                (wallet_address,),
+            ).fetchone()
+            existing_user = con.execute(
+                "SELECT wallet_address FROM earn_wallet_links WHERE earn_user_id = ?",
+                (earn_user_id,),
+            ).fetchone()
+            if existing_wallet and existing_wallet["earn_user_id"] != earn_user_id:
+                raise EarnError("wallet_already_linked")
+            if existing_user and existing_user["wallet_address"] != wallet_address:
+                raise EarnError("earn_account_already_linked")
+            con.execute(
+                """INSERT OR REPLACE INTO earn_wallet_links
+                   (wallet_address, earn_user_id, public_key, linked_at)
+                   VALUES (?,?,?,?)""",
+                (wallet_address, earn_user_id, public_key.lower(), now),
+            )
+            con.execute(
+                "UPDATE earn_wallet_challenges SET consumed_at = ? WHERE challenge_id = ?",
+                (now, challenge_id),
+            )
+            return {"wallet_address": wallet_address, "earn_user_id": earn_user_id}
+
+    def complete_wallet_login(
+        self, *, challenge_id: str, wallet_address: str,
+    ) -> tuple[dict[str, Any], str]:
+        wallet_address = self._wallet_address(wallet_address)
+        now = int(time.time())
+        with self._tx() as con:
+            challenge = con.execute(
+                """SELECT * FROM earn_wallet_challenges
+                   WHERE challenge_id = ? AND purpose = 'login'
+                     AND wallet_address = ? AND consumed_at IS NULL
+                     AND expires_at >= ?""",
+                (challenge_id, wallet_address, now),
+            ).fetchone()
+            link = con.execute(
+                """SELECT a.earn_user_id, a.email, a.email_verified
+                   FROM earn_wallet_links l JOIN earn_accounts a
+                     ON a.earn_user_id = l.earn_user_id
+                   WHERE l.wallet_address = ?""",
+                (wallet_address,),
+            ).fetchone()
+            if not challenge:
+                raise EarnError("invalid_or_expired_wallet_challenge")
+            if not link:
+                raise EarnError("wallet_not_linked")
+            con.execute(
+                "UPDATE earn_wallet_challenges SET consumed_at = ? WHERE challenge_id = ?",
+                (now, challenge_id),
+            )
+            token = secrets.token_urlsafe(32)
+            con.execute(
+                "INSERT INTO earn_sessions VALUES (?,?,?,?)",
+                (hashlib.sha256(token.encode()).hexdigest(), link["earn_user_id"], now + _SESSION_TTL, now),
+            )
+            return dict(link), token
+
+    def wallet_link_for_user(self, earn_user_id: str) -> dict[str, str] | None:
+        with self._tx() as con:
+            row = con.execute(
+                "SELECT wallet_address, linked_at FROM earn_wallet_links WHERE earn_user_id = ?",
+                (earn_user_id,),
+            ).fetchone()
+            return dict(row) if row else None
 
     # ── THC Ledger ───────────────────────────────────────────────────────
 
@@ -672,6 +854,52 @@ def verify_cpx_postback_signature(trans_id: str, received_hash: str) -> bool:
     return hmac.compare_digest(expected, received_hash.lower())
 
 
+def verify_earn_wallet_proof(
+    challenge: dict[str, str], *, wallet_address: str,
+    public_key: str, signature: str,
+) -> bool:
+    """Verify compact secp256k1 proof and bind its public key to THR address.
+
+    The signed payload contains only an expiring server-issued nonce and the
+    requested action.  It is never a transferable payment approval.
+    """
+    try:
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import ec, utils
+        from wallet_v1_address_derivation import derive_thronos_address
+
+        public_key = str(public_key or "").strip().lower()
+        signature = str(signature or "").strip().lower()
+        wallet_address = EarnAccountStore._wallet_address(wallet_address)
+        if len(public_key) != 66 or len(signature) != 128:
+            return False
+        if derive_thronos_address(public_key).upper() != wallet_address:
+            return False
+        pub_bytes = bytes.fromhex(public_key)
+        if pub_bytes[0] not in (2, 3):
+            return False
+        verifier = ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256K1(), pub_bytes)
+        signed = {
+            "action": str(challenge["action"]),
+            "challenge_id": str(challenge["challenge_id"]),
+            "expires_at": str(challenge["expires_at"]),
+            "nonce": str(challenge["nonce"]),
+            "wallet_address": wallet_address,
+        }
+        message = json.dumps(signed, sort_keys=True, separators=(",", ":")).encode()
+        digest = hashlib.sha256(message).digest()
+        sig_bytes = bytes.fromhex(signature)
+        der_signature = utils.encode_dss_signature(
+            int.from_bytes(sig_bytes[:32], "big"), int.from_bytes(sig_bytes[32:], "big"),
+        )
+        verifier.verify(
+            der_signature, digest, ec.ECDSA(utils.Prehashed(hashes.SHA256())),
+        )
+        return True
+    except Exception:
+        return False
+
+
 # ── Flask route registration ─────────────────────────────────────────────
 
 
@@ -753,12 +981,87 @@ def register_earn_account_routes(
         user, _ = _current_user()
         if not user:
             return jsonify(ok=False, error="earn_auth_required"), 401
+        link = store.wallet_link_for_user(user["earn_user_id"])
         return jsonify(
             ok=True,
             earn_user_id=user["earn_user_id"],
             email=user["email"],
             email_verified=bool(user["email_verified"]),
+            wallet_address=link["wallet_address"] if link else None,
         )
+
+    @app.post("/api/earn/wallet-link/challenge")
+    def earn_wallet_link_challenge():
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        data = request.get_json(silent=True) or {}
+        try:
+            challenge = store.wallet_link_challenge(
+                user["earn_user_id"], str(data.get("wallet_address", "")),
+            )
+        except EarnError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, **challenge)
+
+    @app.post("/api/earn/wallet-link/complete")
+    def earn_wallet_link_complete():
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        data = request.get_json(silent=True) or {}
+        challenge_id = str(data.get("challenge_id", ""))
+        wallet_address = str(data.get("wallet_address", ""))
+        try:
+            challenge = store.wallet_challenge_for_proof(
+                challenge_id=challenge_id, purpose="link", wallet_address=wallet_address,
+                earn_user_id=user["earn_user_id"],
+            )
+            if not verify_earn_wallet_proof(
+                challenge, wallet_address=wallet_address,
+                public_key=str(data.get("public_key", "")),
+                signature=str(data.get("signature", "")),
+            ):
+                return jsonify(ok=False, error="invalid_wallet_proof"), 403
+            link = store.complete_wallet_link(
+                challenge_id=challenge_id, earn_user_id=user["earn_user_id"],
+                wallet_address=wallet_address, public_key=str(data.get("public_key", "")),
+            )
+        except EarnError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, **link)
+
+    @app.post("/api/earn/wallet-session/challenge")
+    def earn_wallet_session_challenge():
+        data = request.get_json(silent=True) or {}
+        try:
+            challenge = store.wallet_login_challenge(str(data.get("wallet_address", "")))
+        except EarnError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, **challenge)
+
+    @app.post("/api/earn/wallet-session/complete")
+    def earn_wallet_session_complete():
+        data = request.get_json(silent=True) or {}
+        challenge_id = str(data.get("challenge_id", ""))
+        wallet_address = str(data.get("wallet_address", ""))
+        try:
+            challenge = store.wallet_challenge_for_proof(
+                challenge_id=challenge_id, purpose="login", wallet_address=wallet_address,
+            )
+            if not verify_earn_wallet_proof(
+                challenge, wallet_address=wallet_address,
+                public_key=str(data.get("public_key", "")),
+                signature=str(data.get("signature", "")),
+            ):
+                return jsonify(ok=False, error="invalid_wallet_proof"), 403
+            user, token = store.complete_wallet_login(
+                challenge_id=challenge_id, wallet_address=wallet_address,
+            )
+        except EarnError as exc:
+            return jsonify(ok=False, error=str(exc)), 401
+        response = jsonify(ok=True, earn_user_id=user["earn_user_id"], email=user["email"], access_token=token)
+        return _set_session_cookie(response, token)
 
     @app.get("/api/earn/balance")
     def earn_balance():

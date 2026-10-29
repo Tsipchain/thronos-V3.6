@@ -23,9 +23,12 @@
     .earn-frame.is-mobile-survey { position:fixed; inset:0; z-index:10000; width:100vw; height:100dvh; min-height:100dvh; margin:0; border-radius:0; }
     .earn-survey-close.is-visible { display:block; position:fixed; z-index:10001; top:max(12px, env(safe-area-inset-top)); right:12px; padding:9px 12px; border:0; border-radius:999px; background:#101827; color:#fff; font-weight:700; box-shadow:0 2px 10px #0008; }
   }
-  .earn-balance-bar { background:#0b1220; border:1px solid #2e5874; border-radius:10px; padding:14px; margin-top:14px; display:none; }
+  .earn-balance-bar { background:#0b1220; border:1px solid #2e5874; border-radius:10px; padding:14px; margin-top:14px; }
+  .earn-balance-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .earn-balance-cell { min-width:0; }
   .earn-balance-bar .label { color:#7fb8d8; font-size:12px; } .earn-balance-bar .value { color:#f2c14e; font-size:20px; font-weight:700; }
-  .earn-history { margin-top:12px; display:none; }
+  .earn-balance-bar .value.pending { color:#fbbf24; }
+  .earn-history { margin-top:12px; }
   .earn-history h3 { color:#e2e8f0; font-size:14px; margin:0 0 8px; }
   .earn-history-list { max-height:240px; overflow-y:auto; }
   .earn-history-item { background:#0b1220; border:1px solid #1e3a50; border-radius:8px; padding:10px 12px; margin-bottom:6px; display:flex; justify-content:space-between; align-items:center; }
@@ -53,21 +56,23 @@
     <!-- Authenticated view -->
     <div id="earn-main" style="display:none">
       <div class="earn-balance-bar" id="earn-balance-bar">
-        <div class="label">THC Balance (available)</div>
-        <div class="value" id="earn-balance-value">—</div>
+        <div class="earn-balance-grid">
+          <div class="earn-balance-cell"><div class="label">AVAILABLE THC</div><div class="value" id="earn-balance-value">—</div></div>
+          <div class="earn-balance-cell"><div class="label">PENDING THC</div><div class="value pending" id="earn-pending-value">—</div></div>
+        </div>
       </div>
       <button id="earn-surveys" class="earn-action" style="margin-top:14px" type="button">Open Surveys</button>
       <button id="earn-logout" class="earn-toggle" type="button">Sign out</button>
       <div class="earn-history" id="earn-history">
         <h3>Recent Activity</h3>
-        <div class="earn-history-list" id="earn-history-list"></div>
+        <div class="earn-history-list" id="earn-history-list"><p class="earn-note" style="margin:0">No verified Earn receipts yet.</p></div>
       </div>
     </div>
 
     <div id="earn-status" class="earn-status" role="status"></div>
     <button id="earn-survey-close" class="earn-survey-close" type="button" aria-label="Return to Earn">Back to Earn</button>
     <iframe id="earn-frame" class="earn-frame" title="CPX Research surveys" sandbox="allow-forms allow-scripts allow-same-origin allow-popups"></iframe>
-    <p class="earn-note">Beta notice: survey completion is recorded as a verified Earn receipt. THC conversion, BTC payout, and wallet linking are not yet active.</p>
+    <p class="earn-note">Rewards are credited only from verified provider receipts. Pending THC is not spendable or payable until clearance.</p>
   </section>
 </main>
 <script>
@@ -77,7 +82,7 @@
   const emailInput = $('earn-email'), pwInput = $('earn-pw');
   const submitBtn = $('earn-submit'), switchBtn = $('earn-switch');
   const status = $('earn-status'), frame = $('earn-frame'), surveyClose = $('earn-survey-close');
-  const balanceBar = $('earn-balance-bar'), balanceValue = $('earn-balance-value');
+  const balanceBar = $('earn-balance-bar'), balanceValue = $('earn-balance-value'), pendingValue = $('earn-pending-value');
   const historySection = $('earn-history'), historyList = $('earn-history-list');
   let isRegister = false, token = null;
 
@@ -133,21 +138,30 @@
 
   $('earn-surveys').addEventListener('click', async () => {
     setStatus('Loading surveys…');
+    // Open the mobile browser surface synchronously, while the user gesture
+    // is still active.  Android otherwise may block a tab opened after the
+    // asynchronous offerwall request, forcing a destructive same-tab visit.
+    const isMobile = window.matchMedia('(max-width: 700px)').matches;
+    const providerTab = isMobile ? window.open('', '_blank') : null;
     try {
       const res = await fetch('/api/earn/cpx/offerwall', { headers: earnAuthHeaders() });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ok) throw new Error(data.error || 'Surveys unavailable.');
-      // Some CPX survey providers deliberately reject nested frames.  On a
-      // phone, use a first-party browser navigation instead: Android Back
-      // returns here and the HttpOnly Earn session remains intact.
-      if (window.matchMedia('(max-width: 700px)').matches) {
+      // CPX owns its cross-origin page. Open it in a separate browser context
+      // on phones, leaving this authenticated Earn dashboard behind it. Closing
+      // the provider tab or using Android Back therefore returns to Earn.
+      if (isMobile) {
         setStatus('Opening surveys…');
-        window.location.assign(data.url);
+        if (providerTab) providerTab.location.replace(data.url);
+        else window.location.assign(data.url);
         return;
       }
       frame.src = data.url; frame.style.display = 'block';
       setStatus('Connected. Complete a survey to earn THC.');
-    } catch (e) { setStatus(e.message || 'Could not load surveys.', true); }
+    } catch (e) {
+      if (providerTab) providerTab.close();
+      setStatus(e.message || 'Could not load surveys.', true);
+    }
   });
 
   function closeSurvey() {
@@ -158,30 +172,43 @@
   }
   surveyClose.addEventListener('click', closeSurvey);
 
-  async function showMain() {
-    authSection.style.display = 'none'; mainSection.style.display = '';
-    setStatus('');
+  async function refreshDashboard() {
     try {
       const bRes = await fetch('/api/earn/balance', { headers: earnAuthHeaders() });
       const bData = await bRes.json().catch(() => ({}));
-      if (bRes.ok && bData.ok) { balanceBar.style.display = ''; balanceValue.textContent = Number(bData.available).toFixed(2) + ' THC'; }
+      if (bRes.ok && bData.ok) {
+        balanceBar.style.display = '';
+        balanceValue.textContent = Number(bData.available || 0).toFixed(2) + ' THC';
+        pendingValue.textContent = Number(bData.pending || 0).toFixed(2) + ' THC';
+      }
     } catch (_) {}
     try {
       const hRes = await fetch('/api/earn/history', { headers: earnAuthHeaders() });
       const hData = await hRes.json().catch(() => ({}));
-      if (hRes.ok && hData.ok && hData.entries.length) {
-        historySection.style.display = ''; historyList.innerHTML = '';
+      historySection.style.display = '';
+      historyList.innerHTML = '';
+      if (hRes.ok && hData.ok && Array.isArray(hData.entries) && hData.entries.length) {
         hData.entries.slice(0, 20).forEach(e => {
           const div = document.createElement('div'); div.className = 'earn-history-item';
           div.innerHTML = '<div><span class="src">' + (e.source||'').replace(/_/g,' ') + '</span></div>'
             + '<div><span class="amt">+' + Number(e.amount).toFixed(2) + '</span> <span class="st st-' + e.state + '">' + e.state + '</span></div>';
           historyList.appendChild(div);
         });
+      } else {
+        historyList.innerHTML = '<p class="earn-note" style="margin:0">No verified Earn receipts yet.</p>';
       }
     } catch (_) {}
   }
 
+  async function showMain() {
+    authSection.style.display = 'none'; mainSection.style.display = '';
+    setStatus('');
+    await refreshDashboard();
+  }
+
   pwInput.addEventListener('keydown', e => { if (e.key === 'Enter') submitBtn.click(); });
+  window.addEventListener('focus', () => { if (mainSection.style.display !== 'none') refreshDashboard(); });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && mainSection.style.display !== 'none') refreshDashboard(); });
 
   // Restore the Earn Account on every same-origin page visit.  The raw
   // session token is kept in an HttpOnly cookie, not localStorage.

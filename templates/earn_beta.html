@@ -2,7 +2,7 @@
 {% block title %}Thronos Earn Beta{% endblock %}
 {% block content %}
 <style>
-  .earn-beta { max-width: 520px; margin: 32px auto; padding: 0 18px 42px; }
+  .earn-beta { max-width: 1160px; margin: 32px auto; padding: 0 18px 42px; }
   .earn-card { background: linear-gradient(145deg,#101827,#182b3d); border:1px solid #2e5874; border-radius:18px; padding:26px; box-shadow:0 12px 45px #0006; }
   .earn-card h1 { color:#f2c14e; margin:0 0 6px; font-size:22px; } .earn-card p { color:#cbd5e1; line-height:1.55; font-size:14px; }
   .earn-form { display:flex; flex-direction:column; gap:10px; margin-top:14px; }
@@ -13,7 +13,8 @@
   .earn-toggle { color:#7fb8d8; font-size:13px; cursor:pointer; background:none; border:none; text-decoration:underline; margin-top:6px; }
   .earn-status { min-height:24px; margin:12px 0; color:#b8d9ee; font-size:13px; }
   .earn-status.error { color:#f87171; }
-  .earn-frame { width:100%; height:850px; border:0; border-radius:12px; background:#fff; display:none; margin-top:12px; }
+  .earn-frame { width:100%; height:min(900px,85vh); min-height:720px; border:0; border-radius:12px; background:#fff; display:none; margin-top:12px; }
+  @media (max-width: 700px) { .earn-beta { padding:0 10px 28px; } .earn-card { padding:18px; } .earn-frame { min-height:760px; height:82vh; } }
   .earn-balance-bar { background:#0b1220; border:1px solid #2e5874; border-radius:10px; padding:14px; margin-top:14px; display:none; }
   .earn-balance-bar .label { color:#7fb8d8; font-size:12px; } .earn-balance-bar .value { color:#f2c14e; font-size:20px; font-weight:700; }
   .earn-history { margin-top:12px; display:none; }
@@ -90,9 +91,18 @@
       const res = await fetch(endpoint, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({email, password: pw}) });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ok) throw new Error(data.error || 'Request failed.');
-      if (isRegister) { setStatus('Account created. Signing in…'); isRegister = false; switchBtn.click(); }
-      if (data.access_token) { token = data.access_token; showMain(); }
-      else if (isRegister) { setStatus('Account created. Please sign in.'); }
+      if (isRegister) {
+        // Registration deliberately has no implicit reward or wallet action.
+        // Authenticate next so the persistent HttpOnly session is issued.
+        const login = await fetch('/api/earn/login', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({email, password: pw}) });
+        const loginData = await login.json().catch(() => ({}));
+        if (!login.ok || !loginData.ok) throw new Error(loginData.error || 'Account created, but sign-in failed.');
+        token = loginData.access_token || null;
+        isRegister = false;
+        submitBtn.textContent = 'Sign In';
+        switchBtn.textContent = 'Need an account? Register';
+        showMain();
+      } else if (data.access_token) { token = data.access_token; showMain(); }
     } catch (e) {
       const msg = (e.message || '').replace(/_/g, ' ');
       setStatus(msg.charAt(0).toUpperCase() + msg.slice(1), true);
@@ -123,7 +133,7 @@
     try {
       const bRes = await fetch('/api/earn/balance', { headers:{'Authorization':'Bearer '+token} });
       const bData = await bRes.json().catch(() => ({}));
-      if (bRes.ok && bData.ok) { balanceBar.style.display = ''; balanceValue.textContent = bData.available.toFixed(2) + ' THC'; }
+      if (bRes.ok && bData.ok) { balanceBar.style.display = ''; balanceValue.textContent = Number(bData.available).toFixed(2) + ' THC'; }
     } catch (_) {}
     try {
       const hRes = await fetch('/api/earn/history', { headers:{'Authorization':'Bearer '+token} });
@@ -141,6 +151,16 @@
   }
 
   pwInput.addEventListener('keydown', e => { if (e.key === 'Enter') submitBtn.click(); });
+
+  // Restore the Earn Account on every same-origin page visit.  The raw
+  // session token is kept in an HttpOnly cookie, not localStorage.
+  (async () => {
+    try {
+      const res = await fetch('/api/earn/me');
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.ok) showMain();
+    } catch (_) { /* Showing the sign-in form is the safe fallback. */ }
+  })();
 })();
 </script>
 {% endblock %}

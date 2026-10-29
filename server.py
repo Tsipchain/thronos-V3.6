@@ -37593,6 +37593,17 @@ def api_v1_enroll_course(course_id: str):
     payment_method = parsed["payment_method"]
     stripe_payment_intent = parsed["stripe_payment_intent"]
 
+    # A client-supplied PaymentIntent ID is not proof of payment.  Course
+    # access will only be created by the dedicated Checkout + verified Stripe
+    # webhook flow.  Until that flow exists, fail closed rather than allowing
+    # a browser to manufacture a fiat enrollment.
+    if payment_method == "stripe":
+        return jsonify(
+            status="error",
+            message="Course card checkout is not enabled yet; no enrollment was created",
+            error="course_stripe_checkout_not_enabled",
+        ), 503
+
     learner_key = student or learner_id
 
     # Fetch the course

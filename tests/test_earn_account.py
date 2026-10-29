@@ -28,6 +28,8 @@ from flask import Flask
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from services.earn_account import (
+    _SESSION_COOKIE,
+    _SESSION_TTL,
     EarnAccountStore,
     EarnError,
     build_cpx_offerwall_url,
@@ -151,7 +153,23 @@ class TestLoginSession:
         body = resp.get_json()
         assert body["ok"] is True
         assert "access_token" in body
-        assert body["expires_in"] == 900
+        assert body["expires_in"] == _SESSION_TTL
+        assert _SESSION_TTL == 30 * 24 * 60 * 60
+        cookie = resp.headers.get("Set-Cookie", "")
+        assert f"{_SESSION_COOKIE}=" in cookie
+        assert "HttpOnly" in cookie
+        assert "Secure" in cookie
+        assert "SameSite=Lax" in cookie
+
+    def test_cookie_session_authenticates_without_bearer_header(self, client, user_a):
+        login = client.post("/api/earn/login", json={
+            "email": "alice@example.com", "password": "password123",
+        }, base_url="https://api.thronoschain.org")
+        assert login.status_code == 200
+        # Flask's test client retains the secure same-origin cookie.
+        me = client.get("/api/earn/me", base_url="https://api.thronoschain.org")
+        assert me.status_code == 200
+        assert me.get_json()["earn_user_id"] == user_a["earn_user_id"]
 
     def test_wrong_password_rejected(self, client, user_a):
         resp = client.post("/api/earn/login", json={
@@ -179,6 +197,17 @@ class TestLoginSession:
         assert body["earn_user_id"] == user_a["earn_user_id"]
         assert body["email"] == "alice@example.com"
         assert "password" not in str(body)
+
+
+class TestEarnCoursesSafetyContract:
+    def test_courses_use_stable_earn_identity_and_do_not_forge_card_payment(self):
+        root = Path(__file__).parent.parent
+        courses = (root / "templates" / "courses.html").read_text()
+        server = (root / "server.py").read_text()
+        assert "activeLearnerId()" in courses
+        assert "restoreEarnAccount()" in courses
+        assert "pi_demo_" not in courses
+        assert "course_stripe_checkout_not_enabled" in server
 
     def test_logout_invalidates_session(self, client, user_a):
         token = _login(client)

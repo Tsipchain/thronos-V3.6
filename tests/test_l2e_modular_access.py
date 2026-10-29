@@ -1055,7 +1055,7 @@ def test_l2e_rollout_verification_course_end_to_end_flow(monkeypatch):
     course_id = created_payload.get("course_id") or (created_payload.get("course") or {}).get("id") or created_payload.get("id")
     assert course_id
 
-    # 2) Verify THR price and optional card mirror path
+    # 2) Verify THR price and confirm Stripe enrollment is blocked (503)
     course_details = _client().get(f"/api/v1/courses/{course_id}")
     assert course_details.status_code == 200
     assert float(course_details.get_json()["course"]["price_thr"]) == 15.0
@@ -1065,8 +1065,8 @@ def test_l2e_rollout_verification_course_end_to_end_flow(monkeypatch):
         "learner_id": "guest-rollout-card",
         "stripe_payment_intent": "pi_rollout_card_001",
     })
-    assert card_path.status_code == 200
-    assert card_path.get_json()["tx"]["payment_method"] == "stripe"
+    assert card_path.status_code == 503
+    assert card_path.get_json()["error"] == "course_stripe_checkout_not_enabled"
 
     # 3) Enroll THR learner for full certificate + result-state path
     enroll_thr = _client().post(f"/api/v1/courses/{course_id}/enroll", json={

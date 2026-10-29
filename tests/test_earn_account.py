@@ -1049,3 +1049,29 @@ class TestFullServerRouteIntegration:
         assert acct_active_line < register_legacy_line, (
             "_earn_acct_active must be checked before register_earn_routes"
         )
+
+
+class TestEarnTemplateCookieSession:
+    """A restored HttpOnly session must not be shadowed by Bearer null."""
+
+    def test_restored_cookie_session_omits_empty_bearer_header(self):
+        template = (Path(__file__).parent.parent / "templates" / "earn_beta.html").read_text()
+        assert "function earnAuthHeaders()" in template
+        assert "return token ? {'Authorization': 'Bearer ' + token} : {};" in template
+        assert "headers: earnAuthHeaders()" in template
+        assert "'Authorization':'Bearer '+token" not in template
+        assert "if (!token) return;" not in template
+
+    def test_dashboard_always_exposes_available_and_pending_balances(self):
+        template = (Path(__file__).parent.parent / "templates" / "earn_beta.html").read_text()
+        assert "AVAILABLE THC" in template
+        assert "PENDING THC" in template
+        assert "bData.pending || 0" in template
+        assert "No verified Earn receipts yet." in template
+
+    def test_mobile_provider_tab_preserves_earn_dashboard(self):
+        template = (Path(__file__).parent.parent / "templates" / "earn_beta.html").read_text()
+        assert "window.open('', '_blank')" in template
+        assert "providerTab.location.replace(data.url)" in template
+        assert "window.addEventListener('focus'" in template
+        assert "visibilitychange" in template

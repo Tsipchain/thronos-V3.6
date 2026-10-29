@@ -25,49 +25,44 @@ def test_duplicate_enrollment_protection(monkeypatch):
     assert resp.get_json()["message"] == "Duplicate enrollment"
 
 
-def test_stripe_student_enrollment_behavior(monkeypatch):
+def test_stripe_student_enrollment_blocked(monkeypatch):
+    """Stripe course enrollment is deliberately blocked until a verified
+    Stripe webhook flow is implemented.  The endpoint must return 503."""
     course_id = "c2"
     courses = [{"id": course_id, "teacher": "teacher1", "price_thr": 10, "students": []}]
-    enrollments = {}
 
     monkeypatch.setattr(server, "load_courses", lambda: courses)
     monkeypatch.setattr(server, "save_courses", lambda _: None)
-    monkeypatch.setattr(server, "load_enrollments", lambda: enrollments)
-    monkeypatch.setattr(server, "save_enrollments", lambda e: enrollments.update(copy.deepcopy(e)))
+    monkeypatch.setattr(server, "load_enrollments", lambda: {})
+    monkeypatch.setattr(server, "save_enrollments", lambda _: None)
 
     resp = _client().post(f"/api/v1/courses/{course_id}/enroll", json={
         "payment_method": "stripe",
         "learner_id": "guest_1",
         "stripe_payment_intent": "pi_abcdef12"
     })
-    assert resp.status_code == 200
+    assert resp.status_code == 503
     body = resp.get_json()
-    assert body["reward_eligible"] is False
-    assert enrollments[course_id]["guest_1"]["access_only"] is True
-    assert enrollments[course_id]["guest_1"]["reward_state"] == "not_eligible"
+    assert body["error"] == "course_stripe_checkout_not_enabled"
 
 
-def test_enrollment_hydration_failure_is_non_fatal(monkeypatch):
+def test_enrollment_hydration_failure_stripe_blocked(monkeypatch):
+    """Stripe enrollment is blocked before hydration logic runs."""
     course_id = "c2b"
     courses = [{"id": course_id, "teacher": "teacher1", "price_thr": 10, "students": []}]
-    enrollments = {}
 
     monkeypatch.setattr(server, "load_courses", lambda: courses)
     monkeypatch.setattr(server, "save_courses", lambda _: None)
-    monkeypatch.setattr(server, "load_enrollments", lambda: enrollments)
-    monkeypatch.setattr(server, "save_enrollments", lambda e: enrollments.update(copy.deepcopy(e)))
-    monkeypatch.setattr(server, "_refresh_enrollment_reward_flags", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(server, "load_enrollments", lambda: {})
+    monkeypatch.setattr(server, "save_enrollments", lambda _: None)
 
     resp = _client().post(f"/api/v1/courses/{course_id}/enroll", json={
         "payment_method": "stripe",
         "learner_id": "guest_hydration_fail",
         "stripe_payment_intent": "pi_hydrate1234",
     })
-    assert resp.status_code == 200
-    body = resp.get_json()
-    assert body["status"] == "success"
-    assert enrollments[course_id]["guest_hydration_fail"]["reward_state"] == "not_eligible"
-    assert enrollments[course_id]["guest_hydration_fail"]["reward_claimability"] == "not_claimable"
+    assert resp.status_code == 503
+    assert resp.get_json()["error"] == "course_stripe_checkout_not_enabled"
 
 
 def test_route_wiring_smoke_and_aliases(monkeypatch):
@@ -119,30 +114,29 @@ def test_route_wiring_smoke_and_aliases(monkeypatch):
     assert claim_alias.status_code == 403
 
 
-def test_stripe_second_click_returns_clean_409(monkeypatch):
+def test_stripe_second_click_also_blocked(monkeypatch):
+    """Both attempts should be blocked since Stripe enrollment is not enabled."""
     course_id = "c_dup_retry"
     courses = [{"id": course_id, "teacher": "teacher1", "price_thr": 5, "students": []}]
-    enrollments = {}
 
     monkeypatch.setattr(server, "load_courses", lambda: courses)
     monkeypatch.setattr(server, "save_courses", lambda _: None)
-    monkeypatch.setattr(server, "load_enrollments", lambda: enrollments)
-    monkeypatch.setattr(server, "save_enrollments", lambda e: enrollments.update(copy.deepcopy(e)))
+    monkeypatch.setattr(server, "load_enrollments", lambda: {})
+    monkeypatch.setattr(server, "save_enrollments", lambda _: None)
 
     first = _client().post(f"/api/v1/courses/{course_id}/enroll", json={
         "payment_method": "stripe",
         "learner_id": "guest_retry",
         "stripe_payment_intent": "pi_retry12345",
     })
-    assert first.status_code == 200
+    assert first.status_code == 503
 
     second = _client().post(f"/api/v1/courses/{course_id}/enroll", json={
         "payment_method": "stripe",
         "learner_id": "guest_retry",
         "stripe_payment_intent": "pi_retry12345",
     })
-    assert second.status_code == 409
-    assert second.get_json()["message"] == "Duplicate enrollment"
+    assert second.status_code == 503
 
 
 def test_certificate_lifecycle_pending_states():
@@ -1156,3 +1150,77 @@ def test_l2e_rollout_verification_course_end_to_end_flow(monkeypatch):
         query_string={"actor_role": "tenant_admin", "tenant_id": "tenant-rollout"},
     )
     assert observability.status_code == 200
+
+
+# ── Wallet-less learner quiz submission ─────────────────────────────────
+
+
+def test_walletless_learner_can_submit_quiz(monkeypatch):
+    """Learners with only an earn-account (learner_id, no THR wallet) must be
+    able to submit quizzes.  Reward eligibility must be False."""
+    course_id = "c_walletless_quiz"
+    learner = "earn_user_abc"
+    courses = [{
+        "id": course_id,
+        "teacher": "T1",
+        "students": [learner],
+        "reward_policy": "manual_claim",
+        "certificate_enabled": False,
+    }]
+    enrollments = {course_id: {learner: {"reward_eligible": False, "completed": False}}}
+    quiz = {
+        "pass_threshold_score": 50,
+        "questions": [
+            {"id": 1, "type": "multiple_choice", "correct": 0, "weight": 1, "options": ["a", "b"]},
+        ],
+    }
+    monkeypatch.setattr(server, "load_courses", lambda: courses)
+    monkeypatch.setattr(server, "save_courses", lambda *_: None)
+    monkeypatch.setattr(server, "get_course_quiz", lambda *_: quiz)
+    monkeypatch.setattr(server, "load_enrollments", lambda: enrollments)
+    monkeypatch.setattr(server, "save_enrollments", lambda e: enrollments.update(copy.deepcopy(e)))
+    monkeypatch.setattr(server, "load_json", lambda *args, **kwargs: {})
+    monkeypatch.setattr(server, "save_json", lambda *args, **kwargs: None)
+
+    resp = _client().post(f"/api/v1/courses/{course_id}/quiz/submit", json={
+        "learner_id": learner,
+        "answers": {"1": 0},
+    })
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["passed"] is True
+    assert body["reward_eligibility"] is False
+
+
+def test_quiz_submit_requires_some_identifier(monkeypatch):
+    """Quiz submission must fail when neither student_thr nor learner_id is provided."""
+    course_id = "c_no_id_quiz"
+    quiz = {
+        "pass_threshold_score": 50,
+        "questions": [{"id": 1, "type": "multiple_choice", "correct": 0, "weight": 1, "options": ["a", "b"]}],
+    }
+    monkeypatch.setattr(server, "get_course_quiz", lambda *_: quiz)
+
+    resp = _client().post(f"/api/v1/courses/{course_id}/quiz/submit", json={
+        "answers": {"1": 0},
+    })
+    assert resp.status_code == 400
+    assert "learner_id" in resp.get_json()["message"].lower() or "student" in resp.get_json()["message"].lower()
+
+
+def test_reward_claim_requires_wallet(monkeypatch):
+    """Reward claim must require a THR wallet — wallet-less learners cannot claim."""
+    course_id = "c_claim_wallet"
+    learner = "earn_user_noreward"
+    courses = [{"id": course_id, "teacher": "T1", "reward_l2e": 5.0, "reward_policy": "manual_claim"}]
+    enrollments = {course_id: {learner: {
+        "reward_eligible": False,
+        "completed": True,
+        "reward_claimed": False,
+    }}}
+    monkeypatch.setattr(server, "load_courses", lambda: courses)
+    monkeypatch.setattr(server, "load_enrollments", lambda: enrollments)
+
+    resp = _client().post(f"/api/v1/courses/{course_id}/claim_reward", json={"learner_id": learner})
+    assert resp.status_code == 403
+    assert "not claimable" in resp.get_json()["message"].lower() or "wallet" in resp.get_json()["message"].lower()

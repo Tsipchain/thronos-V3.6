@@ -40005,11 +40005,13 @@ def api_v1_create_quiz(course_id: str):
 def api_v1_submit_quiz(course_id: str):
     """Submit quiz answers and get score. Records passing status."""
     data = request.get_json() or {}
-    student = (data.get("student_thr") or "").strip()
+    student_thr = (data.get("student_thr") or "").strip()
+    learner_id = (data.get("learner_id") or "").strip()
+    student = student_thr or learner_id
     answers = data.get("answers", {})
 
     if not student:
-        return jsonify(status="error", message="Student address required"), 400
+        return jsonify(status="error", message="Student or learner_id required"), 400
 
     # Get quiz
     quiz = get_course_quiz(course_id)
@@ -40083,7 +40085,7 @@ def api_v1_submit_quiz(course_id: str):
         "quiz_score": score,
         "pass_fail_status": "pass" if passed else "fail",
         "certificate_eligibility": False,
-        "reward_eligibility": bool(student),
+        "reward_eligibility": bool(student_thr),
         "score": score,
         "passed": passed,
         "attempts": quiz_attempts.get(course_id, {}).get(student, {}).get("attempts", 0) + 1,
@@ -40107,8 +40109,8 @@ def api_v1_submit_quiz(course_id: str):
     enrollments[course_id][student]["quiz_score"] = score
     enrollments[course_id][student]["pass_fail_status"] = pass_fail_status
     enrollments[course_id][student]["completion_status"] = completion_status
-    enrollments[course_id][student]["reward_eligibility"] = "eligible" if bool(student) else "not_eligible"
-    enrollments[course_id][student]["reward_eligible"] = bool(student)
+    enrollments[course_id][student]["reward_eligibility"] = "eligible" if bool(student_thr) else "not_eligible"
+    enrollments[course_id][student]["reward_eligible"] = bool(student_thr)
     enrollments[course_id][student]["reward_policy"] = course.get("reward_policy", "manual_claim")
     enrollments[course_id][student]["certificate_template_name"] = course.get("certificate_template_name")
     enrollments[course_id][student]["certificate_issuer_identity"] = course.get("certificate_issuer_identity") or course.get("teacher")
@@ -40175,7 +40177,7 @@ def api_v1_submit_quiz(course_id: str):
         pass_fail_status=pass_fail_status,
         certificate_eligibility=certificate_eligibility,
         certificate_status=certificate_status,
-        reward_eligibility=bool(student),
+        reward_eligibility=bool(student_thr),
         reward_claimability=reward_claimability,
         score=score,
         correct=correct,

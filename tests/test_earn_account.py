@@ -1101,3 +1101,10 @@ class TestEarnTemplateCookieSession:
         assert "earn-activity-dialog" in template
         assert "activityDialog.showModal()" in template
         assert "source.textContent" in template
+
+    def test_activity_view_explains_link_and_unavailable_settlement(self):
+        template = (Path(__file__).parent.parent / "templates" / "earn_beta.html").read_text()
+        assert "earn-wallet-status" in template
+        assert "Cash-out" in template
+        assert "Not enabled yet." in template
+        assert "get('view') === 'activity'" in template

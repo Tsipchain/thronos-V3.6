@@ -1877,6 +1877,72 @@ async function showWallet() {
 // The Earn Account remains independent from the local wallet.  This screen only
 // reads the authenticated Earn session and never creates a wallet link, moves
 // THC, or presents a simulated cash-out result.
+async function _signEarnWalletChallenge(challenge) {
+  const address = getActiveAddr();
+  if (!address || !_pwaSigningCtx?.privHex || _pwaSigningCtx.address !== address) {
+    throw new Error('wallet_locked');
+  }
+  if (String(challenge.wallet_address || '').toUpperCase() !== address.toUpperCase()) {
+    throw new Error('wallet_address_mismatch');
+  }
+  const { secp256k1, sha256 } = await _loadNobleLibs();
+  const signingPayload = {
+    action: String(challenge.action),
+    challenge_id: String(challenge.challenge_id),
+    expires_at: String(challenge.expires_at),
+    nonce: String(challenge.nonce),
+    wallet_address: address.toUpperCase(),
+  };
+  const canonical = JSON.stringify(signingPayload, Object.keys(signingPayload).sort());
+  const privateKey = hexToBytes(_pwaSigningCtx.privHex.replace(/^0x/, ''));
+  const hash = sha256(new TextEncoder().encode(canonical));
+  const sig = typeof secp256k1.sign === 'function'
+    ? secp256k1.sign(hash, privateKey, { lowS: true })
+    : await secp256k1.signAsync(hash, privateKey, { lowS: true });
+  return {
+    challenge_id: signingPayload.challenge_id,
+    wallet_address: signingPayload.wallet_address,
+    public_key: bytesToHex(secp256k1.getPublicKey(privateKey, true)),
+    signature: sig.toCompactHex(),
+  };
+}
+
+async function _restoreEarnSessionFromWallet(earnBase) {
+  const wallet_address = getActiveAddr();
+  if (!wallet_address || !_pwaSigningCtx?.privHex) return false;
+  const start = await fetch(`${earnBase}/api/earn/wallet-session/challenge`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    credentials: 'include', body: JSON.stringify({ wallet_address }),
+  });
+  const challenge = await start.json().catch(() => null);
+  if (!start.ok || !challenge?.ok) return false;
+  const proof = await _signEarnWalletChallenge(challenge);
+  const complete = await fetch(`${earnBase}/api/earn/wallet-session/complete`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    credentials: 'include', body: JSON.stringify(proof),
+  });
+  return complete.ok;
+}
+
+async function _linkActiveWalletToEarn(earnBase) {
+  const wallet_address = getActiveAddr();
+  if (!wallet_address || !_pwaSigningCtx?.privHex) throw new Error('wallet_locked');
+  const start = await fetch(`${earnBase}/api/earn/wallet-link/challenge`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    credentials: 'include', body: JSON.stringify({ wallet_address }),
+  });
+  const challenge = await start.json().catch(() => null);
+  if (!start.ok || !challenge?.ok) throw new Error(challenge?.error || 'wallet_link_unavailable');
+  const proof = await _signEarnWalletChallenge(challenge);
+  const complete = await fetch(`${earnBase}/api/earn/wallet-link/complete`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    credentials: 'include', body: JSON.stringify(proof),
+  });
+  const result = await complete.json().catch(() => null);
+  if (!complete.ok || !result?.ok) throw new Error(result?.error || 'wallet_link_failed');
+  return result;
+}
+
 async function showEarn() {
   render(`
     <div class="screen">
@@ -1895,8 +1961,12 @@ async function showEarn() {
   const body = document.getElementById('earnPwaBody');
   const earnBase = API_WRITE;
   try {
-    const meResponse = await fetch(`${earnBase}/api/earn/me`, { credentials: 'include' });
-    const me = await meResponse.json().catch(() => null);
+    let meResponse = await fetch(`${earnBase}/api/earn/me`, { credentials: 'include' });
+    let me = await meResponse.json().catch(() => null);
+    if (!meResponse.ok && await _restoreEarnSessionFromWallet(earnBase).catch(() => false)) {
+      meResponse = await fetch(`${earnBase}/api/earn/me`, { credentials: 'include' });
+      me = await meResponse.json().catch(() => null);
+    }
     if (!meResponse.ok || !me?.ok) {
       body.innerHTML = `
         <div style="font-weight:700;font-size:1rem;margin-bottom:7px">Earn Account</div>
@@ -1932,10 +2002,22 @@ async function showEarn() {
       </div>
       <button class="btn btn--primary" id="openSurveyBtn" style="width:100%;padding:11px">Open Surveys</button>
       <button class="btn" id="openEarnCenterBtn" style="width:100%;padding:10px;margin-top:8px">Earn history &amp; account</button>
+      ${me.wallet_address ? `<p style="font-size:.72rem;color:#55d6a7;line-height:1.45;margin:10px 0 0">✓ Linked wallet: ${escHtml(me.wallet_address.slice(0, 10))}…</p>` : `<button class="btn" id="linkEarnWalletBtn" style="width:100%;padding:10px;margin-top:8px">Link active Thronos wallet</button>`}
       <p id="earnPwaMessage" style="font-size:.72rem;color:var(--muted);line-height:1.45;margin:12px 0 4px">Rewards remain pending until verified CPX clearance. No wallet settlement or payout is claimed here.</p>
       <div style="margin-top:12px"><div style="font-size:.7rem;color:var(--muted);letter-spacing:.08em">RECENT REWARDS</div>${rows}</div>
     `;
     document.getElementById('openEarnCenterBtn').addEventListener('click', () => window.location.assign(`${earnBase}/earn`));
+    document.getElementById('linkEarnWalletBtn')?.addEventListener('click', async () => {
+      const message = document.getElementById('earnPwaMessage');
+      message.textContent = 'Requesting wallet proof…';
+      try {
+        await _linkActiveWalletToEarn(earnBase);
+        message.textContent = 'Wallet linked securely.';
+        setTimeout(showEarn, 500);
+      } catch (error) {
+        message.textContent = `Could not link wallet: ${error.message || 'unknown_error'}`;
+      }
+    });
     document.getElementById('openSurveyBtn').addEventListener('click', async () => {
       const message = document.getElementById('earnPwaMessage');
       message.textContent = 'Opening available surveys…';
@@ -1954,6 +2036,7 @@ async function showEarn() {
     body.innerHTML = '<p style="color:var(--muted);margin:0">Earn is temporarily unavailable. Your wallet remains safe and unchanged.</p>';
   }
 }
+
 
 // ─── Token detail modal ────────────────────────────────────────────────────────
 

@@ -304,6 +304,24 @@ class TestCPXIdentity:
                 pytest.fail(f"Browser-supplied ext_user_id found: {line.strip()}")
 
 
+class TestProviderAvailability:
+    def test_provider_listing_requires_an_authenticated_earn_account(self, client):
+        assert client.get("/api/earn/providers").status_code == 401
+
+    @patch.dict(os.environ, {"CPX_SURVEYS_BETA_ENABLED": "1", "BITCOTASKS_ENABLED": "0"}, clear=False)
+    def test_provider_listing_exposes_feature_state_not_credentials(self, client, user_a):
+        token = _login(client)
+        response = client.get("/api/earn/providers", headers=_auth(token))
+        assert response.status_code == 200
+        body = response.get_json()
+        assert body["ok"] is True
+        providers = {item["id"]: item for item in body["providers"]}
+        assert providers["cpx"]["enabled"] is True
+        assert providers["bitcotasks"]["enabled"] is False
+        assert "api_key" not in str(body).lower()
+        assert "secret" not in str(body).lower()
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # 5. THC LEDGER — POSTBACK IDEMPOTENCY
 # ══════════════════════════════════════════════════════════════════════════
@@ -1075,3 +1093,11 @@ class TestEarnTemplateCookieSession:
         assert "providerTab.location.replace(data.url)" in template
         assert "window.addEventListener('focus'" in template
         assert "visibilitychange" in template
+
+    def test_provider_cards_and_compact_activity_dialog_are_present(self):
+        template = (Path(__file__).parent.parent / "templates" / "earn_beta.html").read_text()
+        assert "/api/earn/providers" in template
+        assert "Open BitcoTasks" in template
+        assert "earn-activity-dialog" in template
+        assert "activityDialog.showModal()" in template
+        assert "source.textContent" in template

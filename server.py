@@ -1131,9 +1131,12 @@ if os.environ.get("EARN_ACCOUNT_ENABLED", "").strip().lower() in ("1", "true", "
             os.environ.get("EARN_IDENTITY_KEY", ""),
         )
         register_earn_account_routes(app, _earn_acct_store)
-        logger.info("Earn Account routes registered on master")
+        # ``logger`` is configured later during module initialisation.  Keep
+        # this early startup path independent so enabling Earn cannot prevent
+        # Gunicorn from booting.
+        print("[Earn Account] routes registered on master")
     except Exception as _earn_account_init_error:
-        logger.error("Earn Account initialization failed: %s", _earn_account_init_error)
+        print(f"[Earn Account] initialization failed: {_earn_account_init_error}")
 
 # --------------------------------------------------------------------------
 # AI demo usage tracking

@@ -1581,6 +1581,7 @@ async function showWallet() {
         <button class="action-btn" id="tokensBtn"><span class="action-btn__icon">◈</span>Tokens</button>
         <button class="action-btn" id="connectBtn"><span class="action-btn__icon">⬡</span>Connect</button>
         <button class="action-btn" id="musicBtn"><span class="action-btn__icon">🎵</span>Music</button>
+        <button class="action-btn" id="earnBtn"><span class="action-btn__icon">✨</span>Earn</button>
         <button class="action-btn" id="historyBtn"><span class="action-btn__icon">📋</span>History</button>
         <button class="action-btn" id="createTokenBtn"><span class="action-btn__icon">🪙</span>Create Token</button>
         <button class="action-btn" id="nftBtn"><span class="action-btn__icon">🖼️</span>NFTs</button>
@@ -1640,6 +1641,7 @@ async function showWallet() {
   document.getElementById('networksBtn').addEventListener('click', showMultiChain);
   document.getElementById('connectBtn').addEventListener('click', showWalletConnect);
   document.getElementById('musicBtn').addEventListener('click', showMusic);
+  document.getElementById('earnBtn').addEventListener('click', showEarn);
   document.getElementById('createTokenBtn').addEventListener('click', showCreateToken);
   document.getElementById('nftBtn').addEventListener('click', showNFTs);
   document.getElementById('epochBtn').addEventListener('click', showEpoch);
@@ -1869,6 +1871,88 @@ async function showWallet() {
     homeChainBalances = null;
     loadOtherNetworkAssets(netId);
   }, 30000);
+}
+
+// ─── Earn (account-first, read-only from the wallet PWA) ──────────────────────
+// The Earn Account remains independent from the local wallet.  This screen only
+// reads the authenticated Earn session and never creates a wallet link, moves
+// THC, or presents a simulated cash-out result.
+async function showEarn() {
+  render(`
+    <div class="screen">
+      <div class="header">
+        <button class="btn--icon" id="earnBackBtn" aria-label="Back">←</button>
+        <span class="logo--sm">✨ Earn</span>
+        <span style="margin-left:auto;font-size:.72rem;color:var(--muted)">THC rewards</span>
+      </div>
+      <div class="card" id="earnPwaBody" style="padding:16px;margin-top:10px">
+        <p style="color:var(--muted);margin:0">Loading your Earn Account…</p>
+      </div>
+    </div>
+  `);
+
+  document.getElementById('earnBackBtn').addEventListener('click', showWallet);
+  const body = document.getElementById('earnPwaBody');
+  const earnBase = API_WRITE;
+  try {
+    const meResponse = await fetch(`${earnBase}/api/earn/me`, { credentials: 'include' });
+    const me = await meResponse.json().catch(() => null);
+    if (!meResponse.ok || !me?.ok) {
+      body.innerHTML = `
+        <div style="font-weight:700;font-size:1rem;margin-bottom:7px">Earn Account</div>
+        <p style="color:var(--muted);line-height:1.5">Sign in or create an Earn Account to keep your survey rewards and THC history. Your wallet remains separate until you explicitly link it.</p>
+        <button class="btn btn--primary" id="openEarnLoginBtn" style="width:100%;padding:11px">Open Earn</button>
+      `;
+      document.getElementById('openEarnLoginBtn').addEventListener('click', () => {
+        window.location.assign(`${earnBase}/earn`);
+      });
+      return;
+    }
+
+    const [balanceResponse, historyResponse] = await Promise.all([
+      fetch(`${earnBase}/api/earn/balance`, { credentials: 'include' }),
+      fetch(`${earnBase}/api/earn/history`, { credentials: 'include' }),
+    ]);
+    const balance = await balanceResponse.json().catch(() => null);
+    const history = await historyResponse.json().catch(() => null);
+    const available = Number(balance?.available || 0).toFixed(2);
+    const pending = Number(balance?.pending || 0).toFixed(2);
+    const entries = Array.isArray(history?.entries) ? history.entries.slice(0, 4) : [];
+    const rows = entries.length ? entries.map(entry => `
+      <div style="display:flex;justify-content:space-between;gap:8px;padding:9px 0;border-top:1px solid #ffffff14">
+        <div style="min-width:0"><div style="font-size:.8rem">${escHtml(entry.source || 'Earn reward')}</div><div style="font-size:.68rem;color:var(--muted)">${escHtml(entry.state || 'pending')}</div></div>
+        <div style="font-size:.82rem;color:var(--accent)">+${escHtml(String(entry.amount || '0'))} THC</div>
+      </div>`).join('') : '<p style="color:var(--muted);font-size:.82rem">No verified rewards yet.</p>';
+
+    body.innerHTML = `
+      <div style="font-size:.72rem;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(me.email || '')}</div>
+      <div style="display:flex;gap:10px;margin:13px 0">
+        <div style="flex:1;background:#0d0a1a;border-radius:9px;padding:10px"><div style="font-size:.66rem;color:var(--muted)">AVAILABLE</div><div style="font-size:1.1rem;color:var(--accent);font-weight:700">${available} THC</div></div>
+        <div style="flex:1;background:#0d0a1a;border-radius:9px;padding:10px"><div style="font-size:.66rem;color:var(--muted)">PENDING</div><div style="font-size:1.1rem;color:#e8bf5a;font-weight:700">${pending} THC</div></div>
+      </div>
+      <button class="btn btn--primary" id="openSurveyBtn" style="width:100%;padding:11px">Open Surveys</button>
+      <button class="btn" id="openEarnCenterBtn" style="width:100%;padding:10px;margin-top:8px">Earn history &amp; account</button>
+      <p id="earnPwaMessage" style="font-size:.72rem;color:var(--muted);line-height:1.45;margin:12px 0 4px">Rewards remain pending until verified CPX clearance. No wallet settlement or payout is claimed here.</p>
+      <div style="margin-top:12px"><div style="font-size:.7rem;color:var(--muted);letter-spacing:.08em">RECENT REWARDS</div>${rows}</div>
+    `;
+    document.getElementById('openEarnCenterBtn').addEventListener('click', () => window.location.assign(`${earnBase}/earn`));
+    document.getElementById('openSurveyBtn').addEventListener('click', async () => {
+      const message = document.getElementById('earnPwaMessage');
+      message.textContent = 'Opening available surveys…';
+      try {
+        const response = await fetch(`${earnBase}/api/earn/cpx/offerwall`, { credentials: 'include' });
+        const offerwall = await response.json().catch(() => null);
+        if (!response.ok || !offerwall?.ok || !offerwall.url) throw new Error(offerwall?.error || 'survey_unavailable');
+        // CPX providers can reject nested frames.  A top-level navigation is
+        // intentional and Back returns to the PWA with the Earn cookie intact.
+        window.location.assign(offerwall.url);
+      } catch {
+        message.textContent = 'Surveys are temporarily unavailable. Your Earn balance remains unchanged.';
+      }
+    });
+  } catch {
+    body.innerHTML = '<p style="color:var(--muted);margin:0">Earn is temporarily unavailable. Your wallet remains safe and unchanged.</p>';
+  }
 }
 
 // ─── Token detail modal ────────────────────────────────────────────────────────

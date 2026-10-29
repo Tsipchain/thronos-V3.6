@@ -199,6 +199,35 @@ class EarnAccountStore:
                 CREATE INDEX IF NOT EXISTS idx_cpx_receipts_user
                     ON cpx_receipts(earn_user_id);
 
+                -- Provider-specific public identifiers are short, stable and
+                -- opaque.  They never expose an email or a wallet address.
+                CREATE TABLE IF NOT EXISTS earn_provider_identities (
+                    provider        TEXT NOT NULL,
+                    provider_user_id TEXT NOT NULL,
+                    earn_user_id    TEXT NOT NULL
+                        REFERENCES earn_accounts(earn_user_id),
+                    created_at      INTEGER NOT NULL,
+                    PRIMARY KEY (provider, provider_user_id),
+                    UNIQUE (provider, earn_user_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS bitcotasks_receipts (
+                    trans_id        TEXT PRIMARY KEY,
+                    earn_user_id    TEXT NOT NULL
+                        REFERENCES earn_accounts(earn_user_id),
+                    status          INTEGER NOT NULL,
+                    amount_thc      TEXT NOT NULL,
+                    payout_usd      TEXT,
+                    offer_name      TEXT,
+                    offer_type      TEXT,
+                    thc_entry_id    TEXT,
+                    received_at     INTEGER NOT NULL,
+                    payload         TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_bitcotasks_receipts_user
+                    ON bitcotasks_receipts(earn_user_id);
+
                 -- A wallet link is a cryptographic identity binding, never a
                 -- user-supplied address claim.  One wallet and one Earn
                 -- account are intentionally a 1:1 relation for this beta.
@@ -234,6 +263,46 @@ class EarnAccountStore:
             self._identity_key, earn_user_id.encode(), hashlib.sha256,
         ).hexdigest()
         return "thr_" + digest[:40]
+
+    def provider_user_id(self, earn_user_id: str, provider: str) -> str:
+        """Return a stable opaque provider identity (max 32 chars).
+
+        Provider walls must never receive an email, wallet address, or the
+        account primary key.  The mapping is written before a provider URL is
+        issued, so an incoming postback can only resolve a user who actually
+        opened that provider through Earn.
+        """
+        provider = (provider or "").strip().lower()
+        if provider != "bitcotasks":
+            raise EarnError("unsupported_earn_provider")
+        with self._tx() as con:
+            existing = con.execute(
+                """SELECT provider_user_id FROM earn_provider_identities
+                   WHERE provider = ? AND earn_user_id = ?""",
+                (provider, earn_user_id),
+            ).fetchone()
+            if existing:
+                return str(existing["provider_user_id"])
+            user = con.execute(
+                "SELECT 1 FROM earn_accounts WHERE earn_user_id = ?",
+                (earn_user_id,),
+            ).fetchone()
+            if not user:
+                raise EarnError("unknown_earn_user")
+            digest = hmac.new(
+                self._identity_key,
+                f"{provider}:{earn_user_id}".encode("utf-8"),
+                hashlib.sha256,
+            ).hexdigest()
+            # 31 characters: accepted by BitcoTasks' documented varchar(32).
+            provider_user_id = "bt_" + digest[:28]
+            con.execute(
+                """INSERT INTO earn_provider_identities
+                   (provider, provider_user_id, earn_user_id, created_at)
+                   VALUES (?,?,?,?)""",
+                (provider, provider_user_id, earn_user_id, int(time.time())),
+            )
+            return provider_user_id
 
     # ── Registration ─────────────────────────────────────────────────────
 
@@ -697,6 +766,101 @@ class EarnAccountStore:
         d.pop("password_hash", None)
         return d
 
+    # ── BitcoTasks receipt handling ───────────────────────────────────────
+
+    def record_bitcotasks_receipt(
+        self,
+        *,
+        trans_id: str,
+        provider_user_id: str,
+        status: int,
+        reward_thc: str,
+        payout_usd: str = "",
+        offer_name: str = "",
+        offer_type: str = "",
+        payload: dict[str, Any],
+    ) -> tuple[dict[str, Any], bool]:
+        """Record one signed BitcoTasks transaction atomically.
+
+        BitcoTasks sends a credit as status 1 and a chargeback as status 2.
+        Its configured reward is already denominated in THC; we do not infer
+        or re-price it from USD at callback time.
+        """
+        if status not in (1, 2) or not trans_id or len(trans_id) > 200:
+            raise EarnError("invalid_bitcotasks_receipt")
+        if not provider_user_id or len(provider_user_id) > 32:
+            raise EarnError("invalid_bitcotasks_user")
+        try:
+            amount = Decimal(str(reward_thc)).quantize(_THC_SCALE, rounding=ROUND_DOWN)
+            if amount < 0:
+                raise ValueError
+        except (TypeError, ValueError, InvalidOperation):
+            raise EarnError("invalid_bitcotasks_amount")
+        now = int(time.time())
+        payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        with self._tx() as con:
+            identity = con.execute(
+                """SELECT earn_user_id FROM earn_provider_identities
+                   WHERE provider = 'bitcotasks' AND provider_user_id = ?""",
+                (provider_user_id,),
+            ).fetchone()
+            if not identity:
+                raise EarnError("unknown_provider_user")
+            uid = identity["earn_user_id"]
+            prior = con.execute(
+                "SELECT * FROM bitcotasks_receipts WHERE trans_id = ?",
+                (trans_id,),
+            ).fetchone()
+            if prior:
+                if prior["earn_user_id"] != uid:
+                    raise EarnError("bitcotasks_receipt_conflict")
+                if prior["status"] == status:
+                    return dict(prior), False
+                if status != 2:
+                    raise EarnError("invalid_bitcotasks_transition")
+                con.execute(
+                    """UPDATE bitcotasks_receipts
+                       SET status = 2, received_at = ?, payload = ?
+                       WHERE trans_id = ?""",
+                    (now, payload_json, trans_id),
+                )
+                if prior["thc_entry_id"]:
+                    self._reverse_thc_in_tx(con, prior["thc_entry_id"])
+                return dict(con.execute(
+                    "SELECT * FROM bitcotasks_receipts WHERE trans_id = ?",
+                    (trans_id,),
+                ).fetchone()), True
+
+            # A lone chargeback has no credit to reverse; store it only to
+            # make retries harmless and to block a later forged credit.
+            entry_id = None
+            if status == 1:
+                if amount <= 0:
+                    raise EarnError("invalid_bitcotasks_amount")
+                entry_id = "thc_" + secrets.token_urlsafe(18)
+                con.execute(
+                    """INSERT INTO thc_ledger
+                       (entry_id, earn_user_id, source, source_ref, amount,
+                        state, note, created_at, updated_at)
+                       VALUES (?,?,?,?,?,'pending',?,?,?)""",
+                    (
+                        entry_id, uid, "bitcotasks", trans_id, str(amount),
+                        f"{offer_type}:{offer_name}"[:300], now, now,
+                    ),
+                )
+            con.execute(
+                """INSERT INTO bitcotasks_receipts
+                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    trans_id, uid, status, str(amount), str(payout_usd),
+                    str(offer_name)[:500], str(offer_type)[:100], entry_id,
+                    now, payload_json,
+                ),
+            )
+            return dict(con.execute(
+                "SELECT * FROM bitcotasks_receipts WHERE trans_id = ?", (trans_id,),
+            ).fetchone()), True
+
     # ── CPX receipt handling ──────────────────────────────────────────────
 
     def record_cpx_receipt(
@@ -837,6 +1001,28 @@ def build_cpx_offerwall_url(cpx_ext_user_id: str) -> str:
         "CPX_OFFERWALL_URL", "https://offers.cpx-research.com/index.php",
     )
     return f"{base}?{query}"
+
+
+def build_bitcotasks_offerwall_url(provider_user_id: str) -> str:
+    api_key = os.getenv("BITCOTASKS_API_KEY", "").strip()
+    if not api_key:
+        raise EarnError("bitcotasks_not_configured")
+    if not provider_user_id or len(provider_user_id) > 32:
+        raise EarnError("invalid_bitcotasks_user")
+    return f"https://bitcotasks.com/offerwall/{api_key}/{provider_user_id}"
+
+
+def verify_bitcotasks_postback_signature(
+    sub_id: str, trans_id: str, reward: str, signature: str,
+) -> bool:
+    """Verify BitcoTasks' documented md5(subId + transId + reward + secret)."""
+    secret = os.getenv("BITCOTASKS_SECRET_KEY", "").strip()
+    if not secret or not sub_id or not trans_id or not reward or not signature:
+        return False
+    expected = hashlib.md5(
+        f"{sub_id}{trans_id}{reward}{secret}".encode("utf-8"),
+    ).hexdigest()
+    return hmac.compare_digest(expected, str(signature).strip().lower())
 
 
 def cpx_postback_hash(trans_id: str, secret: str) -> str:
@@ -1094,6 +1280,25 @@ def register_earn_account_routes(
         except EarnError as exc:
             return jsonify(ok=False, error=str(exc)), 503
 
+    @app.get("/api/earn/bitcotasks/offerwall")
+    def earn_bitcotasks_offerwall():
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        if os.getenv("BITCOTASKS_ENABLED", "0") != "1":
+            return jsonify(ok=False, error="bitcotasks_not_enabled"), 503
+        try:
+            provider_user_id = store.provider_user_id(
+                user["earn_user_id"], "bitcotasks",
+            )
+            return jsonify(
+                ok=True,
+                provider="bitcotasks",
+                url=build_bitcotasks_offerwall_url(provider_user_id),
+            )
+        except EarnError as exc:
+            return jsonify(ok=False, error=str(exc)), 503
+
     @app.route("/api/earn/cpx/postback", methods=["GET", "POST"])
     def earn_cpx_postback():
         params = (
@@ -1125,6 +1330,42 @@ def register_earn_account_routes(
         except (EarnError, ValueError):
             return "0", 400
         return "1", 200
+
+    @app.route("/api/earn/bitcotasks/postback", methods=["GET", "POST"])
+    def earn_bitcotasks_postback():
+        """BitcoTasks S2S receiver; never exposed to browser reward claims."""
+        params = (
+            request.values.to_dict()
+            if request.values
+            else (request.get_json(silent=True) or {})
+        )
+        if os.getenv("BITCOTASKS_POSTBACK_LIVE", "0") != "1":
+            return "ERROR", 503
+        sub_id = str(params.get("subId") or "").strip()
+        trans_id = str(params.get("transId") or "").strip()
+        reward = str(params.get("reward") or "").strip()
+        signature = str(params.get("signature") or "").strip()
+        if not verify_bitcotasks_postback_signature(
+            sub_id, trans_id, reward, signature,
+        ):
+            return "ERROR", 403
+        # Dashboard connectivity tests must not fabricate a user reward.
+        if str(params.get("debug") or "0") == "1":
+            return "ok", 200
+        try:
+            store.record_bitcotasks_receipt(
+                trans_id=trans_id,
+                provider_user_id=sub_id,
+                status=int(params.get("status") or 0),
+                reward_thc=reward,
+                payout_usd=str(params.get("payout") or ""),
+                offer_name=str(params.get("offer_name") or ""),
+                offer_type=str(params.get("offer_type") or ""),
+                payload=params,
+            )
+        except (EarnError, ValueError):
+            return "ERROR", 400
+        return "ok", 200
 
     @app.post("/api/earn/session/rotate")
     def earn_session_rotate():

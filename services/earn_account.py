@@ -1060,7 +1060,9 @@ def register_earn_account_routes(
             )
         except EarnError as exc:
             return jsonify(ok=False, error=str(exc)), 401
-        response = jsonify(ok=True, earn_user_id=user["earn_user_id"], email=user["email"], access_token=token)
+        # The wallet-proof flow needs no JavaScript-visible bearer token.
+        # Keep the session confined to the Secure, HttpOnly cookie.
+        response = jsonify(ok=True, earn_user_id=user["earn_user_id"], email=user["email"])
         return _set_session_cookie(response, token)
 
     @app.get("/api/earn/balance")

@@ -72,6 +72,13 @@
   const historySection = $('earn-history'), historyList = $('earn-history-list');
   let isRegister = false, token = null;
 
+  // On a restored session the raw token intentionally does not exist in
+  // JavaScript: it is an HttpOnly cookie.  Never send "Bearer null", because
+  // that would prevent the server from falling back to the cookie session.
+  function earnAuthHeaders() {
+    return token ? {'Authorization': 'Bearer ' + token} : {};
+  }
+
   function setStatus(msg, isError) { status.textContent = msg; status.className = 'earn-status' + (isError ? ' error' : ''); }
 
   switchBtn.addEventListener('click', () => {
@@ -110,7 +117,7 @@
   });
 
   $('earn-logout').addEventListener('click', async () => {
-    if (token) await fetch('/api/earn/logout', { method:'POST', headers:{'Authorization':'Bearer '+token} }).catch(()=>{});
+    await fetch('/api/earn/logout', { method:'POST', headers: earnAuthHeaders() }).catch(()=>{});
     token = null; mainSection.style.display = 'none'; authSection.style.display = ''; frame.style.display = 'none';
     setStatus('Signed out.');
   });
@@ -119,7 +126,7 @@
     if (!token) return;
     setStatus('Loading surveys…');
     try {
-      const res = await fetch('/api/earn/cpx/offerwall', { headers:{'Authorization':'Bearer '+token} });
+      const res = await fetch('/api/earn/cpx/offerwall', { headers: earnAuthHeaders() });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ok) throw new Error(data.error || 'Surveys unavailable.');
       frame.src = data.url; frame.style.display = 'block';
@@ -131,12 +138,12 @@
     authSection.style.display = 'none'; mainSection.style.display = '';
     setStatus('');
     try {
-      const bRes = await fetch('/api/earn/balance', { headers:{'Authorization':'Bearer '+token} });
+      const bRes = await fetch('/api/earn/balance', { headers: earnAuthHeaders() });
       const bData = await bRes.json().catch(() => ({}));
       if (bRes.ok && bData.ok) { balanceBar.style.display = ''; balanceValue.textContent = Number(bData.available).toFixed(2) + ' THC'; }
     } catch (_) {}
     try {
-      const hRes = await fetch('/api/earn/history', { headers:{'Authorization':'Bearer '+token} });
+      const hRes = await fetch('/api/earn/history', { headers: earnAuthHeaders() });
       const hData = await hRes.json().catch(() => ({}));
       if (hRes.ok && hData.ok && hData.entries.length) {
         historySection.style.display = ''; historyList.innerHTML = '';

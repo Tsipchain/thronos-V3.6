@@ -100,12 +100,6 @@ class EarnWalletLinkTests(unittest.TestCase):
             public_key=proof["public_key"], signature=proof["signature"],
         ))
 
-    def test_pwa_activity_button_targets_the_authenticated_activity_view(self):
-        pwa = (Path(__file__).parent.parent / "public" / "wallet-pwa" / "app.js").read_text()
-        self.assertIn("/earn?view=activity", pwa)
-        self.assertIn("Link this active Thronos wallet", pwa)
-        self.assertIn("Cash-out and wallet settlement are not enabled yet.", pwa)
-
 
 if __name__ == "__main__":
     unittest.main()

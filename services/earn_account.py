@@ -38,7 +38,12 @@ _MIN_PASSWORD_LEN = 8
 _MAX_PASSWORD_LEN = 128
 _MAX_EMAIL_LEN = 254
 _PBKDF2_ITERATIONS = 260_000
-_SESSION_TTL = 900
+# Earn is an account product, not a one-page form.  The durable server-side
+# session lets the same account move between /earn and /courses until it
+# explicitly signs out.  Tokens remain revocable because only their hashes
+# are stored in SQLite.
+_SESSION_TTL = max(900, min(int(os.getenv("EARN_SESSION_TTL_SECONDS", str(30 * 24 * 60 * 60))), 90 * 24 * 60 * 60))
+_SESSION_COOKIE = "thr_earn_session"
 _RATE_WINDOW = 900
 _RATE_MAX_ATTEMPTS = 5
 _RATE_LOCKOUT = 1800
@@ -682,7 +687,25 @@ def register_earn_account_routes(
             .removeprefix("Bearer ")
             .strip()
         )
+        user = store.user_for_session(token)
+        if user:
+            return user, token
+        # Browser pages use this HttpOnly, same-origin cookie.  API consumers
+        # may continue using the Bearer token, so this is additive.
+        token = request.cookies.get(_SESSION_COOKIE, "").strip()
         return store.user_for_session(token), token
+
+    def _set_session_cookie(response, token: str):
+        response.set_cookie(
+            _SESSION_COOKIE,
+            token,
+            max_age=_SESSION_TTL,
+            secure=True,
+            httponly=True,
+            samesite="Lax",
+            path="/",
+        )
+        return response
 
     @app.post("/api/earn/register")
     def earn_register():
@@ -707,20 +730,23 @@ def register_earn_account_routes(
         except EarnError as exc:
             code = 429 if "locked" in str(exc) else 401
             return jsonify(ok=False, error=str(exc)), code
-        return jsonify(
+        response = jsonify(
             ok=True,
             earn_user_id=user["earn_user_id"],
             email=user["email"],
             access_token=token,
             expires_in=_SESSION_TTL,
         )
+        return _set_session_cookie(response, token)
 
     @app.post("/api/earn/logout")
     def earn_logout():
         user, token = _current_user()
         if user and token:
             store.logout(token)
-        return jsonify(ok=True)
+        response = jsonify(ok=True)
+        response.delete_cookie(_SESSION_COOKIE, path="/", secure=True, httponly=True, samesite="Lax")
+        return response
 
     @app.get("/api/earn/me")
     def earn_me():
@@ -802,6 +828,7 @@ def register_earn_account_routes(
         if not result:
             return jsonify(ok=False, error="earn_auth_required"), 401
         new_token, expires = result
-        return jsonify(
+        response = jsonify(
             ok=True, access_token=new_token, expires_in=_SESSION_TTL,
         )
+        return _set_session_cookie(response, new_token)

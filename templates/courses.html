@@ -488,7 +488,7 @@
             📚 <span class="lang-el">Μαθήματα</span><span class="lang-en">Courses</span>
         </button>
         <button class="tab-btn" onclick="showTab('create')">
-            ➕ <span class="lang-el">Δημιουργία</span><span class="lang-en">Create</span>
+            🏛️ <span class="lang-el">Είσαι καθηγητής ή Πανεπιστήμιο;</span><span class="lang-en">Teacher or University?</span>
         </button>
         <button class="tab-btn" onclick="showTab('my-courses')">
             📖 <span class="lang-el">Τα Μαθήματά μου</span><span class="lang-en">My Courses</span>
@@ -509,7 +509,19 @@
     <!-- Create Course Tab -->
     <div id="create-tab" class="tab-content">
         <div class="panel">
-            <h3>➕ <span class="lang-el">Δημιουργία Μαθήματος (Εκπαιδευτές)</span><span class="lang-en">Create Course (Teachers Only)</span></h3>
+            <h3>🏛️ <span class="lang-el">Καθηγητές & Πανεπιστήμια</span><span class="lang-en">Teachers & Universities</span></h3>
+            <p>Η δημοσίευση μαθήματος δεν είναι ανοικτή φόρμα. Απαιτεί συνδεδεμένο THR Wallet, επαλήθευση εκπαιδευτή και έγκριση για το ίδρυμα/μάθημα.</p>
+            <p>Στείλε αίτημα στην ομάδα και θα λάβεις τη σωστή ροή εκπαιδευτή. Οι μαθητές μπορούν να εγγραφούν με Earn Account και κάρτα όταν ενεργοποιηθεί το verified checkout.</p>
+            <div class="input-group">
+                <input id="teacherRequestName" class="input-field" placeholder="Ονοματεπώνυμο / Ίδρυμα" />
+                <input id="teacherRequestEmail" class="input-field" type="email" placeholder="Email επικοινωνίας" />
+            </div>
+            <input id="teacherRequestThr" class="input-field" placeholder="THR address (υποχρεωτικό για δημοσίευση)" style="width:100%; margin-bottom:10px;" />
+            <textarea id="teacherRequestMessage" class="input-field" placeholder="Περιέγραψε το μάθημα ή το πρόγραμμα σπουδών" style="width:100%; min-height:90px;"></textarea>
+            <button class="btn-primary" style="width:100%; margin-top:10px;" type="button" onclick="openTeacherRequest()">✉️ Επικοινωνία με ThronosEdu</button>
+            <div class="log-box" id="teacherRequestLog">Η αποστολή ανοίγει το email client σου προς admin@thronoschain.org — δεν καταχωρείται τίποτα ως μάθημα από αυτή τη φόρμα.</div>
+            <div id="teacherWorkbench" style="display:none;">
+            <h3>➕ <span class="lang-el">Εγκεκριμένο Εργαστήριο Εκπαιδευτή</span><span class="lang-en">Approved Teacher Workspace</span></h3>
             <input id="title" class="input-field" placeholder="Course Title" style="width: 100%; margin-bottom: 10px;" />
             <input id="titleEl" class="input-field" placeholder="Τίτλος Μαθήματος (Ελληνικά)" style="width: 100%; margin-bottom: 10px;" />
             <input id="description" class="input-field" placeholder="Description (optional)" style="width: 100%; margin-bottom:10px;" />
@@ -586,6 +598,7 @@
                 <span class="lang-el">Δημιουργία Μαθήματος</span><span class="lang-en">Create Course</span>
             </button>
             <div class="log-box" id="log"><span class="lang-el">Έτοιμο για δημιουργία μαθημάτων...</span><span class="lang-en">Ready to create courses...</span></div>
+            </div>
         </div>
     </div>
     <!-- My Courses Tab -->
@@ -685,6 +698,7 @@ const $ = (id) => document.getElementById(id);
 let connectedWallet = null;
 let connectedSecret = null;
 let connectedPassphrase = null;
+let earnAccount = null;
 let currentQuizCourseId = null;
 let currentQuizQuestions = [];
 let currentLang = localStorage.getItem('lang') || 'en';
@@ -722,6 +736,30 @@ async function apiPost(url, body) {
         throw err;
     }
     return payload;
+}
+
+function activeLearnerId() {
+    return earnAccount?.earn_user_id || connectedWallet || null;
+}
+
+async function restoreEarnAccount() {
+    try {
+        const res = await fetch('/api/earn/me');
+        const data = await res.json().catch(() => ({}));
+        earnAccount = (res.ok && data.ok) ? data : null;
+    } catch (_) {
+        earnAccount = null;
+    }
+}
+
+function openTeacherRequest() {
+    const name = $("teacherRequestName").value.trim();
+    const email = $("teacherRequestEmail").value.trim();
+    const thr = $("teacherRequestThr").value.trim();
+    const message = $("teacherRequestMessage").value.trim();
+    const subject = encodeURIComponent('ThronosEdu teacher / university request');
+    const body = encodeURIComponent(`Name / institution: ${name}\nContact email: ${email}\nTHR address: ${thr}\n\nProgram proposal:\n${message}`);
+    window.location.href = `mailto:admin@thronoschain.org?subject=${subject}&body=${body}`;
 }
 
 // Logging
@@ -1304,9 +1342,10 @@ function courseCard(c) {
     const el = document.createElement("div");
     el.className = "course-card";
 
-    const isEnrolled = connectedWallet && (c.students || []).includes(connectedWallet);
-    const isCompleted = connectedWallet && (c.completed || []).includes(connectedWallet);
-    const isQuizPassed = connectedWallet && (c.quiz_passed || []).includes(connectedWallet);
+    const learnerId = activeLearnerId();
+    const isEnrolled = learnerId && (c.students || []).includes(learnerId);
+    const isCompleted = learnerId && (c.completed || []).includes(learnerId);
+    const isQuizPassed = learnerId && (c.quiz_passed || []).includes(learnerId);
     const isTeacher = connectedWallet && c.teacher === connectedWallet;
     const hasQuiz = c.has_quiz;
     const enrollmentMeta = c.enrollment_meta || null;
@@ -1319,7 +1358,7 @@ function courseCard(c) {
     const certThreshold = c.certificate_threshold_score ?? 80;
     const liveSessions = Array.isArray(c.live_sessions) ? c.live_sessions : [];
 
-    const rewardEligible = Boolean(connectedWallet);
+    const rewardEligible = Boolean(enrollmentMeta?.reward_eligible);
     let badges = "";
     if (isEnrolled) badges += `<span class="badge badge-enrolled">${currentLang === 'el' ? 'Εγγεγραμμένος' : 'Enrolled'}</span>`;
     if (isQuizPassed) badges += `<span class="badge badge-quiz-passed">${currentLang === 'el' ? 'Quiz ✓' : 'Quiz ✓'}</span>`;
@@ -1370,7 +1409,7 @@ function courseCard(c) {
                     <button class="btn-secondary btn-claim-reward" ${claimDisabled ? 'disabled' : ''} title="${claimDisabledReason}">🎁 Claim Reward</button>
                 ` : `
                     <button class="btn-enroll-thr btn-primary" ${!connectedWallet ? 'disabled' : ''} title="${!connectedWallet ? 'Connect THR wallet to pay on-chain' : ''}">💸 Pay with THR</button>
-                    <button class="btn-enroll-card btn-secondary">💳 Pay with Card</button>
+                    <button class="btn-enroll-card btn-secondary">💳 Card checkout (pending)</button>
                 `}
                 ${hasQuiz && isEnrolled ? `
                     <button class="btn-quiz btn-secondary" onclick="openCourseModal('${c.id}', 'quiz')">
@@ -1437,32 +1476,12 @@ function courseCard(c) {
     const enrollCardBtn = el.querySelector(".btn-enroll-card");
     if (enrollCardBtn) {
         enrollCardBtn.onclick = async () => {
-            try {
-                const learnerId = connectedWallet || `guest-${Date.now()}`;
-                log(`Card enrollment started for "${c.title}"...`);
-                const result = await apiPost(`/api/v1/courses/${c.id}/enroll`, {
-                    payment_method: "stripe",
-                    learner_id: learnerId,
-                    student_thr: connectedWallet || null,
-                    stripe_payment_intent: `pi_demo_${Date.now()}`
-                });
-                if (result.status === "success") {
-                    const modeMsg = result.reward_eligible
-                        ? "reward-eligible enrollment recorded."
-                        : "mirror-only access enrollment recorded (no wallet reward eligibility yet).";
-                    log(`Card enrollment recorded for "${c.title}" — ${modeMsg}`);
-                    await refresh();
-                } else {
-                    log(`Card enrollment failed: ${result.message || 'Unknown error'}`, true);
-                }
-            } catch (e) {
-                if (e.status === 409) {
-                    log(`Already enrolled in "${c.title}". Access is active.`);
-                    await refresh();
-                    return;
-                }
-                log(`Card enrollment error: ${e.message}`, true);
+            if (!earnAccount) {
+                log("Sign in to your Earn Account before card checkout.", true);
+                window.location.href = '/earn';
+                return;
             }
+            log("Card checkout is pending verified Stripe webhook activation. No enrollment was created.", true);
         };
     }
 
@@ -1496,7 +1515,7 @@ function courseCard(c) {
                 }
                 const session = sessions[0];
                 const join = await apiPost(`/api/v1/courses/${c.id}/live_sessions/${session.id}/join`, {
-                    learner_id: connectedWallet || `guest-${Date.now()}`,
+                    learner_id: activeLearnerId(),
                     student_thr: connectedWallet || null
                 });
                 if (join.status === "success") {
@@ -1652,7 +1671,7 @@ function courseCard(c) {
             const sessionId = btn.dataset.session;
             try {
                 const join = await apiPost(`/api/v1/courses/${c.id}/live_sessions/${sessionId}/join`, {
-                    learner_id: connectedWallet || `guest-${Date.now()}`,
+                    learner_id: activeLearnerId(),
                     student_thr: connectedWallet || null
                 });
                 if (join.status === "success") {
@@ -1755,9 +1774,9 @@ async function refresh() {
             } catch (e) {
                 c.has_quiz = false;
             }
-            if (connectedWallet) {
+            if (activeLearnerId()) {
                 try {
-                    const enrollStatus = await apiGet(`/api/v1/courses/${c.id}/enrollment/${encodeURIComponent(connectedWallet)}`);
+                    const enrollStatus = await apiGet(`/api/v1/courses/${c.id}/enrollment/${encodeURIComponent(activeLearnerId())}`);
                     c.enrollment_meta = enrollStatus.enrollment || null;
                 } catch (e) {
                     c.enrollment_meta = null;
@@ -1794,15 +1813,16 @@ async function refresh() {
 
 // Load My Courses
 async function loadMyCourses() {
-    if (!connectedWallet) {
-        $("my-courses-list").innerHTML = `<div class="empty-state">${currentLang === 'el' ? 'Συνδέστε το πορτοφόλι σας' : 'Please connect your wallet'}</div>`;
+    const learnerId = activeLearnerId();
+    if (!learnerId) {
+        $("my-courses-list").innerHTML = `<div class="empty-state">${currentLang === 'el' ? 'Συνδεθείτε με Earn Account ή πορτοφόλι' : 'Sign in with an Earn Account or wallet'}</div>`;
         return;
     }
 
     try {
         const data = await apiGet("/api/v1/courses");
         const courses = data.courses || [];
-        const myCourses = courses.filter(c => (c.students || []).includes(connectedWallet));
+        const myCourses = courses.filter(c => (c.students || []).includes(learnerId));
 
         const box = $("my-courses-list");
         box.innerHTML = "";
@@ -2928,8 +2948,12 @@ function escapeAttr(str) {
 // Auto-refresh
 $("refresh").onclick = refresh;
 
-// Initial load
-syncWalletFromSession(false);
-refresh().catch(e => log(`Initial load error: ${e.message}`, true));
+// Initial load: restore the same HttpOnly Earn Account session used by /earn
+// before resolving course enrollment state.
+(async () => {
+    await restoreEarnAccount();
+    syncWalletFromSession(false);
+    refresh().catch(e => log(`Initial load error: ${e.message}`, true));
+})();
 </script>
 {% endblock %}

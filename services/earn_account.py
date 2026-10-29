@@ -1267,6 +1267,22 @@ def register_earn_account_routes(
         entries = store.thc_history(user["earn_user_id"])
         return jsonify(ok=True, entries=entries)
 
+    @app.get("/api/earn/providers")
+    def earn_providers():
+        """Return public availability only; provider credentials stay server-side."""
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        return jsonify(
+            ok=True,
+            providers=[
+                {"id": "cpx", "label": "CPX Research", "kind": "surveys",
+                 "enabled": os.getenv("CPX_SURVEYS_BETA_ENABLED", "0") == "1"},
+                {"id": "bitcotasks", "label": "BitcoTasks", "kind": "offers",
+                 "enabled": os.getenv("BITCOTASKS_ENABLED", "0") == "1"},
+            ],
+        )
+
     @app.get("/api/earn/cpx/offerwall")
     def earn_cpx_offerwall():
         user, _ = _current_user()

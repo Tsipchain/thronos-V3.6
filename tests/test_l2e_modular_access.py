@@ -1157,7 +1157,7 @@ def test_l2e_rollout_verification_course_end_to_end_flow(monkeypatch):
 
 def test_walletless_learner_can_submit_quiz(monkeypatch):
     """Learners with only an earn-account (learner_id, no THR wallet) must be
-    able to submit quizzes.  Reward eligibility must be False."""
+    able to submit quizzes with a valid X-Student-Token.  Reward eligibility must be False."""
     course_id = "c_walletless_quiz"
     learner = "earn_user_abc"
     courses = [{
@@ -1182,14 +1182,125 @@ def test_walletless_learner_can_submit_quiz(monkeypatch):
     monkeypatch.setattr(server, "load_json", lambda *args, **kwargs: {})
     monkeypatch.setattr(server, "save_json", lambda *args, **kwargs: None)
 
-    resp = _client().post(f"/api/v1/courses/{course_id}/quiz/submit", json={
-        "learner_id": learner,
-        "answers": {"1": 0},
-    })
+    token = server.create_edu_student_token(learner)
+    resp = _client().post(f"/api/v1/courses/{course_id}/quiz/submit",
+        json={"learner_id": learner, "answers": {"1": 0}},
+        headers={"X-Student-Token": token},
+    )
     assert resp.status_code == 200
     body = resp.get_json()
     assert body["passed"] is True
     assert body["reward_eligibility"] is False
+
+
+def test_walletless_submit_rejected_without_token(monkeypatch):
+    """Wallet-less learner_id submission without X-Student-Token must be rejected."""
+    course_id = "c_no_token"
+    learner = "earn_user_no_tok"
+    quiz = {
+        "pass_threshold_score": 50,
+        "questions": [{"id": 1, "type": "multiple_choice", "correct": 0, "weight": 1, "options": ["a", "b"]}],
+    }
+    monkeypatch.setattr(server, "get_course_quiz", lambda *_: quiz)
+
+    resp = _client().post(f"/api/v1/courses/{course_id}/quiz/submit", json={
+        "learner_id": learner,
+        "answers": {"1": 0},
+    })
+    assert resp.status_code == 401
+    assert "token" in resp.get_json()["message"].lower()
+
+
+def test_user_a_cannot_submit_quiz_as_user_b(monkeypatch):
+    """A signed token for user A must not allow submitting as user B."""
+    course_id = "c_cross_user"
+    user_a = "learner_alice"
+    user_b = "learner_bob"
+    courses = [{
+        "id": course_id,
+        "teacher": "T1",
+        "students": [user_a, user_b],
+        "reward_policy": "manual_claim",
+        "certificate_enabled": False,
+    }]
+    enrollments = {course_id: {
+        user_a: {"reward_eligible": False, "completed": False},
+        user_b: {"reward_eligible": False, "completed": False},
+    }}
+    quiz = {
+        "pass_threshold_score": 50,
+        "questions": [{"id": 1, "type": "multiple_choice", "correct": 0, "weight": 1, "options": ["a", "b"]}],
+    }
+    monkeypatch.setattr(server, "load_courses", lambda: courses)
+    monkeypatch.setattr(server, "save_courses", lambda *_: None)
+    monkeypatch.setattr(server, "get_course_quiz", lambda *_: quiz)
+    monkeypatch.setattr(server, "load_enrollments", lambda: enrollments)
+    monkeypatch.setattr(server, "save_enrollments", lambda e: enrollments.update(copy.deepcopy(e)))
+    monkeypatch.setattr(server, "load_json", lambda *args, **kwargs: {})
+    monkeypatch.setattr(server, "save_json", lambda *args, **kwargs: None)
+
+    token_a = server.create_edu_student_token(user_a)
+
+    # user A's token + user B's learner_id => identity mismatch
+    resp = _client().post(f"/api/v1/courses/{course_id}/quiz/submit",
+        json={"learner_id": user_b, "answers": {"1": 0}},
+        headers={"X-Student-Token": token_a},
+    )
+    assert resp.status_code == 403
+    assert "mismatch" in resp.get_json()["message"].lower()
+
+    # user A's token with matching identity => success
+    resp_ok = _client().post(f"/api/v1/courses/{course_id}/quiz/submit",
+        json={"learner_id": user_a, "answers": {"1": 0}},
+        headers={"X-Student-Token": token_a},
+    )
+    assert resp_ok.status_code == 200
+    assert resp_ok.get_json()["passed"] is True
+
+
+def test_expired_student_token_rejected(monkeypatch):
+    """An expired student token must be rejected."""
+    import time as _time
+    learner = "learner_expired"
+    sec = server.EDU_QUIZ_SECRET
+    # Create a token that expired 10 seconds ago
+    import hmac as _hmac, hashlib as _hashlib
+    expiry = int(_time.time()) - 10
+    payload = f"{learner}:{expiry}"
+    sig = _hmac.new(sec.encode(), payload.encode(), _hashlib.sha256).hexdigest()
+    expired_token = f"{learner}:{expiry}:{sig}"
+
+    quiz = {
+        "pass_threshold_score": 50,
+        "questions": [{"id": 1, "type": "multiple_choice", "correct": 0, "weight": 1, "options": ["a", "b"]}],
+    }
+    monkeypatch.setattr(server, "get_course_quiz", lambda *_: quiz)
+
+    resp = _client().post("/api/v1/courses/c_expired/quiz/submit",
+        json={"learner_id": learner, "answers": {"1": 0}},
+        headers={"X-Student-Token": expired_token},
+    )
+    assert resp.status_code == 401
+
+
+def test_forged_student_token_rejected(monkeypatch):
+    """A token with a tampered signature must be rejected."""
+    learner = "learner_forge"
+    token = server.create_edu_student_token(learner)
+    # Flip last hex char
+    forged = token[:-1] + ("0" if token[-1] != "0" else "1")
+
+    quiz = {
+        "pass_threshold_score": 50,
+        "questions": [{"id": 1, "type": "multiple_choice", "correct": 0, "weight": 1, "options": ["a", "b"]}],
+    }
+    monkeypatch.setattr(server, "get_course_quiz", lambda *_: quiz)
+
+    resp = _client().post("/api/v1/courses/c_forged/quiz/submit",
+        json={"learner_id": learner, "answers": {"1": 0}},
+        headers={"X-Student-Token": forged},
+    )
+    assert resp.status_code == 401
 
 
 def test_quiz_submit_requires_some_identifier(monkeypatch):

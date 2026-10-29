@@ -52,6 +52,12 @@
   .earn-dialog-head h2 { font-size:17px; margin:0; color:#f2c14e; }
   .earn-dialog-close { background:none; color:#cbd5e1; border:0; font-size:24px; cursor:pointer; }
   .earn-dialog-body { padding:14px 18px 18px; overflow:auto; max-height:calc(min(76vh,700px) - 70px); }
+  .earn-account-summary { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin-bottom:14px; }
+  .earn-account-summary div { background:#0b1220; border:1px solid #1e3a50; border-radius:9px; padding:10px; }
+  .earn-account-summary .summary-label { display:block; color:#7fb8d8; font-size:11px; margin-bottom:3px; }
+  .earn-account-summary .summary-value { color:#e2e8f0; font-size:12px; overflow-wrap:anywhere; }
+  .earn-account-summary .linked { color:#34d399; }
+  .earn-account-summary .not-linked { color:#fbbf24; }
   @media (max-width: 520px) { .earn-provider-grid { grid-template-columns:1fr; } .earn-activity-trigger { float:none; margin-top:12px; } }
 </style>
 <main class="earn-beta">
@@ -104,7 +110,15 @@
 </main>
 <dialog id="earn-activity-dialog" class="earn-activity-dialog" aria-labelledby="earn-activity-title">
   <div class="earn-dialog-head"><h2 id="earn-activity-title">Recent activity</h2><button id="earn-activity-close" class="earn-dialog-close" type="button" aria-label="Close activity">×</button></div>
-  <div class="earn-dialog-body"><div class="earn-history-list" id="earn-history-list"><p class="earn-note" style="margin:0">No verified Earn receipts yet.</p></div></div>
+  <div class="earn-dialog-body">
+    <div class="earn-account-summary" id="earn-account-summary" aria-live="polite">
+      <div><span class="summary-label">Earn account</span><span class="summary-value" id="earn-account-email">—</span></div>
+      <div><span class="summary-label">Thronos wallet</span><span class="summary-value not-linked" id="earn-wallet-status">Not linked</span></div>
+      <div><span class="summary-label">Reward clearance</span><span class="summary-value">Pending receipts remain unavailable until provider clearance.</span></div>
+      <div><span class="summary-label">Cash-out</span><span class="summary-value">Not enabled yet.</span></div>
+    </div>
+    <div class="earn-history-list" id="earn-history-list"><p class="earn-note" style="margin:0">No verified Earn receipts yet.</p></div>
+  </div>
 </dialog>
 <script>
 (() => {
@@ -229,6 +243,21 @@
 
   async function refreshDashboard() {
     try {
+      const meRes = await fetch('/api/earn/me', { headers: earnAuthHeaders() });
+      const me = await meRes.json().catch(() => ({}));
+      if (meRes.ok && me.ok) {
+        $('earn-account-email').textContent = me.email || '—';
+        const walletStatus = $('earn-wallet-status');
+        if (me.wallet_address) {
+          walletStatus.textContent = 'Linked: ' + me.wallet_address;
+          walletStatus.className = 'summary-value linked';
+        } else {
+          walletStatus.textContent = 'Not linked — link from Wallet PWA or APK';
+          walletStatus.className = 'summary-value not-linked';
+        }
+      }
+    } catch (_) {}
+    try {
       const bRes = await fetch('/api/earn/balance', { headers: earnAuthHeaders() });
       const bData = await bRes.json().catch(() => ({}));
       if (bRes.ok && bData.ok) {
@@ -287,7 +316,10 @@
     try {
       const res = await fetch('/api/earn/me');
       const data = await res.json().catch(() => ({}));
-      if (res.ok && data.ok) showMain();
+      if (res.ok && data.ok) {
+        await showMain();
+        if (new URLSearchParams(window.location.search).get('view') === 'activity') activityDialog.showModal();
+      }
     } catch (_) { /* Showing the sign-in form is the safe fallback. */ }
   })();
 })();

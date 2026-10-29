@@ -1297,11 +1297,13 @@ def test_expired_student_token_rejected(monkeypatch):
     course_id = "c_expired"
     sec = "test-secret"
     monkeypatch.setattr(server, "EDU_QUIZ_SECRET", sec)
-    import hmac as _hmac, hashlib as _hashlib
+    import hmac as _hmac, hashlib as _hashlib, uuid as _uuid
     expiry = int(_time.time()) - 10
-    payload = f"{learner}:{course_id}:{expiry}"
+    nonce = _uuid.uuid4().hex
+    payload = f"{learner}:{course_id}:{expiry}:{nonce}"
     sig = _hmac.new(sec.encode(), payload.encode(), _hashlib.sha256).hexdigest()
-    expired_token = f"{learner}:{course_id}:{expiry}:{sig}"
+    expired_token = f"{learner}:{course_id}:{expiry}:{nonce}:{sig}"
+    server._edu_token_nonces[nonce] = expiry
 
     quiz = {
         "pass_threshold_score": 50,
@@ -1314,6 +1316,7 @@ def test_expired_student_token_rejected(monkeypatch):
         headers={"X-Student-Token": expired_token},
     )
     assert resp.status_code == 401
+    server._edu_token_nonces.pop(nonce, None)
 
 
 def test_forged_student_token_rejected(monkeypatch):
@@ -1468,3 +1471,127 @@ def test_token_for_wrong_course_rejected(monkeypatch):
     )
     assert resp.status_code == 401
     assert "wrong-course" in resp.get_json()["message"].lower() or "invalid" in resp.get_json()["message"].lower()
+
+
+# ── Token issuance hardening tests ─────────────────────────────────────
+
+
+def test_token_issuance_without_enrollment_rejected(monkeypatch):
+    """Calling the token issuance endpoint for a non-enrolled student must be rejected."""
+    course_id = "c_issue_no_enroll"
+    courses = [{"id": course_id, "teacher": "T1", "students": ["enrolled_only"]}]
+    monkeypatch.setattr(server, "EDU_QUIZ_SECRET", "test-secret")
+    monkeypatch.setattr(server, "load_courses", lambda: courses)
+
+    resp = _client().post(f"/api/v1/courses/{course_id}/token/issue", json={
+        "learner_id": "outsider_learner",
+        "auth_secret": "some-auth",
+    })
+    assert resp.status_code == 403
+    assert "not enrolled" in resp.get_json()["message"].lower()
+
+
+def test_token_issuance_wallet_proof_mismatch_rejected(monkeypatch):
+    """wallet_proof.from must match the claimed student identity."""
+    course_id = "c_issue_wallet_mismatch"
+    student = "THR_REAL_STUDENT"
+    courses = [{"id": course_id, "teacher": "T1", "students": [student]}]
+    monkeypatch.setattr(server, "EDU_QUIZ_SECRET", "test-secret")
+    monkeypatch.setattr(server, "load_courses", lambda: courses)
+
+    resp = _client().post(f"/api/v1/courses/{course_id}/token/issue", json={
+        "student_thr": student,
+        "wallet_proof": {"from": "THR_DIFFERENT_WALLET"},
+    })
+    assert resp.status_code == 403
+    assert "does not match" in resp.get_json()["message"].lower()
+
+
+def test_token_revocation_and_reuse_rejected(monkeypatch):
+    """A revoked token must be rejected when used for quiz submission."""
+    course_id = "c_revoke_test"
+    student = "learner_revoke"
+    courses = [{"id": course_id, "teacher": "T1", "students": [student]}]
+    quiz = {
+        "pass_threshold_score": 50,
+        "questions": [{"id": 1, "type": "multiple_choice", "correct": 0, "weight": 1, "options": ["a", "b"]}],
+    }
+    monkeypatch.setattr(server, "EDU_QUIZ_SECRET", "test-secret")
+    monkeypatch.setattr(server, "ADMIN_SECRET", "admin-test-secret")
+    monkeypatch.setattr(server, "load_courses", lambda: courses)
+    monkeypatch.setattr(server, "save_courses", lambda *_: None)
+    monkeypatch.setattr(server, "get_course_quiz", lambda *_: quiz)
+    monkeypatch.setattr(server, "load_enrollments", lambda: {course_id: {student: {}}})
+    monkeypatch.setattr(server, "save_enrollments", lambda *_: None)
+    monkeypatch.setattr(server, "load_json", lambda *args, **kwargs: {})
+    monkeypatch.setattr(server, "save_json", lambda *args, **kwargs: None)
+
+    token = server.create_edu_student_token(student, course_id)
+    nonce = token.split(":")[3]
+
+    revoke_resp = _client().post("/api/v1/edu/token/revoke",
+        json={"nonce": nonce},
+        headers={"X-Admin-Secret": "admin-test-secret"},
+    )
+    assert revoke_resp.status_code == 200
+
+    resp = _client().post(f"/api/v1/courses/{course_id}/quiz/submit",
+        json={"learner_id": student, "answers": {"1": 0}},
+        headers={"X-Student-Token": token},
+    )
+    assert resp.status_code == 401
+
+
+def test_teacher_cross_course_token_rejected(monkeypatch):
+    """A teacher token for course A must not work on course B."""
+    course_a = "teacher_course_a"
+    course_b = "teacher_course_b"
+    teacher = "T_CROSS"
+    courses = [
+        {"id": course_a, "teacher": teacher, "students": []},
+        {"id": course_b, "teacher": "T_OTHER", "students": []},
+    ]
+    monkeypatch.setattr(server, "EDU_QUIZ_SECRET", "test-secret")
+    monkeypatch.setattr(server, "load_courses", lambda: courses)
+
+    token_a = server.create_edu_teacher_token(teacher, course_a)
+    verified = server.verify_edu_teacher_token(token_a, expected_course_id=course_b)
+    assert verified is None
+
+
+def test_wildcard_student_token_rejected(monkeypatch):
+    """Tokens with wildcard '*' course_id must be rejected."""
+    monkeypatch.setattr(server, "EDU_QUIZ_SECRET", "test-secret")
+    token = server.create_edu_student_token("any_student", "*")
+    assert token is None
+
+
+def test_wildcard_teacher_token_rejected(monkeypatch):
+    """Teacher tokens with wildcard '*' course_id must be rejected."""
+    monkeypatch.setattr(server, "EDU_QUIZ_SECRET", "test-secret")
+    token = server.create_edu_teacher_token("any_teacher", "*")
+    assert token is None
+
+
+def test_teacher_token_issuance_wrong_owner_rejected(monkeypatch):
+    """Teacher token issuance for a course they don't own must be rejected."""
+    course_id = "c_teacher_not_owner"
+    courses = [{"id": course_id, "teacher": "T_REAL_OWNER", "students": []}]
+    monkeypatch.setattr(server, "EDU_QUIZ_SECRET", "test-secret")
+    monkeypatch.setattr(server, "load_courses", lambda: courses)
+
+    resp = _client().post(f"/api/v1/courses/{course_id}/teacher-token/issue", json={
+        "teacher_thr": "T_IMPOSTER",
+        "wallet_proof": {"from": "T_IMPOSTER"},
+    })
+    assert resp.status_code in (401, 403, 503)
+
+
+def test_token_issuance_requires_secret(monkeypatch):
+    """Token issuance endpoint must return 503 when EDU_QUIZ_SECRET is not set."""
+    monkeypatch.setattr(server, "EDU_QUIZ_SECRET", "")
+    resp = _client().post("/api/v1/courses/any_course/token/issue", json={
+        "learner_id": "anyone",
+        "auth_secret": "something",
+    })
+    assert resp.status_code == 503

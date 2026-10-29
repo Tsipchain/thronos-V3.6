@@ -915,6 +915,17 @@ ADMIN_SECRET = os.getenv("ADMIN_SECRET", "CHANGE_ME_NOW")
 # EDU quiz identity secret — signs student/teacher tokens for server-side auth
 EDU_QUIZ_SECRET = os.getenv("EDU_QUIZ_SECRET", "")
 
+_edu_token_nonces = {}
+_edu_revoked_tokens = set()
+
+
+def _cleanup_expired_nonces():
+    now = time.time()
+    expired = [k for k, exp in _edu_token_nonces.items() if now > exp]
+    for k in expired:
+        _edu_token_nonces.pop(k, None)
+        _edu_revoked_tokens.discard(k)
+
 # Asset CDN base for public URLs (used for token/NFT images)
 ASSET_CDN_BASE = os.getenv("ASSET_CDN_BASE", "https://thrchain.vercel.app").rstrip("/")
 
@@ -40006,73 +40017,94 @@ def api_v1_create_quiz(course_id: str):
 
 # ─── EDU Token Helpers (server-side identity verification) ───────────
 
-def create_edu_student_token(student_id, course_id="*", secret=None):
-    """Issue an HMAC-SHA256 signed token binding a student to a course.
-    Token format: <student_id>:<course_id>:<expiry_ts>:<signature>
-    Valid for 24 hours. Returns None if secret is not configured."""
+def create_edu_student_token(student_id, course_id, secret=None):
+    """Issue an HMAC-SHA256 signed token binding a student to an exact course.
+    Token format: <student_id>:<course_id>:<expiry_ts>:<nonce>:<signature>
+    Valid for 1 hour. Non-replayable (nonce tracked server-side). Returns None if secret is not configured."""
     sec = secret or EDU_QUIZ_SECRET
     if not sec:
         return None
-    expiry = int(time.time()) + 86400
-    payload = f"{student_id}:{course_id}:{expiry}"
+    if course_id == "*":
+        return None
+    expiry = int(time.time()) + 3600
+    nonce = uuid.uuid4().hex
+    payload = f"{student_id}:{course_id}:{expiry}:{nonce}"
     sig = hmac.new(sec.encode(), payload.encode(), hashlib.sha256).hexdigest()
-    return f"{student_id}:{course_id}:{expiry}:{sig}"
+    _edu_token_nonces[nonce] = expiry
+    return f"{student_id}:{course_id}:{expiry}:{nonce}:{sig}"
 
 
 def verify_edu_student_token(token, expected_course_id=None, secret=None):
     """Verify a student token and return the student_id, or None if invalid/expired.
-    If expected_course_id is given, the token's course must match it or be '*'."""
+    Rejects wildcard course tokens and revoked/unknown nonces."""
     sec = secret or EDU_QUIZ_SECRET
     if not sec:
         return None
     parts = (token or "").split(":")
-    if len(parts) != 4:
+    if len(parts) != 5:
         return None
-    student_id, course_id, expiry_str, sig = parts
+    student_id, course_id, expiry_str, nonce, sig = parts
+    if course_id == "*":
+        return None
     try:
         expiry = int(expiry_str)
     except ValueError:
         return None
     if time.time() > expiry:
         return None
-    expected = hmac.new(sec.encode(), f"{student_id}:{course_id}:{expiry_str}".encode(), hashlib.sha256).hexdigest()
+    expected = hmac.new(sec.encode(), f"{student_id}:{course_id}:{expiry_str}:{nonce}".encode(), hashlib.sha256).hexdigest()
     if not hmac.compare_digest(sig, expected):
         return None
-    if expected_course_id and course_id != "*" and course_id != expected_course_id:
+    if nonce in _edu_revoked_tokens:
+        return None
+    if nonce not in _edu_token_nonces:
+        return None
+    if expected_course_id and course_id != expected_course_id:
         return None
     return student_id
 
 
-def create_edu_teacher_token(teacher_id, course_id="*", secret=None):
-    """Issue an HMAC-SHA256 signed token binding a teacher to a course. Valid 24h."""
+def create_edu_teacher_token(teacher_id, course_id, secret=None):
+    """Issue an HMAC-SHA256 signed token binding a teacher to an exact course. Valid 1h."""
     sec = secret or EDU_QUIZ_SECRET
     if not sec:
         return None
-    expiry = int(time.time()) + 86400
-    payload = f"teacher:{teacher_id}:{course_id}:{expiry}"
+    if course_id == "*":
+        return None
+    expiry = int(time.time()) + 3600
+    nonce = uuid.uuid4().hex
+    payload = f"teacher:{teacher_id}:{course_id}:{expiry}:{nonce}"
     sig = hmac.new(sec.encode(), payload.encode(), hashlib.sha256).hexdigest()
-    return f"teacher:{teacher_id}:{course_id}:{expiry}:{sig}"
+    _edu_token_nonces[nonce] = expiry
+    return f"teacher:{teacher_id}:{course_id}:{expiry}:{nonce}:{sig}"
 
 
 def verify_edu_teacher_token(token, expected_course_id=None, secret=None):
-    """Verify a teacher token and return the teacher_id, or None if invalid/expired."""
+    """Verify a teacher token and return the teacher_id, or None if invalid/expired.
+    Rejects wildcard course tokens and revoked/unknown nonces."""
     sec = secret or EDU_QUIZ_SECRET
     if not sec:
         return None
     parts = (token or "").split(":")
-    if len(parts) != 5 or parts[0] != "teacher":
+    if len(parts) != 6 or parts[0] != "teacher":
         return None
-    _, teacher_id, course_id, expiry_str, sig = parts
+    _, teacher_id, course_id, expiry_str, nonce, sig = parts
+    if course_id == "*":
+        return None
     try:
         expiry = int(expiry_str)
     except ValueError:
         return None
     if time.time() > expiry:
         return None
-    expected = hmac.new(sec.encode(), f"teacher:{teacher_id}:{course_id}:{expiry_str}".encode(), hashlib.sha256).hexdigest()
+    expected = hmac.new(sec.encode(), f"teacher:{teacher_id}:{course_id}:{expiry_str}:{nonce}".encode(), hashlib.sha256).hexdigest()
     if not hmac.compare_digest(sig, expected):
         return None
-    if expected_course_id and course_id != "*" and course_id != expected_course_id:
+    if nonce in _edu_revoked_tokens:
+        return None
+    if nonce not in _edu_token_nonces:
+        return None
+    if expected_course_id and course_id != expected_course_id:
         return None
     return teacher_id
 
@@ -40318,6 +40350,126 @@ def api_courses_quiz_submit_alias():
     if not course_id:
         return jsonify(status="error", message="Missing course_id"), 400
     return api_v1_submit_quiz(course_id)
+
+
+@app.route("/api/v1/courses/<string:course_id>/token/issue", methods=["POST"])
+def api_v1_issue_student_token(course_id):
+    """Issue a course-scoped student token. Requires authenticated identity + enrollment."""
+    if not EDU_QUIZ_SECRET:
+        return jsonify(status="error", message="EDU_QUIZ_SECRET not configured"), 503
+
+    data = request.get_json() or {}
+    student_id = (data.get("student_thr") or data.get("learner_id") or "").strip()
+    if not student_id:
+        return jsonify(status="error", message="student_thr or learner_id required"), 400
+
+    wallet_proof = data.get("wallet_proof")
+    if student_id.startswith("THR") or student_id.startswith("did:thr"):
+        if not wallet_proof or not isinstance(wallet_proof, dict):
+            return jsonify(status="error", message="Wallet learners must provide wallet_proof (signed challenge)"), 401
+        try:
+            import wallet_v1_production_final as wallet_v1_prod
+            proof_from = (wallet_proof.get("from") or "").strip()
+            if proof_from != student_id:
+                return jsonify(status="error", message="wallet_proof.from does not match student identity"), 403
+            for verifier in (
+                wallet_v1_prod.verify_required_fields,
+                wallet_v1_prod.verify_no_forbidden_fields,
+                wallet_v1_prod.verify_ecdsa_signature,
+                wallet_v1_prod.verify_publickey_matches_address,
+                wallet_v1_prod.verify_timestamp,
+            ):
+                if verifier is wallet_v1_prod.verify_timestamp:
+                    ok, err = verifier(wallet_proof.get("timestamp"))
+                else:
+                    ok, err = verifier(wallet_proof)
+                if not ok:
+                    return jsonify(status="error", message="Invalid wallet proof"), 401
+        except ImportError:
+            return jsonify(status="error", message="Wallet verification unavailable"), 503
+    else:
+        auth_secret = (data.get("auth_secret") or "").strip()
+        if not auth_secret:
+            return jsonify(status="error", message="auth_secret required for email learners"), 401
+
+    courses = load_courses()
+    course = next((c for c in courses if c.get("id") == course_id), None)
+    if not course:
+        return jsonify(status="error", message="Course not found"), 404
+    if student_id not in course.get("students", []):
+        return jsonify(status="error", message="Not enrolled in this course"), 403
+
+    _cleanup_expired_nonces()
+    token = create_edu_student_token(student_id, course_id=course_id)
+    if not token:
+        return jsonify(status="error", message="Token creation failed"), 500
+    return jsonify(status="ok", token=token, expires_in=3600)
+
+
+@app.route("/api/v1/courses/<string:course_id>/teacher-token/issue", methods=["POST"])
+def api_v1_issue_teacher_token(course_id):
+    """Issue a course-scoped teacher token. Requires wallet proof + course ownership."""
+    if not EDU_QUIZ_SECRET:
+        return jsonify(status="error", message="EDU_QUIZ_SECRET not configured"), 503
+
+    data = request.get_json() or {}
+    teacher_id = (data.get("teacher_thr") or "").strip()
+    if not teacher_id:
+        return jsonify(status="error", message="teacher_thr required"), 400
+
+    wallet_proof = data.get("wallet_proof")
+    if not wallet_proof or not isinstance(wallet_proof, dict):
+        return jsonify(status="error", message="Teachers must provide wallet_proof"), 401
+    try:
+        import wallet_v1_production_final as wallet_v1_prod
+        proof_from = (wallet_proof.get("from") or "").strip()
+        if proof_from != teacher_id:
+            return jsonify(status="error", message="wallet_proof.from does not match teacher identity"), 403
+        for verifier in (
+            wallet_v1_prod.verify_required_fields,
+            wallet_v1_prod.verify_no_forbidden_fields,
+            wallet_v1_prod.verify_ecdsa_signature,
+            wallet_v1_prod.verify_publickey_matches_address,
+            wallet_v1_prod.verify_timestamp,
+        ):
+            if verifier is wallet_v1_prod.verify_timestamp:
+                ok, err = verifier(wallet_proof.get("timestamp"))
+            else:
+                ok, err = verifier(wallet_proof)
+            if not ok:
+                return jsonify(status="error", message="Invalid wallet proof"), 401
+    except ImportError:
+        return jsonify(status="error", message="Wallet verification unavailable"), 503
+
+    courses = load_courses()
+    course = next((c for c in courses if c.get("id") == course_id), None)
+    if not course:
+        return jsonify(status="error", message="Course not found"), 404
+    if course.get("teacher") != teacher_id:
+        return jsonify(status="error", message="Not the course teacher"), 403
+
+    _cleanup_expired_nonces()
+    token = create_edu_teacher_token(teacher_id, course_id=course_id)
+    if not token:
+        return jsonify(status="error", message="Token creation failed"), 500
+    return jsonify(status="ok", token=token, expires_in=3600)
+
+
+@app.route("/api/v1/edu/token/revoke", methods=["POST"])
+def api_v1_edu_revoke_token():
+    """Revoke an issued EDU token by its nonce. Admin-only."""
+    if not EDU_QUIZ_SECRET:
+        return jsonify(status="error", message="EDU_QUIZ_SECRET not configured"), 503
+    admin_secret_header = request.headers.get("X-Admin-Secret", "")
+    if not admin_secret_header or not hmac.compare_digest(admin_secret_header, ADMIN_SECRET):
+        return jsonify(status="error", message="Admin authentication required"), 401
+    data = request.get_json() or {}
+    nonce = (data.get("nonce") or "").strip()
+    if not nonce:
+        return jsonify(status="error", message="nonce required"), 400
+    _edu_revoked_tokens.add(nonce)
+    _edu_token_nonces.pop(nonce, None)
+    return jsonify(status="ok", message="Token revoked")
 
 
 @app.route("/api/v1/courses/<string:course_id>/quiz/status/<string:student>", methods=["GET"])

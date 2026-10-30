@@ -1943,6 +1943,15 @@ async function _linkActiveWalletToEarn(earnBase) {
   return result;
 }
 
+function _formatEarnThc(raw) {
+  const value = String(raw ?? '0').trim();
+  if (!/^\d+(?:\.\d{1,6})?$/.test(value)) return '0.00';
+  const [whole, fraction = ''] = value.split('.');
+  const significant = fraction.replace(/0+$/, '').length;
+  const digits = Math.max(2, significant);
+  return whole + '.' + (fraction + '000000').slice(0, digits);
+}
+
 async function showEarn() {
   render(`
     <div class="screen">
@@ -1985,14 +1994,16 @@ async function showEarn() {
     ]);
     const balance = await balanceResponse.json().catch(() => null);
     const history = await historyResponse.json().catch(() => null);
-    const available = Number(balance?.available || 0).toFixed(2);
-    const pending = Number(balance?.pending || 0).toFixed(2);
-    const entries = Array.isArray(history?.entries) ? history.entries.slice(0, 4) : [];
-    const rows = entries.length ? entries.map(entry => `
+    const available = _formatEarnThc(balance?.available);
+    const pending = _formatEarnThc(balance?.pending);
+    const allEntries = Array.isArray(history?.entries) ? history.entries : [];
+    const entries = allEntries.slice(0, 4);
+    const renderEntry = (entry) => `
       <div style="display:flex;justify-content:space-between;gap:8px;padding:9px 0;border-top:1px solid #ffffff14">
         <div style="min-width:0"><div style="font-size:.8rem">${escHtml(entry.source || 'Earn reward')}</div><div style="font-size:.68rem;color:var(--muted)">${escHtml(entry.state || 'pending')}</div></div>
-        <div style="font-size:.82rem;color:var(--accent)">+${escHtml(String(entry.amount || '0'))} THC</div>
-      </div>`).join('') : '<p style="color:var(--muted);font-size:.82rem">No verified rewards yet.</p>';
+        <div style="font-size:.82rem;color:var(--accent)">+${escHtml(_formatEarnThc(entry.amount))} THC</div>
+      </div>`;
+    const rows = entries.length ? entries.map(renderEntry).join('') : '<p style="color:var(--muted);font-size:.82rem">No verified rewards yet.</p>';
 
     body.innerHTML = `
       <div style="font-size:.72rem;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(me.email || '')}</div>
@@ -2006,7 +2017,41 @@ async function showEarn() {
       <p id="earnPwaMessage" style="font-size:.72rem;color:var(--muted);line-height:1.45;margin:12px 0 4px">Rewards remain pending until verified CPX clearance. No wallet settlement or payout is claimed here.</p>
       <div style="margin-top:12px"><div style="font-size:.7rem;color:var(--muted);letter-spacing:.08em">RECENT REWARDS</div>${rows}</div>
     `;
-    document.getElementById('openEarnCenterBtn').addEventListener('click', () => window.location.assign(`${earnBase}/earn`));
+    const openEarnActivity = () => {
+      const overlay = document.createElement('div');
+      overlay.setAttribute('role', 'dialog');
+      overlay.setAttribute('aria-modal', 'true');
+      overlay.style.cssText = 'position:fixed;inset:0;z-index:10000;background:#070612ee;padding:max(18px,env(safe-area-inset-top)) 14px 18px;overflow:auto;';
+      const walletText = me.wallet_address
+        ? 'Linked: ' + escHtml(me.wallet_address)
+        : 'Not linked — link from Wallet PWA or APK';
+      const activityRows = allEntries.length
+        ? allEntries.map(renderEntry).join('')
+        : '<p style="color:var(--muted);font-size:.82rem">No verified rewards yet.</p>';
+      overlay.innerHTML = `
+        <div style="max-width:520px;margin:0 auto;background:#17152f;border:1px solid #453b78;border-radius:18px;padding:16px">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+            <div><div style="font-size:1.1rem;font-weight:800">⏱ Earn activity</div><div style="color:var(--muted);font-size:.75rem;margin-top:3px">${escHtml(me.email || '')}</div></div>
+            <button id="closeEarnActivity" class="btn--icon" type="button" aria-label="Close">×</button>
+          </div>
+          <div style="display:flex;gap:10px;margin:15px 0">
+            <div style="flex:1;background:#0d0a1a;border-radius:9px;padding:10px"><div style="font-size:.66rem;color:var(--muted)">AVAILABLE</div><div style="font-size:1.1rem;color:var(--accent);font-weight:700">${available} THC</div></div>
+            <div style="flex:1;background:#0d0a1a;border-radius:9px;padding:10px"><div style="font-size:.66rem;color:var(--muted)">PENDING</div><div style="font-size:1.1rem;color:#e8bf5a;font-weight:700">${pending} THC</div></div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-bottom:12px;font-size:.73rem">
+            <div style="background:#0d0a1a;border-radius:8px;padding:10px"><div style="color:var(--muted);margin-bottom:4px">THRONOS WALLET</div><div>${walletText}</div></div>
+            <div style="background:#0d0a1a;border-radius:8px;padding:10px"><div style="color:var(--muted);margin-bottom:4px">CASH-OUT</div><div>Not enabled yet.</div></div>
+          </div>
+          <p style="font-size:.74rem;color:var(--muted);line-height:1.45;margin:0 0 10px">Pending receipts remain unavailable until provider clearance.</p>
+          <div style="font-size:.7rem;color:var(--muted);letter-spacing:.08em">RECENT REWARDS</div>
+          <div style="margin-top:6px">${activityRows}</div>
+        </div>`;
+      document.body.appendChild(overlay);
+      overlay.querySelector('#closeEarnActivity').addEventListener('click', () => overlay.remove());
+      overlay.addEventListener('click', (event) => { if (event.target === overlay) overlay.remove(); });
+    };
+    window.__thronosOpenEarnActivity = openEarnActivity;
+    document.getElementById('openEarnCenterBtn').addEventListener('click', openEarnActivity);
     document.getElementById('linkEarnWalletBtn')?.addEventListener('click', async () => {
       const message = document.getElementById('earnPwaMessage');
       message.textContent = 'Requesting wallet proof…';

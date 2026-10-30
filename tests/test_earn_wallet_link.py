@@ -104,9 +104,14 @@ class EarnWalletLinkTests(unittest.TestCase):
         root = Path(__file__).parent.parent / "public" / "wallet-pwa"
         index = (root / "index.html").read_text()
         handoff = (root / "earn-activity-handoff.js").read_text()
+        app = (root / "app.js").read_text()
         self.assertIn("earn-activity-handoff.js", index)
         self.assertIn("#openEarnCenterBtn", handoff)
-        self.assertIn("/earn?view=activity", handoff)
+        self.assertIn("window.__thronosOpenEarnActivity", handoff)
+        self.assertNotIn("/earn?view=activity", handoff)
+        self.assertIn("window.__thronosOpenEarnActivity = openEarnActivity", app)
+        self.assertIn("Pending receipts remain unavailable until provider clearance.", app)
+        self.assertIn("_formatEarnThc", app)
 
 
 if __name__ == "__main__":

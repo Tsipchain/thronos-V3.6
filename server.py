@@ -48413,6 +48413,24 @@ def earn_beta_page():
     """Wallet-first CPX beta entry. The iframe URL is never client-composed."""
     return render_template("earn_beta.html")
 
+
+# ─── Public Earn / CPX publisher information ───────────────────────────────
+# Kept public, static and free of account data so a provider or prospective
+# user can find the applicable rules before opening a survey.
+@app.get("/terms")
+def earn_terms_page():
+    return render_template("earn_terms.html")
+
+
+@app.get("/privacy")
+def earn_privacy_page():
+    return render_template("earn_privacy.html")
+
+
+@app.get("/contact")
+def earn_contact_page():
+    return render_template("earn_contact.html")
+
 # ─── Earn Center: wallet-bound identity and transactional reward ledger ──────
 # This registration deliberately has no payout worker and no live CPX callback.
 # A reward cannot become paid until a separate, audited settlement path supplies

@@ -44,6 +44,8 @@
   .earn-provider .earn-action { width:100%; margin:0; }
   .earn-provider.is-unavailable { opacity:.7; }
   .earn-provider-status { color:#fbbf24; font-size:11px; font-weight:700; }
+  .earn-activity-launch { display:inline-flex; align-items:center; gap:7px; margin:12px 0 2px; color:#06120e; background:#f2c14e; border:1px solid #f8d66c; border-radius:999px; padding:10px 14px; font-size:13px; font-weight:800; text-decoration:none; box-shadow:0 3px 12px #0004; }
+  .earn-activity-launch:focus-visible { outline:3px solid #7fb8d8; outline-offset:2px; }
   .earn-activity-trigger { display:flex; align-items:center; gap:8px; color:#b8d9ee; background:#101827; border:1px solid #2e5874; border-radius:999px; padding:8px 12px; cursor:pointer; float:right; }
   .earn-activity-count { min-width:18px; height:18px; line-height:18px; border-radius:99px; text-align:center; background:#f2c14e; color:#101827; font-size:11px; font-weight:800; }
   .earn-activity-dialog { width:min(620px,calc(100vw - 28px)); max-height:min(76vh,700px); background:#101827; color:#e2e8f0; border:1px solid #2e5874; border-radius:16px; box-shadow:0 20px 70px #000b; padding:0; }
@@ -64,6 +66,7 @@
   <section class="earn-card">
     <h1>Thronos Earn — Beta</h1>
     <p id="earn-subtitle">Create an Earn Account or sign in. No wallet required.</p>
+    <a id="earn-activity-launch" class="earn-activity-launch" href="/earn?view=activity" target="_blank" rel="noopener" aria-label="Open Earn balance and activity in a new tab">⏱ Balance &amp; activity</a>
 
     <!-- Auth form -->
     <div id="earn-auth">
@@ -327,9 +330,12 @@
     try {
       const res = await fetch('/api/earn/me');
       const data = await res.json().catch(() => ({}));
+      const requestedView = new URLSearchParams(window.location.search).get('view');
       if (res.ok && data.ok) {
         await showMain();
-        if (new URLSearchParams(window.location.search).get('view') === 'activity') activityDialog.showModal();
+        if (requestedView === 'activity') activityDialog.showModal();
+      } else if (requestedView === 'activity') {
+        setStatus('Sign in to view your Earn balance and activity.', false);
       }
     } catch (_) { /* Showing the sign-in form is the safe fallback. */ }
   })();

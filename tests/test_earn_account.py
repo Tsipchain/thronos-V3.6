@@ -1302,7 +1302,11 @@ class TestEarnTemplateCookieSession:
         template = (Path(__file__).parent.parent / "templates" / "earn_beta.html").read_text()
         assert "AVAILABLE THC" in template
         assert "PENDING THC" in template
-        assert "bData.pending || 0" in template
+        # Decimal strings are deliberately formatted without Number()/float conversion.
+        assert "formatThc(bData.available)" in template
+        assert "formatThc(bData.pending)" in template
+        assert "Number(bData.available" not in template
+        assert "Number(bData.pending" not in template
         assert "No verified Earn receipts yet." in template
 
     def test_mobile_provider_tab_preserves_earn_dashboard(self):

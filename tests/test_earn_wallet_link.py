@@ -112,6 +112,9 @@ class EarnWalletLinkTests(unittest.TestCase):
         self.assertIn("window.__thronosOpenEarnActivity = openEarnActivity", app)
         self.assertIn("Pending receipts remain unavailable until provider clearance.", app)
         self.assertIn("_formatEarnThc", app)
+        self.assertIn("linkEarnWalletFromActivity", app)
+        self.assertIn("await _linkActiveWalletToEarn(earnBase)", app)
+        self.assertNotIn("cashout_execute", app)
 
 
 if __name__ == "__main__":

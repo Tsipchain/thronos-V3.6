@@ -2024,7 +2024,10 @@ async function showEarn() {
       overlay.style.cssText = 'position:fixed;inset:0;z-index:10000;background:#070612ee;padding:max(18px,env(safe-area-inset-top)) 14px 18px;overflow:auto;';
       const walletText = me.wallet_address
         ? 'Linked: ' + escHtml(me.wallet_address)
-        : 'Not linked — link from Wallet PWA or APK';
+        : 'Not linked yet.';
+      const walletAction = me.wallet_address ? '' : `
+        <button id="linkEarnWalletFromActivity" class="btn btn--primary" type="button" style="width:100%;padding:9px;margin-top:8px;font-size:.76rem">Link active Thronos wallet</button>
+        <div id="earnActivityLinkMessage" style="font-size:.7rem;color:var(--muted);margin-top:6px"></div>`;
       const activityRows = allEntries.length
         ? allEntries.map(renderEntry).join('')
         : '<p style="color:var(--muted);font-size:.82rem">No verified rewards yet.</p>';
@@ -2039,7 +2042,7 @@ async function showEarn() {
             <div style="flex:1;background:#0d0a1a;border-radius:9px;padding:10px"><div style="font-size:.66rem;color:var(--muted)">PENDING</div><div style="font-size:1.1rem;color:#e8bf5a;font-weight:700">${pending} THC</div></div>
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-bottom:12px;font-size:.73rem">
-            <div style="background:#0d0a1a;border-radius:8px;padding:10px"><div style="color:var(--muted);margin-bottom:4px">THRONOS WALLET</div><div>${walletText}</div></div>
+            <div style="background:#0d0a1a;border-radius:8px;padding:10px"><div style="color:var(--muted);margin-bottom:4px">THRONOS WALLET</div><div>${walletText}</div>${walletAction}</div>
             <div style="background:#0d0a1a;border-radius:8px;padding:10px"><div style="color:var(--muted);margin-bottom:4px">CASH-OUT</div><div>Not enabled yet.</div></div>
           </div>
           <p style="font-size:.74rem;color:var(--muted);line-height:1.45;margin:0 0 10px">Pending receipts remain unavailable until provider clearance.</p>
@@ -2049,6 +2052,21 @@ async function showEarn() {
       document.body.appendChild(overlay);
       overlay.querySelector('#closeEarnActivity').addEventListener('click', () => overlay.remove());
       overlay.addEventListener('click', (event) => { if (event.target === overlay) overlay.remove(); });
+      overlay.querySelector('#linkEarnWalletFromActivity')?.addEventListener('click', async (event) => {
+        const button = event.currentTarget;
+        const message = overlay.querySelector('#earnActivityLinkMessage');
+        button.disabled = true;
+        if (message) message.textContent = 'Requesting signed wallet proof…';
+        try {
+          await _linkActiveWalletToEarn(earnBase);
+          if (message) message.textContent = 'Wallet linked securely.';
+          overlay.remove();
+          await showEarn();
+        } catch (error) {
+          button.disabled = false;
+          if (message) message.textContent = 'Could not link wallet: ' + (error.message || 'unknown_error');
+        }
+      });
     };
     window.__thronosOpenEarnActivity = openEarnActivity;
     document.getElementById('openEarnCenterBtn').addEventListener('click', openEarnActivity);

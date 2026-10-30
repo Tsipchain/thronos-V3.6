@@ -1,10 +1,11 @@
-// Keep the PWA's compact Earn card focused on balances.  The detailed history
-// view belongs to the authenticated Earn dashboard, where it can show account
-// and wallet-link state without copying sensitive data into the wallet UI.
+// The PWA owns its Earn detail view.  Do not navigate to the web dashboard:
+// an authenticated wallet session must stay in the installed PWA surface.
 document.addEventListener('click', (event) => {
   const button = event.target.closest('#openEarnCenterBtn');
   if (!button) return;
   event.preventDefault();
   event.stopImmediatePropagation();
-  window.location.assign('/earn?view=activity');
+  if (typeof window.__thronosOpenEarnActivity === 'function') {
+    window.__thronosOpenEarnActivity();
+  }
 }, true);

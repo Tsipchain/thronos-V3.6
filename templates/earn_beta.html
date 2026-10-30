@@ -26,6 +26,8 @@
   .earn-balance-bar { background:#0b1220; border:1px solid #2e5874; border-radius:10px; padding:14px; margin-top:14px; }
   .earn-balance-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
   .earn-balance-cell { min-width:0; }
+  button.earn-balance-cell { appearance:none; width:100%; text-align:left; background:#0b1220; border:1px solid transparent; border-radius:8px; padding:8px; cursor:pointer; }
+  button.earn-balance-cell:focus-visible { outline:3px solid #7fb8d8; outline-offset:2px; }
   .earn-balance-bar .label { color:#7fb8d8; font-size:12px; } .earn-balance-bar .value { color:#f2c14e; font-size:20px; font-weight:700; }
   .earn-balance-bar .value.pending { color:#fbbf24; }
   .earn-history { margin-top:12px; }
@@ -44,7 +46,7 @@
   .earn-provider .earn-action { width:100%; margin:0; }
   .earn-provider.is-unavailable { opacity:.7; }
   .earn-provider-status { color:#fbbf24; font-size:11px; font-weight:700; }
-  .earn-activity-launch { display:inline-flex; align-items:center; gap:7px; margin:12px 0 2px; color:#06120e; background:#f2c14e; border:1px solid #f8d66c; border-radius:999px; padding:10px 14px; font-size:13px; font-weight:800; text-decoration:none; box-shadow:0 3px 12px #0004; }
+  .earn-activity-launch { display:inline-flex; align-items:center; gap:7px; margin:12px 0 2px; color:#06120e; background:#f2c14e; border:1px solid #f8d66c; border-radius:999px; padding:10px 14px; font-size:13px; font-weight:800; text-decoration:none; box-shadow:0 3px 12px #0004; cursor:pointer; }
   .earn-activity-launch:focus-visible { outline:3px solid #7fb8d8; outline-offset:2px; }
   .earn-activity-trigger { display:flex; align-items:center; gap:8px; color:#b8d9ee; background:#101827; border:1px solid #2e5874; border-radius:999px; padding:8px 12px; cursor:pointer; float:right; }
   .earn-activity-count { min-width:18px; height:18px; line-height:18px; border-radius:99px; text-align:center; background:#f2c14e; color:#101827; font-size:11px; font-weight:800; }
@@ -64,9 +66,10 @@
 </style>
 <main class="earn-beta">
   <section class="earn-card">
-    <h1>Thronos Earn — Beta</h1>
+    <h1>Thronos Earn Project</h1>
+    <p style="margin:0;color:#7fb8d8;font-size:12px">Powered by ThronosLabs and ENCOM</p>
     <p id="earn-subtitle">Create an Earn Account or sign in. No wallet required.</p>
-    <a id="earn-activity-launch" class="earn-activity-launch" href="/earn?view=activity" target="_blank" rel="noopener" aria-label="Open Earn balance and activity in a new tab">⏱ Balance &amp; activity</a>
+    <button id="earn-activity-launch" class="earn-activity-launch" type="button" aria-haspopup="dialog" aria-label="Open Earn balance and activity">⏱ Balance &amp; activity</button>
 
     <!-- Auth form -->
     <div id="earn-auth">
@@ -82,8 +85,8 @@
     <div id="earn-main" style="display:none">
       <div class="earn-balance-bar" id="earn-balance-bar">
         <div class="earn-balance-grid">
-          <div class="earn-balance-cell"><div class="label">AVAILABLE THC</div><div class="value" id="earn-balance-value">—</div></div>
-          <div class="earn-balance-cell"><div class="label">PENDING THC</div><div class="value pending" id="earn-pending-value">—</div></div>
+          <button id="earn-available-trigger" class="earn-balance-cell" type="button" aria-haspopup="dialog"><div class="label">AVAILABLE THC</div><div class="value" id="earn-balance-value">—</div></button>
+          <button id="earn-pending-trigger" class="earn-balance-cell" type="button" aria-haspopup="dialog"><div class="label">PENDING THC</div><div class="value pending" id="earn-pending-value">—</div></button>
         </div>
       </div>
       <div class="earn-provider-grid" aria-label="Earn providers">
@@ -148,12 +151,30 @@
   // Earn amounts arrive as fixed-scale decimal strings.  Format without
   // Number()/floating-point conversion so display never rounds a ledger value.
   function formatThc(raw) {
-    const value = String(raw ?? '0').trim();
-    if (!/^\\d+(?:\\.\\d{1,6})?$/.test(value)) return '0.00';
+    const value = String(raw ?? '').trim();
+    if (!/^\d+(?:\.\d{1,6})?$/.test(value)) return null;
     const [whole, fraction = ''] = value.split('.');
     const significant = fraction.replace(/0+$/, '').length;
     const digits = Math.max(2, significant);
     return whole + '.' + (fraction + '000000').slice(0, digits);
+  }
+
+  function formatReceiptDate(raw) {
+    const seconds = Number(raw);
+    if (!Number.isInteger(seconds) || seconds <= 0) return 'Receipt date unavailable';
+    const date = new Date(seconds * 1000);
+    return Number.isNaN(date.getTime()) ? 'Receipt date unavailable' : date.toLocaleString();
+  }
+
+  function clearanceText(entry) {
+    if (String(entry.state || '').toLowerCase() === 'reversed') {
+      return entry.reversal_reason ? 'Reversed: ' + String(entry.reversal_reason) : 'Reversed by provider';
+    }
+    const eta = Number(entry.estimated_clearance_at);
+    if (!Number.isInteger(eta) || eta <= 0) return 'Clearance date not yet received from provider.';
+    // Presentation only. The browser clock never changes a ledger state.
+    const days = Math.max(0, Math.ceil((eta * 1000 - Date.now()) / 86400000));
+    return 'Estimated clearance: ' + formatReceiptDate(eta) + ' (' + days + ' day' + (days === 1 ? '' : 's') + ' remaining)';
   }
 
   switchBtn.addEventListener('click', () => {
@@ -197,7 +218,11 @@
     setStatus('Signed out.');
   });
 
-  $('earn-activity-trigger').addEventListener('click', () => activityDialog.showModal());
+  function openActivity() { activityDialog.showModal(); }
+  $('earn-activity-trigger').addEventListener('click', openActivity);
+  $('earn-activity-launch').addEventListener('click', openActivity);
+  $('earn-available-trigger').addEventListener('click', openActivity);
+  $('earn-pending-trigger').addEventListener('click', openActivity);
   $('earn-activity-close').addEventListener('click', () => activityDialog.close());
   activityDialog.addEventListener('click', e => { if (e.target === activityDialog) activityDialog.close(); });
 
@@ -274,34 +299,57 @@
     try {
       const bRes = await fetch('/api/earn/balance', { headers: earnAuthHeaders() });
       const bData = await bRes.json().catch(() => ({}));
-      if (bRes.ok && bData.ok) {
+      const available = bRes.ok && bData.ok ? formatThc(bData.available) : null;
+      const pending = bRes.ok && bData.ok ? formatThc(bData.pending) : null;
+      if (available !== null && pending !== null) {
         balanceBar.style.display = '';
-        balanceValue.textContent = formatThc(bData.available) + ' THC';
-        pendingValue.textContent = formatThc(bData.pending) + ' THC';
+        balanceValue.textContent = available + ' THC';
+        pendingValue.textContent = pending + ' THC';
+      } else {
+        balanceBar.style.display = '';
+        balanceValue.textContent = 'Unavailable';
+        pendingValue.textContent = 'Unavailable';
+        setStatus('Could not load your Earn balance. Retry this page; no zero balance is assumed.', true);
       }
-    } catch (_) {}
+    } catch (_) {
+      balanceBar.style.display = '';
+      balanceValue.textContent = 'Unavailable';
+      pendingValue.textContent = 'Unavailable';
+      setStatus('Could not load your Earn balance. Retry this page; no zero balance is assumed.', true);
+    }
     try {
       const hRes = await fetch('/api/earn/history', { headers: earnAuthHeaders() });
       const hData = await hRes.json().catch(() => ({}));
       historySection.style.display = '';
       historyList.innerHTML = '';
-      if (hRes.ok && hData.ok && Array.isArray(hData.entries) && hData.entries.length) {
+      if (!hRes.ok || !hData.ok || !Array.isArray(hData.entries)) {
+        activityCount.textContent = '—';
+        historyList.innerHTML = '<p class="earn-note" style="margin:0">Activity could not be loaded. Retry this page; no empty history is assumed.</p>';
+      } else if (hData.entries.length) {
         activityCount.textContent = String(hData.entries.length);
         hData.entries.slice(0, 20).forEach(e => {
           const div = document.createElement('div'); div.className = 'earn-history-item';
           const left = document.createElement('div'), source = document.createElement('span');
           source.className = 'src'; source.textContent = (e.source || '').replace(/_/g, ' ');
+          const provider = document.createElement('div'), receipt = document.createElement('div'), clearance = document.createElement('div');
+          provider.className = 'earn-note'; provider.style.margin = '3px 0 0'; provider.textContent = e.provider_status || e.state || 'pending';
+          receipt.className = 'earn-note'; receipt.style.margin = '2px 0 0'; receipt.textContent = formatReceiptDate(e.received_at);
+          clearance.className = 'earn-note'; clearance.style.margin = '2px 0 0'; clearance.textContent = clearanceText(e);
           const right = document.createElement('div'), amount = document.createElement('span'), state = document.createElement('span');
-          amount.className = 'amt'; amount.textContent = '+' + formatThc(e.amount) + ' ';
+          const value = formatThc(e.amount);
+          amount.className = 'amt'; amount.textContent = value === null ? 'Amount unavailable' : (value === '0.00' && String(e.state || '').toLowerCase() === 'pending' ? 'Provider amount pending' : '+' + value + ' THC');
           state.className = 'st st-' + String(e.state || 'pending').replace(/[^a-z-]/g, ''); state.textContent = e.state || 'pending';
-          left.appendChild(source); right.append(amount, state); div.append(left, right);
+          left.append(source, provider, receipt, clearance); right.append(amount, state); div.append(left, right);
           historyList.appendChild(div);
         });
       } else {
         activityCount.textContent = '0';
         historyList.innerHTML = '<p class="earn-note" style="margin:0">No verified Earn receipts yet.</p>';
       }
-    } catch (_) {}
+    } catch (_) {
+      activityCount.textContent = '—';
+      historyList.innerHTML = '<p class="earn-note" style="margin:0">Activity could not be loaded. Retry this page; no empty history is assumed.</p>';
+    }
     try {
       const pRes = await fetch('/api/earn/providers', { headers: earnAuthHeaders() });
       const pData = await pRes.json().catch(() => ({}));

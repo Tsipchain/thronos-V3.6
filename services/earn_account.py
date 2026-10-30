@@ -175,6 +175,13 @@ class EarnAccountStore:
                     state           TEXT NOT NULL DEFAULT 'pending',
                     note            TEXT NOT NULL DEFAULT '',
                     settlement_ref  TEXT,
+                    -- These fields describe only provider-originated reward
+                    -- evidence.  They never calculate clearance locally.
+                    provider_status TEXT,
+                    received_at     INTEGER,
+                    estimated_clearance_at INTEGER,
+                    cleared_at      INTEGER,
+                    reversal_reason TEXT,
                     created_at      INTEGER NOT NULL,
                     updated_at      INTEGER NOT NULL,
                     UNIQUE(source, source_ref)
@@ -182,6 +189,27 @@ class EarnAccountStore:
 
                 CREATE INDEX IF NOT EXISTS idx_thc_ledger_user
                     ON thc_ledger(earn_user_id, created_at DESC);
+
+                -- An append-only, deduplicated audit trail for provider
+                -- clearance/reversal events.  It is deliberately separate
+                -- from the balance projection in thc_ledger: a verified
+                -- transition updates the original entry, never creates a
+                -- second credit.
+                CREATE TABLE IF NOT EXISTS thc_ledger_audit (
+                    audit_id        TEXT PRIMARY KEY,
+                    entry_id        TEXT NOT NULL
+                        REFERENCES thc_ledger(entry_id),
+                    event_ref       TEXT NOT NULL,
+                    event_type      TEXT NOT NULL,
+                    state           TEXT NOT NULL,
+                    provider_status TEXT,
+                    occurred_at     INTEGER NOT NULL,
+                    details         TEXT NOT NULL DEFAULT '',
+                    UNIQUE(entry_id, event_ref)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_thc_ledger_audit_entry
+                    ON thc_ledger_audit(entry_id, occurred_at ASC);
 
                 CREATE TABLE IF NOT EXISTS cpx_receipts (
                     trans_id        TEXT PRIMARY KEY,
@@ -253,6 +281,22 @@ class EarnAccountStore:
                 CREATE INDEX IF NOT EXISTS idx_earn_wallet_challenges_expiry
                     ON earn_wallet_challenges(expires_at);
             """)
+            # Existing production Earn databases predate the provider
+            # clearance presentation fields.  SQLite lacks ADD COLUMN IF NOT
+            # EXISTS, so use a narrow, fixed migration list rather than any
+            # dynamic SQL based on external input.
+            existing = {
+                row[1] for row in con.execute("PRAGMA table_info(thc_ledger)")
+            }
+            for column, definition in (
+                ("provider_status", "TEXT"),
+                ("received_at", "INTEGER"),
+                ("estimated_clearance_at", "INTEGER"),
+                ("cleared_at", "INTEGER"),
+                ("reversal_reason", "TEXT"),
+            ):
+                if column not in existing:
+                    con.execute(f"ALTER TABLE thc_ledger ADD COLUMN {column} {definition}")
         finally:
             con.close()
 
@@ -504,6 +548,12 @@ class EarnAccountStore:
             "nonce": secrets.token_urlsafe(24),
             "expires_at": str(now + _WALLET_CHALLENGE_TTL),
         }
+        # Linking changes the account's sign-in authority.  The wallet PWA/APK
+        # must pass its existing biometric/passkey gate before it signs this
+        # exact server challenge.  The requirement is included in the signed
+        # payload, so a proof for a login challenge cannot be repurposed.
+        if purpose == "link":
+            challenge["approval"] = "biometric_passkey"
         with self._tx() as con:
             con.execute("DELETE FROM earn_wallet_challenges WHERE expires_at < ?", (now,))
             con.execute(
@@ -546,13 +596,16 @@ class EarnAccountStore:
             ).fetchone()
             if not row or (earn_user_id is not None and row["earn_user_id"] != earn_user_id):
                 raise EarnError("invalid_or_expired_wallet_challenge")
-            return {
+            proof = {
                 "action": "earn_wallet_link" if purpose == "link" else "earn_wallet_login",
                 "challenge_id": row["challenge_id"],
                 "wallet_address": row["wallet_address"],
                 "nonce": row["nonce"],
                 "expires_at": str(row["expires_at"]),
             }
+            if purpose == "link":
+                proof["approval"] = "biometric_passkey"
+            return proof
 
     def complete_wallet_link(
         self, *, challenge_id: str, earn_user_id: str, wallet_address: str,
@@ -751,7 +804,9 @@ class EarnAccountStore:
         with self._tx() as con:
             rows = con.execute(
                 """SELECT entry_id, source, source_ref, amount, state,
-                          note, settlement_ref, created_at, updated_at
+                          note, settlement_ref, provider_status, received_at,
+                          estimated_clearance_at, cleared_at, reversal_reason,
+                          created_at, updated_at
                    FROM thc_ledger WHERE earn_user_id = ?
                    ORDER BY created_at DESC LIMIT ?""",
                 (earn_user_id, min(max(limit, 1), 200)),
@@ -765,6 +820,147 @@ class EarnAccountStore:
             d["amount"] = str(Decimal(d["amount"]).quantize(_THC_SCALE))
         d.pop("password_hash", None)
         return d
+
+    @staticmethod
+    def _provider_time(value: int | str | None, *, field: str) -> int | None:
+        """Validate provider-supplied timestamps without manufacturing one.
+
+        An ETA is optional evidence, not a product timer.  Callers that do not
+        possess a verified provider timestamp must pass None; this method
+        intentionally never derives an estimate from the local clock.
+        """
+        if value is None or value == "":
+            return None
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            raise EarnError(f"invalid_{field}")
+        if parsed <= 0:
+            raise EarnError(f"invalid_{field}")
+        return parsed
+
+    @staticmethod
+    def _provider_status(value: str) -> str:
+        status = str(value or "").strip()
+        if not status or len(status) > 100:
+            raise EarnError("invalid_provider_status")
+        return status
+
+    @staticmethod
+    def _append_ledger_audit_in_tx(
+        con: sqlite3.Connection,
+        *,
+        entry_id: str,
+        event_ref: str,
+        event_type: str,
+        state: str,
+        provider_status: str | None,
+        occurred_at: int,
+        details: str = "",
+    ) -> bool:
+        """Append an event once; event_ref is the durable idempotency key."""
+        if not event_ref or len(event_ref) > 240:
+            raise EarnError("invalid_provider_event_ref")
+        existing = con.execute(
+            "SELECT 1 FROM thc_ledger_audit WHERE entry_id = ? AND event_ref = ?",
+            (entry_id, event_ref),
+        ).fetchone()
+        if existing:
+            return False
+        con.execute(
+            """INSERT INTO thc_ledger_audit
+               (audit_id, entry_id, event_ref, event_type, state,
+                provider_status, occurred_at, details)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (
+                "thca_" + secrets.token_urlsafe(18), entry_id, event_ref,
+                event_type, state, provider_status, occurred_at, details[:500],
+            ),
+        )
+        return True
+
+    def record_verified_clearance(
+        self,
+        *,
+        source: str,
+        source_ref: str,
+        event_ref: str,
+        new_state: str,
+        provider_status: str,
+        estimated_clearance_at: int | str | None = None,
+        cleared_at: int | str | None = None,
+    ) -> tuple[dict[str, Any], bool]:
+        """Apply one *already verified* provider clearance event.
+
+        This is intentionally a store-only operation: there is no browser
+        route and no UI action that calls it.  A provider adapter must verify
+        its receipt/policy before calling this method.  The original ledger
+        entry remains the sole balance record; this function only advances its
+        state and writes an immutable audit event.
+        """
+        if new_state not in ("confirmed", "payable"):
+            raise EarnError("invalid_clearance_state")
+        if not source or len(source) > 100 or not source_ref or len(source_ref) > 200:
+            raise EarnError("invalid_clearance_reference")
+        provider_status = self._provider_status(provider_status)
+        eta = self._provider_time(estimated_clearance_at, field="estimated_clearance_at")
+        provider_cleared_at = self._provider_time(cleared_at, field="cleared_at")
+        now = int(time.time())
+        with self._tx() as con:
+            row = con.execute(
+                "SELECT * FROM thc_ledger WHERE source = ? AND source_ref = ?",
+                (source, source_ref),
+            ).fetchone()
+            if not row:
+                raise EarnError("thc_entry_not_found")
+            # A retransmitted verified clearance is harmless and must not
+            # create a second balance entry or a second audit record.
+            already_applied = con.execute(
+                "SELECT 1 FROM thc_ledger_audit WHERE entry_id = ? AND event_ref = ?",
+                (row["entry_id"], event_ref),
+            ).fetchone()
+            if already_applied:
+                return self._ledger_dict(row), False
+            if row["state"] == "reversed":
+                raise EarnError("invalid_thc_transition")
+            if row["state"] != new_state:
+                if new_state not in _THC_TRANSITIONS.get(row["state"], set()):
+                    raise EarnError("invalid_thc_transition")
+                con.execute(
+                    """UPDATE thc_ledger
+                       SET state = ?, provider_status = ?,
+                           estimated_clearance_at = COALESCE(?, estimated_clearance_at),
+                           cleared_at = ?, updated_at = ?
+                       WHERE entry_id = ?""",
+                    (
+                        new_state, provider_status, eta,
+                        provider_cleared_at or now, now, row["entry_id"],
+                    ),
+                )
+            else:
+                # A distinct verified receipt may enrich provider metadata,
+                # but it still cannot duplicate a balance credit.
+                con.execute(
+                    """UPDATE thc_ledger
+                       SET provider_status = ?,
+                           estimated_clearance_at = COALESCE(?, estimated_clearance_at),
+                           cleared_at = COALESCE(?, cleared_at), updated_at = ?
+                       WHERE entry_id = ?""",
+                    (provider_status, eta, provider_cleared_at, now, row["entry_id"]),
+                )
+            self._append_ledger_audit_in_tx(
+                con,
+                entry_id=row["entry_id"],
+                event_ref=event_ref,
+                event_type="provider_clearance",
+                state=new_state,
+                provider_status=provider_status,
+                occurred_at=provider_cleared_at or now,
+            )
+            updated = con.execute(
+                "SELECT * FROM thc_ledger WHERE entry_id = ?", (row["entry_id"],),
+            ).fetchone()
+            return self._ledger_dict(updated), True
 
     # ── BitcoTasks receipt handling ───────────────────────────────────────
 
@@ -873,6 +1069,7 @@ class EarnAccountStore:
         amount_usd: str = "",
         offer_id: str = "",
         payload: dict[str, Any],
+        estimated_clearance_at: int | str | None = None,
     ) -> tuple[dict[str, Any], bool]:
         if status not in (1, 2) or not trans_id or len(trans_id) > 200:
             raise EarnError("invalid_cpx_receipt")
@@ -883,6 +1080,13 @@ class EarnAccountStore:
         except (TypeError, ValueError, InvalidOperation):
             raise EarnError("invalid_cpx_amount")
         amount_local = str(amt_dec)
+        # CPX does not currently publish an official clearance ETA in its
+        # signed receipt contract, so the route below leaves this as None.
+        # A future verified adapter may supply a documented provider value;
+        # never derive one from a local policy or browser clock.
+        provider_eta = self._provider_time(
+            estimated_clearance_at, field="estimated_clearance_at",
+        )
         with self._tx() as con:
             user = con.execute(
                 "SELECT earn_user_id FROM earn_accounts WHERE cpx_ext_user_id = ?",
@@ -912,7 +1116,14 @@ class EarnAccountStore:
                     )
                     if prior["thc_entry_id"]:
                         try:
-                            self._reverse_thc_in_tx(con, prior["thc_entry_id"])
+                            self._reverse_thc_in_tx(
+                                con, prior["thc_entry_id"],
+                                provider_status="reversed",
+                                reversal_reason=str(
+                                    payload.get("reversal_reason") or payload.get("reason") or ""
+                                ).strip()[:300] or None,
+                                event_ref=f"cpx:reversal:{trans_id}",
+                            )
                         except EarnError:
                             pass
                     return dict(
@@ -929,8 +1140,9 @@ class EarnAccountStore:
                 con.execute(
                     """INSERT INTO thc_ledger
                        (entry_id, earn_user_id, source, source_ref, amount,
-                        state, note, created_at, updated_at)
-                       VALUES (?,?,?,?,?,'pending',?,?,?)""",
+                        state, note, provider_status, received_at,
+                        estimated_clearance_at, created_at, updated_at)
+                       VALUES (?,?,?,?,?,'pending',?,?,?,?,?,?)""",
                     (
                         thc_entry_id,
                         uid,
@@ -938,9 +1150,21 @@ class EarnAccountStore:
                         trans_id,
                         str(amount_local),
                         f"offer:{offer_id}" if offer_id else "",
+                        "received_pending_clearance",
+                        now,
+                        provider_eta,
                         now,
                         now,
                     ),
+                )
+                self._append_ledger_audit_in_tx(
+                    con,
+                    entry_id=thc_entry_id,
+                    event_ref=f"cpx:receipt:{trans_id}",
+                    event_type="provider_receipt",
+                    state="pending",
+                    provider_status="received_pending_clearance",
+                    occurred_at=now,
                 )
 
             con.execute(
@@ -966,7 +1190,13 @@ class EarnAccountStore:
             ), True
 
     def _reverse_thc_in_tx(
-        self, con: sqlite3.Connection, entry_id: str,
+        self,
+        con: sqlite3.Connection,
+        entry_id: str,
+        *,
+        provider_status: str | None = None,
+        reversal_reason: str | None = None,
+        event_ref: str | None = None,
     ) -> None:
         row = con.execute(
             "SELECT state FROM thc_ledger WHERE entry_id = ?", (entry_id,),
@@ -975,10 +1205,25 @@ class EarnAccountStore:
             return
         if "reversed" not in _THC_TRANSITIONS.get(row["state"], set()):
             raise EarnError("invalid_thc_transition")
+        now = int(time.time())
         con.execute(
-            "UPDATE thc_ledger SET state = 'reversed', updated_at = ? WHERE entry_id = ?",
-            (int(time.time()), entry_id),
+            """UPDATE thc_ledger
+               SET state = 'reversed', provider_status = COALESCE(?, provider_status),
+                   reversal_reason = COALESCE(?, reversal_reason), updated_at = ?
+               WHERE entry_id = ?""",
+            (provider_status, reversal_reason, now, entry_id),
         )
+        if event_ref:
+            self._append_ledger_audit_in_tx(
+                con,
+                entry_id=entry_id,
+                event_ref=event_ref,
+                event_type="provider_reversal",
+                state="reversed",
+                provider_status=provider_status,
+                occurred_at=now,
+                details=reversal_reason or "",
+            )
 
 
 # ── CPX helpers (reused from earn_center pattern) ────────────────────────
@@ -1072,6 +1317,11 @@ def verify_earn_wallet_proof(
             "nonce": str(challenge["nonce"]),
             "wallet_address": wallet_address,
         }
+        # Wallet-link proofs are deliberately distinct from wallet-session
+        # proofs.  The PWA/APK only produces this proof after its local
+        # WebAuthn/passkey approval gate succeeds.
+        if challenge.get("approval"):
+            signed["approval"] = str(challenge["approval"])
         message = json.dumps(signed, sort_keys=True, separators=(",", ":")).encode()
         digest = hashlib.sha256(message).digest()
         sig_bytes = bytes.fromhex(signature)
@@ -1082,6 +1332,32 @@ def verify_earn_wallet_proof(
             der_signature, digest, ec.ECDSA(utils.Prehashed(hashes.SHA256())),
         )
         return True
+    except Exception:
+        return False
+
+
+def _wallet_link_requires_mobile_approval(wallet_address: str) -> bool:
+    """Return whether this wallet opted into the existing 3FA device flow.
+
+    3FA is an *additional* approval signal and never replaces the expiring,
+    wallet-signed challenge.  Import lazily so Earn can remain available on
+    deployments where the optional 3FA blueprint is not installed.
+    """
+    try:
+        from three_factor_auth import check_3fa_required
+        return bool(check_3fa_required(wallet_address, action="earn_wallet_link"))
+    except Exception:
+        return False
+
+
+def _verified_mobile_wallet_approval(approval_id: str, wallet_address: str) -> bool:
+    """Verify a live 3FA approval for a wallet-link request when required."""
+    if not approval_id:
+        return False
+    try:
+        from three_factor_auth import verify_3fa_approval
+        result = verify_3fa_approval(approval_id, wallet_address)
+        return bool(result.get("ok"))
     except Exception:
         return False
 
@@ -1212,6 +1488,13 @@ def register_earn_account_routes(
                 signature=str(data.get("signature", "")),
             ):
                 return jsonify(ok=False, error="invalid_wallet_proof"), 403
+            # A registered mobile 3FA device is an extra confirmation channel
+            # for desktop/QR pairing.  It supplements, but never replaces,
+            # the signed, single-use Earn challenge verified above.
+            if _wallet_link_requires_mobile_approval(wallet_address) and not _verified_mobile_wallet_approval(
+                str(data.get("mobile_approval_id", "")), wallet_address,
+            ):
+                return jsonify(ok=False, error="mobile_wallet_approval_required"), 403
             link = store.complete_wallet_link(
                 challenge_id=challenge_id, earn_user_id=user["earn_user_id"],
                 wallet_address=wallet_address, public_key=str(data.get("public_key", "")),

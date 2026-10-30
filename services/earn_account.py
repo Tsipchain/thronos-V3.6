@@ -1096,16 +1096,19 @@ def register_earn_account_routes(
     from flask import jsonify, request
 
     def _current_user():
-        token = (
-            request.headers.get("Authorization", "")
-            .removeprefix("Bearer ")
-            .strip()
-        )
-        user = store.user_for_session(token)
-        if user:
-            return user, token
-        # Browser pages use this HttpOnly, same-origin cookie.  API consumers
-        # may continue using the Bearer token, so this is additive.
+        # An explicitly supplied Authorization header is authoritative.  Never
+        # fall back to a browser cookie when that Bearer token is invalid or
+        # revoked, otherwise a stale API token could silently authenticate as
+        # whichever account happens to be open in the browser.
+        auth_header = request.headers.get("Authorization", "").strip()
+        if auth_header:
+            if not auth_header.startswith("Bearer "):
+                return None, ""
+            token = auth_header.removeprefix("Bearer ").strip()
+            return store.user_for_session(token), token
+
+        # Browser pages without an Authorization header use the HttpOnly,
+        # same-origin cookie. API consumers use only their Bearer token.
         token = request.cookies.get(_SESSION_COOKIE, "").strip()
         return store.user_for_session(token), token
 
@@ -1266,6 +1269,22 @@ def register_earn_account_routes(
             return jsonify(ok=False, error="earn_auth_required"), 401
         entries = store.thc_history(user["earn_user_id"])
         return jsonify(ok=True, entries=entries)
+
+    @app.get("/api/earn/providers")
+    def earn_providers():
+        """Return public availability only; provider credentials stay server-side."""
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        return jsonify(
+            ok=True,
+            providers=[
+                {"id": "cpx", "label": "CPX Research", "kind": "surveys",
+                 "enabled": os.getenv("CPX_SURVEYS_BETA_ENABLED", "0") == "1"},
+                {"id": "bitcotasks", "label": "BitcoTasks", "kind": "offers",
+                 "enabled": os.getenv("BITCOTASKS_ENABLED", "0") == "1"},
+            ],
+        )
 
     @app.get("/api/earn/cpx/offerwall")
     def earn_cpx_offerwall():

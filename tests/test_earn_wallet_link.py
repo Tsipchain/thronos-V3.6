@@ -100,6 +100,14 @@ class EarnWalletLinkTests(unittest.TestCase):
             public_key=proof["public_key"], signature=proof["signature"],
         ))
 
+    def test_pwa_activity_button_uses_the_authenticated_activity_handoff(self):
+        root = Path(__file__).parent.parent / "public" / "wallet-pwa"
+        index = (root / "index.html").read_text()
+        handoff = (root / "earn-activity-handoff.js").read_text()
+        self.assertIn("earn-activity-handoff.js", index)
+        self.assertIn("#openEarnCenterBtn", handoff)
+        self.assertIn("/earn?view=activity", handoff)
+
 
 if __name__ == "__main__":
     unittest.main()

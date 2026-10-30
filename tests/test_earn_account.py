@@ -18,6 +18,7 @@ import hashlib
 import os
 import sys
 import threading
+import time
 from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
@@ -304,6 +305,241 @@ class TestCPXIdentity:
                 pytest.fail(f"Browser-supplied ext_user_id found: {line.strip()}")
 
 
+class TestProviderAvailability:
+    # --- Test 1: GET /api/earn/providers requires authenticated Earn session ---
+
+    def test_provider_listing_requires_an_authenticated_earn_account(self, client):
+        assert client.get("/api/earn/providers").status_code == 401
+
+    def test_provider_listing_rejects_invalid_bearer_token(self, client, user_a):
+        resp = client.get("/api/earn/providers", headers=_auth("bad-token-xxx"))
+        assert resp.status_code == 401
+        assert resp.get_json()["error"] == "earn_auth_required"
+
+    # --- Test 2: Response exposes only provider availability, never keys/secrets/URLs ---
+
+    @patch.dict(os.environ, {"CPX_SURVEYS_BETA_ENABLED": "1", "BITCOTASKS_ENABLED": "0"}, clear=False)
+    def test_provider_listing_exposes_feature_state_not_credentials(self, client, user_a):
+        token = _login(client)
+        response = client.get("/api/earn/providers", headers=_auth(token))
+        assert response.status_code == 200
+        body = response.get_json()
+        assert body["ok"] is True
+        providers = {item["id"]: item for item in body["providers"]}
+        assert providers["cpx"]["enabled"] is True
+        assert providers["bitcotasks"]["enabled"] is False
+        assert "api_key" not in str(body).lower()
+        assert "secret" not in str(body).lower()
+
+    @patch.dict(os.environ, {
+        "CPX_SURVEYS_BETA_ENABLED": "1", "BITCOTASKS_ENABLED": "1",
+        "CPX_APP_SECURE_HASH": "super-secret-cpx", "BITCOTASKS_SECRET": "super-secret-bt",
+    }, clear=False)
+    def test_provider_response_never_leaks_env_secrets(self, client, user_a):
+        token = _login(client)
+        resp = client.get("/api/earn/providers", headers=_auth(token))
+        raw = resp.get_data(as_text=True).lower()
+        for forbidden in ["super-secret-cpx", "super-secret-bt", "api_key", "secret_key",
+                          "private_key", "password", "token", "hash"]:
+            assert forbidden not in raw, f"Forbidden value '{forbidden}' leaked in provider response"
+        body = resp.get_json()
+        for p in body["providers"]:
+            allowed_keys = {"id", "label", "kind", "enabled"}
+            assert set(p.keys()) == allowed_keys, f"Provider {p['id']} exposes extra keys: {set(p.keys()) - allowed_keys}"
+
+    # --- Test 3: CPX enabled/disabled state is correct ---
+
+    @patch.dict(os.environ, {"CPX_SURVEYS_BETA_ENABLED": "0"}, clear=False)
+    def test_cpx_disabled_when_env_is_zero(self, client, user_a):
+        token = _login(client)
+        resp = client.get("/api/earn/providers", headers=_auth(token))
+        providers = {p["id"]: p for p in resp.get_json()["providers"]}
+        assert providers["cpx"]["enabled"] is False
+
+    @patch.dict(os.environ, {"CPX_SURVEYS_BETA_ENABLED": "1"}, clear=False)
+    def test_cpx_enabled_when_env_is_one(self, client, user_a):
+        token = _login(client)
+        resp = client.get("/api/earn/providers", headers=_auth(token))
+        providers = {p["id"]: p for p in resp.get_json()["providers"]}
+        assert providers["cpx"]["enabled"] is True
+
+    # --- Test 4: BitcoTasks remains disabled unless BITCOTASKS_ENABLED=1 ---
+
+    @patch.dict(os.environ, {"BITCOTASKS_ENABLED": "0"}, clear=False)
+    def test_bitcotasks_disabled_by_default(self, client, user_a):
+        token = _login(client)
+        resp = client.get("/api/earn/providers", headers=_auth(token))
+        providers = {p["id"]: p for p in resp.get_json()["providers"]}
+        assert providers["bitcotasks"]["enabled"] is False
+
+    @patch.dict(os.environ, {"BITCOTASKS_ENABLED": "1"}, clear=False)
+    def test_bitcotasks_enabled_only_when_flag_is_one(self, client, user_a):
+        token = _login(client)
+        resp = client.get("/api/earn/providers", headers=_auth(token))
+        providers = {p["id"]: p for p in resp.get_json()["providers"]}
+        assert providers["bitcotasks"]["enabled"] is True
+
+    def test_bitcotasks_disabled_when_env_unset(self, client, user_a):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("BITCOTASKS_ENABLED", None)
+            token = _login(client)
+            resp = client.get("/api/earn/providers", headers=_auth(token))
+            providers = {p["id"]: p for p in resp.get_json()["providers"]}
+            assert providers["bitcotasks"]["enabled"] is False
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 4b. EARN ROUTE COLLISION AND INTEGRATED ACCOUNT FLOW
+# ══════════════════════════════════════════════════════════════════════════
+
+
+class TestEarnRouteCollision:
+    """Test 5: No route collision with existing Earn routes."""
+
+    def test_all_earn_routes_are_unique(self, app):
+        earn_rules = [
+            rule for rule in app.url_map.iter_rules()
+            if rule.rule.startswith("/api/earn")
+        ]
+        seen = {}
+        for rule in earn_rules:
+            for method in rule.methods - {"HEAD", "OPTIONS"}:
+                key = (method, rule.rule)
+                assert key not in seen, (
+                    f"Route collision: {method} {rule.rule} registered twice "
+                    f"(endpoints: {seen[key]} and {rule.endpoint})"
+                )
+                seen[key] = rule.endpoint
+
+    def test_providers_route_does_not_shadow_cpx_or_bitcotasks(self, app):
+        rules = {r.rule for r in app.url_map.iter_rules()}
+        assert "/api/earn/providers" in rules
+        assert "/api/earn/cpx/offerwall" in rules
+        assert "/api/earn/bitcotasks/offerwall" in rules
+
+
+class TestIntegratedAccountFlow:
+    """Test 6: /api/earn/me, balance, history and provider list work together."""
+
+    @patch.dict(os.environ, _CPX_ENV, clear=False)
+    def test_full_authenticated_account_flow(self, client, store, user_a):
+        token = _login(client)
+        headers = _auth(token)
+
+        me_resp = client.get("/api/earn/me", headers=headers)
+        assert me_resp.status_code == 200
+        me = me_resp.get_json()
+        assert me["ok"] is True
+        assert me["email"] == "alice@example.com"
+        assert me["earn_user_id"].startswith("earn_")
+
+        bal_resp = client.get("/api/earn/balance", headers=headers)
+        assert bal_resp.status_code == 200
+        bal = bal_resp.get_json()
+        assert bal["ok"] is True
+        assert "available" in bal
+        assert "pending" in bal
+        assert bal["currency"] == "THC"
+
+        hist_resp = client.get("/api/earn/history", headers=headers)
+        assert hist_resp.status_code == 200
+        hist = hist_resp.get_json()
+        assert hist["ok"] is True
+        assert isinstance(hist["entries"], list)
+
+        prov_resp = client.get("/api/earn/providers", headers=headers)
+        assert prov_resp.status_code == 200
+        prov = prov_resp.get_json()
+        assert prov["ok"] is True
+        assert len(prov["providers"]) >= 2
+        provider_ids = {p["id"] for p in prov["providers"]}
+        assert "cpx" in provider_ids
+        assert "bitcotasks" in provider_ids
+
+    @patch.dict(os.environ, _CPX_ENV, clear=False)
+    def test_all_endpoints_reject_without_auth(self, client):
+        for endpoint in ["/api/earn/me", "/api/earn/balance",
+                         "/api/earn/history", "/api/earn/providers"]:
+            resp = client.get(endpoint)
+            assert resp.status_code == 401, f"{endpoint} did not require auth"
+
+
+class TestActivityOutputSafety:
+    """Test 7: Activity/history output is safe for wallet-linked and email-only accounts."""
+
+    @patch.dict(os.environ, _CPX_ENV, clear=False)
+    def test_history_safe_for_email_only_account(self, client, store, user_a):
+        token = _login(client)
+        headers = _auth(token)
+
+        me = client.get("/api/earn/me", headers=headers).get_json()
+        assert me["wallet_address"] is None
+
+        u = store.user_for_session(token)
+        store.record_cpx_receipt(
+            trans_id="tx-safe-1", cpx_ext_user_id=u["cpx_ext_user_id"],
+            status=1, amount_local="100", payload={"status": "1"},
+        )
+
+        hist = client.get("/api/earn/history", headers=headers).get_json()
+        assert hist["ok"] is True
+        assert len(hist["entries"]) >= 1
+        raw = str(hist).lower()
+        for forbidden in ["private_key", "secret", "password", "api_key", "mnemonic"]:
+            assert forbidden not in raw, f"Forbidden '{forbidden}' in history output"
+
+        entry = hist["entries"][0]
+        assert "amount" in entry
+        assert "state" in entry
+        assert "source" in entry
+
+    @patch.dict(os.environ, _CPX_ENV, clear=False)
+    def test_history_safe_for_wallet_linked_account(self, client, store, user_a):
+        token = _login(client)
+        headers = _auth(token)
+
+        with store._tx() as con:
+            con.execute(
+                "INSERT OR REPLACE INTO earn_wallet_links (wallet_address, earn_user_id, public_key, linked_at) VALUES (?,?,?,?)",
+                ("THR_TEST_WALLET_ADDR", user_a["earn_user_id"], "pubkey_placeholder", int(time.time())),
+            )
+
+        me = client.get("/api/earn/me", headers=headers).get_json()
+        assert me["wallet_address"] == "THR_TEST_WALLET_ADDR"
+
+        u = store.user_for_session(token)
+        store.record_cpx_receipt(
+            trans_id="tx-safe-2", cpx_ext_user_id=u["cpx_ext_user_id"],
+            status=1, amount_local="200", payload={"status": "1"},
+        )
+
+        hist = client.get("/api/earn/history", headers=headers).get_json()
+        assert hist["ok"] is True
+        assert len(hist["entries"]) >= 1
+        raw = str(hist).lower()
+        for forbidden in ["private_key", "secret", "password", "api_key"]:
+            assert forbidden not in raw
+
+        bal = client.get("/api/earn/balance", headers=headers).get_json()
+        assert bal["ok"] is True
+        assert Decimal(bal["pending"]) >= Decimal("200")
+
+    @patch.dict(os.environ, _CPX_ENV, clear=False)
+    def test_two_accounts_history_isolated(self, client, store, user_a, user_b):
+        token_a = _login(client, "alice@example.com", "password123")
+        token_b = _login(client, "bob@example.com", "password456")
+
+        u_a = store.user_for_session(token_a)
+        store.record_cpx_receipt(
+            trans_id="tx-iso-alice", cpx_ext_user_id=u_a["cpx_ext_user_id"],
+            status=1, amount_local="500", payload={"status": "1"},
+        )
+
+        hist_b = client.get("/api/earn/history", headers=_auth(token_b)).get_json()
+        assert hist_b["ok"] is True
+        assert len(hist_b["entries"]) == 0
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # 5. THC LEDGER — POSTBACK IDEMPOTENCY
 # ══════════════════════════════════════════════════════════════════════════
@@ -530,8 +766,11 @@ class TestNoWalletRequired:
 
     def test_source_has_no_wallet_requirement(self):
         source = (Path(__file__).parent.parent / "services" / "earn_account.py").read_text()
-        assert "wallet_address" not in source
-        assert "wallet NOT NULL" not in source
+        # Optional signed wallet linking is allowed; the Earn account itself
+        # must never require a wallet address to exist or to authenticate.
+        account_schema = source.split("CREATE TABLE IF NOT EXISTS earn_accounts", 1)[1].split(");", 1)[0]
+        assert "wallet_address" not in account_schema
+        assert "wallet_required" not in account_schema
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -1066,7 +1305,11 @@ class TestEarnTemplateCookieSession:
         template = (Path(__file__).parent.parent / "templates" / "earn_beta.html").read_text()
         assert "AVAILABLE THC" in template
         assert "PENDING THC" in template
-        assert "bData.pending || 0" in template
+        # Decimal strings are deliberately formatted without Number()/float conversion.
+        assert "formatThc(bData.available)" in template
+        assert "formatThc(bData.pending)" in template
+        assert "Number(bData.available" not in template
+        assert "Number(bData.pending" not in template
         assert "No verified Earn receipts yet." in template
 
     def test_mobile_provider_tab_preserves_earn_dashboard(self):
@@ -1075,3 +1318,18 @@ class TestEarnTemplateCookieSession:
         assert "providerTab.location.replace(data.url)" in template
         assert "window.addEventListener('focus'" in template
         assert "visibilitychange" in template
+
+    def test_provider_cards_and_compact_activity_dialog_are_present(self):
+        template = (Path(__file__).parent.parent / "templates" / "earn_beta.html").read_text()
+        assert "/api/earn/providers" in template
+        assert "Open BitcoTasks" in template
+        assert "earn-activity-dialog" in template
+        assert "activityDialog.showModal()" in template
+        assert "source.textContent" in template
+
+    def test_activity_view_explains_link_and_unavailable_settlement(self):
+        template = (Path(__file__).parent.parent / "templates" / "earn_beta.html").read_text()
+        assert "earn-wallet-status" in template
+        assert "Cash-out" in template
+        assert "Not enabled yet." in template
+        assert "get('view') === 'activity'" in template

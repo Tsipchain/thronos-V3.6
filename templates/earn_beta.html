@@ -37,6 +37,28 @@
   .st-pending { background:#92400e33; color:#fbbf24; } .st-confirmed { background:#065f4633; color:#34d399; }
   .st-payable { background:#1e40af33; color:#60a5fa; } .st-reversed { background:#7f1d1d33; color:#f87171; }
   .earn-note { margin-top:14px; color:#91a7b8; font-size:12px; }
+  .earn-provider-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin-top:14px; }
+  .earn-provider { background:#0b1220; border:1px solid #2e5874; border-radius:12px; padding:14px; }
+  .earn-provider h3 { color:#e2e8f0; font-size:15px; margin:0 0 5px; }
+  .earn-provider p { color:#91a7b8; font-size:12px; margin:0 0 10px; }
+  .earn-provider .earn-action { width:100%; margin:0; }
+  .earn-provider.is-unavailable { opacity:.7; }
+  .earn-provider-status { color:#fbbf24; font-size:11px; font-weight:700; }
+  .earn-activity-trigger { display:flex; align-items:center; gap:8px; color:#b8d9ee; background:#101827; border:1px solid #2e5874; border-radius:999px; padding:8px 12px; cursor:pointer; float:right; }
+  .earn-activity-count { min-width:18px; height:18px; line-height:18px; border-radius:99px; text-align:center; background:#f2c14e; color:#101827; font-size:11px; font-weight:800; }
+  .earn-activity-dialog { width:min(620px,calc(100vw - 28px)); max-height:min(76vh,700px); background:#101827; color:#e2e8f0; border:1px solid #2e5874; border-radius:16px; box-shadow:0 20px 70px #000b; padding:0; }
+  .earn-activity-dialog::backdrop { background:#000b; }
+  .earn-dialog-head { display:flex; justify-content:space-between; align-items:center; padding:16px 18px; border-bottom:1px solid #2e5874; }
+  .earn-dialog-head h2 { font-size:17px; margin:0; color:#f2c14e; }
+  .earn-dialog-close { background:none; color:#cbd5e1; border:0; font-size:24px; cursor:pointer; }
+  .earn-dialog-body { padding:14px 18px 18px; overflow:auto; max-height:calc(min(76vh,700px) - 70px); }
+  .earn-account-summary { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin-bottom:14px; }
+  .earn-account-summary div { background:#0b1220; border:1px solid #1e3a50; border-radius:9px; padding:10px; }
+  .earn-account-summary .summary-label { display:block; color:#7fb8d8; font-size:11px; margin-bottom:3px; }
+  .earn-account-summary .summary-value { color:#e2e8f0; font-size:12px; overflow-wrap:anywhere; }
+  .earn-account-summary .linked { color:#34d399; }
+  .earn-account-summary .not-linked { color:#fbbf24; }
+  @media (max-width: 520px) { .earn-provider-grid { grid-template-columns:1fr; } .earn-activity-trigger { float:none; margin-top:12px; } }
 </style>
 <main class="earn-beta">
   <section class="earn-card">
@@ -61,11 +83,22 @@
           <div class="earn-balance-cell"><div class="label">PENDING THC</div><div class="value pending" id="earn-pending-value">—</div></div>
         </div>
       </div>
-      <button id="earn-surveys" class="earn-action" style="margin-top:14px" type="button">Open Surveys</button>
+      <div class="earn-provider-grid" aria-label="Earn providers">
+        <section class="earn-provider" id="provider-cpx">
+          <h3>CPX Research</h3><p>Surveys selected for your account.</p>
+          <button id="earn-surveys" class="earn-action" type="button">Open Surveys</button>
+        </section>
+        <section class="earn-provider is-unavailable" id="provider-bitcotasks">
+          <h3>BitcoTasks</h3><p id="bitcotasks-copy">More tasks and offers are being prepared.</p>
+          <button id="earn-bitcotasks" class="earn-action" type="button" disabled>Coming soon</button>
+          <div id="bitcotasks-status" class="earn-provider-status" aria-live="polite">Provider approval pending</div>
+        </section>
+      </div>
       <button id="earn-logout" class="earn-toggle" type="button">Sign out</button>
       <div class="earn-history" id="earn-history">
-        <h3>Recent Activity</h3>
-        <div class="earn-history-list" id="earn-history-list"><p class="earn-note" style="margin:0">No verified Earn receipts yet.</p></div>
+        <button id="earn-activity-trigger" class="earn-activity-trigger" type="button" aria-haspopup="dialog" aria-label="Open recent activity">
+          Recent activity <span class="earn-activity-count" id="earn-activity-count">0</span>
+        </button>
       </div>
     </div>
 
@@ -75,6 +108,18 @@
     <p class="earn-note">Rewards are credited only from verified provider receipts. Pending THC is not spendable or payable until clearance.</p>
   </section>
 </main>
+<dialog id="earn-activity-dialog" class="earn-activity-dialog" aria-labelledby="earn-activity-title">
+  <div class="earn-dialog-head"><h2 id="earn-activity-title">Recent activity</h2><button id="earn-activity-close" class="earn-dialog-close" type="button" aria-label="Close activity">×</button></div>
+  <div class="earn-dialog-body">
+    <div class="earn-account-summary" id="earn-account-summary" aria-live="polite">
+      <div><span class="summary-label">Earn account</span><span class="summary-value" id="earn-account-email">—</span></div>
+      <div><span class="summary-label">Thronos wallet</span><span class="summary-value not-linked" id="earn-wallet-status">Not linked</span></div>
+      <div><span class="summary-label">Reward clearance</span><span class="summary-value">Pending receipts remain unavailable until provider clearance.</span></div>
+      <div><span class="summary-label">Cash-out</span><span class="summary-value">Not enabled yet.</span></div>
+    </div>
+    <div class="earn-history-list" id="earn-history-list"><p class="earn-note" style="margin:0">No verified Earn receipts yet.</p></div>
+  </div>
+</dialog>
 <script>
 (() => {
   const $ = id => document.getElementById(id);
@@ -84,6 +129,8 @@
   const status = $('earn-status'), frame = $('earn-frame'), surveyClose = $('earn-survey-close');
   const balanceBar = $('earn-balance-bar'), balanceValue = $('earn-balance-value'), pendingValue = $('earn-pending-value');
   const historySection = $('earn-history'), historyList = $('earn-history-list');
+  const activityDialog = $('earn-activity-dialog'), activityCount = $('earn-activity-count');
+  const bitcoButton = $('earn-bitcotasks'), bitcoProvider = $('provider-bitcotasks');
   let isRegister = false, token = null;
 
   // On a restored session the raw token intentionally does not exist in
@@ -94,6 +141,17 @@
   }
 
   function setStatus(msg, isError) { status.textContent = msg; status.className = 'earn-status' + (isError ? ' error' : ''); }
+
+  // Earn amounts arrive as fixed-scale decimal strings.  Format without
+  // Number()/floating-point conversion so display never rounds a ledger value.
+  function formatThc(raw) {
+    const value = String(raw ?? '0').trim();
+    if (!/^\\d+(?:\\.\\d{1,6})?$/.test(value)) return '0.00';
+    const [whole, fraction = ''] = value.split('.');
+    const significant = fraction.replace(/0+$/, '').length;
+    const digits = Math.max(2, significant);
+    return whole + '.' + (fraction + '000000').slice(0, digits);
+  }
 
   switchBtn.addEventListener('click', () => {
     isRegister = !isRegister;
@@ -136,6 +194,10 @@
     setStatus('Signed out.');
   });
 
+  $('earn-activity-trigger').addEventListener('click', () => activityDialog.showModal());
+  $('earn-activity-close').addEventListener('click', () => activityDialog.close());
+  activityDialog.addEventListener('click', e => { if (e.target === activityDialog) activityDialog.close(); });
+
   $('earn-surveys').addEventListener('click', async () => {
     setStatus('Loading surveys…');
     // Open the mobile browser surface synchronously, while the user gesture
@@ -164,6 +226,24 @@
     }
   });
 
+  bitcoButton.addEventListener('click', async () => {
+    const isMobile = window.matchMedia('(max-width: 700px)').matches;
+    const providerTab = isMobile ? window.open('', '_blank') : null;
+    try {
+      const res = await fetch('/api/earn/bitcotasks/offerwall', { headers: earnAuthHeaders() });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) throw new Error(data.error || 'BitcoTasks is unavailable.');
+      if (isMobile) {
+        if (providerTab) providerTab.location.replace(data.url);
+        else window.location.assign(data.url);
+      } else { frame.src = data.url; frame.style.display = 'block'; }
+      setStatus('Connected to BitcoTasks.');
+    } catch (e) {
+      if (providerTab) providerTab.close();
+      setStatus((e.message || 'Could not load BitcoTasks.').replace(/_/g, ' '), true);
+    }
+  });
+
   function closeSurvey() {
     frame.style.display = 'none';
     frame.classList.remove('is-mobile-survey');
@@ -174,12 +254,27 @@
 
   async function refreshDashboard() {
     try {
+      const meRes = await fetch('/api/earn/me', { headers: earnAuthHeaders() });
+      const me = await meRes.json().catch(() => ({}));
+      if (meRes.ok && me.ok) {
+        $('earn-account-email').textContent = me.email || '—';
+        const walletStatus = $('earn-wallet-status');
+        if (me.wallet_address) {
+          walletStatus.textContent = 'Linked: ' + me.wallet_address;
+          walletStatus.className = 'summary-value linked';
+        } else {
+          walletStatus.textContent = 'Not linked — link from Wallet PWA or APK';
+          walletStatus.className = 'summary-value not-linked';
+        }
+      }
+    } catch (_) {}
+    try {
       const bRes = await fetch('/api/earn/balance', { headers: earnAuthHeaders() });
       const bData = await bRes.json().catch(() => ({}));
       if (bRes.ok && bData.ok) {
         balanceBar.style.display = '';
-        balanceValue.textContent = Number(bData.available || 0).toFixed(2) + ' THC';
-        pendingValue.textContent = Number(bData.pending || 0).toFixed(2) + ' THC';
+        balanceValue.textContent = formatThc(bData.available) + ' THC';
+        pendingValue.textContent = formatThc(bData.pending) + ' THC';
       }
     } catch (_) {}
     try {
@@ -188,14 +283,30 @@
       historySection.style.display = '';
       historyList.innerHTML = '';
       if (hRes.ok && hData.ok && Array.isArray(hData.entries) && hData.entries.length) {
+        activityCount.textContent = String(hData.entries.length);
         hData.entries.slice(0, 20).forEach(e => {
           const div = document.createElement('div'); div.className = 'earn-history-item';
-          div.innerHTML = '<div><span class="src">' + (e.source||'').replace(/_/g,' ') + '</span></div>'
-            + '<div><span class="amt">+' + Number(e.amount).toFixed(2) + '</span> <span class="st st-' + e.state + '">' + e.state + '</span></div>';
+          const left = document.createElement('div'), source = document.createElement('span');
+          source.className = 'src'; source.textContent = (e.source || '').replace(/_/g, ' ');
+          const right = document.createElement('div'), amount = document.createElement('span'), state = document.createElement('span');
+          amount.className = 'amt'; amount.textContent = '+' + formatThc(e.amount) + ' ';
+          state.className = 'st st-' + String(e.state || 'pending').replace(/[^a-z-]/g, ''); state.textContent = e.state || 'pending';
+          left.appendChild(source); right.append(amount, state); div.append(left, right);
           historyList.appendChild(div);
         });
       } else {
+        activityCount.textContent = '0';
         historyList.innerHTML = '<p class="earn-note" style="margin:0">No verified Earn receipts yet.</p>';
+      }
+    } catch (_) {}
+    try {
+      const pRes = await fetch('/api/earn/providers', { headers: earnAuthHeaders() });
+      const pData = await pRes.json().catch(() => ({}));
+      const bitco = pData.providers && pData.providers.find(p => p.id === 'bitcotasks');
+      if (pRes.ok && pData.ok && bitco && bitco.enabled) {
+        bitcoButton.disabled = false; bitcoButton.textContent = 'Open BitcoTasks';
+        $('bitcotasks-copy').textContent = 'Tasks and offers selected for your account.';
+        $('bitcotasks-status').textContent = 'Available now'; bitcoProvider.classList.remove('is-unavailable');
       }
     } catch (_) {}
   }
@@ -216,7 +327,10 @@
     try {
       const res = await fetch('/api/earn/me');
       const data = await res.json().catch(() => ({}));
-      if (res.ok && data.ok) showMain();
+      if (res.ok && data.ok) {
+        await showMain();
+        if (new URLSearchParams(window.location.search).get('view') === 'activity') activityDialog.showModal();
+      }
     } catch (_) { /* Showing the sign-in form is the safe fallback. */ }
   })();
 })();

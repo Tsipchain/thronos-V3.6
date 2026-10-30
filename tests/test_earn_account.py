@@ -766,8 +766,11 @@ class TestNoWalletRequired:
 
     def test_source_has_no_wallet_requirement(self):
         source = (Path(__file__).parent.parent / "services" / "earn_account.py").read_text()
-        assert "wallet_address" not in source
+        # Optional signed wallet linking is allowed; the Earn account itself
+        # must never require a wallet address to exist or to authenticate.
+        assert "wallet_address TEXT NOT NULL" not in source
         assert "wallet NOT NULL" not in source
+        assert "wallet_required" not in source
 
 
 # ══════════════════════════════════════════════════════════════════════════

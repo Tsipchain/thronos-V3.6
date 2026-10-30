@@ -1,0 +1,38 @@
+name: Earn Account Regression Tests
+
+on:
+  push:
+    branches: ["codex/earn-provider-dashboard"]
+  pull_request:
+    paths:
+      - "services/earn_account.py"
+      - "templates/earn_beta.html"
+      - "public/wallet-pwa/**"
+      - "tests/test_earn_account.py"
+      - "tests/test_earn_wallet_link.py"
+      - ".github/workflows/earn-account-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  earn-account:
+    name: Earn account and wallet-link tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --disable-pip-version-check -r requirements.txt pytest
+      - name: Run Earn regression suite
+        env:
+          # Tests use temporary state and must never receive live credentials.
+          CPX_POSTBACK_LIVE: "0"
+          BITCOTASKS_ENABLED: "0"
+        run: |
+          python -m pytest tests/test_earn_account.py tests/test_earn_wallet_link.py -v

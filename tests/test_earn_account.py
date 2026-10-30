@@ -1333,3 +1333,10 @@ class TestEarnTemplateCookieSession:
         assert "Cash-out" in template
         assert "Not enabled yet." in template
         assert "get('view') === 'activity'" in template
+
+    def test_mobile_activity_shortcut_opens_new_tab_without_reward_side_effect(self):
+        template = (Path(__file__).parent.parent / "templates" / "earn_beta.html").read_text()
+        assert 'id="earn-activity-launch"' in template
+        assert 'href="/earn?view=activity"' in template
+        assert 'target="_blank"' in template
+        assert "Sign in to view your Earn balance and activity." in template

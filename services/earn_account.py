@@ -30,6 +30,7 @@ from typing import Any
 from urllib.parse import urlencode
 
 _THC_SCALE = Decimal("0.000001")
+_CLEARANCE_DAYS = int(os.getenv("EARN_CLEARANCE_DAYS", "7"))
 
 logger = logging.getLogger(__name__)
 
@@ -724,26 +725,42 @@ class EarnAccountStore:
                 ).fetchone(),
             )
 
-    def thc_balance(self, earn_user_id: str) -> dict[str, str]:
+    def thc_balance(self, earn_user_id: str) -> dict[str, Any]:
+        now = int(time.time())
         with self._tx() as con:
             rows = con.execute(
-                "SELECT state, amount FROM thc_ledger WHERE earn_user_id = ?",
+                "SELECT state, amount, created_at FROM thc_ledger WHERE earn_user_id = ?",
                 (earn_user_id,),
             ).fetchall()
         by_state: dict[str, Decimal] = {}
+        earliest_pending_ts: int | None = None
+        latest_pending_ts: int | None = None
         for r in rows:
             s = r["state"]
             by_state[s] = by_state.get(s, Decimal("0")) + Decimal(r["amount"])
+            if s == "pending":
+                ts = int(r["created_at"] or 0)
+                if earliest_pending_ts is None or ts < earliest_pending_ts:
+                    earliest_pending_ts = ts
+                if latest_pending_ts is None or ts > latest_pending_ts:
+                    latest_pending_ts = ts
         confirmed = by_state.get("confirmed", Decimal("0"))
         payable = by_state.get("payable", Decimal("0"))
         paid = by_state.get("paid", Decimal("0"))
         pending = by_state.get("pending", Decimal("0"))
-        return {
+        result: dict[str, Any] = {
             "available": str((confirmed + payable).quantize(_THC_SCALE)),
             "pending": str(pending.quantize(_THC_SCALE)),
             "total_earned": str((confirmed + payable + paid).quantize(_THC_SCALE)),
             "paid_out": str(paid.quantize(_THC_SCALE)),
+            "clearance_days": _CLEARANCE_DAYS,
         }
+        if earliest_pending_ts:
+            clears_at = earliest_pending_ts + _CLEARANCE_DAYS * 86400
+            remaining = max(0, clears_at - now)
+            result["earliest_clears_at"] = clears_at
+            result["days_remaining"] = remaining // 86400 + (1 if remaining % 86400 else 0)
+        return result
 
     def thc_history(
         self, earn_user_id: str, *, limit: int = 100,
@@ -764,6 +781,8 @@ class EarnAccountStore:
         if "amount" in d:
             d["amount"] = str(Decimal(d["amount"]).quantize(_THC_SCALE))
         d.pop("password_hash", None)
+        if d.get("state") == "pending" and d.get("created_at"):
+            d["clears_at"] = int(d["created_at"]) + _CLEARANCE_DAYS * 86400
         return d
 
     # ── BitcoTasks receipt handling ───────────────────────────────────────

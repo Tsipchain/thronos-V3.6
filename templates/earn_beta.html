@@ -34,8 +34,15 @@
   .earn-history-item { background:#0b1220; border:1px solid #1e3a50; border-radius:8px; padding:10px 12px; margin-bottom:6px; display:flex; justify-content:space-between; align-items:center; }
   .earn-history-item .src { color:#cbd5e1; font-size:13px; } .earn-history-item .amt { color:#00a86b; font-weight:700; font-size:14px; }
   .earn-history-item .st { font-size:11px; padding:2px 7px; border-radius:4px; }
-  .st-pending { background:#92400e33; color:#fbbf24; } .st-confirmed { background:#065f4633; color:#34d399; }
+  .st-pending { background:#92400e33; color:#fbbf24; cursor:pointer; } .st-confirmed { background:#065f4633; color:#34d399; }
   .st-payable { background:#1e40af33; color:#60a5fa; } .st-reversed { background:#7f1d1d33; color:#f87171; }
+  .earn-pending-detail { display:none; margin-top:8px; background:#0b1220; border:1px solid #92400e55; border-radius:8px; padding:10px 12px; }
+  .earn-pending-detail .pd-row { display:flex; justify-content:space-between; align-items:center; margin-bottom:4px; }
+  .earn-pending-detail .pd-label { color:#7fb8d8; font-size:12px; } .earn-pending-detail .pd-value { color:#fbbf24; font-size:13px; font-weight:600; }
+  .earn-pending-detail .pd-bar { height:4px; background:#1e3a50; border-radius:2px; margin-top:6px; overflow:hidden; }
+  .earn-pending-detail .pd-fill { height:100%; background:linear-gradient(90deg,#fbbf24,#f59e0b); border-radius:2px; transition:width .5s; }
+  .earn-balance-cell.clickable { cursor:pointer; border-radius:6px; padding:4px; transition:background .15s; }
+  .earn-balance-cell.clickable:hover { background:#ffffff08; }
   .earn-note { margin-top:14px; color:#91a7b8; font-size:12px; }
 </style>
 <main class="earn-beta">
@@ -60,7 +67,14 @@
       <div class="earn-balance-bar" id="earn-balance-bar">
         <div class="earn-balance-grid">
           <div class="earn-balance-cell"><div class="label">AVAILABLE THC</div><div class="value" id="earn-balance-value">—</div></div>
-          <div class="earn-balance-cell"><div class="label">PENDING THC</div><div class="value pending" id="earn-pending-value">—</div></div>
+          <div class="earn-balance-cell clickable" id="earn-pending-cell" title="Tap to see clearance details"><div class="label">PENDING THC</div><div class="value pending" id="earn-pending-value">—</div></div>
+        </div>
+        <div class="earn-pending-detail" id="earn-pending-detail">
+          <div class="pd-row"><span class="pd-label">Clearance period</span><span class="pd-value" id="pd-period">—</span></div>
+          <div class="pd-row"><span class="pd-label">Days remaining</span><span class="pd-value" id="pd-days">—</span></div>
+          <div class="pd-row"><span class="pd-label">Total earned</span><span class="pd-value" id="pd-total">—</span></div>
+          <div class="pd-bar"><div class="pd-fill" id="pd-fill" style="width:0%"></div></div>
+          <p style="color:#91a7b8;font-size:11px;margin:8px 0 0;">Pending rewards clear after provider verification. No action required.</p>
         </div>
       </div>
       <button id="earn-surveys" class="earn-action" style="margin-top:14px" type="button">Open Surveys</button>
@@ -86,7 +100,13 @@
   const status = $('earn-status'), frame = $('earn-frame'), surveyClose = $('earn-survey-close');
   const balanceBar = $('earn-balance-bar'), balanceValue = $('earn-balance-value'), pendingValue = $('earn-pending-value');
   const historySection = $('earn-history'), historyList = $('earn-history-list');
+  const pendingCell = $('earn-pending-cell'), pendingDetail = $('earn-pending-detail');
   let isRegister = false, token = null;
+
+  pendingCell.addEventListener('click', () => {
+    const shown = pendingDetail.style.display === 'block';
+    pendingDetail.style.display = shown ? 'none' : 'block';
+  });
 
   // On a restored session the raw token intentionally does not exist in
   // JavaScript: it is an HttpOnly cookie.  Never send "Bearer null", because
@@ -180,8 +200,23 @@
       const bData = await bRes.json().catch(() => ({}));
       if (bRes.ok && bData.ok) {
         balanceBar.style.display = '';
-        balanceValue.textContent = Number(bData.available || 0).toFixed(2) + ' THC';
-        pendingValue.textContent = Number(bData.pending || 0).toFixed(2) + ' THC';
+        const avail = Number(bData.available || 0);
+        const pend = Number(bData.pending || 0);
+        balanceValue.textContent = avail.toFixed(2) + ' THC';
+        pendingValue.textContent = pend.toFixed(2) + ' THC';
+        $('pd-period').textContent = (bData.clearance_days || 7) + ' days';
+        $('pd-total').textContent = Number(bData.total_earned || 0).toFixed(2) + ' THC';
+        if (pend > 0 && bData.days_remaining != null) {
+          const days = bData.days_remaining;
+          const cDays = bData.clearance_days || 7;
+          $('pd-days').textContent = days > 0 ? days + (days === 1 ? ' day' : ' days') : 'Ready';
+          const pct = Math.min(100, Math.max(0, ((cDays - days) / cDays) * 100));
+          $('pd-fill').style.width = pct + '%';
+        } else {
+          $('pd-days').textContent = 'None pending';
+          $('pd-fill').style.width = '0%';
+          pendingDetail.style.display = 'none';
+        }
       }
     } catch (_) {}
     try {
@@ -192,8 +227,19 @@
       if (hRes.ok && hData.ok && Array.isArray(hData.entries) && hData.entries.length) {
         hData.entries.slice(0, 20).forEach(e => {
           const div = document.createElement('div'); div.className = 'earn-history-item';
+          let extra = '';
+          if (e.state === 'pending' && e.clears_at) {
+            const now = Math.floor(Date.now() / 1000);
+            const rem = Math.max(0, e.clears_at - now);
+            const d = Math.ceil(rem / 86400);
+            extra = '<div style="width:100%;font-size:11px;color:#91a7b8;margin-top:4px;">'
+              + (d > 0 ? d + (d === 1 ? ' day' : ' days') + ' until clearance' : 'Ready for clearance')
+              + '</div>';
+          }
+          div.style.flexWrap = 'wrap';
           div.innerHTML = '<div><span class="src">' + (e.source||'').replace(/_/g,' ') + '</span></div>'
-            + '<div><span class="amt">+' + Number(e.amount).toFixed(2) + '</span> <span class="st st-' + e.state + '">' + e.state + '</span></div>';
+            + '<div><span class="amt">+' + Number(e.amount).toFixed(2) + '</span> <span class="st st-' + e.state + '">' + e.state + '</span></div>'
+            + extra;
           historyList.appendChild(div);
         });
       } else {

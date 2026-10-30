@@ -142,6 +142,17 @@
 
   function setStatus(msg, isError) { status.textContent = msg; status.className = 'earn-status' + (isError ? ' error' : ''); }
 
+  // Earn amounts arrive as fixed-scale decimal strings.  Format without
+  // Number()/floating-point conversion so display never rounds a ledger value.
+  function formatThc(raw) {
+    const value = String(raw ?? '0').trim();
+    if (!/^\\d+(?:\\.\\d{1,6})?$/.test(value)) return '0.00';
+    const [whole, fraction = ''] = value.split('.');
+    const significant = fraction.replace(/0+$/, '').length;
+    const digits = Math.max(2, significant);
+    return whole + '.' + (fraction + '000000').slice(0, digits);
+  }
+
   switchBtn.addEventListener('click', () => {
     isRegister = !isRegister;
     submitBtn.textContent = isRegister ? 'Create Account' : 'Sign In';
@@ -262,8 +273,8 @@
       const bData = await bRes.json().catch(() => ({}));
       if (bRes.ok && bData.ok) {
         balanceBar.style.display = '';
-        balanceValue.textContent = Number(bData.available || 0).toFixed(2) + ' THC';
-        pendingValue.textContent = Number(bData.pending || 0).toFixed(2) + ' THC';
+        balanceValue.textContent = formatThc(bData.available) + ' THC';
+        pendingValue.textContent = formatThc(bData.pending) + ' THC';
       }
     } catch (_) {}
     try {
@@ -278,7 +289,7 @@
           const left = document.createElement('div'), source = document.createElement('span');
           source.className = 'src'; source.textContent = (e.source || '').replace(/_/g, ' ');
           const right = document.createElement('div'), amount = document.createElement('span'), state = document.createElement('span');
-          amount.className = 'amt'; amount.textContent = '+' + Number(e.amount || 0).toFixed(2) + ' ';
+          amount.className = 'amt'; amount.textContent = '+' + formatThc(e.amount) + ' ';
           state.className = 'st st-' + String(e.state || 'pending').replace(/[^a-z-]/g, ''); state.textContent = e.state || 'pending';
           left.appendChild(source); right.append(amount, state); div.append(left, right);
           historyList.appendChild(div);

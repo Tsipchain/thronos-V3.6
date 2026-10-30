@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Thronos Earn Beta{% endblock %}
+{% block title %}Thronos Earn — Powered by Thronos Labs &amp; Encom{% endblock %}
 {% block content %}
 <style>
   .earn-beta { max-width: 1160px; margin: 32px auto; padding: 0 18px 42px; }
@@ -121,7 +121,7 @@
     <div class="earn-account-summary" id="earn-account-summary" aria-live="polite">
       <div><span class="summary-label">Earn account</span><span class="summary-value" id="earn-account-email">—</span></div>
       <div><span class="summary-label">Thronos wallet</span><span class="summary-value not-linked" id="earn-wallet-status">Not linked</span></div>
-      <div><span class="summary-label">Reward clearance</span><span class="summary-value">Pending receipts remain unavailable until provider clearance.</span></div>
+      <div><span class="summary-label">Reward clearance</span><span class="summary-value" id="earn-clearance-summary">Pending receipts remain unavailable until provider clearance.</span></div>
       <div><span class="summary-label">Cash-out</span><span class="summary-value">Not enabled yet.</span></div>
     </div>
     <div class="earn-history-list" id="earn-history-list"><p class="earn-note" style="margin:0">No verified Earn receipts yet.</p></div>
@@ -306,6 +306,19 @@
         balanceBar.style.display = '';
         balanceValue.textContent = available + ' THC';
         pendingValue.textContent = pending + ' THC';
+        const cs = $('earn-clearance-summary');
+        if (cs) {
+          if (bData.days_remaining != null && Number(bData.pending) > 0) {
+            const d = bData.days_remaining;
+            cs.textContent = d > 0
+              ? d + (d === 1 ? ' day' : ' days') + ' until earliest clearance (' + bData.clearance_days + '-day period)'
+              : 'Earliest pending reward ready for clearance';
+          } else if (Number(bData.pending) > 0) {
+            cs.textContent = 'Clearance date not yet received from provider.';
+          } else {
+            cs.textContent = 'No pending rewards.';
+          }
+        }
       } else {
         balanceBar.style.display = '';
         balanceValue.textContent = 'Unavailable';

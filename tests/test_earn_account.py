@@ -768,7 +768,7 @@ class TestNoWalletRequired:
         source = (Path(__file__).parent.parent / "services" / "earn_account.py").read_text()
         # Optional signed wallet linking is allowed; the Earn account itself
         # must never require a wallet address to exist or to authenticate.
-        account_schema = source.split("CREATE TABLE IF NOT EXISTS earn_accounts", 1)[1].split('"""', 1)[0]
+        account_schema = source.split("CREATE TABLE IF NOT EXISTS earn_accounts", 1)[1].split(");", 1)[0]
         assert "wallet_address" not in account_schema
         assert "wallet_required" not in account_schema
 

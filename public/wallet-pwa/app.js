@@ -1893,6 +1893,7 @@ async function _signEarnWalletChallenge(challenge) {
     nonce: String(challenge.nonce),
     wallet_address: address.toUpperCase(),
   };
+  if (challenge.approval) signingPayload.approval = String(challenge.approval);
   const canonical = JSON.stringify(signingPayload, Object.keys(signingPayload).sort());
   const privateKey = hexToBytes(_pwaSigningCtx.privHex.replace(/^0x/, ''));
   const hash = sha256(new TextEncoder().encode(canonical));
@@ -1924,6 +1925,48 @@ async function _restoreEarnSessionFromWallet(earnBase) {
   return complete.ok;
 }
 
+async function _requestEarnLinkMobileApproval(earnBase, walletAddress, challenge) {
+  // A registered 3FA device adds a separate mobile-wallet confirmation for
+  // desktop/QR pairing.  It is supplemental: the final link still requires
+  // the expiring challenge signed by the linked wallet itself.
+  const statusResponse = await fetch(
+    `${earnBase}/api/3fa/status?wallet=${encodeURIComponent(walletAddress)}`,
+    { credentials: 'include' },
+  );
+  const status = await statusResponse.json().catch(() => null);
+  if (!statusResponse.ok || !status?.ok || !status.enabled) return '';
+
+  const requestResponse = await fetch(`${earnBase}/api/3fa/approval/request`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({
+      wallet: walletAddress,
+      action: 'earn_wallet_link',
+      details: { purpose: 'earn_account_link', challenge_id: String(challenge.challenge_id) },
+    }),
+  });
+  const requestApproval = await requestResponse.json().catch(() => null);
+  if (!requestResponse.ok || !requestApproval?.ok || !requestApproval.approval_id) {
+    throw new Error(requestApproval?.error || 'mobile_wallet_approval_required');
+  }
+
+  const expiresAt = Date.now() + Math.max(1, Number(requestApproval.expires_in || 0)) * 1000;
+  while (Date.now() < expiresAt) {
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    const pollResponse = await fetch(
+      `${earnBase}${requestApproval.poll_url}`,
+      { credentials: 'include' },
+    );
+    const poll = await pollResponse.json().catch(() => null);
+    if (pollResponse.ok && poll?.status === 'approved') return String(requestApproval.approval_id);
+    if (!pollResponse.ok || ['denied', 'expired'].includes(String(poll?.status || ''))) {
+      throw new Error(poll?.error || 'mobile_wallet_approval_required');
+    }
+  }
+  throw new Error('mobile_wallet_approval_required');
+}
+
 async function _linkActiveWalletToEarn(earnBase) {
   const wallet_address = getActiveAddr();
   if (!wallet_address || !_pwaSigningCtx?.privHex) throw new Error('wallet_locked');
@@ -1933,10 +1976,23 @@ async function _linkActiveWalletToEarn(earnBase) {
   });
   const challenge = await start.json().catch(() => null);
   if (!start.ok || !challenge?.ok) throw new Error(challenge?.error || 'wallet_link_unavailable');
+  const biometricApproved = await requireTxApproval({
+    action: 'Link Earn Account',
+    address: wallet_address,
+    lines: [
+      { label: 'Wallet', value: wallet_address },
+      { label: 'Account action', value: 'Link to Earn Account' },
+    ],
+  });
+  if (!biometricApproved) throw new Error('biometric_approval_required');
+  const mobileApprovalId = await _requestEarnLinkMobileApproval(
+    earnBase, wallet_address, challenge,
+  );
   const proof = await _signEarnWalletChallenge(challenge);
   const complete = await fetch(`${earnBase}/api/earn/wallet-link/complete`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    credentials: 'include', body: JSON.stringify(proof),
+    credentials: 'include',
+    body: JSON.stringify({ ...proof, mobile_approval_id: mobileApprovalId }),
   });
   const result = await complete.json().catch(() => null);
   if (!complete.ok || !result?.ok) throw new Error(result?.error || 'wallet_link_failed');
@@ -1944,12 +2000,33 @@ async function _linkActiveWalletToEarn(earnBase) {
 }
 
 function _formatEarnThc(raw) {
-  const value = String(raw ?? '0').trim();
-  if (!/^\d+(?:\.\d{1,6})?$/.test(value)) return '0.00';
+  const value = String(raw ?? '').trim();
+  // A malformed server value is an unavailable value, never a false zero.
+  if (!/^\d+(?:\.\d{1,6})?$/.test(value)) return null;
   const [whole, fraction = ''] = value.split('.');
   const significant = fraction.replace(/0+$/, '').length;
   const digits = Math.max(2, significant);
   return whole + '.' + (fraction + '000000').slice(0, digits);
+}
+
+function _formatEarnReceiptDate(raw) {
+  const seconds = Number(raw);
+  if (!Number.isInteger(seconds) || seconds <= 0) return 'Receipt date unavailable';
+  const date = new Date(seconds * 1000);
+  return Number.isNaN(date.getTime()) ? 'Receipt date unavailable' : date.toLocaleString();
+}
+
+function _formatEarnClearance(entry) {
+  if (String(entry.state || '').toLowerCase() === 'reversed') {
+    return entry.reversal_reason ? `Reversed: ${String(entry.reversal_reason)}` : 'Reversed by provider';
+  }
+  const eta = Number(entry.estimated_clearance_at);
+  if (!Number.isInteger(eta) || eta <= 0) {
+    return 'Clearance date not yet received from provider.';
+  }
+  // This is presentation only: no local clock or timer can transition THC.
+  const remaining = Math.max(0, Math.ceil((eta * 1000 - Date.now()) / 86400000));
+  return `Estimated clearance: ${_formatEarnReceiptDate(eta)} (${remaining} day${remaining === 1 ? '' : 's'} remaining)`;
 }
 
 async function showEarn() {
@@ -1957,8 +2034,8 @@ async function showEarn() {
     <div class="screen">
       <div class="header">
         <button class="btn--icon" id="earnBackBtn" aria-label="Back">←</button>
-        <span class="logo--sm">✨ Earn</span>
-        <span style="margin-left:auto;font-size:.72rem;color:var(--muted)">THC rewards</span>
+        <span class="logo--sm">✨ Thronos Earn</span>
+        <span style="margin-left:auto;font-size:.62rem;color:var(--muted);text-align:right">Powered by<br>ThronosLabs · ENCOM</span>
       </div>
       <div class="card" id="earnPwaBody" style="padding:16px;margin-top:10px">
         <p style="color:var(--muted);margin:0">Loading your Earn Account…</p>
@@ -2001,16 +2078,20 @@ async function showEarn() {
     }
     const available = _formatEarnThc(balance.available);
     const pending = _formatEarnThc(balance.pending);
+    const availableText = available === null ? 'Unavailable' : `${available} THC`;
+    const pendingText = pending === null ? 'Unavailable' : `${pending} THC`;
     const allEntries = Array.isArray(history.entries) ? history.entries : [];
     const entries = allEntries.slice(0, 4);
     const renderEntry = (entry) => {
       const amount = _formatEarnThc(entry.amount);
-      const amountText = amount === '0.00' && String(entry.state || '').toLowerCase() === 'pending'
+      const amountText = amount === null
+        ? 'Amount unavailable'
+        : amount === '0.00' && String(entry.state || '').toLowerCase() === 'pending'
         ? 'Provider amount pending'
         : '+' + amount + ' THC';
       return `
         <div style="display:flex;justify-content:space-between;gap:8px;padding:9px 0;border-top:1px solid #ffffff14">
-          <div style="min-width:0"><div style="font-size:.8rem">${escHtml(entry.source || 'Earn reward')}</div><div style="font-size:.68rem;color:var(--muted)">${escHtml(entry.state || 'pending')}</div></div>
+          <div style="min-width:0"><div style="font-size:.8rem">${escHtml(entry.source || 'Earn reward')}</div><div style="font-size:.68rem;color:var(--muted)">${escHtml(entry.provider_status || entry.state || 'pending')} · ${escHtml(_formatEarnReceiptDate(entry.received_at))}</div><div style="font-size:.68rem;color:var(--muted);margin-top:2px">${escHtml(_formatEarnClearance(entry))}</div></div>
           <div style="font-size:.82rem;color:var(--accent)">${escHtml(amountText)}</div>
         </div>`;
     };
@@ -2018,9 +2099,9 @@ async function showEarn() {
 
     body.innerHTML = `
       <div style="font-size:.72rem;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(me.email || '')}</div>
-      <div style="display:flex;gap:10px;margin:13px 0">
-        <div style="flex:1;background:#0d0a1a;border-radius:9px;padding:10px"><div style="font-size:.66rem;color:var(--muted)">AVAILABLE</div><div style="font-size:1.1rem;color:var(--accent);font-weight:700">${available} THC</div></div>
-        <div style="flex:1;background:#0d0a1a;border-radius:9px;padding:10px"><div style="font-size:.66rem;color:var(--muted)">PENDING</div><div style="font-size:1.1rem;color:#e8bf5a;font-weight:700">${pending} THC</div></div>
+        <div style="display:flex;gap:10px;margin:13px 0">
+          <button id="earnAvailableCard" type="button" style="flex:1;background:#0d0a1a;border:0;border-radius:9px;padding:10px;text-align:left;cursor:pointer"><div style="font-size:.66rem;color:var(--muted)">AVAILABLE</div><div style="font-size:1.1rem;color:var(--accent);font-weight:700">${availableText}</div></button>
+          <button id="earnPendingCard" type="button" style="flex:1;background:#0d0a1a;border:0;border-radius:9px;padding:10px;text-align:left;cursor:pointer"><div style="font-size:.66rem;color:var(--muted)">PENDING</div><div style="font-size:1.1rem;color:#e8bf5a;font-weight:700">${pendingText}</div></button>
       </div>
       <button class="btn btn--primary" id="openSurveyBtn" style="width:100%;padding:11px">Open Surveys</button>
       <button class="btn" id="openEarnCenterBtn" style="width:100%;padding:10px;margin-top:8px">Earn history &amp; account</button>
@@ -2049,8 +2130,8 @@ async function showEarn() {
             <button id="closeEarnActivity" class="btn--icon" type="button" aria-label="Close">×</button>
           </div>
           <div style="display:flex;gap:10px;margin:15px 0">
-            <div style="flex:1;background:#0d0a1a;border-radius:9px;padding:10px"><div style="font-size:.66rem;color:var(--muted)">AVAILABLE</div><div style="font-size:1.1rem;color:var(--accent);font-weight:700">${available} THC</div></div>
-            <div style="flex:1;background:#0d0a1a;border-radius:9px;padding:10px"><div style="font-size:.66rem;color:var(--muted)">PENDING</div><div style="font-size:1.1rem;color:#e8bf5a;font-weight:700">${pending} THC</div></div>
+            <div style="flex:1;background:#0d0a1a;border-radius:9px;padding:10px"><div style="font-size:.66rem;color:var(--muted)">AVAILABLE</div><div style="font-size:1.1rem;color:var(--accent);font-weight:700">${availableText}</div></div>
+            <div style="flex:1;background:#0d0a1a;border-radius:9px;padding:10px"><div style="font-size:.66rem;color:var(--muted)">PENDING</div><div style="font-size:1.1rem;color:#e8bf5a;font-weight:700">${pendingText}</div></div>
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-bottom:12px;font-size:.73rem">
             <div style="background:#0d0a1a;border-radius:8px;padding:10px"><div style="color:var(--muted);margin-bottom:4px">THRONOS WALLET</div><div>${walletText}</div>${walletAction}</div>
@@ -2081,6 +2162,8 @@ async function showEarn() {
     };
     window.__thronosOpenEarnActivity = openEarnActivity;
     document.getElementById('openEarnCenterBtn').addEventListener('click', openEarnActivity);
+    document.getElementById('earnAvailableCard').addEventListener('click', openEarnActivity);
+    document.getElementById('earnPendingCard').addEventListener('click', openEarnActivity);
     document.getElementById('linkEarnWalletBtn')?.addEventListener('click', async () => {
       const message = document.getElementById('earnPwaMessage');
       message.textContent = 'Requesting wallet proof…';

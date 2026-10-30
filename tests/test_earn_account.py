@@ -492,6 +492,9 @@ class TestActivityOutputSafety:
         assert "amount" in entry
         assert "state" in entry
         assert "source" in entry
+        assert entry["provider_status"] == "received_pending_clearance"
+        assert entry["received_at"] is not None
+        assert entry["estimated_clearance_at"] is None
 
     @patch.dict(os.environ, _CPX_ENV, clear=False)
     def test_history_safe_for_wallet_linked_account(self, client, store, user_a):
@@ -602,6 +605,34 @@ class TestPostbackIdempotency:
         assert len(entries) == 10
         assert Decimal(store.thc_balance(user_a["earn_user_id"])["pending"]) == Decimal("1000")
 
+    def test_concurrent_duplicate_postbacks_remain_exactly_once(self, store, user_a):
+        _, token = store.login("alice@example.com", "password123")
+        user = store.user_for_session(token)
+        results, errors = [], []
+
+        def post_same_receipt():
+            try:
+                results.append(store.record_cpx_receipt(
+                    trans_id="concurrent-duplicate",
+                    cpx_ext_user_id=user["cpx_ext_user_id"],
+                    status=1, amount_local="77", payload={"status": "1"},
+                )[1])
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=post_same_receipt) for _ in range(8)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        assert errors == []
+        assert results.count(True) == 1
+        assert results.count(False) == 7
+        history = store.thc_history(user_a["earn_user_id"])
+        assert len(history) == 1
+        assert history[0]["source_ref"] == "concurrent-duplicate"
+        assert Decimal(store.thc_balance(user_a["earn_user_id"])["pending"]) == Decimal("77")
+
     def test_conflicting_user_for_same_trans_id_rejected(self, store, user_a, user_b):
         _, ta = store.login("alice@example.com", "password123")
         _, tb = store.login("bob@example.com", "password456")
@@ -659,6 +690,198 @@ class TestReversalHandling:
             status=2, amount_local="200", payload={},
         )
         assert Decimal(store.thc_balance(user_a["earn_user_id"])["available"]) == Decimal("0")
+
+
+class TestProviderClearancePresentation:
+    """Clearance is a verified provider transition, never a browser timer."""
+
+    def _pending_receipt(self, store, user_a, trans_id="tx-clear-1", amount="150"):
+        _, token = store.login("alice@example.com", "password123")
+        user = store.user_for_session(token)
+        receipt, _ = store.record_cpx_receipt(
+            trans_id=trans_id,
+            cpx_ext_user_id=user["cpx_ext_user_id"],
+            status=1,
+            amount_local=amount,
+            payload={"status": "1"},
+        )
+        return receipt
+
+    def test_existing_ledger_schema_migrates_clearance_fields(self, tmp_path):
+        import sqlite3
+
+        db_path = tmp_path / "pre-clearance-earn.db"
+        con = sqlite3.connect(db_path)
+        con.execute(
+            """CREATE TABLE thc_ledger (
+                entry_id TEXT PRIMARY KEY, earn_user_id TEXT NOT NULL,
+                source TEXT NOT NULL, source_ref TEXT NOT NULL, amount TEXT NOT NULL,
+                state TEXT NOT NULL DEFAULT 'pending', note TEXT NOT NULL DEFAULT '',
+                settlement_ref TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+                UNIQUE(source, source_ref)
+            )"""
+        )
+        con.commit()
+        con.close()
+        EarnAccountStore(str(db_path), _TEST_KEY)
+        con = sqlite3.connect(db_path)
+        columns = {row[1] for row in con.execute("PRAGMA table_info(thc_ledger)")}
+        con.close()
+        assert {
+            "provider_status", "received_at", "estimated_clearance_at",
+            "cleared_at", "reversal_reason",
+        } <= columns
+
+    def test_verified_clearance_updates_same_entry_exactly_once(self, store, user_a):
+        receipt = self._pending_receipt(store, user_a)
+        entry_id = receipt["thc_entry_id"]
+        confirmed, changed = store.record_verified_clearance(
+            source="cpx_survey",
+            source_ref="tx-clear-1",
+            event_ref="cpx-clearance-confirmed-1",
+            new_state="confirmed",
+            provider_status="confirmed_by_provider",
+        )
+        assert changed is True
+        assert confirmed["entry_id"] == entry_id
+        assert confirmed["state"] == "confirmed"
+        assert confirmed["provider_status"] == "confirmed_by_provider"
+        assert confirmed["cleared_at"] is not None
+
+        replay, replay_changed = store.record_verified_clearance(
+            source="cpx_survey",
+            source_ref="tx-clear-1",
+            event_ref="cpx-clearance-confirmed-1",
+            new_state="confirmed",
+            provider_status="confirmed_by_provider",
+        )
+        assert replay_changed is False
+        assert replay["entry_id"] == entry_id
+
+        payable, payable_changed = store.record_verified_clearance(
+            source="cpx_survey",
+            source_ref="tx-clear-1",
+            event_ref="cpx-clearance-payable-1",
+            new_state="payable",
+            provider_status="payable_by_provider",
+        )
+        assert payable_changed is True
+        assert payable["entry_id"] == entry_id
+        assert payable["state"] == "payable"
+        with store._tx() as con:
+            ledger_count = con.execute(
+                "SELECT COUNT(*) FROM thc_ledger WHERE source = ? AND source_ref = ?",
+                ("cpx_survey", "tx-clear-1"),
+            ).fetchone()[0]
+            audit_count = con.execute(
+                "SELECT COUNT(*) FROM thc_ledger_audit WHERE entry_id = ?", (entry_id,),
+            ).fetchone()[0]
+        assert ledger_count == 1
+        assert audit_count == 3  # receipt, confirmed, payable
+        balance = store.thc_balance(user_a["earn_user_id"])
+        assert Decimal(balance["pending"]) == Decimal("0")
+        assert Decimal(balance["available"]) == Decimal("150")
+
+    def test_pending_history_has_no_invented_provider_eta(self, store, user_a):
+        self._pending_receipt(store, user_a, trans_id="tx-no-eta")
+        entry = store.thc_history(user_a["earn_user_id"])[0]
+        assert entry["state"] == "pending"
+        assert entry["provider_status"] == "received_pending_clearance"
+        assert entry["received_at"] is not None
+        assert entry["estimated_clearance_at"] is None
+        template = (Path(__file__).parent.parent / "templates" / "earn_beta.html").read_text()
+        pwa = (Path(__file__).parent.parent / "public" / "wallet-pwa" / "app.js").read_text()
+        for source in (template, pwa):
+            assert "Clearance date not yet received from provider." in source
+            assert "5-day" not in source.lower()
+
+    def test_verified_provider_eta_is_preserved_and_labeled_estimated(self, store, user_a):
+        _, token = store.login("alice@example.com", "password123")
+        user = store.user_for_session(token)
+        official_eta = int(time.time()) + 172800
+        store.record_cpx_receipt(
+            trans_id="tx-official-eta",
+            cpx_ext_user_id=user["cpx_ext_user_id"],
+            status=1,
+            amount_local="12",
+            payload={"status": "1"},
+            estimated_clearance_at=official_eta,
+        )
+        entry = store.thc_history(user_a["earn_user_id"])[0]
+        assert entry["estimated_clearance_at"] == official_eta
+        for path in (
+            Path(__file__).parent.parent / "templates" / "earn_beta.html",
+            Path(__file__).parent.parent / "public" / "wallet-pwa" / "app.js",
+        ):
+            assert "Estimated clearance:" in path.read_text()
+
+    def test_reversal_remains_visible_and_removes_availability(self, store, user_a):
+        receipt = self._pending_receipt(store, user_a, trans_id="tx-visible-reversal", amount="44")
+        store.record_verified_clearance(
+            source="cpx_survey",
+            source_ref="tx-visible-reversal",
+            event_ref="cpx-clearance-confirmed-visible",
+            new_state="confirmed",
+            provider_status="confirmed_by_provider",
+        )
+        store.record_cpx_receipt(
+            trans_id="tx-visible-reversal",
+            cpx_ext_user_id=store.user_for_session(
+                store.login("alice@example.com", "password123")[1]
+            )["cpx_ext_user_id"],
+            status=2,
+            amount_local="44",
+            payload={"status": "2", "reason": "provider_reversal"},
+        )
+        history = store.thc_history(user_a["earn_user_id"])
+        assert len(history) == 1
+        assert history[0]["entry_id"] == receipt["thc_entry_id"]
+        assert history[0]["state"] == "reversed"
+        assert history[0]["reversal_reason"] == "provider_reversal"
+        assert Decimal(store.thc_balance(user_a["earn_user_id"])["available"]) == Decimal("0")
+
+    def test_clearance_cannot_skip_pending_to_payable(self, store, user_a):
+        self._pending_receipt(store, user_a, trans_id="tx-no-skip")
+        with pytest.raises(EarnError, match="invalid_thc_transition"):
+            store.record_verified_clearance(
+                source="cpx_survey",
+                source_ref="tx-no-skip",
+                event_ref="cpx-clearance-payable-no-skip",
+                new_state="payable",
+                provider_status="payable_by_provider",
+            )
+
+    @patch.dict(os.environ, _CPX_ENV, clear=False)
+    def test_pending_postback_api_history_and_pwa_contract_agree(self, client, store, user_a):
+        token = _login(client)
+        user = store.user_for_session(token)
+        trans_id = "tx-presentation-api"
+        callback = client.post("/api/earn/cpx/postback", data={
+            "trans_id": trans_id,
+            "user_id": user["cpx_ext_user_id"],
+            "status": "1",
+            "amount_local": "0",
+            "secure_hash": cpx_postback_hash(trans_id, _CPX_ENV["CPX_APP_SECURE_HASH"]),
+        })
+        assert callback.status_code == 200
+        headers = _auth(token)
+        balance = client.get("/api/earn/balance", headers=headers).get_json()
+        history = client.get("/api/earn/history", headers=headers).get_json()
+        assert balance["pending"] == "0.000000"
+        assert len(history["entries"]) == 1
+        entry = history["entries"][0]
+        assert entry["source_ref"] == trans_id
+        assert entry["provider_status"] == "received_pending_clearance"
+        assert entry["received_at"] is not None
+        assert entry["estimated_clearance_at"] is None
+        pwa = (Path(__file__).parent.parent / "public" / "wallet-pwa" / "app.js").read_text()
+        assert "Provider amount pending" in pwa
+        assert "entry.provider_status" in pwa
+        assert "entry.received_at" in pwa
+
+    def test_no_browser_or_public_clearance_route_exists(self, app):
+        rules = {rule.rule for rule in app.url_map.iter_rules()}
+        assert not any("clearance" in rule for rule in rules)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -1311,6 +1534,9 @@ class TestEarnTemplateCookieSession:
         assert "Number(bData.available" not in template
         assert "Number(bData.pending" not in template
         assert "No verified Earn receipts yet." in template
+        assert "Could not load your Earn balance. Retry this page; no zero balance is assumed." in template
+        assert "Activity could not be loaded. Retry this page; no empty history is assumed." in template
+        assert "Provider amount pending" in template
 
     def test_mobile_provider_tab_preserves_earn_dashboard(self):
         template = (Path(__file__).parent.parent / "templates" / "earn_beta.html").read_text()
@@ -1334,9 +1560,12 @@ class TestEarnTemplateCookieSession:
         assert "Not enabled yet." in template
         assert "requestedView === 'activity'" in template
 
-    def test_mobile_activity_shortcut_opens_new_tab_without_reward_side_effect(self):
+    def test_activity_shortcuts_open_the_in_page_detail_panel_without_reward_side_effect(self):
         template = (Path(__file__).parent.parent / "templates" / "earn_beta.html").read_text()
         assert 'id="earn-activity-launch"' in template
-        assert 'href="/earn?view=activity"' in template
-        assert 'target="_blank"' in template
+        assert "function openActivity()" in template
+        assert "earn-available-trigger" in template
+        assert "earn-pending-trigger" in template
+        assert 'href="/earn?view=activity"' not in template
+        assert 'target="_blank"' not in template
         assert "Sign in to view your Earn balance and activity." in template

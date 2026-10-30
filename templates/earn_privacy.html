@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Thronos Earn — Privacy Policy{% endblock %}
+{% block content %}
+<main class="container" style="max-width:860px;margin:32px auto 64px">
+  <h1>Thronos Earn — Privacy Policy</h1>
+  <p><strong>Last updated:</strong> 30 October 2026</p>
+
+  <h2>1. Who this applies to</h2>
+  <p>This policy applies to Thronos Earn, a beta rewards interface operated by ThronosLabs within the Thronos ecosystem. For privacy requests, contact <a href="mailto:admin@thronoschain.org">admin@thronoschain.org</a>.</p>
+
+  <h2>2. Data we process</h2>
+  <p>To operate an Earn Account, we process an email address, a password hash rather than a plaintext password, session-token hashes, account identifiers, and reward-ledger records. If a user elects to link a Thronos wallet, we process the public wallet address, public key, and signed challenge metadata required to verify the link. We do not request or store private keys or seed phrases.</p>
+
+  <h2>3. Provider data</h2>
+  <p>For CPX Research, Thronos Earn generates a stable opaque provider identifier server-side. We do not send the Earn email address or optional wallet address to CPX through the offerwall identity. Provider receipts may contain a transaction reference, reward amount, offer reference, provider status and reversal information needed for fraud prevention and accounting.</p>
+
+  <h2>4. Why we use data</h2>
+  <p>We use this data to authenticate users, display account activity, verify provider callbacks, prevent duplicate or fraudulent rewards, handle reversals, respond to support requests, and protect the service. We do not sell Earn Account personal data.</p>
+
+  <h2>5. Third-party services</h2>
+  <p>When you open a provider offerwall, that provider operates its own service and privacy practices. Review the provider’s policy before submitting information in an offer or survey.</p>
+
+  <h2>6. Retention and requests</h2>
+  <p>We retain operational and security records only for as long as reasonably necessary for account operation, fraud prevention, provider reconciliation, legal obligations, and dispute handling. You may request access, correction, or deletion information by contacting us. Some records may need to be retained where required for security, fraud prevention, or legal compliance.</p>
+
+  <h2>7. Security</h2>
+  <p>We use server-side session controls, password hashing, signed wallet-link challenges, provider callback verification, and idempotent ledger records. No security measure is absolute; never send secrets or wallet recovery material by email or chat.</p>
+
+  <p>Read the <a href="/terms">Terms of Use</a> or visit <a href="/contact">Contact</a>.</p>
+</main>
+{% endblock %}

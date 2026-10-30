@@ -1994,15 +1994,26 @@ async function showEarn() {
     ]);
     const balance = await balanceResponse.json().catch(() => null);
     const history = await historyResponse.json().catch(() => null);
-    const available = _formatEarnThc(balance?.available);
-    const pending = _formatEarnThc(balance?.pending);
-    const allEntries = Array.isArray(history?.entries) ? history.entries : [];
+    // Never turn a failed or unauthenticated API response into a false 0.00 balance.
+    // The Earn ledger is server-authoritative; an unavailable read must be visible.
+    if (!balanceResponse.ok || !balance?.ok || !historyResponse.ok || !history?.ok) {
+      throw new Error('earn_data_unavailable');
+    }
+    const available = _formatEarnThc(balance.available);
+    const pending = _formatEarnThc(balance.pending);
+    const allEntries = Array.isArray(history.entries) ? history.entries : [];
     const entries = allEntries.slice(0, 4);
-    const renderEntry = (entry) => `
-      <div style="display:flex;justify-content:space-between;gap:8px;padding:9px 0;border-top:1px solid #ffffff14">
-        <div style="min-width:0"><div style="font-size:.8rem">${escHtml(entry.source || 'Earn reward')}</div><div style="font-size:.68rem;color:var(--muted)">${escHtml(entry.state || 'pending')}</div></div>
-        <div style="font-size:.82rem;color:var(--accent)">+${escHtml(_formatEarnThc(entry.amount))} THC</div>
-      </div>`;
+    const renderEntry = (entry) => {
+      const amount = _formatEarnThc(entry.amount);
+      const amountText = amount === '0.00' && String(entry.state || '').toLowerCase() === 'pending'
+        ? 'Provider amount pending'
+        : '+' + amount + ' THC';
+      return `
+        <div style="display:flex;justify-content:space-between;gap:8px;padding:9px 0;border-top:1px solid #ffffff14">
+          <div style="min-width:0"><div style="font-size:.8rem">${escHtml(entry.source || 'Earn reward')}</div><div style="font-size:.68rem;color:var(--muted)">${escHtml(entry.state || 'pending')}</div></div>
+          <div style="font-size:.82rem;color:var(--accent)">${escHtml(amountText)}</div>
+        </div>`;
+    };
     const rows = entries.length ? entries.map(renderEntry).join('') : '<p style="color:var(--muted);font-size:.82rem">No verified rewards yet.</p>';
 
     body.innerHTML = `
@@ -2096,7 +2107,11 @@ async function showEarn() {
       }
     });
   } catch {
-    body.innerHTML = '<p style="color:var(--muted);margin:0">Earn is temporarily unavailable. Your wallet remains safe and unchanged.</p>';
+    body.innerHTML = `
+      <p style="color:var(--muted);margin:0 0 12px">Earn data could not be loaded. No zero balance is assumed; your wallet and rewards remain unchanged.</p>
+      <button class="btn" id="retryEarnLoadBtn" type="button" style="width:100%;padding:10px">Retry Earn data</button>
+    `;
+    document.getElementById('retryEarnLoadBtn')?.addEventListener('click', showEarn);
   }
 }
 

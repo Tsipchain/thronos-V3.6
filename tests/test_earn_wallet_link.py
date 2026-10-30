@@ -115,6 +115,9 @@ class EarnWalletLinkTests(unittest.TestCase):
         self.assertIn("linkEarnWalletFromActivity", app)
         self.assertIn("await _linkActiveWalletToEarn(earnBase)", app)
         self.assertNotIn("cashout_execute", app)
+        self.assertIn("earn_data_unavailable", app)
+        self.assertIn("No zero balance is assumed", app)
+        self.assertIn("Provider amount pending", app)
 
 
 if __name__ == "__main__":

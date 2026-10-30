@@ -35288,6 +35288,34 @@ def get_explorer_url(chain: str, txid: str) -> str | None:
     return None
 
 
+_CHAIN_ALIASES: dict[str, str] = {
+    "bnb": "bsc", "binance": "bsc", "bsc-mainnet": "bsc",
+    "arb": "arbitrum", "arbitrum-one": "arbitrum",
+    "ethereum": "eth", "eth-mainnet": "eth",
+    "thr": "thronos", "thronoschain": "thronos",
+    "bitcoin": "btc",
+}
+
+
+def normalize_chain_id(raw: str) -> str:
+    """Collapse chain aliases to a single canonical label."""
+    c = (raw or "").strip().lower()
+    return _CHAIN_ALIASES.get(c, c)
+
+
+def canonical_event_id(chain: str, tx_hash: str, log_index: int | None = None) -> str:
+    """Compute a durable canonical identity for an on-chain event.
+
+    Format:  ``<chain_id>:<tx_hash>:<log_index>``
+    For events without a log_index (native transfers, internal-only events)
+    the log_index segment is ``-``.
+    """
+    cid = normalize_chain_id(chain)
+    h = (tx_hash or "").strip().lower()
+    li = str(log_index) if log_index is not None else "-"
+    return f"{cid}:{h}:{li}"
+
+
 def add_wallet_history_event(
     thr_address: str,
     event_type: str,
@@ -35308,26 +35336,27 @@ def add_wallet_history_event(
     lp_shares: float = 0.0,
     pair: str = "",
     note: str = "",
+    log_index: int | None = None,
 ) -> dict:
     """
-    Write a wallet history event (transaction, pledge, pool seed, withdrawal, action, gateway, etc).
+    Write a wallet history event with canonical identity and exactly-once semantics.
+
+    Canonical identity
+    ~~~~~~~~~~~~~~~~~~
+    Every externally observed event is identified by ``chain_id:tx_hash:log_index``.
+    For internal Thronos events the identity falls back to ``chain:internal_txid:-``.
+    A duplicate canonical_id updates the existing record (status transition) instead
+    of creating a second row.
 
     Args:
-        thr_address: Thronos wallet address or system actor (GATEWAY_SYSTEM, SYSTEM_PYTHIA_ACTIONS, etc.)
-        event_type: Phase 2.0: pledge, token_receive, token_send, pool_seed, pool_withdraw, bridge
-                    Phase 2: crosschain_withdrawal_* (requested/fee_charged/signed/broadcasted/confirmed/failed)
-                    Phase 2.2: external_service_fee_collected, external_fee_split_recorded, pool_topup_from_service_fee, gas_reserve_accounted
-                    Phase 2.3: pythia_action_intent_created, pythia_action_approved, pythia_action_signed, pythia_action_broadcasted, pythia_action_confirmed, pythia_action_failed
-                              gas_wallet_topped_up, swap_to_gas_requested, swap_to_gas_confirmed
-                              gateway_payment_received, gateway_fee_collected, gateway_pool_topup_allocated, gateway_gas_reserve_allocated, gateway_payout_requested
-                    Phase 2.4.5: pythia_v1_wallet_discovered, pythia_v1_wallet_provisioned, pythia_public_address_registered, pythia_role_address_registered
-                                 pythia_evm_address_attached, pythia_evm_address_created
-        chain: thronos, bsc, base, arbitrum, eth, btc
+        thr_address: Thronos wallet address or system actor
+        event_type: Event classification string
+        chain: thronos, bsc, base, arbitrum, eth, btc (aliases normalized)
         asset: THR, BTC, WBTC, USDT, USDC, BNB, ETH, native
         amount: Transaction amount
-        status: pending, confirmed, credited, pool_seeded, queued, sent, failed, manual_review, intent, approved, signed, broadcasted
+        status: pending, confirmed, credited, pool_seeded, queued, sent, failed, etc.
         direction: in, out, pool, bridge, crosschain, system, gateway
-        internal_txid: Thronos transaction ID or action_id (PACT-*) if applicable
+        internal_txid: Thronos transaction ID or action_id if applicable
         external_txid: External chain tx hash if applicable
         token_contract: Token contract address (for ERC20/BEP20)
         token_standard: native, BEP20, ERC20
@@ -35336,25 +35365,34 @@ def add_wallet_history_event(
         external_from: EVM sender address or vault source
         external_to: EVM recipient/vault destination
         pool_id: Pool identifier for LP events
-        lp_shares: LP shares minted (for pool_add_liquidity_lp_minted events)
-        pair: Token pair string e.g. "THR/USDT" (for LP events)
-        note: Optional admin note or context about the event
+        lp_shares: LP shares minted
+        pair: Token pair string e.g. "THR/USDT"
+        note: Optional context
+        log_index: EVM log index within the transaction (preserves distinct events
+                   in a single tx hash)
 
     Returns:
-        The created event dict
+        The created or updated event dict
     """
     if timestamp is None:
         timestamp = time.time()
 
+    norm_chain = normalize_chain_id(chain)
+
     # Build explorer URL if we have external txid
-    explorer_url = get_explorer_url(chain, external_txid) if external_txid else None
+    explorer_url = get_explorer_url(norm_chain, external_txid) if external_txid else None
+
+    # Compute canonical identity
+    tx_ref = external_txid or internal_txid
+    cid = canonical_event_id(norm_chain, tx_ref, log_index) if tx_ref else ""
 
     event = {
         "id": f"{thr_address}_{event_type}_{int(timestamp*1000)}_{random.randint(1000,9999)}",
+        "canonical_id": cid,
         "thr_address": thr_address,
         "event_type": event_type,
-        "chain": chain,
-        "network_label": network_label or chain.upper(),
+        "chain": norm_chain,
+        "network_label": network_label or norm_chain.upper(),
         "asset": asset,
         "token_standard": token_standard,
         "token_contract": token_contract,
@@ -35370,13 +35408,36 @@ def add_wallet_history_event(
         "lp_shares": lp_shares,
         "pair": pair,
         "note": note,
+        "log_index": log_index,
         "timestamp": timestamp,
         "created_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(timestamp)),
     }
 
-    # Append to wallet history
     try:
         history = load_json(WALLET_HISTORY_FILE, [])
+
+        # Deduplicate: if canonical_id is non-empty and already exists,
+        # update the existing record's status instead of appending.
+        if cid:
+            for idx, existing in enumerate(history):
+                if existing.get("canonical_id") == cid:
+                    old_status = existing.get("status")
+                    existing["status"] = status
+                    existing["event_type"] = event_type
+                    if lp_shares:
+                        existing["lp_shares"] = lp_shares
+                    if note:
+                        existing["note"] = note
+                    existing["updated_at"] = time.strftime(
+                        "%Y-%m-%d %H:%M:%S UTC", time.gmtime()
+                    )
+                    save_json(WALLET_HISTORY_FILE, history)
+                    logger.info(
+                        "Updated wallet history event %s: %s → %s",
+                        cid, old_status, status,
+                    )
+                    return existing
+
         history.append(event)
         save_json(WALLET_HISTORY_FILE, history)
         logger.info(f"Added wallet history event: {event_type} {amount} {asset} for {thr_address}")
@@ -35384,6 +35445,61 @@ def add_wallet_history_event(
         logger.error(f"Failed to save wallet history event: {e}")
 
     return event
+
+
+def history_dedupe_dry_run() -> dict:
+    """Scan wallet_history.json and report canonical-id collisions without modifying data.
+
+    Returns a dict with:
+      - total: total events in the file
+      - with_canonical_id: events that already have a canonical_id
+      - without_canonical_id: events missing a canonical_id (pre-migration)
+      - collisions: list of groups where >1 event shares the same canonical_id
+      - backfill_candidates: events that have external_txid or internal_txid
+        but no canonical_id (can be backfilled)
+    """
+    history = load_json(WALLET_HISTORY_FILE, [])
+    seen: dict[str, list[dict]] = {}
+    without_cid = []
+    backfill_candidates = []
+
+    for evt in history:
+        cid = evt.get("canonical_id", "")
+        if cid:
+            seen.setdefault(cid, []).append(evt)
+        else:
+            without_cid.append(evt)
+            tx_ref = evt.get("external_txid") or evt.get("internal_txid")
+            if tx_ref:
+                backfill_candidates.append({
+                    "id": evt.get("id"),
+                    "event_type": evt.get("event_type"),
+                    "chain": evt.get("chain"),
+                    "external_txid": evt.get("external_txid", ""),
+                    "internal_txid": evt.get("internal_txid", ""),
+                    "proposed_canonical_id": canonical_event_id(
+                        evt.get("chain", ""),
+                        tx_ref,
+                        evt.get("log_index"),
+                    ),
+                })
+
+    collisions = []
+    for cid, evts in seen.items():
+        if len(evts) > 1:
+            collisions.append({
+                "canonical_id": cid,
+                "count": len(evts),
+                "event_ids": [e.get("id") for e in evts],
+            })
+
+    return {
+        "total": len(history),
+        "with_canonical_id": len(history) - len(without_cid),
+        "without_canonical_id": len(without_cid),
+        "collisions": collisions,
+        "backfill_candidates": backfill_candidates,
+    }
 
 
 def get_wallet_history(thr_address: str, limit: int = 100) -> list:

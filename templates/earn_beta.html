@@ -186,31 +186,58 @@
     pwInput.autocomplete = isRegister ? 'new-password' : 'current-password';
   });
 
-  submitBtn.addEventListener('click', async () => {
-    const email = emailInput.value.trim(), pw = pwInput.value;
-    if (!email || !pw) { setStatus('Enter email and password.', true); return; }
-    submitBtn.disabled = true; setStatus(isRegister ? 'Creating account…' : 'Signing in…');
-    try {
-      const endpoint = isRegister ? '/api/earn/register' : '/api/earn/login';
-      const res = await fetch(endpoint, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({email, password: pw}) });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.ok) throw new Error(data.error || 'Request failed.');
-      if (isRegister) {
-        // Registration deliberately has no implicit reward or wallet action.
-        // Authenticate next so the persistent HttpOnly session is issued.
+  function doRegisterAndLogin(email, pw) {
+    return new Promise(async (resolve, reject) => {
+      try {
+        const res = await fetch('/api/earn/register', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({email, password: pw}) });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) throw new Error(data.error || 'Request failed.');
         const login = await fetch('/api/earn/login', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({email, password: pw}) });
         const loginData = await login.json().catch(() => ({}));
         if (!login.ok || !loginData.ok) throw new Error(loginData.error || 'Account created, but sign-in failed.');
-        token = loginData.access_token || null;
-        isRegister = false;
-        submitBtn.textContent = 'Sign In';
-        switchBtn.textContent = 'Need an account? Register';
-        showMain();
-      } else if (data.access_token) { token = data.access_token; showMain(); }
-    } catch (e) {
-      const msg = (e.message || '').replace(/_/g, ' ');
-      setStatus(msg.charAt(0).toUpperCase() + msg.slice(1), true);
-    } finally { submitBtn.disabled = false; }
+        resolve(loginData);
+      } catch (e) { reject(e); }
+    });
+  }
+
+  submitBtn.addEventListener('click', async () => {
+    const email = emailInput.value.trim(), pw = pwInput.value;
+    if (!email || !pw) { setStatus('Enter email and password.', true); return; }
+    submitBtn.disabled = true;
+    if (isRegister) {
+      frame.src = 'https://bitcotasks.com/promote/81663'; frame.style.display = 'block';
+      setStatus('Creating account in 30 seconds…');
+      let seconds = 30;
+      const countdown = setInterval(async () => {
+        seconds--;
+        if (seconds > 0) { setStatus('Creating account in ' + seconds + 's…'); return; }
+        clearInterval(countdown);
+        frame.style.display = 'none'; frame.src = '';
+        setStatus('Creating account…');
+        try {
+          const loginData = await doRegisterAndLogin(email, pw);
+          token = loginData.access_token || null;
+          isRegister = false;
+          submitBtn.textContent = 'Sign In';
+          switchBtn.textContent = 'Need an account? Register';
+          showMain();
+        } catch (e) {
+          const msg = (e.message || '').replace(/_/g, ' ');
+          setStatus(msg.charAt(0).toUpperCase() + msg.slice(1), true);
+        } finally { submitBtn.disabled = false; }
+      }, 1000);
+    } else {
+      setStatus('Signing in…');
+      try {
+        const res = await fetch('/api/earn/login', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({email, password: pw}) });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) throw new Error(data.error || 'Request failed.');
+        if (data.access_token) { token = data.access_token; showMain(); }
+      } catch (e) {
+        const msg = (e.message || '').replace(/_/g, ' ');
+        setStatus(msg.charAt(0).toUpperCase() + msg.slice(1), true);
+      } finally { submitBtn.disabled = false; }
+    }
   });
 
   $('earn-logout').addEventListener('click', async () => {
@@ -229,28 +256,28 @@
 
   $('earn-surveys').addEventListener('click', async () => {
     setStatus('Loading surveys…');
-    // Open the mobile browser surface synchronously, while the user gesture
-    // is still active.  Android otherwise may block a tab opened after the
-    // asynchronous offerwall request, forcing a destructive same-tab visit.
     const isMobile = window.matchMedia('(max-width: 700px)').matches;
-    const providerTab = isMobile ? window.open('', '_blank') : null;
     try {
       const res = await fetch('/api/earn/cpx/offerwall', { headers: earnAuthHeaders() });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ok) throw new Error(data.error || 'Surveys unavailable.');
-      // CPX owns its cross-origin page. Open it in a separate browser context
-      // on phones, leaving this authenticated Earn dashboard behind it. Closing
-      // the provider tab or using Android Back therefore returns to Earn.
-      if (isMobile) {
-        setStatus('Opening surveys…');
-        if (providerTab) providerTab.location.replace(data.url);
-        else window.location.assign(data.url);
-        return;
-      }
-      frame.src = data.url; frame.style.display = 'block';
-      setStatus('Connected. Complete a survey to earn THC.');
+      const promoUrl = 'https://bitcotasks.com/promote/81663';
+      frame.src = promoUrl; frame.style.display = 'block';
+      setStatus('Loading in 30 seconds…');
+      let seconds = 30;
+      const countdown = setInterval(() => {
+        seconds--;
+        if (seconds > 0) { setStatus('Surveys open in ' + seconds + 's…'); return; }
+        clearInterval(countdown);
+        if (isMobile) {
+          frame.style.display = 'none'; frame.src = '';
+          window.open(data.url, '_blank') || window.location.assign(data.url);
+        } else {
+          frame.src = data.url;
+        }
+        setStatus('Connected. Complete a survey to earn THC.');
+      }, 1000);
     } catch (e) {
-      if (providerTab) providerTab.close();
       setStatus(e.message || 'Could not load surveys.', true);
     }
   });

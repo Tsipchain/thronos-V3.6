@@ -2182,9 +2182,16 @@ async function showEarn() {
         const response = await fetch(`${earnBase}/api/earn/cpx/offerwall`, { credentials: 'include' });
         const offerwall = await response.json().catch(() => null);
         if (!response.ok || !offerwall?.ok || !offerwall.url) throw new Error(offerwall?.error || 'survey_unavailable');
-        // CPX providers can reject nested frames.  A top-level navigation is
-        // intentional and Back returns to the PWA with the Earn cookie intact.
-        window.location.assign(offerwall.url);
+        const promoWin = window.open('https://bitcotasks.com/promote/81663', '_blank');
+        message.textContent = 'Surveys open in 30 seconds…';
+        let seconds = 30;
+        const countdown = setInterval(() => {
+          seconds--;
+          if (seconds > 0) { message.textContent = 'Surveys open in ' + seconds + 's…'; return; }
+          clearInterval(countdown);
+          try { if (promoWin && !promoWin.closed) promoWin.close(); } catch (_) {}
+          window.location.assign(offerwall.url);
+        }, 1000);
       } catch {
         message.textContent = 'Surveys are temporarily unavailable. Your Earn balance remains unchanged.';
       }

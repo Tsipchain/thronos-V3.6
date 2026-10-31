@@ -155,6 +155,7 @@ from ai_models_config import base_model_config
 # CRITICAL FIX #6: Import compute_model_stats and create_ai_transfer_from_ledger_entry from ai_interaction_ledger
 from ai_interaction_ledger import compute_model_stats, create_ai_transfer_from_ledger_entry
 from services.l2e_edu import l2e_edu_bp
+from services.xrpl_bridge import xrpl_bridge_bp
 
 app = Flask(__name__)
 # Allow thronoschain.org (Vercel CDN + Plesk branding site) and all subdomains,
@@ -180,6 +181,7 @@ except Exception:
     CORS(app, origins=_CORS_ORIGINS)
 
 app.register_blueprint(l2e_edu_bp)
+app.register_blueprint(xrpl_bridge_bp)
 
 # Background worker infrastructure for async block processing and broadcasting
 _BLOCK_PROCESS_QUEUE = queue.Queue(maxsize=100)

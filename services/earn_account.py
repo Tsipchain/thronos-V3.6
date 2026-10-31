@@ -835,10 +835,6 @@ class EarnAccountStore:
         if "amount" in d:
             d["amount"] = str(Decimal(d["amount"]).quantize(_THC_SCALE))
         d.pop("password_hash", None)
-        if d.get("state") == "pending" and not d.get("estimated_clearance_at"):
-            created = int(d.get("created_at") or 0)
-            if created:
-                d["estimated_clearance_at"] = created + _CLEARANCE_DAYS * 86400
         return d
 
     @staticmethod

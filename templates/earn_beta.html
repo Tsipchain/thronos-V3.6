@@ -308,12 +308,12 @@
         pendingValue.textContent = pending + ' THC';
         const cs = $('earn-clearance-summary');
         if (cs) {
-          if (bData.days_remaining != null && Number(bData.pending) > 0) {
+          if (bData.days_remaining != null && pending !== '0.00') {
             const d = bData.days_remaining;
             cs.textContent = d > 0
               ? d + (d === 1 ? ' day' : ' days') + ' until earliest clearance (' + bData.clearance_days + '-day period)'
               : 'Earliest pending reward ready for clearance';
-          } else if (Number(bData.pending) > 0) {
+          } else if (pending !== '0.00') {
             cs.textContent = 'Clearance date not yet received from provider.';
           } else {
             cs.textContent = 'No pending rewards.';

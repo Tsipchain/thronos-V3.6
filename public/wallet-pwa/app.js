@@ -2954,7 +2954,7 @@ async function showMultiChain() {
       });
     }
 
-    const fmt = (v, d=8) => v == null ? '—' : v === 0 ? '0.00' : v.toFixed(d);
+    const fmt = (v, d=8) => v == null ? '—' : v === 0 ? (0).toFixed(d) : v.toFixed(d);
     const chains = [
       { icon:'₿', label:'Bitcoin',         sym:'BTC',  val:bal.btc,      color:'#f7931a', net:'bitcoin',  addr:btcAddr },
       { icon:'Ξ', label:'Ethereum',         sym:'ETH',  val:bal.eth,      color:'#627eea', net:'ethereum', addr:bal.evmAddr },
@@ -4365,22 +4365,22 @@ function _renderHistoryRow(tx) {
   let amountHtml;
   if (kind === 'swap' && tx.amount_out !== undefined) {
     const symOut = (tx.symbol_out || '').toUpperCase();
-    amountHtml = `<span style="color:#ff6b6b">-${Number(amount || 0).toLocaleString(undefined,{maximumFractionDigits:6})} ${symbol}</span>
+    amountHtml = `<span style="color:#ff6b6b">-${Number(amount || 0).toLocaleString(undefined,{maximumFractionDigits:8})} ${symbol}</span>
       <span style="color:var(--muted)"> → </span>
-      <span style="color:#00ff66">+${Number(tx.amount_out).toLocaleString(undefined,{maximumFractionDigits:6})} ${symOut}</span>`;
+      <span style="color:#00ff66">+${Number(tx.amount_out).toLocaleString(undefined,{maximumFractionDigits:8})} ${symOut}</span>`;
   } else if (kind === 'liquidity' && Array.isArray(tx.amounts)) {
-    amountHtml = tx.amounts.map(a => `<span style="color:#fff">${Number(a.amount || a).toLocaleString(undefined,{maximumFractionDigits:6})} ${(a.symbol || '').toUpperCase()}</span>`).join(' / ');
+    amountHtml = tx.amounts.map(a => `<span style="color:#fff">${Number(a.amount || a).toLocaleString(undefined,{maximumFractionDigits:8})} ${(a.symbol || '').toUpperCase()}</span>`).join(' / ');
   } else {
     const sign = direction === 'in' ? '+' : (direction === 'out' ? '-' : '');
     const color = direction === 'in' ? '#00ff66' : (direction === 'out' ? '#ff6b6b' : '#fff');
-    amountHtml = `<span style="color:${color}">${sign}${Number(amount || 0).toLocaleString(undefined,{maximumFractionDigits:6})} ${symbol}</span>`;
+    amountHtml = `<span style="color:${color}">${sign}${Number(amount || 0).toLocaleString(undefined,{maximumFractionDigits:8})} ${symbol}</span>`;
   }
 
   const counterparty = tx.to || tx.from || tx.counterparty || '';
   const cpLabel = direction === 'in' ? 'From' : (direction === 'out' ? 'To' : '');
   const cpHtml = counterparty && cpLabel ? `<div style="font-size:.7rem;color:var(--muted);">${cpLabel}: <span style="font-family:'Courier New',monospace;color:#b08cf8">${_shortAddr(counterparty)}</span></div>` : '';
 
-  const feeHtml = tx.fee_burned ? `<div style="font-size:.72rem;color:var(--muted)">Fee: ${Number(tx.fee_burned).toLocaleString(undefined,{maximumFractionDigits:6})} THR</div>` : '';
+  const feeHtml = tx.fee_burned ? `<div style="font-size:.72rem;color:var(--muted)">Fee: ${Number(tx.fee_burned).toLocaleString(undefined,{maximumFractionDigits:8})} THR</div>` : '';
   const noteHtml = tx.note ? `<div style="font-size:.72rem;color:var(--muted);margin-top:2px">${tx.note}</div>` : '';
   const networkLabel = tx.network_label || (tx.chain ? tx.chain.toUpperCase() : '');
   const netBadge = networkLabel ? `<span style="font-size:.68rem;background:#1a1040;border:1px solid #2a2050;border-radius:4px;padding:1px 5px;color:var(--muted)">${networkLabel}</span>` : '';
@@ -4593,7 +4593,7 @@ async function showHistory(address) {
       } else {
         const id = raw.id || raw.event_id || raw.tx_id || raw.internal_txid || '';
         key = id ? chain + '|id|' + String(id)
-          : chain + '|fallback|' + type + '|' + String(raw.timestamp || '') + '|' + asset + '|' + Number(raw.amount || 0).toFixed(6) + '|' + String(raw.external_from || raw.from || '') + '|' + String(raw.external_to || raw.to || '');
+          : chain + '|fallback|' + type + '|' + String(raw.timestamp || '') + '|' + asset + '|' + Number(raw.amount || 0).toFixed(8) + '|' + String(raw.external_from || raw.from || '') + '|' + String(raw.external_to || raw.to || '');
       }
 
       const existing = groups.get(key);

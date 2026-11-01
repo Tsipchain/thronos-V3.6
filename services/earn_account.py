@@ -257,6 +257,22 @@ class EarnAccountStore:
                 CREATE INDEX IF NOT EXISTS idx_bitcotasks_receipts_user
                     ON bitcotasks_receipts(earn_user_id);
 
+                CREATE TABLE IF NOT EXISTS pure_receipts (
+                    trans_id        TEXT PRIMARY KEY,
+                    earn_user_id    TEXT NOT NULL
+                        REFERENCES earn_accounts(earn_user_id),
+                    status          INTEGER NOT NULL,
+                    amount_thc      TEXT NOT NULL,
+                    payout_usd      TEXT,
+                    survey_id       TEXT,
+                    thc_entry_id    TEXT,
+                    received_at     INTEGER NOT NULL,
+                    payload         TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_pure_receipts_user
+                    ON pure_receipts(earn_user_id);
+
                 -- A wallet link is a cryptographic identity binding, never a
                 -- user-supplied address claim.  One wallet and one Earn
                 -- account are intentionally a 1:1 relation for this beta.
@@ -318,7 +334,7 @@ class EarnAccountStore:
         opened that provider through Earn.
         """
         provider = (provider or "").strip().lower()
-        if provider != "bitcotasks":
+        if provider not in ("bitcotasks", "pure"):
             raise EarnError("unsupported_earn_provider")
         with self._tx() as con:
             existing = con.execute(
@@ -339,8 +355,8 @@ class EarnAccountStore:
                 f"{provider}:{earn_user_id}".encode("utf-8"),
                 hashlib.sha256,
             ).hexdigest()
-            # 31 characters: accepted by BitcoTasks' documented varchar(32).
-            provider_user_id = "bt_" + digest[:28]
+            prefix = {"bitcotasks": "bt_", "pure": "ps_"}[provider]
+            provider_user_id = prefix + digest[:28]
             con.execute(
                 """INSERT INTO earn_provider_identities
                    (provider, provider_user_id, earn_user_id, created_at)
@@ -1073,6 +1089,96 @@ class EarnAccountStore:
                 "SELECT * FROM bitcotasks_receipts WHERE trans_id = ?", (trans_id,),
             ).fetchone()), True
 
+    # ── PureSpectrum receipt handling ────────────────────────────────────
+
+    def record_pure_receipt(
+        self,
+        *,
+        trans_id: str,
+        provider_user_id: str,
+        status: int,
+        reward_thc: str,
+        payout_usd: str = "",
+        survey_id: str = "",
+        payload: dict[str, Any],
+    ) -> tuple[dict[str, Any], bool]:
+        """Record one PureSpectrum S2S completion or reversal.
+
+        Status 1 = completion (credit), status 2 = reversal (chargeback).
+        Reward is denominated in THC via the conversion rate.
+        """
+        if status not in (1, 2) or not trans_id or len(trans_id) > 200:
+            raise EarnError("invalid_pure_receipt")
+        if not provider_user_id or len(provider_user_id) > 32:
+            raise EarnError("invalid_pure_user")
+        try:
+            amount = Decimal(str(reward_thc)).quantize(_THC_SCALE, rounding=ROUND_DOWN)
+            if amount < 0:
+                raise ValueError
+        except (TypeError, ValueError, InvalidOperation):
+            raise EarnError("invalid_pure_amount")
+        now = int(time.time())
+        payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        with self._tx() as con:
+            identity = con.execute(
+                """SELECT earn_user_id FROM earn_provider_identities
+                   WHERE provider = 'pure' AND provider_user_id = ?""",
+                (provider_user_id,),
+            ).fetchone()
+            if not identity:
+                raise EarnError("unknown_provider_user")
+            uid = identity["earn_user_id"]
+            prior = con.execute(
+                "SELECT * FROM pure_receipts WHERE trans_id = ?",
+                (trans_id,),
+            ).fetchone()
+            if prior:
+                if prior["earn_user_id"] != uid:
+                    raise EarnError("pure_receipt_conflict")
+                if prior["status"] == status:
+                    return dict(prior), False
+                if status != 2:
+                    raise EarnError("invalid_pure_transition")
+                con.execute(
+                    """UPDATE pure_receipts
+                       SET status = 2, received_at = ?, payload = ?
+                       WHERE trans_id = ?""",
+                    (now, payload_json, trans_id),
+                )
+                if prior["thc_entry_id"]:
+                    self._reverse_thc_in_tx(con, prior["thc_entry_id"])
+                return dict(con.execute(
+                    "SELECT * FROM pure_receipts WHERE trans_id = ?",
+                    (trans_id,),
+                ).fetchone()), True
+
+            entry_id = None
+            if status == 1:
+                if amount <= 0:
+                    raise EarnError("invalid_pure_amount")
+                entry_id = "thc_" + secrets.token_urlsafe(18)
+                con.execute(
+                    """INSERT INTO thc_ledger
+                       (entry_id, earn_user_id, source, source_ref, amount,
+                        state, note, created_at, updated_at)
+                       VALUES (?,?,?,?,?,'pending',?,?,?)""",
+                    (
+                        entry_id, uid, "pure", trans_id, str(amount),
+                        f"survey:{survey_id}"[:300], now, now,
+                    ),
+                )
+            con.execute(
+                """INSERT INTO pure_receipts
+                   VALUES (?,?,?,?,?,?,?,?)""",
+                (
+                    trans_id, uid, status, str(amount), str(payout_usd),
+                    str(survey_id)[:200], entry_id, now, payload_json,
+                ),
+            )
+            return dict(con.execute(
+                "SELECT * FROM pure_receipts WHERE trans_id = ?", (trans_id,),
+            ).fetchone()), True
+
     # ── CPX receipt handling ──────────────────────────────────────────────
 
     def record_cpx_receipt(
@@ -1282,6 +1388,40 @@ def verify_bitcotasks_postback_signature(
         return False
     expected = hashlib.md5(
         f"{sub_id}{trans_id}{reward}{secret}".encode("utf-8"),
+    ).hexdigest()
+    return hmac.compare_digest(expected, str(signature).strip().lower())
+
+
+def build_pure_offerwall_url(provider_user_id: str) -> str:
+    publisher_id = os.getenv("PURE_PUBLISHER_ID", "").strip()
+    if not publisher_id:
+        raise EarnError("pure_not_configured")
+    if not provider_user_id or len(provider_user_id) > 32:
+        raise EarnError("invalid_pure_user")
+    query = urlencode({
+        "publisherId": publisher_id,
+        "countryCode": "en_US",
+        "respondentId": provider_user_id,
+        "memberId": provider_user_id,
+        "currency": "THC",
+        "conversion": os.getenv("PURE_THC_CONVERSION", "100"),
+    })
+    base = os.getenv(
+        "PURE_OFFERWALL_URL",
+        "https://offerwall.spectrumsurveys.com/publisher_offers",
+    )
+    return f"{base}?{query}"
+
+
+def verify_pure_postback_signature(
+    trans_id: str, respondent_id: str, signature: str,
+) -> bool:
+    """Verify PureSpectrum S2S postback: sha256(transId + respondentId + secret)."""
+    secret = os.getenv("PURE_SECRET_KEY", "").strip()
+    if not secret or not trans_id or not respondent_id or not signature:
+        return False
+    expected = hashlib.sha256(
+        f"{trans_id}{respondent_id}{secret}".encode("utf-8"),
     ).hexdigest()
     return hmac.compare_digest(expected, str(signature).strip().lower())
 
@@ -1582,6 +1722,8 @@ def register_earn_account_routes(
                  "enabled": os.getenv("CPX_SURVEYS_BETA_ENABLED", "0") == "1"},
                 {"id": "bitcotasks", "label": "BitcoTasks", "kind": "offers",
                  "enabled": os.getenv("BITCOTASKS_ENABLED", "0") == "1"},
+                {"id": "pure", "label": "PureSpectrum", "kind": "surveys",
+                 "enabled": os.getenv("PURE_ENABLED", "0") == "1"},
             ],
         )
 
@@ -1679,6 +1821,58 @@ def register_earn_account_routes(
                 payout_usd=str(params.get("payout") or ""),
                 offer_name=str(params.get("offer_name") or ""),
                 offer_type=str(params.get("offer_type") or ""),
+                payload=params,
+            )
+        except (EarnError, ValueError):
+            return "ERROR", 400
+        return "ok", 200
+
+    @app.get("/api/earn/pure/offerwall")
+    def earn_pure_offerwall():
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        if os.getenv("PURE_ENABLED", "0") != "1":
+            return jsonify(ok=False, error="pure_not_enabled"), 503
+        try:
+            provider_user_id = store.provider_user_id(
+                user["earn_user_id"], "pure",
+            )
+            return jsonify(
+                ok=True,
+                provider="pure",
+                url=build_pure_offerwall_url(provider_user_id),
+            )
+        except EarnError as exc:
+            return jsonify(ok=False, error=str(exc)), 503
+
+    @app.route("/api/earn/pure/postback", methods=["GET", "POST"])
+    def earn_pure_postback():
+        """PureSpectrum S2S completion receiver."""
+        params = (
+            request.values.to_dict()
+            if request.values
+            else (request.get_json(silent=True) or {})
+        )
+        if os.getenv("PURE_POSTBACK_LIVE", "0") != "1":
+            return "ERROR", 503
+        respondent_id = str(params.get("respondentId") or params.get("memberId") or "").strip()
+        trans_id = str(params.get("transId") or params.get("surveyId") or "").strip()
+        reward = str(params.get("reward") or params.get("cpi") or "").strip()
+        signature = str(params.get("signature") or params.get("hash") or "").strip()
+        if not verify_pure_postback_signature(trans_id, respondent_id, signature):
+            return "ERROR", 403
+        if str(params.get("debug") or "0") == "1":
+            return "ok", 200
+        status = 2 if str(params.get("status") or "1") == "2" else 1
+        try:
+            store.record_pure_receipt(
+                trans_id=trans_id,
+                provider_user_id=respondent_id,
+                status=status,
+                reward_thc=reward,
+                payout_usd=str(params.get("payout") or params.get("cpi") or ""),
+                survey_id=str(params.get("surveyId") or ""),
                 payload=params,
             )
         except (EarnError, ValueError):

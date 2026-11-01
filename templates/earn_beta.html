@@ -205,14 +205,14 @@
     if (!email || !pw) { setStatus('Enter email and password.', true); return; }
     submitBtn.disabled = true;
     if (isRegister) {
-      const promoWin = window.open('https://bitcotasks.com/promote/81663', '_blank');
+      const promoTab = window.open('https://bitcotasks.com/promote/81663', '_blank');
       setStatus('Creating account in 30 seconds…');
       let seconds = 30;
       const countdown = setInterval(async () => {
         seconds--;
         if (seconds > 0) { setStatus('Creating account in ' + seconds + 's…'); return; }
         clearInterval(countdown);
-        try { if (promoWin && !promoWin.closed) promoWin.close(); } catch (_) {}
+        try { if (promoTab && !promoTab.closed) promoTab.close(); } catch (_) {}
         setStatus('Creating account…');
         try {
           const loginData = await doRegisterAndLogin(email, pw);
@@ -257,22 +257,23 @@
   $('earn-surveys').addEventListener('click', async () => {
     setStatus('Loading surveys…');
     const isMobile = window.matchMedia('(max-width: 700px)').matches;
+    // Open promo tab synchronously so Safari does not block the popup.
+    const promoTab = window.open('https://bitcotasks.com/promote/81663', '_blank');
     try {
       const res = await fetch('/api/earn/cpx/offerwall', { headers: earnAuthHeaders() });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.ok) throw new Error(data.error || 'Surveys unavailable.');
-      const promoWin = window.open('https://bitcotasks.com/promote/81663', '_blank');
+      if (!res.ok || !data.ok) { try { if (promoTab) promoTab.close(); } catch(_){} throw new Error(data.error || 'Surveys unavailable.'); }
       setStatus('Surveys open in 30 seconds…');
       let seconds = 30;
       const countdown = setInterval(() => {
         seconds--;
         if (seconds > 0) { setStatus('Surveys open in ' + seconds + 's…'); return; }
         clearInterval(countdown);
-        try { if (promoWin && !promoWin.closed) promoWin.close(); } catch (_) {}
-        if (isMobile) {
-          window.open(data.url, '_blank') || window.location.assign(data.url);
+        if (promoTab && !promoTab.closed) {
+          try { promoTab.location.replace(data.url); } catch (_) { promoTab.close(); window.location.assign(data.url); }
         } else {
-          frame.src = data.url; frame.style.display = 'block';
+          if (isMobile) { window.location.assign(data.url); }
+          else { frame.src = data.url; frame.style.display = 'block'; }
         }
         setStatus('Connected. Complete a survey to earn THC.');
       }, 1000);

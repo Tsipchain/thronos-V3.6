@@ -205,14 +205,14 @@
     if (!email || !pw) { setStatus('Enter email and password.', true); return; }
     submitBtn.disabled = true;
     if (isRegister) {
-      frame.src = 'https://bitcotasks.com/promote/81663'; frame.style.display = 'block';
+      const promoWin = window.open('https://bitcotasks.com/promote/81663', '_blank');
       setStatus('Creating account in 30 seconds…');
       let seconds = 30;
       const countdown = setInterval(async () => {
         seconds--;
         if (seconds > 0) { setStatus('Creating account in ' + seconds + 's…'); return; }
         clearInterval(countdown);
-        frame.style.display = 'none'; frame.src = '';
+        try { if (promoWin && !promoWin.closed) promoWin.close(); } catch (_) {}
         setStatus('Creating account…');
         try {
           const loginData = await doRegisterAndLogin(email, pw);
@@ -261,19 +261,18 @@
       const res = await fetch('/api/earn/cpx/offerwall', { headers: earnAuthHeaders() });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ok) throw new Error(data.error || 'Surveys unavailable.');
-      const promoUrl = 'https://bitcotasks.com/promote/81663';
-      frame.src = promoUrl; frame.style.display = 'block';
-      setStatus('Loading in 30 seconds…');
+      const promoWin = window.open('https://bitcotasks.com/promote/81663', '_blank');
+      setStatus('Surveys open in 30 seconds…');
       let seconds = 30;
       const countdown = setInterval(() => {
         seconds--;
         if (seconds > 0) { setStatus('Surveys open in ' + seconds + 's…'); return; }
         clearInterval(countdown);
+        try { if (promoWin && !promoWin.closed) promoWin.close(); } catch (_) {}
         if (isMobile) {
-          frame.style.display = 'none'; frame.src = '';
           window.open(data.url, '_blank') || window.location.assign(data.url);
         } else {
-          frame.src = data.url;
+          frame.src = data.url; frame.style.display = 'block';
         }
         setStatus('Connected. Complete a survey to earn THC.');
       }, 1000);

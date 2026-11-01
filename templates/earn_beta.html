@@ -159,7 +159,7 @@
     <span class="promo-badge" id="promo-badge"></span>
     <h2 id="promo-title"></h2>
     <p class="promo-text" id="promo-desc"></p>
-    <a id="promo-visit" class="promo-visit" href="#" target="_blank" rel="noopener">Visit</a>
+    <button id="promo-visit" class="promo-visit" type="button">Visit</button>
     <div class="promo-countdown" id="promo-countdown"></div>
     <button class="promo-skip" id="promo-skip" type="button">Skip</button>
   </div>
@@ -193,7 +193,8 @@
       $('promo-title').textContent = ad.title;
       $('promo-desc').textContent = ad.desc;
       const visitBtn = $('promo-visit');
-      visitBtn.href = ad.url; visitBtn.textContent = ad.cta;
+      visitBtn.dataset.url = ad.url; visitBtn.textContent = ad.cta;
+      visitBtn.onclick = () => { window.open(ad.url, '_blank'); };
       const countdownEl = $('promo-countdown');
       const skipBtn = $('promo-skip');
       let seconds = durationSec;

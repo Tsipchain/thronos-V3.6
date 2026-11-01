@@ -39,7 +39,7 @@
   .st-pending { background:#92400e33; color:#fbbf24; } .st-confirmed { background:#065f4633; color:#34d399; }
   .st-payable { background:#1e40af33; color:#60a5fa; } .st-reversed { background:#7f1d1d33; color:#f87171; }
   .earn-note { margin-top:14px; color:#91a7b8; font-size:12px; }
-  .earn-provider-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin-top:14px; }
+  .earn-provider-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; margin-top:14px; }
   .earn-provider { background:#0b1220; border:1px solid #2e5874; border-radius:12px; padding:14px; }
   .earn-provider h3 { color:#e2e8f0; font-size:15px; margin:0 0 5px; }
   .earn-provider p { color:#91a7b8; font-size:12px; margin:0 0 10px; }
@@ -62,6 +62,7 @@
   .earn-account-summary .summary-value { color:#e2e8f0; font-size:12px; overflow-wrap:anywhere; }
   .earn-account-summary .linked { color:#34d399; }
   .earn-account-summary .not-linked { color:#fbbf24; }
+  @media (max-width: 700px) { .earn-provider-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
   @media (max-width: 520px) { .earn-provider-grid { grid-template-columns:1fr; } .earn-activity-trigger { float:none; margin-top:12px; } }
 </style>
 <main class="earn-beta">
@@ -98,6 +99,11 @@
           <h3>BitcoTasks</h3><p id="bitcotasks-copy">More tasks and offers are being prepared.</p>
           <button id="earn-bitcotasks" class="earn-action" type="button" disabled>Coming soon</button>
           <div id="bitcotasks-status" class="earn-provider-status" aria-live="polite">Provider approval pending</div>
+        </section>
+        <section class="earn-provider is-unavailable" id="provider-pure">
+          <h3>PureSpectrum</h3><p id="pure-copy">Additional surveys coming soon.</p>
+          <button id="earn-pure" class="earn-action" type="button" disabled>Coming soon</button>
+          <div id="pure-status" class="earn-provider-status" aria-live="polite">Integration pending</div>
         </section>
       </div>
       <button id="earn-logout" class="earn-toggle" type="button">Sign out</button>
@@ -138,6 +144,7 @@
   const historySection = $('earn-history'), historyList = $('earn-history-list');
   const activityDialog = $('earn-activity-dialog'), activityCount = $('earn-activity-count');
   const bitcoButton = $('earn-bitcotasks'), bitcoProvider = $('provider-bitcotasks');
+  const pureButton = $('earn-pure'), pureProvider = $('provider-pure');
   let isRegister = false, token = null;
 
   // On a restored session the raw token intentionally does not exist in
@@ -300,6 +307,24 @@
     }
   });
 
+  pureButton.addEventListener('click', async () => {
+    const isMobile = window.matchMedia('(max-width: 700px)').matches;
+    const providerTab = isMobile ? window.open('', '_blank') : null;
+    try {
+      const res = await fetch('/api/earn/pure/offerwall', { headers: earnAuthHeaders() });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) throw new Error(data.error || 'PureSpectrum is unavailable.');
+      if (isMobile) {
+        if (providerTab) providerTab.location.replace(data.url);
+        else window.location.assign(data.url);
+      } else { frame.src = data.url; frame.style.display = 'block'; }
+      setStatus('Connected to PureSpectrum surveys.');
+    } catch (e) {
+      if (providerTab) providerTab.close();
+      setStatus((e.message || 'Could not load PureSpectrum.').replace(/_/g, ' '), true);
+    }
+  });
+
   function closeSurvey() {
     frame.style.display = 'none';
     frame.classList.remove('is-mobile-survey');
@@ -399,6 +424,12 @@
         bitcoButton.disabled = false; bitcoButton.textContent = 'Open BitcoTasks';
         $('bitcotasks-copy').textContent = 'Tasks and offers selected for your account.';
         $('bitcotasks-status').textContent = 'Available now'; bitcoProvider.classList.remove('is-unavailable');
+      }
+      const pure = pData.providers && pData.providers.find(p => p.id === 'pure');
+      if (pRes.ok && pData.ok && pure && pure.enabled) {
+        pureButton.disabled = false; pureButton.textContent = 'Open Surveys';
+        $('pure-copy').textContent = 'Variety surveys for your account.';
+        $('pure-status').textContent = 'Available now'; pureProvider.classList.remove('is-unavailable');
       }
     } catch (_) {}
   }

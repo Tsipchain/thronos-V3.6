@@ -64,6 +64,17 @@
   .earn-account-summary .not-linked { color:#fbbf24; }
   @media (max-width: 700px) { .earn-provider-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
   @media (max-width: 520px) { .earn-provider-grid { grid-template-columns:1fr; } .earn-activity-trigger { float:none; margin-top:12px; } }
+  .promo-overlay { position:fixed; inset:0; z-index:10002; background:rgba(0,0,0,.88); display:flex; align-items:center; justify-content:center; padding:16px; animation:promoFadeIn .3s ease; }
+  @keyframes promoFadeIn { from { opacity:0; } to { opacity:1; } }
+  .promo-card { background:linear-gradient(145deg,#101827,#182b3d); border:1px solid #f2c14e; border-radius:18px; padding:28px 24px; max-width:380px; width:100%; text-align:center; box-shadow:0 20px 60px #000a; animation:promoSlideUp .35s ease; }
+  @keyframes promoSlideUp { from { transform:translateY(30px); opacity:0; } to { transform:translateY(0); opacity:1; } }
+  .promo-badge { display:inline-block; background:#f2c14e; color:#101827; font-size:11px; font-weight:800; padding:3px 10px; border-radius:99px; margin-bottom:12px; letter-spacing:.3px; }
+  .promo-card h2 { color:#f2c14e; font-size:20px; margin:0 0 8px; }
+  .promo-card .promo-text { color:#cbd5e1; font-size:13px; line-height:1.55; margin:0 0 18px; }
+  .promo-visit { display:inline-block; background:#00a86b; color:#06120e; font-weight:800; padding:12px 32px; border:0; border-radius:10px; cursor:pointer; font-size:14px; text-decoration:none; transition:background .15s; }
+  .promo-visit:hover { background:#00c77b; }
+  .promo-countdown { color:#7fb8d8; font-size:12px; margin-top:14px; }
+  .promo-skip { color:#91a7b8; font-size:12px; background:none; border:none; cursor:pointer; margin-top:8px; text-decoration:underline; display:none; }
 </style>
 <main class="earn-beta">
   <section class="earn-card">
@@ -143,6 +154,16 @@
     <div class="earn-history-list" id="earn-history-list"><p class="earn-note" style="margin:0">No verified Earn receipts yet.</p></div>
   </div>
 </dialog>
+<div id="promo-overlay" class="promo-overlay" style="display:none" role="dialog" aria-modal="true" aria-label="Sponsored content">
+  <div class="promo-card">
+    <span class="promo-badge" id="promo-badge"></span>
+    <h2 id="promo-title"></h2>
+    <p class="promo-text" id="promo-desc"></p>
+    <a id="promo-visit" class="promo-visit" href="#" target="_blank" rel="noopener">Visit</a>
+    <div class="promo-countdown" id="promo-countdown"></div>
+    <button class="promo-skip" id="promo-skip" type="button">Skip</button>
+  </div>
+</div>
 <script>
 (() => {
   const $ = id => document.getElementById(id);
@@ -156,6 +177,39 @@
   const bitcoButton = $('earn-bitcotasks'), bitcoProvider = $('provider-bitcotasks');
   const pureButton = $('earn-pure'), pureProvider = $('provider-pure');
   let isRegister = false, token = null;
+
+  const promoAds = [
+    { title: 'LitBits Faucet', desc: 'Earn free Bitcoin daily with the LitBits Faucet on Telegram. Claim, grow and withdraw your crypto.', url: 'https://t.me/litebits_faucet_bot/app?startapp=BPS0MGLI', badge: 'Thronos Recommends', cta: 'Open Faucet' },
+    { title: 'BitcoTasks', desc: 'Complete simple tasks and offers to earn crypto rewards instantly.', url: 'https://bitcotasks.com/promote/81663', badge: 'Sponsor', cta: 'Visit BitcoTasks' },
+  ];
+  let promoIndex = Math.floor(Math.random() * promoAds.length);
+
+  function showPromo(durationSec) {
+    durationSec = durationSec || 15;
+    return new Promise(resolve => {
+      const ad = promoAds[promoIndex++ % promoAds.length];
+      const overlay = $('promo-overlay');
+      $('promo-badge').textContent = ad.badge;
+      $('promo-title').textContent = ad.title;
+      $('promo-desc').textContent = ad.desc;
+      const visitBtn = $('promo-visit');
+      visitBtn.href = ad.url; visitBtn.textContent = ad.cta;
+      const countdownEl = $('promo-countdown');
+      const skipBtn = $('promo-skip');
+      let seconds = durationSec;
+      countdownEl.textContent = 'Continuing in ' + seconds + 's…';
+      skipBtn.style.display = 'none';
+      overlay.style.display = 'flex';
+      function done() { clearInterval(timer); overlay.style.display = 'none'; skipBtn.removeEventListener('click', done); resolve(); }
+      const timer = setInterval(() => {
+        seconds--;
+        if (seconds <= 5) skipBtn.style.display = '';
+        if (seconds > 0) { countdownEl.textContent = 'Continuing in ' + seconds + 's…'; return; }
+        done();
+      }, 1000);
+      skipBtn.addEventListener('click', done);
+    });
+  }
 
   // On a restored session the raw token intentionally does not exist in
   // JavaScript: it is an HttpOnly cookie.  Never send "Bearer null", because
@@ -222,27 +276,20 @@
     if (!email || !pw) { setStatus('Enter email and password.', true); return; }
     submitBtn.disabled = true;
     if (isRegister) {
-      frame.src = 'https://bitcotasks.com/promote/81663'; frame.style.display = 'block';
-      setStatus('Creating account in 30 seconds…');
-      let seconds = 30;
-      const countdown = setInterval(async () => {
-        seconds--;
-        if (seconds > 0) { setStatus('Creating account in ' + seconds + 's…'); return; }
-        clearInterval(countdown);
-        frame.style.display = 'none'; frame.src = '';
-        setStatus('Creating account…');
-        try {
-          const loginData = await doRegisterAndLogin(email, pw);
-          token = loginData.access_token || null;
-          isRegister = false;
-          submitBtn.textContent = 'Sign In';
-          switchBtn.textContent = 'Need an account? Register';
-          showMain();
-        } catch (e) {
-          const msg = (e.message || '').replace(/_/g, ' ');
-          setStatus(msg.charAt(0).toUpperCase() + msg.slice(1), true);
-        } finally { submitBtn.disabled = false; }
-      }, 1000);
+      setStatus('Preparing your account…');
+      await showPromo(15);
+      setStatus('Creating account…');
+      try {
+        const loginData = await doRegisterAndLogin(email, pw);
+        token = loginData.access_token || null;
+        isRegister = false;
+        submitBtn.textContent = 'Sign In';
+        switchBtn.textContent = 'Need an account? Register';
+        showMain();
+      } catch (e) {
+        const msg = (e.message || '').replace(/_/g, ' ');
+        setStatus(msg.charAt(0).toUpperCase() + msg.slice(1), true);
+      } finally { submitBtn.disabled = false; }
     } else {
       setStatus('Signing in…');
       try {
@@ -278,22 +325,15 @@
       const res = await fetch('/api/earn/cpx/offerwall', { headers: earnAuthHeaders() });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ok) throw new Error(data.error || 'Surveys unavailable.');
-      const promoUrl = 'https://bitcotasks.com/promote/81663';
-      frame.src = promoUrl; frame.style.display = 'block';
-      setStatus('Loading in 30 seconds…');
-      let seconds = 30;
-      const countdown = setInterval(() => {
-        seconds--;
-        if (seconds > 0) { setStatus('Surveys open in ' + seconds + 's…'); return; }
-        clearInterval(countdown);
-        if (isMobile) {
-          frame.style.display = 'none'; frame.src = '';
-          window.open(data.url, '_blank') || window.location.assign(data.url);
-        } else {
-          frame.src = data.url;
-        }
-        setStatus('Connected. Complete a survey to earn THC.');
-      }, 1000);
+      await showPromo(15);
+      if (isMobile) {
+        window.open(data.url, '_blank') || window.location.assign(data.url);
+      } else {
+        frame.src = data.url; frame.style.display = 'block';
+        frame.classList.add('is-mobile-survey');
+        surveyClose.classList.add('is-visible');
+      }
+      setStatus('Connected. Complete a survey to earn THC.');
     } catch (e) {
       setStatus(e.message || 'Could not load surveys.', true);
     }

@@ -106,6 +106,16 @@
           <div id="pure-status" class="earn-provider-status" aria-live="polite">Integration pending</div>
         </section>
       </div>
+      <div id="t2e-section" class="earn-provider" style="margin-top:14px;display:none">
+        <h3 style="margin-bottom:8px">Train-to-Earn</h3>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px">
+          <div><span style="color:#7fb8d8;font-size:11px;display:block">Streak</span><span id="t2e-streak" style="color:#f2c14e;font-size:18px;font-weight:700">0</span> days</div>
+          <div><span style="color:#7fb8d8;font-size:11px;display:block">Today</span><span id="t2e-today" style="color:#e2e8f0;font-size:14px">0/3</span></div>
+          <div><span style="color:#7fb8d8;font-size:11px;display:block">Total earned</span><span id="t2e-total" style="color:#34d399;font-size:14px;font-weight:700">0.00 THC</span></div>
+        </div>
+        <button id="t2e-log-workout" class="earn-action" type="button">Log Workout</button>
+        <div id="t2e-status" class="earn-provider-status" aria-live="polite"></div>
+      </div>
       <button id="earn-logout" class="earn-toggle" type="button">Sign out</button>
       <div class="earn-history" id="earn-history">
         <button id="earn-activity-trigger" class="earn-activity-trigger" type="button" aria-haspopup="dialog" aria-label="Open recent activity">
@@ -432,7 +442,40 @@
         $('pure-status').textContent = 'Available now'; pureProvider.classList.remove('is-unavailable');
       }
     } catch (_) {}
+    try {
+      const tRes = await fetch('/api/earn/t2e/stats', { headers: earnAuthHeaders() });
+      const tData = await tRes.json().catch(() => ({}));
+      if (tRes.ok && tData.ok) {
+        $('t2e-section').style.display = '';
+        $('t2e-streak').textContent = tData.current_streak || '0';
+        $('t2e-today').textContent = (tData.today_count || 0) + '/' + (_t2eDailyCap);
+        $('t2e-total').textContent = (tData.total_thc_earned || '0.00') + ' THC';
+      }
+    } catch (_) {}
   }
+  const _t2eDailyCap = 3;
+
+  $('t2e-log-workout').addEventListener('click', async () => {
+    const dur = prompt('Workout duration in minutes (minimum 15):');
+    if (!dur) return;
+    const minutes = parseInt(dur, 10);
+    if (!minutes || minutes < 15) { setStatus('Minimum workout duration is 15 minutes.', true); return; }
+    try {
+      const res = await fetch('/api/earn/t2e/workout', {
+        method: 'POST', headers: { ...earnAuthHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ duration_min: minutes, workout_type: 'general' }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.ok) {
+        setStatus('Workout logged! Earned ' + data.reward_thc + ' THC');
+        refreshDashboard();
+      } else {
+        setStatus((data.error || 'Could not log workout.').replace(/_/g, ' '), true);
+      }
+    } catch (e) {
+      setStatus('Could not log workout.', true);
+    }
+  });
 
   async function showMain() {
     authSection.style.display = 'none'; mainSection.style.display = '';

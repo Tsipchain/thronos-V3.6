@@ -346,6 +346,38 @@ async function _fetchBtcBalance(btcAddr) {
   } catch { return null; }
 }
 
+async function _fetchBtcTxHistory(btcAddr) {
+  if (!btcAddr) return [];
+  try {
+    const r = await fetch(`https://blockstream.info/api/address/${encodeURIComponent(btcAddr)}/txs`, { signal: AbortSignal.timeout(10000) });
+    if (!r.ok) return [];
+    const txs = await r.json();
+    if (!Array.isArray(txs)) return [];
+    return txs.map(tx => {
+      const inputSats = (tx.vin || []).reduce((s, v) => s + (v.prevout?.scriptpubkey_address === btcAddr ? (v.prevout.value || 0) : 0), 0);
+      const outputSats = (tx.vout || []).reduce((s, v) => s + (v.scriptpubkey_address === btcAddr ? (v.value || 0) : 0), 0);
+      const dir = inputSats > 0 ? 'out' : 'in';
+      const amtSats = dir === 'in' ? outputSats : (inputSats - outputSats);
+      return {
+        event_type: 'transfer',
+        kind: 'transfer',
+        chain: 'btc',
+        asset_symbol: 'BTC',
+        asset: 'BTC',
+        direction: dir,
+        amount: Math.abs(amtSats) / 1e8,
+        fee_burned: (tx.fee || 0) / 1e8,
+        tx_hash: tx.txid || '',
+        external_txid: tx.txid || '',
+        timestamp: tx.status?.block_time || null,
+        status: tx.status?.confirmed ? 'confirmed' : 'pending',
+        from: dir === 'in' ? (tx.vin?.[0]?.prevout?.scriptpubkey_address || '') : btcAddr,
+        to: dir === 'out' ? ((tx.vout || []).find(v => v.scriptpubkey_address !== btcAddr)?.scriptpubkey_address || '') : btcAddr,
+      };
+    });
+  } catch { return []; }
+}
+
 async function _fetchEvmNative(evmAddr, rpcUrl) {
   if (!evmAddr || !rpcUrl) return null;
   try {
@@ -4659,6 +4691,15 @@ async function showHistory(address) {
           ...v1.map(e => ({ ...e, kind: e.event_type || e.kind || 'transfer', asset_symbol: e.asset || e.asset_symbol })),
           ...legacy,
         ];
+      }
+
+      // Fetch BTC on-chain transactions from Blockstream (non-blocking)
+      const btcAddr = localStorage.getItem(`thr_btc_address_${address}`) || '';
+      if (btcAddr) {
+        try {
+          const btcTxs = await _fetchBtcTxHistory(btcAddr);
+          if (btcTxs.length) sourceEvents = [...sourceEvents, ...btcTxs];
+        } catch {}
       }
 
       allTx = _dedupeUnifiedWalletHistory(sourceEvents)

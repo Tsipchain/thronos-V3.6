@@ -2140,6 +2140,14 @@ async function showEarn() {
       ${me.wallet_address ? `<p style="font-size:.72rem;color:#55d6a7;line-height:1.45;margin:10px 0 0">✓ Linked wallet: ${escHtml(me.wallet_address.slice(0, 10))}…</p>` : `<button class="btn" id="linkEarnWalletBtn" style="width:100%;padding:10px;margin-top:8px">Link active Thronos wallet</button>`}
       <p id="earnPwaMessage" style="font-size:.72rem;color:var(--muted);line-height:1.45;margin:12px 0 4px">Rewards remain pending until verified CPX clearance. No wallet settlement or payout is claimed here.</p>
       <div style="margin-top:12px"><div style="font-size:.7rem;color:var(--muted);letter-spacing:.08em">RECENT REWARDS</div>${rows}</div>
+      <div id="earnStakingSection" style="margin-top:16px;border-top:1px solid #ffffff14;padding-top:14px">
+        <div style="font-size:.7rem;color:var(--muted);letter-spacing:.08em;margin-bottom:10px">STAKING POOLS</div>
+        <div id="earnStakingPools"></div>
+        <div id="earnStakingPositions" style="display:none;margin-top:10px">
+          <div style="font-size:.7rem;color:var(--muted);letter-spacing:.08em;margin-bottom:6px">YOUR POSITIONS</div>
+          <div id="earnStakingPosList"></div>
+        </div>
+      </div>
     `;
     const openEarnActivity = () => {
       const overlay = document.createElement('div');
@@ -2228,6 +2236,100 @@ async function showEarn() {
         message.textContent = 'Surveys are temporarily unavailable. Your Earn balance remains unchanged.';
       }
     });
+    // Staking pools
+    try {
+      const [poolsRes, posRes] = await Promise.all([
+        fetch(`${earnBase}/api/earn/staking/pools`, { credentials: 'include' }),
+        fetch(`${earnBase}/api/earn/staking/positions`, { credentials: 'include' }),
+      ]);
+      const poolsData = await poolsRes.json().catch(() => ({}));
+      const posData = await posRes.json().catch(() => ({}));
+      const poolsEl = document.getElementById('earnStakingPools');
+      if (poolsRes.ok && poolsData?.ok && poolsData.pools?.length) {
+        poolsEl.innerHTML = poolsData.pools.map(pool => `
+          <div style="background:#0d0a1a;border-radius:9px;padding:10px;margin-bottom:8px">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+              <span style="font-weight:700;font-size:.82rem">${escHtml(pool.label)}</span>
+              <span style="font-size:.66rem;background:#f2c14e22;color:#f2c14e;padding:2px 6px;border-radius:99px">${escHtml(pool.token)}</span>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:.72rem;margin-bottom:8px">
+              <div style="background:#070612;border-radius:6px;padding:6px"><div style="color:var(--muted);font-size:.62rem">BASE APY</div><div style="color:#55d6a7;font-weight:700">${escHtml(pool.base_apy)}%</div></div>
+              <div style="background:#070612;border-radius:6px;padding:6px"><div style="color:var(--muted);font-size:.62rem">BOOSTED</div><div style="color:#55d6a7;font-weight:700">${escHtml(pool.boosted_apy)}%</div></div>
+              <div style="background:#070612;border-radius:6px;padding:6px"><div style="color:var(--muted);font-size:.62rem">STAKED</div><div>${escHtml(pool.total_staked)} ${escHtml(pool.token)}</div></div>
+              <div style="background:#070612;border-radius:6px;padding:6px"><div style="color:var(--muted);font-size:.62rem">STAKERS</div><div>${pool.stakers}</div></div>
+            </div>
+            ${me.wallet_address ? `
+              <div style="display:flex;gap:6px">
+                <input type="number" step="any" min="${escHtml(pool.min_stake)}" class="pwa-stake-input" data-pool="${escHtml(pool.pool_id)}" placeholder="Amount (${escHtml(pool.token)})" style="flex:1;background:#070612;border:1px solid #453b78;border-radius:6px;color:#fff;padding:7px;font-size:.76rem">
+                <button class="btn btn--primary pwa-stake-btn" data-pool="${escHtml(pool.pool_id)}" style="padding:7px 12px;font-size:.72rem;white-space:nowrap">Stake</button>
+              </div>
+              <div style="font-size:.62rem;color:var(--muted);margin-top:3px">Min: ${escHtml(pool.min_stake)} ${escHtml(pool.token)}</div>
+              <div class="pwa-stake-msg" data-pool="${escHtml(pool.pool_id)}" style="font-size:.66rem;min-height:14px;margin-top:2px"></div>
+            ` : '<div style="font-size:.68rem;color:#e8bf5a;margin-top:4px">🔒 Link a THR Wallet to stake</div>'}
+          </div>
+        `).join('');
+        poolsEl.querySelectorAll('.pwa-stake-btn').forEach(btn => {
+          btn.addEventListener('click', async () => {
+            const poolId = btn.dataset.pool;
+            const input = poolsEl.querySelector(`.pwa-stake-input[data-pool="${poolId}"]`);
+            const msg = poolsEl.querySelector(`.pwa-stake-msg[data-pool="${poolId}"]`);
+            const amount = (input?.value || '').trim();
+            if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) {
+              if (msg) { msg.textContent = 'Enter a valid amount'; msg.style.color = '#f87171'; }
+              return;
+            }
+            btn.disabled = true;
+            try {
+              const res = await fetch(`${earnBase}/api/earn/staking/stake`, {
+                method: 'POST', credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ pool_id: poolId, amount }),
+              });
+              const data = await res.json().catch(() => ({}));
+              if (res.ok && data?.ok) {
+                if (msg) { msg.textContent = `Staked ${data.amount} ${data.token}!`; msg.style.color = '#55d6a7'; }
+                if (input) input.value = '';
+                showEarn();
+              } else {
+                if (msg) { msg.textContent = (data?.error || 'error').replace(/_/g, ' '); msg.style.color = '#f87171'; }
+              }
+            } catch { if (msg) { msg.textContent = 'Staking failed. Try again.'; msg.style.color = '#f87171'; }
+            } finally { btn.disabled = false; }
+          });
+        });
+      }
+      if (posRes.ok && posData?.ok && posData.positions?.length) {
+        const posEl = document.getElementById('earnStakingPositions');
+        const list = document.getElementById('earnStakingPosList');
+        posEl.style.display = '';
+        list.innerHTML = posData.positions.map(pos => `
+          <div style="background:#0d0a1a;border-radius:8px;padding:9px;margin-bottom:5px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px">
+            <div>
+              <span style="color:#f2c14e;font-weight:700;font-size:.82rem">${escHtml(pos.amount)} ${escHtml(pos.token)}</span>
+              <span style="font-size:.66rem;color:#55d6a7;margin-left:6px">APY: ${escHtml(pos.apy)}%</span>
+              <span style="font-size:.66rem;color:#34d399;margin-left:6px">+${escHtml(pos.projected_rewards)} ${escHtml(pos.token)}</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px">
+              <span style="font-size:.62rem;padding:2px 6px;border-radius:4px;${pos.status === 'active' ? 'background:#065f4633;color:#34d399' : 'background:#92400e33;color:#fbbf24'}">${escHtml(pos.status)}</span>
+              ${pos.status === 'active' ? `<button class="pwa-unstake-btn" data-pos="${escHtml(pos.position_id)}" style="font-size:.62rem;color:#f87171;background:none;border:1px solid #f8717144;border-radius:4px;padding:3px 7px;cursor:pointer">Unstake</button>` : ''}
+            </div>
+          </div>
+        `).join('');
+        list.querySelectorAll('.pwa-unstake-btn').forEach(btn => {
+          btn.addEventListener('click', async () => {
+            btn.disabled = true;
+            try {
+              await fetch(`${earnBase}/api/earn/staking/unstake`, {
+                method: 'POST', credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ position_id: btn.dataset.pos }),
+              });
+              showEarn();
+            } catch {} finally { btn.disabled = false; }
+          });
+        });
+      }
+    } catch {}
   } catch {
     body.innerHTML = `
       <p style="color:var(--muted);margin:0 0 12px">Earn data could not be loaded. No zero balance is assumed; your wallet and rewards remain unchanged.</p>

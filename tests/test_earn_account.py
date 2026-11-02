@@ -1568,3 +1568,121 @@ class TestEarnTemplateCookieSession:
         assert 'href="/earn?view=activity"' not in template
         assert 'target="_blank"' not in template
         assert "Sign in to view your Earn balance and activity." in template
+
+
+def _link_wallet(store, earn_user_id, wallet_address, public_key="02" + "ab" * 32):
+    """Directly insert a wallet link for testing (bypasses challenge flow)."""
+    import sqlite3
+    with store._tx() as con:
+        con.execute(
+            """INSERT OR REPLACE INTO earn_wallet_links
+               (wallet_address, earn_user_id, public_key, linked_at)
+               VALUES (?,?,?,?)""",
+            (wallet_address, earn_user_id, public_key, int(time.time())),
+        )
+
+
+class TestStakingPool:
+    def test_list_pools_returns_default_pools(self, store, user_a):
+        pools = store.staking_pools()
+        assert len(pools) == 2
+        tokens = {p["token"] for p in pools}
+        assert tokens == {"THC", "THR"}
+        for pool in pools:
+            assert int(pool["base_apy_bps"]) > 0
+            assert int(pool["boosted_apy_bps"]) >= int(pool["base_apy_bps"])
+            assert Decimal(pool["total_staked"]) == 0
+            assert pool["stakers"] == 0
+
+    def test_stake_requires_wallet_link(self, store, user_a):
+        pools = store.staking_pools()
+        with pytest.raises(EarnError, match="wallet_not_linked"):
+            store.create_stake(user_a["earn_user_id"], pools[0]["pool_id"], "10")
+
+    def test_stake_and_unstake_flow(self, store, user_a):
+        uid = user_a["earn_user_id"]
+        _link_wallet(store, uid, "THR" + "A" * 40)
+        pools = store.staking_pools()
+        thc_pool = next(p for p in pools if p["token"] == "THC")
+        pos = store.create_stake(uid, thc_pool["pool_id"], "50")
+        assert pos["status"] == "active"
+        assert Decimal(pos["amount"]) == Decimal("50")
+        positions = store.staking_positions(uid)
+        assert len(positions) == 1
+        assert positions[0]["position_id"] == pos["position_id"]
+        assert Decimal(positions[0]["projected_rewards"]) >= 0
+        result = store.request_unstake(uid, pos["position_id"])
+        assert result["status"] == "unstaking"
+        positions = store.staking_positions(uid)
+        assert positions[0]["status"] == "unstaking"
+
+    def test_stake_below_minimum_rejected(self, store, user_a):
+        uid = user_a["earn_user_id"]
+        _link_wallet(store, uid, "THR" + "B" * 40)
+        pools = store.staking_pools()
+        thc_pool = next(p for p in pools if p["token"] == "THC")
+        with pytest.raises(EarnError, match="below_minimum_stake"):
+            store.create_stake(uid, thc_pool["pool_id"], "0.01")
+
+    def test_stake_invalid_amount_rejected(self, store, user_a):
+        uid = user_a["earn_user_id"]
+        _link_wallet(store, uid, "THR" + "C" * 40)
+        pools = store.staking_pools()
+        with pytest.raises(EarnError, match="invalid_stake_amount"):
+            store.create_stake(uid, pools[0]["pool_id"], "-5")
+
+    def test_pool_total_staked_updates(self, store, user_a):
+        uid = user_a["earn_user_id"]
+        _link_wallet(store, uid, "THR" + "D" * 40)
+        pools = store.staking_pools()
+        thr_pool = next(p for p in pools if p["token"] == "THR")
+        store.create_stake(uid, thr_pool["pool_id"], "5")
+        store.create_stake(uid, thr_pool["pool_id"], "3")
+        pools_after = store.staking_pools()
+        thr_after = next(p for p in pools_after if p["token"] == "THR")
+        assert Decimal(thr_after["total_staked"]) == Decimal("8")
+        assert thr_after["stakers"] == 2
+
+    def test_staking_api_endpoints(self, client, store, user_a):
+        token = _login(client)
+        uid = user_a["earn_user_id"]
+        _link_wallet(store, uid, "THR" + "E" * 40)
+        resp = client.get("/api/earn/staking/pools", headers=_auth(token))
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["ok"]
+        assert len(data["pools"]) == 2
+        thc_pool = next(p for p in data["pools"] if p["token"] == "THC")
+        resp = client.post("/api/earn/staking/stake",
+            headers=_auth(token),
+            json={"pool_id": thc_pool["pool_id"], "amount": "20"},
+        )
+        assert resp.status_code == 200
+        assert resp.get_json()["ok"]
+        resp = client.get("/api/earn/staking/positions", headers=_auth(token))
+        assert resp.status_code == 200
+        positions = resp.get_json()["positions"]
+        assert len(positions) == 1
+        resp = client.post("/api/earn/staking/unstake",
+            headers=_auth(token),
+            json={"position_id": positions[0]["position_id"]},
+        )
+        assert resp.status_code == 200
+        assert resp.get_json()["ok"]
+
+    def test_unstake_wrong_user_rejected(self, store, user_a, user_b):
+        uid_a = user_a["earn_user_id"]
+        uid_b = user_b["earn_user_id"]
+        _link_wallet(store, uid_a, "THR" + "F" * 40)
+        pools = store.staking_pools()
+        pos = store.create_stake(uid_a, pools[0]["pool_id"], "10")
+        with pytest.raises(EarnError, match="position_not_found"):
+            store.request_unstake(uid_b, pos["position_id"])
+
+    def test_staking_uses_decimal_precision(self, store, user_a):
+        uid = user_a["earn_user_id"]
+        _link_wallet(store, uid, "THR" + "1" * 40)
+        pools = store.staking_pools()
+        thc_pool = next(p for p in pools if p["token"] == "THC")
+        pos = store.create_stake(uid, thc_pool["pool_id"], "10.123456789")
+        assert pos["amount"] == "10.123456"

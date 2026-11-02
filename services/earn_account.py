@@ -297,6 +297,33 @@ class EarnAccountStore:
 
                 CREATE INDEX IF NOT EXISTS idx_earn_wallet_challenges_expiry
                     ON earn_wallet_challenges(expires_at);
+
+                CREATE TABLE IF NOT EXISTS earn_staking_pools (
+                    pool_id          TEXT PRIMARY KEY,
+                    token            TEXT NOT NULL,
+                    label            TEXT NOT NULL,
+                    base_apy_bps     INTEGER NOT NULL,
+                    boosted_apy_bps  INTEGER NOT NULL,
+                    min_stake        TEXT NOT NULL,
+                    status           TEXT NOT NULL DEFAULT 'active',
+                    created_at       INTEGER NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS earn_staking_positions (
+                    position_id          TEXT PRIMARY KEY,
+                    pool_id              TEXT NOT NULL
+                        REFERENCES earn_staking_pools(pool_id),
+                    earn_user_id         TEXT NOT NULL
+                        REFERENCES earn_accounts(earn_user_id),
+                    wallet_address       TEXT NOT NULL,
+                    amount               TEXT NOT NULL,
+                    status               TEXT NOT NULL DEFAULT 'active',
+                    staked_at            INTEGER NOT NULL,
+                    unstake_requested_at INTEGER
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_earn_staking_positions_user
+                    ON earn_staking_positions(earn_user_id);
             """)
             # Existing production Earn databases predate the provider
             # clearance presentation fields.  SQLite lacks ADD COLUMN IF NOT
@@ -922,6 +949,189 @@ class EarnAccountStore:
             "your_rank": caller_rank,
             "entries": entries,
         }
+
+    # ── Staking Pool ────────────────────────────────────────────────────
+
+    _DEFAULT_POOLS = [
+        {
+            "pool_id": "pool_thc_loyalty",
+            "token": "THC",
+            "label": "THC Loyalty Pool",
+            "base_apy_bps": 800,
+            "boosted_apy_bps": 1200,
+            "min_stake": "10",
+        },
+        {
+            "pool_id": "pool_thr_staking",
+            "token": "THR",
+            "label": "THR Staking Pool",
+            "base_apy_bps": 500,
+            "boosted_apy_bps": 800,
+            "min_stake": "1",
+        },
+    ]
+
+    def _ensure_staking_pools(self, con: sqlite3.Connection) -> None:
+        now = int(time.time())
+        for pool in self._DEFAULT_POOLS:
+            existing = con.execute(
+                "SELECT 1 FROM earn_staking_pools WHERE pool_id = ?",
+                (pool["pool_id"],),
+            ).fetchone()
+            if not existing:
+                con.execute(
+                    """INSERT INTO earn_staking_pools
+                       (pool_id, token, label, base_apy_bps, boosted_apy_bps,
+                        min_stake, status, created_at)
+                       VALUES (?,?,?,?,?,?,'active',?)""",
+                    (
+                        pool["pool_id"], pool["token"], pool["label"],
+                        pool["base_apy_bps"], pool["boosted_apy_bps"],
+                        pool["min_stake"], now,
+                    ),
+                )
+
+    def staking_pools(self) -> list[dict[str, Any]]:
+        with self._tx() as con:
+            self._ensure_staking_pools(con)
+            pools = con.execute(
+                "SELECT * FROM earn_staking_pools WHERE status = 'active'"
+            ).fetchall()
+            result = []
+            for p in pools:
+                stats = con.execute(
+                    """SELECT COUNT(*) AS cnt,
+                              COALESCE(SUM(CASE WHEN amount != '' THEN 1 ELSE 0 END), 0) AS pos_count
+                       FROM earn_staking_positions
+                       WHERE pool_id = ? AND status = 'active'""",
+                    (p["pool_id"],),
+                ).fetchone()
+                active_rows = con.execute(
+                    "SELECT amount FROM earn_staking_positions WHERE pool_id = ? AND status = 'active'",
+                    (p["pool_id"],),
+                ).fetchall()
+                total_staked = sum((Decimal(r["amount"]) for r in active_rows), Decimal(0))
+                result.append({
+                    "pool_id": p["pool_id"],
+                    "token": p["token"],
+                    "label": p["label"],
+                    "base_apy_bps": p["base_apy_bps"],
+                    "boosted_apy_bps": p["boosted_apy_bps"],
+                    "base_apy": str(Decimal(p["base_apy_bps"]) / 100),
+                    "boosted_apy": str(Decimal(p["boosted_apy_bps"]) / 100),
+                    "min_stake": p["min_stake"],
+                    "total_staked": str(total_staked.quantize(_THC_SCALE)),
+                    "stakers": stats["cnt"] if stats else 0,
+                })
+            return result
+
+    def staking_positions(self, earn_user_id: str) -> list[dict[str, Any]]:
+        now = int(time.time())
+        with self._tx() as con:
+            self._ensure_staking_pools(con)
+            rows = con.execute(
+                """SELECT sp.*, p.token, p.label AS pool_label,
+                          p.base_apy_bps, p.boosted_apy_bps
+                   FROM earn_staking_positions sp
+                   JOIN earn_staking_pools p ON p.pool_id = sp.pool_id
+                   WHERE sp.earn_user_id = ?
+                   ORDER BY sp.staked_at DESC""",
+                (earn_user_id,),
+            ).fetchall()
+            result = []
+            for r in rows:
+                amt = Decimal(r["amount"])
+                staked_seconds = max(now - r["staked_at"], 0)
+                apy_bps = r["base_apy_bps"]
+                projected_annual = amt * Decimal(apy_bps) / Decimal(10000)
+                projected_earned = (
+                    projected_annual * Decimal(staked_seconds)
+                    / Decimal(365 * 86400)
+                ).quantize(_THC_SCALE)
+                result.append({
+                    "position_id": r["position_id"],
+                    "pool_id": r["pool_id"],
+                    "pool_label": r["pool_label"],
+                    "token": r["token"],
+                    "amount": str(amt.quantize(_THC_SCALE)),
+                    "status": r["status"],
+                    "staked_at": r["staked_at"],
+                    "unstake_requested_at": r["unstake_requested_at"],
+                    "apy": str(Decimal(apy_bps) / 100),
+                    "projected_rewards": str(projected_earned),
+                })
+            return result
+
+    def create_stake(
+        self, earn_user_id: str, pool_id: str, amount: str,
+    ) -> dict[str, Any]:
+        try:
+            amt = Decimal(str(amount)).quantize(_THC_SCALE, rounding=ROUND_DOWN)
+            if amt <= 0:
+                raise ValueError
+        except (TypeError, ValueError, InvalidOperation):
+            raise EarnError("invalid_stake_amount")
+        with self._tx() as con:
+            self._ensure_staking_pools(con)
+            pool = con.execute(
+                "SELECT * FROM earn_staking_pools WHERE pool_id = ? AND status = 'active'",
+                (pool_id,),
+            ).fetchone()
+            if not pool:
+                raise EarnError("pool_not_found")
+            if amt < Decimal(pool["min_stake"]):
+                raise EarnError("below_minimum_stake")
+            link = con.execute(
+                "SELECT wallet_address FROM earn_wallet_links WHERE earn_user_id = ?",
+                (earn_user_id,),
+            ).fetchone()
+            if not link:
+                raise EarnError("wallet_not_linked")
+            now = int(time.time())
+            position_id = "pos_" + secrets.token_urlsafe(18)
+            con.execute(
+                """INSERT INTO earn_staking_positions
+                   (position_id, pool_id, earn_user_id, wallet_address,
+                    amount, status, staked_at)
+                   VALUES (?,?,?,?,?,'active',?)""",
+                (
+                    position_id, pool_id, earn_user_id,
+                    link["wallet_address"], str(amt), now,
+                ),
+            )
+            return {
+                "position_id": position_id,
+                "pool_id": pool_id,
+                "token": pool["token"],
+                "amount": str(amt),
+                "status": "active",
+                "staked_at": now,
+                "wallet_address": link["wallet_address"],
+            }
+
+    def request_unstake(
+        self, earn_user_id: str, position_id: str,
+    ) -> dict[str, Any]:
+        with self._tx() as con:
+            row = con.execute(
+                """SELECT * FROM earn_staking_positions
+                   WHERE position_id = ? AND earn_user_id = ? AND status = 'active'""",
+                (position_id, earn_user_id),
+            ).fetchone()
+            if not row:
+                raise EarnError("position_not_found")
+            now = int(time.time())
+            con.execute(
+                """UPDATE earn_staking_positions
+                   SET status = 'unstaking', unstake_requested_at = ?
+                   WHERE position_id = ?""",
+                (now, position_id),
+            )
+            return {
+                "position_id": position_id,
+                "status": "unstaking",
+                "unstake_requested_at": now,
+            }
 
     @staticmethod
     def _ledger_dict(row: sqlite3.Row) -> dict[str, Any]:
@@ -1794,6 +2004,53 @@ def register_earn_account_routes(
             return jsonify(ok=False, error="earn_auth_required"), 401
         data = store.leaderboard(caller_user_id=user["earn_user_id"])
         return jsonify(ok=True, **data)
+
+    @app.get("/api/earn/staking/pools")
+    def earn_staking_pools():
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        pools = store.staking_pools()
+        return jsonify(ok=True, pools=pools)
+
+    @app.get("/api/earn/staking/positions")
+    def earn_staking_positions():
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        positions = store.staking_positions(user["earn_user_id"])
+        return jsonify(ok=True, positions=positions)
+
+    @app.post("/api/earn/staking/stake")
+    def earn_staking_stake():
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        data = request.get_json(silent=True) or {}
+        try:
+            position = store.create_stake(
+                user["earn_user_id"],
+                str(data.get("pool_id", "")),
+                str(data.get("amount", "")),
+            )
+        except EarnError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, **position)
+
+    @app.post("/api/earn/staking/unstake")
+    def earn_staking_unstake():
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        data = request.get_json(silent=True) or {}
+        try:
+            result = store.request_unstake(
+                user["earn_user_id"],
+                str(data.get("position_id", "")),
+            )
+        except EarnError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, **result)
 
     @app.get("/api/earn/providers")
     def earn_providers():

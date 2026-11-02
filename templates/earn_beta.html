@@ -78,18 +78,18 @@
 </style>
 <main class="earn-beta">
   <section class="earn-card">
-    <h1>Thronos Earn Project</h1>
-    <p style="margin:0;color:#7fb8d8;font-size:12px">Powered by ThronosLabs and ENCOM</p>
-    <p id="earn-subtitle">Create an Earn Account or sign in. No wallet required.</p>
-    <button id="earn-activity-launch" class="earn-activity-launch" type="button" aria-haspopup="dialog" aria-label="Open Earn balance and activity">⏱ Balance &amp; activity</button>
+    <h1 data-i18n="title">Thronos Earn Project</h1>
+    <p style="margin:0;color:#7fb8d8;font-size:12px" data-i18n="powered">Powered by ThronosLabs and ENCOM</p>
+    <p id="earn-subtitle" data-i18n="subtitle">Create an Earn Account or sign in. No wallet required.</p>
+    <button id="earn-activity-launch" class="earn-activity-launch" type="button" aria-haspopup="dialog" data-i18n="balanceBtn">&#x23F1; Balance &amp; activity</button>
 
     <!-- Auth form -->
     <div id="earn-auth">
       <div class="earn-form">
-        <input id="earn-email" class="earn-input" type="email" placeholder="Email" autocomplete="email">
-        <input id="earn-pw" class="earn-input" type="password" placeholder="Password (8+ characters)" autocomplete="current-password">
-        <button id="earn-submit" class="earn-action" type="button">Sign In</button>
-        <button id="earn-switch" class="earn-toggle" type="button">Need an account? Register</button>
+        <input id="earn-email" class="earn-input" type="email" placeholder="Email" data-i18n-placeholder="email" autocomplete="email">
+        <input id="earn-pw" class="earn-input" type="password" placeholder="Password (8+ characters)" data-i18n-placeholder="pw" autocomplete="current-password">
+        <button id="earn-submit" class="earn-action" type="button" data-i18n="signIn">Sign In</button>
+        <button id="earn-switch" class="earn-toggle" type="button" data-i18n="needAcct">Need an account? Register</button>
       </div>
     </div>
 
@@ -97,61 +97,61 @@
     <div id="earn-main" style="display:none">
       <div class="earn-balance-bar" id="earn-balance-bar">
         <div class="earn-balance-grid">
-          <button id="earn-available-trigger" class="earn-balance-cell" type="button" aria-haspopup="dialog"><div class="label">AVAILABLE THC</div><div class="value" id="earn-balance-value">—</div></button>
-          <button id="earn-pending-trigger" class="earn-balance-cell" type="button" aria-haspopup="dialog"><div class="label">PENDING THC</div><div class="value pending" id="earn-pending-value">—</div></button>
+          <button id="earn-available-trigger" class="earn-balance-cell" type="button" aria-haspopup="dialog"><div class="label" data-i18n="availThc">AVAILABLE THC</div><div class="value" id="earn-balance-value">—</div></button>
+          <button id="earn-pending-trigger" class="earn-balance-cell" type="button" aria-haspopup="dialog"><div class="label" data-i18n="pendThc">PENDING THC</div><div class="value pending" id="earn-pending-value">—</div></button>
         </div>
       </div>
       <div class="earn-provider-grid" aria-label="Earn providers">
         <section class="earn-provider" id="provider-cpx">
-          <h3>CPX Research</h3><p>Surveys selected for your account.</p>
-          <button id="earn-surveys" class="earn-action" type="button">Open Surveys</button>
+          <h3 data-i18n="cpxTitle">CPX Research</h3><p data-i18n="cpxDesc">Surveys selected for your account.</p>
+          <button id="earn-surveys" class="earn-action" type="button" data-i18n="openSurveys">Open Surveys</button>
         </section>
         <section class="earn-provider is-unavailable" id="provider-bitcotasks">
-          <h3>BitcoTasks</h3><p id="bitcotasks-copy">More tasks and offers are being prepared.</p>
-          <button id="earn-bitcotasks" class="earn-action" type="button" disabled>Coming soon</button>
-          <div id="bitcotasks-status" class="earn-provider-status" aria-live="polite">Provider approval pending</div>
+          <h3 data-i18n="bitcoTitle">BitcoTasks</h3><p id="bitcotasks-copy" data-i18n="bitcoDesc">More tasks and offers are being prepared.</p>
+          <button id="earn-bitcotasks" class="earn-action" type="button" disabled data-i18n="bitcoSoon">Coming soon</button>
+          <div id="bitcotasks-status" class="earn-provider-status" aria-live="polite" data-i18n="bitcoPending">Provider approval pending</div>
         </section>
         <section class="earn-provider is-unavailable" id="provider-pure">
-          <h3>PureSpectrum</h3><p id="pure-copy">Additional surveys coming soon.</p>
-          <button id="earn-pure" class="earn-action" type="button" disabled>Coming soon</button>
-          <div id="pure-status" class="earn-provider-status" aria-live="polite">Integration pending</div>
+          <h3 data-i18n="pureTitle">PureSpectrum</h3><p id="pure-copy" data-i18n="pureDesc">Additional surveys coming soon.</p>
+          <button id="earn-pure" class="earn-action" type="button" disabled data-i18n="pureSoon">Coming soon</button>
+          <div id="pure-status" class="earn-provider-status" aria-live="polite" data-i18n="purePending">Integration pending</div>
         </section>
       </div>
       <div id="t2e-section" class="earn-provider" style="margin-top:14px;display:none">
-        <h3 style="margin-bottom:8px">Train-to-Earn</h3>
+        <h3 style="margin-bottom:8px" data-i18n="t2eTitle">Train-to-Earn</h3>
         <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px">
-          <div><span style="color:#7fb8d8;font-size:11px;display:block">Streak</span><span id="t2e-streak" style="color:#f2c14e;font-size:18px;font-weight:700">0</span> days</div>
-          <div><span style="color:#7fb8d8;font-size:11px;display:block">Today</span><span id="t2e-today" style="color:#e2e8f0;font-size:14px">0/3</span></div>
-          <div><span style="color:#7fb8d8;font-size:11px;display:block">Total earned</span><span id="t2e-total" style="color:#34d399;font-size:14px;font-weight:700">0.00 THC</span></div>
+          <div><span style="color:#7fb8d8;font-size:11px;display:block" data-i18n="t2eStreak">Streak</span><span id="t2e-streak" style="color:#f2c14e;font-size:18px;font-weight:700">0</span> days</div>
+          <div><span style="color:#7fb8d8;font-size:11px;display:block" data-i18n="t2eToday">Today</span><span id="t2e-today" style="color:#e2e8f0;font-size:14px">0/3</span></div>
+          <div><span style="color:#7fb8d8;font-size:11px;display:block" data-i18n="t2eTotal">Total earned</span><span id="t2e-total" style="color:#34d399;font-size:14px;font-weight:700">0.00 THC</span></div>
         </div>
-        <button id="t2e-log-workout" class="earn-action" type="button">Log Workout</button>
+        <button id="t2e-log-workout" class="earn-action" type="button" data-i18n="logWorkout">Log Workout</button>
         <div id="t2e-status" class="earn-provider-status" aria-live="polite"></div>
       </div>
-      <button id="earn-logout" class="earn-toggle" type="button">Sign out</button>
+      <button id="earn-logout" class="earn-toggle" type="button" data-i18n="signOut">Sign out</button>
       <div class="earn-history" id="earn-history">
         <button id="earn-activity-trigger" class="earn-activity-trigger" type="button" aria-haspopup="dialog" aria-label="Open recent activity">
-          Recent activity <span class="earn-activity-count" id="earn-activity-count">0</span>
+          <span data-i18n="recentActivity">Recent activity</span> <span class="earn-activity-count" id="earn-activity-count">0</span>
         </button>
       </div>
     </div>
 
     <div id="earn-status" class="earn-status" role="status"></div>
-    <button id="earn-survey-close" class="earn-survey-close" type="button" aria-label="Return to Earn">Back to Earn</button>
+    <button id="earn-survey-close" class="earn-survey-close" type="button" data-i18n="backToEarn" data-i18n-label="backToEarn">Back to Earn</button>
     <iframe id="earn-frame" class="earn-frame" title="CPX Research surveys" sandbox="allow-forms allow-scripts allow-same-origin allow-popups"></iframe>
-    <p class="earn-note">Rewards are credited only from verified provider receipts. Pending THC is not spendable or payable until clearance.</p>
-    <p class="earn-note" style="margin-top:8px"><a href="/terms">Terms of Use</a> · <a href="/privacy">Privacy Policy</a> · <a href="/contact">Contact</a></p>
+    <p class="earn-note" data-i18n="rewardsNote">Rewards are credited only from verified provider receipts. Pending THC is not spendable or payable until clearance.</p>
+    <p class="earn-note" style="margin-top:8px"><a href="/terms" data-i18n="terms">Terms of Use</a> · <a href="/privacy" data-i18n="privacy">Privacy Policy</a> · <a href="/contact" data-i18n="contact">Contact</a></p>
   </section>
 </main>
 <dialog id="earn-activity-dialog" class="earn-activity-dialog" aria-labelledby="earn-activity-title">
-  <div class="earn-dialog-head"><h2 id="earn-activity-title">Recent activity</h2><button id="earn-activity-close" class="earn-dialog-close" type="button" aria-label="Close activity">×</button></div>
+  <div class="earn-dialog-head"><h2 id="earn-activity-title" data-i18n="recentActivity">Recent activity</h2><button id="earn-activity-close" class="earn-dialog-close" type="button" aria-label="Close activity">&times;</button></div>
   <div class="earn-dialog-body">
     <div class="earn-account-summary" id="earn-account-summary" aria-live="polite">
-      <div><span class="summary-label">Earn account</span><span class="summary-value" id="earn-account-email">—</span></div>
-      <div><span class="summary-label">Thronos wallet</span><span class="summary-value not-linked" id="earn-wallet-status">Not linked</span></div>
-      <div><span class="summary-label">Reward clearance</span><span class="summary-value" id="earn-clearance-summary">Pending receipts remain unavailable until provider clearance.</span></div>
-      <div><span class="summary-label">Cash-out</span><span class="summary-value">Not enabled yet.</span></div>
+      <div><span class="summary-label" data-i18n="earnAcct">Earn account</span><span class="summary-value" id="earn-account-email">—</span></div>
+      <div><span class="summary-label" data-i18n="thronosWallet">Thronos wallet</span><span class="summary-value not-linked" id="earn-wallet-status" data-i18n="notLinked">Not linked</span></div>
+      <div><span class="summary-label" data-i18n="rewardClearance">Reward clearance</span><span class="summary-value" id="earn-clearance-summary" data-i18n="pendingNote">Pending receipts remain unavailable until provider clearance.</span></div>
+      <div><span class="summary-label" data-i18n="cashOut">Cash-out</span><span class="summary-value" data-i18n="notEnabled">Not enabled yet.</span></div>
     </div>
-    <div class="earn-history-list" id="earn-history-list"><p class="earn-note" style="margin:0">No verified Earn receipts yet.</p></div>
+    <div class="earn-history-list" id="earn-history-list"><p class="earn-note" style="margin:0" data-i18n="noReceipts">No verified Earn receipts yet.</p></div>
   </div>
 </dialog>
 <div id="promo-overlay" class="promo-overlay" style="display:none" role="dialog" aria-modal="true" aria-label="Sponsored content">
@@ -161,12 +161,47 @@
     <p class="promo-text" id="promo-desc"></p>
     <button id="promo-visit" class="promo-visit" type="button">Visit</button>
     <div class="promo-countdown" id="promo-countdown"></div>
-    <button class="promo-skip" id="promo-skip" type="button">Skip</button>
+    <button class="promo-skip" id="promo-skip" type="button" data-i18n="skip">Skip</button>
   </div>
 </div>
 <script>
 (() => {
   const $ = id => document.getElementById(id);
+
+  const _i18n = {
+    en: { title:'Thronos Earn Project', powered:'Powered by ThronosLabs and ENCOM', subtitle:'Create an Earn Account or sign in. No wallet required.', balanceBtn:'Balance & activity', email:'Email', pw:'Password (8+ characters)', pwNew:'Choose a password (8+ characters)', signIn:'Sign In', createAcct:'Create Account', needAcct:'Need an account? Register', haveAcct:'Already have an account? Sign In', signOut:'Sign out', availThc:'AVAILABLE THC', pendThc:'PENDING THC', cpxTitle:'CPX Research', cpxDesc:'Surveys selected for your account.', openSurveys:'Open Surveys', bitcoTitle:'BitcoTasks', bitcoDesc:'More tasks and offers are being prepared.', bitcoSoon:'Coming soon', bitcoPending:'Provider approval pending', bitcoReady:'Tasks and offers selected for your account.', bitcoAvail:'Available now', openBitco:'Open BitcoTasks', pureTitle:'PureSpectrum', pureDesc:'Additional surveys coming soon.', pureSoon:'Coming soon', purePending:'Integration pending', pureReady:'Variety surveys for your account.', pureAvail:'Available now', openPure:'Open Surveys', t2eTitle:'Train-to-Earn', t2eStreak:'Streak', t2eToday:'Today', t2eTotal:'Total earned', logWorkout:'Log Workout', recentActivity:'Recent activity', backToEarn:'Back to Earn', earnAcct:'Earn account', thronosWallet:'Thronos wallet', rewardClearance:'Reward clearance', cashOut:'Cash-out', notLinked:'Not linked', notLinkedFull:'Not linked — link from Wallet PWA or APK', notEnabled:'Not enabled yet.', noReceipts:'No verified Earn receipts yet.', rewardsNote:'Rewards are credited only from verified provider receipts. Pending THC is not spendable or payable until clearance.', terms:'Terms of Use', privacy:'Privacy Policy', contact:'Contact', pendingNote:'Pending receipts remain unavailable until provider clearance.', skip:'Skip', countdown:'Continuing in {s}s…', receiptUnavail:'Receipt date unavailable', reversedBy:'Reversed by provider', reversed:'Reversed: {r}', clearanceNotRecv:'Clearance date not yet received from provider.', estClearance:'Estimated clearance: {d} ({n} day remaining)', estClearancePlural:'Estimated clearance: {d} ({n} days remaining)', enterCreds:'Enter email and password.', preparing:'Preparing your account…', creating:'Creating account…', signingIn:'Signing in…', signedOut:'Signed out.', loadingSurveys:'Loading surveys…', surveysUnavail:'Surveys unavailable.', connectedSurvey:'Connected. Complete a survey to earn THC.', couldNotSurvey:'Could not load surveys.', bitcoUnavail:'BitcoTasks is unavailable.', connectedBitco:'Connected to BitcoTasks.', couldNotBitco:'Could not load BitcoTasks.', pureUnavail:'PureSpectrum is unavailable.', connectedPure:'Connected to PureSpectrum surveys.', couldNotPure:'Could not load PureSpectrum.', returnedEarn:'Returned to Earn.', unavailable:'Unavailable', balanceError:'Could not load your Earn balance. Retry this page; no zero balance is assumed.', activityError:'Activity could not be loaded. Retry this page; no empty history is assumed.', amtUnavail:'Amount unavailable', amtPending:'Provider amount pending', daysClearance:'{n} day until earliest clearance ({d}-day period)', daysClearancePlural:'{n} days until earliest clearance ({d}-day period)', readyClearance:'Earliest pending reward ready for clearance', noPending:'No pending rewards.', workoutPrompt:'Workout duration in minutes (minimum 15):', workoutMin:'Minimum workout duration is 15 minutes.', workoutLogged:'Workout logged! Earned {v} THC', workoutFailed:'Could not log workout.', signInView:'Sign in to view your Earn balance and activity.', days:' days' },
+    el: { title:'Έργο Thronos Earn', powered:'Από ThronosLabs και ENCOM', subtitle:'Δημιούργησε λογαριασμό Earn ή σύνδεσου. Δεν χρειάζεται πορτοφόλι.', balanceBtn:'Υπόλοιπο & δραστηριότητα', email:'Email', pw:'Κωδικός (8+ χαρακτήρες)', pwNew:'Διάλεξε κωδικό (8+ χαρακτήρες)', signIn:'Σύνδεση', createAcct:'Δημιουργία λογαριασμού', needAcct:'Δεν έχεις λογαριασμό; Εγγραφή', haveAcct:'Έχεις ήδη λογαριασμό; Σύνδεση', signOut:'Αποσύνδεση', availThc:'ΔΙΑΘΈΣΙΜΑ THC', pendThc:'ΕΚΚΡΕΜΆ THC', cpxDesc:'Έρευνες επιλεγμένες για τον λογαριασμό σου.', openSurveys:'Άνοιγμα ερευνών', bitcoDesc:'Περισσότερες εργασίες ετοιμάζονται.', bitcoSoon:'Έρχεται σύντομα', bitcoPending:'Εκκρεμής έγκριση παρόχου', bitcoReady:'Εργασίες και προσφορές για τον λογαριασμό σου.', bitcoAvail:'Διαθέσιμο τώρα', openBitco:'Άνοιγμα BitcoTasks', pureDesc:'Επιπλέον έρευνες έρχονται σύντομα.', pureSoon:'Έρχεται σύντομα', purePending:'Εκκρεμής ενσωμάτωση', pureReady:'Διάφορες έρευνες για τον λογαριασμό σου.', pureAvail:'Διαθέσιμο τώρα', openPure:'Άνοιγμα ερευνών', t2eTitle:'Train-to-Earn', t2eStreak:'Σειρά', t2eToday:'Σήμερα', t2eTotal:'Συνολικά κέρδη', logWorkout:'Καταγραφή προπόνησης', recentActivity:'Πρόσφατη δραστηριότητα', backToEarn:'Πίσω στο Earn', earnAcct:'Λογαριασμός Earn', thronosWallet:'Πορτοφόλι Thronos', rewardClearance:'Εκκαθάριση αμοιβών', cashOut:'Ανάληψη', notLinked:'Μη συνδεδεμένο', notLinkedFull:'Μη συνδεδεμένο — σύνδεσε από Wallet PWA ή APK', notEnabled:'Δεν είναι ακόμα διαθέσιμο.', noReceipts:'Καμία επαληθευμένη απόδειξη Earn ακόμα.', rewardsNote:'Οι αμοιβές πιστώνονται μόνο από επαληθευμένες αποδείξεις παρόχων. Τα εκκρεμή THC δεν είναι διαθέσιμα μέχρι την εκκαθάριση.', terms:'Όροι χρήσης', privacy:'Πολιτική απορρήτου', contact:'Επικοινωνία', pendingNote:'Οι εκκρεμείς αποδείξεις δεν είναι διαθέσιμες μέχρι την εκκαθάριση του παρόχου.', skip:'Παράλειψη', countdown:'Συνέχεια σε {s}δ…', receiptUnavail:'Ημερομηνία απόδειξης μη διαθέσιμη', reversedBy:'Αντιστράφηκε από πάροχο', reversed:'Αντιστροφή: {r}', clearanceNotRecv:'Ημερομηνία εκκαθάρισης δεν έχει ληφθεί ακόμα.', estClearance:'Εκτιμώμενη εκκαθάριση: {d} ({n} ημέρα απομένει)', estClearancePlural:'Εκτιμώμενη εκκαθάριση: {d} ({n} ημέρες απομένουν)', enterCreds:'Εισάγετε email και κωδικό.', preparing:'Προετοιμασία λογαριασμού…', creating:'Δημιουργία λογαριασμού…', signingIn:'Σύνδεση…', signedOut:'Αποσυνδεθήκατε.', loadingSurveys:'Φόρτωση ερευνών…', surveysUnavail:'Οι έρευνες δεν είναι διαθέσιμες.', connectedSurvey:'Συνδέθηκε. Ολοκλήρωσε μια έρευνα για να κερδίσεις THC.', couldNotSurvey:'Δεν ήταν δυνατή η φόρτωση ερευνών.', bitcoUnavail:'Το BitcoTasks δεν είναι διαθέσιμο.', connectedBitco:'Συνδέθηκε στο BitcoTasks.', couldNotBitco:'Δεν ήταν δυνατή η φόρτωση BitcoTasks.', pureUnavail:'Το PureSpectrum δεν είναι διαθέσιμο.', connectedPure:'Συνδέθηκε στο PureSpectrum.', couldNotPure:'Δεν ήταν δυνατή η φόρτωση PureSpectrum.', returnedEarn:'Επιστροφή στο Earn.', unavailable:'Μη διαθέσιμο', balanceError:'Δεν ήταν δυνατή η φόρτωση υπολοίπου. Δοκιμάστε ξανά.', activityError:'Δεν ήταν δυνατή η φόρτωση δραστηριότητας. Δοκιμάστε ξανά.', amtUnavail:'Ποσό μη διαθέσιμο', amtPending:'Ποσό παρόχου εκκρεμές', daysClearance:'{n} ημέρα μέχρι την εκκαθάριση (περίοδος {d} ημερών)', daysClearancePlural:'{n} ημέρες μέχρι την εκκαθάριση (περίοδος {d} ημερών)', readyClearance:'Η πρώτη εκκρεμής αμοιβή είναι έτοιμη για εκκαθάριση', noPending:'Καμία εκκρεμής αμοιβή.', workoutPrompt:'Διάρκεια προπόνησης σε λεπτά (ελάχιστο 15):', workoutMin:'Ελάχιστη διάρκεια προπόνησης 15 λεπτά.', workoutLogged:'Προπόνηση καταγράφηκε! Κέρδισες {v} THC', workoutFailed:'Δεν ήταν δυνατή η καταγραφή προπόνησης.', signInView:'Συνδεθείτε για να δείτε το υπόλοιπο και τη δραστηριότητα Earn.' },
+    de: { title:'Thronos Earn Projekt', powered:'Betrieben von ThronosLabs und ENCOM', subtitle:'Erstelle ein Earn-Konto oder melde dich an. Kein Wallet erforderlich.', balanceBtn:'Guthaben & Aktivität', pw:'Passwort (8+ Zeichen)', pwNew:'Passwort wählen (8+ Zeichen)', signIn:'Anmelden', createAcct:'Konto erstellen', needAcct:'Kein Konto? Registrieren', haveAcct:'Bereits ein Konto? Anmelden', signOut:'Abmelden', availThc:'VERFÜGBARE THC', pendThc:'AUSSTEHENDE THC', cpxDesc:'Umfragen ausgewählt für dein Konto.', openSurveys:'Umfragen öffnen', bitcoDesc:'Weitere Aufgaben und Angebote werden vorbereitet.', bitcoSoon:'Kommt bald', bitcoPending:'Anbieter-Genehmigung ausstehend', bitcoReady:'Aufgaben und Angebote für dein Konto.', bitcoAvail:'Jetzt verfügbar', openBitco:'BitcoTasks öffnen', pureDesc:'Weitere Umfragen kommen bald.', pureSoon:'Kommt bald', purePending:'Integration ausstehend', pureReady:'Verschiedene Umfragen für dein Konto.', pureAvail:'Jetzt verfügbar', openPure:'Umfragen öffnen', t2eStreak:'Serie', t2eToday:'Heute', t2eTotal:'Gesamt verdient', logWorkout:'Training erfassen', recentActivity:'Letzte Aktivität', backToEarn:'Zurück zu Earn', earnAcct:'Earn-Konto', thronosWallet:'Thronos Wallet', rewardClearance:'Freigabe der Belohnungen', cashOut:'Auszahlung', notLinked:'Nicht verbunden', notLinkedFull:'Nicht verbunden — verbinde über Wallet PWA oder APK', notEnabled:'Noch nicht verfügbar.', noReceipts:'Noch keine verifizierten Earn-Belege.', rewardsNote:'Belohnungen werden nur aus verifizierten Anbieterbelegen gutgeschrieben. Ausstehende THC sind bis zur Freigabe nicht verfügbar.', terms:'Nutzungsbedingungen', privacy:'Datenschutz', pendingNote:'Ausstehende Belege sind bis zur Anbieterfreigabe nicht verfügbar.', skip:'Überspringen', countdown:'Weiter in {s}s…', receiptUnavail:'Belegdatum nicht verfügbar', reversedBy:'Vom Anbieter storniert', reversed:'Storniert: {r}', clearanceNotRecv:'Freigabedatum noch nicht vom Anbieter erhalten.', enterCreds:'E-Mail und Passwort eingeben.', preparing:'Konto wird vorbereitet…', creating:'Konto wird erstellt…', signingIn:'Anmeldung…', signedOut:'Abgemeldet.', loadingSurveys:'Umfragen werden geladen…', surveysUnavail:'Umfragen nicht verfügbar.', connectedSurvey:'Verbunden. Schließe eine Umfrage ab, um THC zu verdienen.', couldNotSurvey:'Umfragen konnten nicht geladen werden.', bitcoUnavail:'BitcoTasks ist nicht verfügbar.', connectedBitco:'Mit BitcoTasks verbunden.', couldNotBitco:'BitcoTasks konnte nicht geladen werden.', pureUnavail:'PureSpectrum ist nicht verfügbar.', connectedPure:'Mit PureSpectrum verbunden.', couldNotPure:'PureSpectrum konnte nicht geladen werden.', returnedEarn:'Zurück zu Earn.', unavailable:'Nicht verfügbar', balanceError:'Guthaben konnte nicht geladen werden. Seite neu laden.', activityError:'Aktivität konnte nicht geladen werden. Seite neu laden.', amtUnavail:'Betrag nicht verfügbar', amtPending:'Anbieterbetrag ausstehend', readyClearance:'Früheste ausstehende Belohnung bereit zur Freigabe', noPending:'Keine ausstehenden Belohnungen.', workoutPrompt:'Trainingsdauer in Minuten (mindestens 15):', workoutMin:'Mindesttrainingsdauer beträgt 15 Minuten.', workoutLogged:'Training erfasst! {v} THC verdient', workoutFailed:'Training konnte nicht erfasst werden.', signInView:'Anmelden, um Guthaben und Aktivität zu sehen.' },
+    fr: { title:'Projet Thronos Earn', powered:'Par ThronosLabs et ENCOM', subtitle:'Créez un compte Earn ou connectez-vous. Aucun portefeuille requis.', balanceBtn:'Solde & activité', pw:'Mot de passe (8+ caractères)', pwNew:'Choisissez un mot de passe (8+ caractères)', signIn:'Connexion', createAcct:'Créer un compte', needAcct:'Pas de compte ? Inscription', haveAcct:'Déjà un compte ? Connexion', signOut:'Déconnexion', availThc:'THC DISPONIBLES', pendThc:'THC EN ATTENTE', cpxDesc:'Sondages sélectionnés pour votre compte.', openSurveys:'Ouvrir les sondages', bitcoDesc:'D’autres tâches et offres arrivent bientôt.', bitcoSoon:'Bientôt', bitcoPending:'Approbation du fournisseur en attente', bitcoReady:'Tâches et offres pour votre compte.', bitcoAvail:'Disponible maintenant', openBitco:'Ouvrir BitcoTasks', pureDesc:'D’autres sondages arrivent bientôt.', pureSoon:'Bientôt', purePending:'Intégration en attente', pureReady:'Sondages variés pour votre compte.', pureAvail:'Disponible maintenant', openPure:'Ouvrir les sondages', t2eStreak:'Série', t2eToday:'Aujourd’hui', t2eTotal:'Total gagné', logWorkout:'Enregistrer l’entraînement', recentActivity:'Activité récente', backToEarn:'Retour à Earn', earnAcct:'Compte Earn', thronosWallet:'Portefeuille Thronos', rewardClearance:'Compensation des récompenses', cashOut:'Retrait', notLinked:'Non lié', notLinkedFull:'Non lié — liez via Wallet PWA ou APK', notEnabled:'Pas encore disponible.', noReceipts:'Aucun reçu Earn vérifié.', rewardsNote:'Les récompenses sont créditées uniquement à partir de reçus vérifiés. Les THC en attente ne sont pas disponibles avant la compensation.', terms:'Conditions', privacy:'Confidentialité', skip:'Passer', countdown:'Suite dans {s}s…', enterCreds:'Entrez email et mot de passe.', preparing:'Préparation du compte…', creating:'Création du compte…', signingIn:'Connexion…', signedOut:'Déconnecté.', loadingSurveys:'Chargement des sondages…', connectedSurvey:'Connecté. Complétez un sondage pour gagner des THC.', returnedEarn:'Retour à Earn.', unavailable:'Indisponible', signInView:'Connectez-vous pour voir votre solde et activité Earn.' },
+    es: { title:'Proyecto Thronos Earn', powered:'Por ThronosLabs y ENCOM', subtitle:'Crea una cuenta Earn o inicia sesión. No se necesita billetera.', balanceBtn:'Saldo y actividad', pw:'Contraseña (8+ caracteres)', pwNew:'Elige una contraseña (8+ caracteres)', signIn:'Iniciar sesión', createAcct:'Crear cuenta', needAcct:'¿No tienes cuenta? Regístrate', haveAcct:'¿Ya tienes cuenta? Inicia sesión', signOut:'Cerrar sesión', availThc:'THC DISPONIBLES', pendThc:'THC PENDIENTES', cpxDesc:'Encuestas seleccionadas para tu cuenta.', openSurveys:'Abrir encuestas', bitcoDesc:'Más tareas y ofertas en preparación.', bitcoSoon:'Próximamente', bitcoReady:'Tareas y ofertas para tu cuenta.', bitcoAvail:'Disponible ahora', openBitco:'Abrir BitcoTasks', pureDesc:'Más encuestas próximamente.', pureSoon:'Próximamente', pureReady:'Encuestas variadas para tu cuenta.', pureAvail:'Disponible ahora', openPure:'Abrir encuestas', t2eStreak:'Racha', t2eToday:'Hoy', t2eTotal:'Total ganado', logWorkout:'Registrar entrenamiento', recentActivity:'Actividad reciente', backToEarn:'Volver a Earn', earnAcct:'Cuenta Earn', thronosWallet:'Billetera Thronos', rewardClearance:'Compensación de recompensas', cashOut:'Retiro', notLinked:'No vinculada', notLinkedFull:'No vinculada — vincula desde Wallet PWA o APK', notEnabled:'Aún no disponible.', noReceipts:'Aún no hay recibos Earn verificados.', rewardsNote:'Las recompensas se acreditan solo a partir de recibos verificados. Los THC pendientes no están disponibles hasta la compensación.', terms:'Términos', privacy:'Privacidad', skip:'Omitir', countdown:'Continúa en {s}s…', enterCreds:'Ingresa email y contraseña.', preparing:'Preparando tu cuenta…', creating:'Creando cuenta…', signingIn:'Iniciando sesión…', signedOut:'Sesión cerrada.', loadingSurveys:'Cargando encuestas…', connectedSurvey:'Conectado. Completa una encuesta para ganar THC.', returnedEarn:'Vuelto a Earn.', unavailable:'No disponible', signInView:'Inicia sesión para ver tu saldo y actividad Earn.' },
+    pt: { title:'Projeto Thronos Earn', powered:'Por ThronosLabs e ENCOM', subtitle:'Crie uma conta Earn ou faça login. Sem necessidade de carteira.', balanceBtn:'Saldo e atividade', pw:'Senha (8+ caracteres)', pwNew:'Escolha uma senha (8+ caracteres)', signIn:'Entrar', createAcct:'Criar conta', needAcct:'Não tem conta? Registre-se', haveAcct:'Já tem conta? Entre', signOut:'Sair', availThc:'THC DISPONÍVEIS', pendThc:'THC PENDENTES', cpxDesc:'Pesquisas selecionadas para sua conta.', openSurveys:'Abrir pesquisas', bitcoDesc:'Mais tarefas e ofertas em preparação.', bitcoSoon:'Em breve', bitcoReady:'Tarefas e ofertas para sua conta.', bitcoAvail:'Disponível agora', openBitco:'Abrir BitcoTasks', pureDesc:'Mais pesquisas em breve.', pureSoon:'Em breve', pureReady:'Pesquisas variadas para sua conta.', pureAvail:'Disponível agora', openPure:'Abrir pesquisas', recentActivity:'Atividade recente', backToEarn:'Voltar ao Earn', signIn:'Entrar', signOut:'Sair', skip:'Pular', enterCreds:'Insira email e senha.', signingIn:'Entrando…', signedOut:'Desconectado.', unavailable:'Indisponível', signInView:'Entre para ver seu saldo e atividade Earn.' },
+    it: { title:'Progetto Thronos Earn', powered:'Da ThronosLabs e ENCOM', subtitle:'Crea un account Earn o accedi. Nessun portafoglio richiesto.', balanceBtn:'Saldo e attività', pw:'Password (8+ caratteri)', pwNew:'Scegli una password (8+ caratteri)', signIn:'Accedi', createAcct:'Crea account', needAcct:'Non hai un account? Registrati', haveAcct:'Hai già un account? Accedi', signOut:'Esci', availThc:'THC DISPONIBILI', pendThc:'THC IN ATTESA', cpxDesc:'Sondaggi selezionati per il tuo account.', openSurveys:'Apri sondaggi', bitcoDesc:'Altre attività e offerte in arrivo.', bitcoSoon:'In arrivo', bitcoReady:'Attività e offerte per il tuo account.', bitcoAvail:'Disponibile ora', openBitco:'Apri BitcoTasks', pureDesc:'Altri sondaggi in arrivo.', pureSoon:'In arrivo', pureReady:'Sondaggi vari per il tuo account.', pureAvail:'Disponibile ora', openPure:'Apri sondaggi', recentActivity:'Attività recente', backToEarn:'Torna a Earn', skip:'Salta', enterCreds:'Inserisci email e password.', signingIn:'Accesso…', signedOut:'Disconnesso.', unavailable:'Non disponibile', signInView:'Accedi per vedere il tuo saldo e attività Earn.' },
+    tr: { title:'Thronos Earn Projesi', powered:'ThronosLabs ve ENCOM tarafından', subtitle:'Earn hesabı oluştur veya giriş yap. Cüzdan gerekmez.', balanceBtn:'Bakiye ve aktivite', pw:'Şifre (8+ karakter)', pwNew:'Şifre seç (8+ karakter)', signIn:'Giriş yap', createAcct:'Hesap oluştur', needAcct:'Hesabın yok mu? Kayıt ol', haveAcct:'Hesabın var mı? Giriş yap', signOut:'Çıkış', availThc:'MEVCUT THC', pendThc:'BEKLEYEN THC', cpxDesc:'Hesabın için seçilmiş anketler.', openSurveys:'Anketleri aç', bitcoDesc:'Daha fazla görev ve teklif hazırlanıyor.', bitcoSoon:'Yakında', bitcoReady:'Hesabın için görevler ve teklifler.', bitcoAvail:'Şimdi mevcut', openBitco:'BitcoTasks aç', pureDesc:'Ek anketler yakında.', pureSoon:'Yakında', pureReady:'Hesabın için çeşitli anketler.', pureAvail:'Şimdi mevcut', openPure:'Anketleri aç', recentActivity:'Son aktivite', backToEarn:'Earn’e dön', skip:'Atla', enterCreds:'Email ve şifre gir.', signingIn:'Giriş yapılıyor…', signedOut:'Çıkış yapıldı.', unavailable:'Mevcut değil', signInView:'Earn bakiyeni ve aktiviteni görmek için giriş yap.' },
+    ru: { title:'Проект Thronos Earn', powered:'От ThronosLabs и ENCOM', subtitle:'Создайте аккаунт Earn или войдите. Кошелёк не требуется.', balanceBtn:'Баланс и активность', pw:'Пароль (8+ символов)', pwNew:'Выберите пароль (8+ символов)', signIn:'Войти', createAcct:'Создать аккаунт', needAcct:'Нет аккаунта? Регистрация', haveAcct:'Есть аккаунт? Войти', signOut:'Выйти', availThc:'ДОСТУПНЫЕ THC', pendThc:'ОЖИДАЮЩИЕ THC', cpxDesc:'Опросы подобраны для вашего аккаунта.', openSurveys:'Открыть опросы', bitcoDesc:'Ещё больше заданий готовится.', bitcoSoon:'Скоро', bitcoReady:'Задания и предложения для вашего аккаунта.', bitcoAvail:'Доступно сейчас', openBitco:'Открыть BitcoTasks', pureDesc:'Дополнительные опросы скоро.', pureSoon:'Скоро', pureReady:'Разнообразные опросы для вашего аккаунта.', pureAvail:'Доступно сейчас', openPure:'Открыть опросы', recentActivity:'Недавняя активность', backToEarn:'Назад в Earn', skip:'Пропустить', enterCreds:'Введите email и пароль.', signingIn:'Вход…', signedOut:'Вы вышли.', unavailable:'Недоступно', signInView:'Войдите, чтобы увидеть баланс и активность Earn.' },
+    ja: { title:'Thronos Earnプロジェクト', subtitle:'Earnアカウントを作成またはログイン。ウォレット不要。', signIn:'ログイン', createAcct:'アカウント作成', signOut:'ログアウト', openSurveys:'アンケートを開く', recentActivity:'最近のアクティビティ', skip:'スキップ', signInView:'ログインして残高とアクティビティを確認' },
+    zh: { title:'Thronos Earn项目', subtitle:'创建Earn账户或登录。无需钱包。', signIn:'登录', createAcct:'创建账户', signOut:'退出', openSurveys:'打开问卷', recentActivity:'最近活动', skip:'跳过', signInView:'登录查看余额和活动' },
+    ko: { title:'Thronos Earn 프로젝트', subtitle:'Earn 계정을 만들거나 로그인하세요. 지갑 불필요.', signIn:'로그인', createAcct:'계정 만들기', signOut:'로그아웃', openSurveys:'설문조사 열기', recentActivity:'최근 활동', skip:'건너뛰기', signInView:'잔액과 활동을 보려면 로그인하세요' },
+  };
+
+  const _userLang = (navigator.language || 'en').split('-')[0].toLowerCase();
+  const _lang = _i18n[_userLang] ? _userLang : 'en';
+  function t(key) { return (_i18n[_lang] && _i18n[_lang][key]) || _i18n.en[key] || key; }
+
+  function applyI18n() {
+    document.querySelectorAll('[data-i18n]').forEach(el => {
+      const key = el.dataset.i18n;
+      if (key) el.textContent = t(key);
+    });
+    document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+      const key = el.dataset.i18nPlaceholder;
+      if (key) el.placeholder = t(key);
+    });
+    document.querySelectorAll('[data-i18n-label]').forEach(el => {
+      const key = el.dataset.i18nLabel;
+      if (key) el.setAttribute('aria-label', t(key));
+    });
+  }
+
   const authSection = $('earn-auth'), mainSection = $('earn-main');
   const emailInput = $('earn-email'), pwInput = $('earn-pw');
   const submitBtn = $('earn-submit'), switchBtn = $('earn-switch');
@@ -177,6 +212,7 @@
   const bitcoButton = $('earn-bitcotasks'), bitcoProvider = $('provider-bitcotasks');
   const pureButton = $('earn-pure'), pureProvider = $('provider-pure');
   let isRegister = false, token = null;
+  applyI18n();
 
   const promoAds = [
     { title: 'LitBits Faucet', desc: 'Earn free Bitcoin daily with the LitBits Faucet on Telegram. Claim, grow and withdraw your crypto.', url: 'https://t.me/litebits_faucet_bot/app?startapp=BPS0MGLI', badge: 'Thronos Recommends', cta: 'Open Faucet' },
@@ -198,14 +234,14 @@
       const countdownEl = $('promo-countdown');
       const skipBtn = $('promo-skip');
       let seconds = durationSec;
-      countdownEl.textContent = 'Continuing in ' + seconds + 's…';
+      countdownEl.textContent = t('countdown').replace('{s}', seconds);
       skipBtn.style.display = 'none';
       overlay.style.display = 'flex';
       function done() { clearInterval(timer); overlay.style.display = 'none'; skipBtn.removeEventListener('click', done); resolve(); }
       const timer = setInterval(() => {
         seconds--;
         if (seconds <= 5) skipBtn.style.display = '';
-        if (seconds > 0) { countdownEl.textContent = 'Continuing in ' + seconds + 's…'; return; }
+        if (seconds > 0) { countdownEl.textContent = t('countdown').replace('{s}', seconds); return; }
         done();
       }, 1000);
       skipBtn.addEventListener('click', done);
@@ -234,27 +270,26 @@
 
   function formatReceiptDate(raw) {
     const seconds = Number(raw);
-    if (!Number.isInteger(seconds) || seconds <= 0) return 'Receipt date unavailable';
+    if (!Number.isInteger(seconds) || seconds <= 0) return t('receiptUnavail');
     const date = new Date(seconds * 1000);
-    return Number.isNaN(date.getTime()) ? 'Receipt date unavailable' : date.toLocaleString();
+    return Number.isNaN(date.getTime()) ? t('receiptUnavail') : date.toLocaleString();
   }
 
   function clearanceText(entry) {
     if (String(entry.state || '').toLowerCase() === 'reversed') {
-      return entry.reversal_reason ? 'Reversed: ' + String(entry.reversal_reason) : 'Reversed by provider';
+      return entry.reversal_reason ? t('reversed').replace('{r}', String(entry.reversal_reason)) : t('reversedBy');
     }
     const eta = Number(entry.estimated_clearance_at);
-    if (!Number.isInteger(eta) || eta <= 0) return 'Clearance date not yet received from provider.';
-    // Presentation only. The browser clock never changes a ledger state.
+    if (!Number.isInteger(eta) || eta <= 0) return t('clearanceNotRecv');
     const days = Math.max(0, Math.ceil((eta * 1000 - Date.now()) / 86400000));
-    return 'Estimated clearance: ' + formatReceiptDate(eta) + ' (' + days + ' day' + (days === 1 ? '' : 's') + ' remaining)';
+    return (days === 1 ? t('estClearance') : t('estClearancePlural')).replace('{d}', formatReceiptDate(eta)).replace('{n}', days);
   }
 
   switchBtn.addEventListener('click', () => {
     isRegister = !isRegister;
-    submitBtn.textContent = isRegister ? 'Create Account' : 'Sign In';
-    switchBtn.textContent = isRegister ? 'Already have an account? Sign In' : 'Need an account? Register';
-    pwInput.placeholder = isRegister ? 'Choose a password (8+ characters)' : 'Password (8+ characters)';
+    submitBtn.textContent = isRegister ? t('createAcct') : t('signIn');
+    switchBtn.textContent = isRegister ? t('haveAcct') : t('needAcct');
+    pwInput.placeholder = isRegister ? t('pwNew') : t('pw');
     pwInput.autocomplete = isRegister ? 'new-password' : 'current-password';
   });
 
@@ -274,25 +309,25 @@
 
   submitBtn.addEventListener('click', async () => {
     const email = emailInput.value.trim(), pw = pwInput.value;
-    if (!email || !pw) { setStatus('Enter email and password.', true); return; }
+    if (!email || !pw) { setStatus(t('enterCreds'), true); return; }
     submitBtn.disabled = true;
     if (isRegister) {
-      setStatus('Preparing your account…');
+      setStatus(t('preparing'));
       await showPromo(15);
-      setStatus('Creating account…');
+      setStatus(t('creating'));
       try {
         const loginData = await doRegisterAndLogin(email, pw);
         token = loginData.access_token || null;
         isRegister = false;
-        submitBtn.textContent = 'Sign In';
-        switchBtn.textContent = 'Need an account? Register';
+        submitBtn.textContent = t('signIn');
+        switchBtn.textContent = t('needAcct');
         showMain();
       } catch (e) {
         const msg = (e.message || '').replace(/_/g, ' ');
         setStatus(msg.charAt(0).toUpperCase() + msg.slice(1), true);
       } finally { submitBtn.disabled = false; }
     } else {
-      setStatus('Signing in…');
+      setStatus(t('signingIn'));
       try {
         const res = await fetch('/api/earn/login', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({email, password: pw}) });
         const data = await res.json().catch(() => ({}));
@@ -308,7 +343,7 @@
   $('earn-logout').addEventListener('click', async () => {
     await fetch('/api/earn/logout', { method:'POST', headers: earnAuthHeaders() }).catch(()=>{});
     token = null; mainSection.style.display = 'none'; authSection.style.display = ''; frame.style.display = 'none';
-    setStatus('Signed out.');
+    setStatus(t('signedOut'));
   });
 
   function openActivity() { activityDialog.showModal(); }
@@ -320,12 +355,12 @@
   activityDialog.addEventListener('click', e => { if (e.target === activityDialog) activityDialog.close(); });
 
   $('earn-surveys').addEventListener('click', async () => {
-    setStatus('Loading surveys…');
+    setStatus(t('loadingSurveys'));
     const isMobile = window.matchMedia('(max-width: 700px)').matches;
     try {
       const res = await fetch('/api/earn/cpx/offerwall', { headers: earnAuthHeaders() });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.ok) throw new Error(data.error || 'Surveys unavailable.');
+      if (!res.ok || !data.ok) throw new Error(data.error || t('surveysUnavail'));
       await showPromo(15);
       if (isMobile) {
         window.open(data.url, 'thronos_survey') || window.location.assign(data.url);
@@ -334,9 +369,9 @@
         frame.classList.add('is-mobile-survey');
         surveyClose.classList.add('is-visible');
       }
-      setStatus('Connected. Complete a survey to earn THC.');
+      setStatus(t('connectedSurvey'));
     } catch (e) {
-      setStatus(e.message || 'Could not load surveys.', true);
+      setStatus(e.message || t('couldNotSurvey'), true);
     }
   });
 
@@ -345,13 +380,13 @@
     try {
       const res = await fetch('/api/earn/bitcotasks/offerwall', { headers: earnAuthHeaders() });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.ok) throw new Error(data.error || 'BitcoTasks is unavailable.');
+      if (!res.ok || !data.ok) throw new Error(data.error || t('bitcoUnavail'));
       if (isMobile) {
         window.open(data.url, 'thronos_survey') || window.location.assign(data.url);
       } else { frame.src = data.url; frame.style.display = 'block'; }
-      setStatus('Connected to BitcoTasks.');
+      setStatus(t('connectedBitco'));
     } catch (e) {
-      setStatus((e.message || 'Could not load BitcoTasks.').replace(/_/g, ' '), true);
+      setStatus((e.message || t('couldNotBitco')).replace(/_/g, ' '), true);
     }
   });
 
@@ -360,13 +395,13 @@
     try {
       const res = await fetch('/api/earn/pure/offerwall', { headers: earnAuthHeaders() });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.ok) throw new Error(data.error || 'PureSpectrum is unavailable.');
+      if (!res.ok || !data.ok) throw new Error(data.error || t('pureUnavail'));
       if (isMobile) {
         window.open(data.url, 'thronos_survey') || window.location.assign(data.url);
       } else { frame.src = data.url; frame.style.display = 'block'; }
-      setStatus('Connected to PureSpectrum surveys.');
+      setStatus(t('connectedPure'));
     } catch (e) {
-      setStatus((e.message || 'Could not load PureSpectrum.').replace(/_/g, ' '), true);
+      setStatus((e.message || t('couldNotPure')).replace(/_/g, ' '), true);
     }
   });
 
@@ -374,7 +409,7 @@
     frame.style.display = 'none';
     frame.classList.remove('is-mobile-survey');
     surveyClose.classList.remove('is-visible');
-    setStatus('Returned to Earn.');
+    setStatus(t('returnedEarn'));
   }
   surveyClose.addEventListener('click', closeSurvey);
 
@@ -389,7 +424,7 @@
           walletStatus.textContent = 'Linked: ' + me.wallet_address;
           walletStatus.className = 'summary-value linked';
         } else {
-          walletStatus.textContent = 'Not linked — link from Wallet PWA or APK';
+          walletStatus.textContent = t('notLinkedFull');
           walletStatus.className = 'summary-value not-linked';
         }
       }
@@ -408,25 +443,25 @@
           if (bData.days_remaining != null && pending !== '0.00') {
             const d = bData.days_remaining;
             cs.textContent = d > 0
-              ? d + (d === 1 ? ' day' : ' days') + ' until earliest clearance (' + bData.clearance_days + '-day period)'
-              : 'Earliest pending reward ready for clearance';
+              ? (d === 1 ? t('daysClearance') : t('daysClearancePlural')).replace('{n}', d).replace('{d}', bData.clearance_days)
+              : t('readyClearance');
           } else if (pending !== '0.00') {
-            cs.textContent = 'Clearance date not yet received from provider.';
+            cs.textContent = t('clearanceNotRecv');
           } else {
-            cs.textContent = 'No pending rewards.';
+            cs.textContent = t('noPending');
           }
         }
       } else {
         balanceBar.style.display = '';
-        balanceValue.textContent = 'Unavailable';
-        pendingValue.textContent = 'Unavailable';
-        setStatus('Could not load your Earn balance. Retry this page; no zero balance is assumed.', true);
+        balanceValue.textContent = t('unavailable');
+        pendingValue.textContent = t('unavailable');
+        setStatus(t('balanceError'), true);
       }
     } catch (_) {
       balanceBar.style.display = '';
-      balanceValue.textContent = 'Unavailable';
-      pendingValue.textContent = 'Unavailable';
-      setStatus('Could not load your Earn balance. Retry this page; no zero balance is assumed.', true);
+      balanceValue.textContent = t('unavailable');
+      pendingValue.textContent = t('unavailable');
+      setStatus(t('balanceError'), true);
     }
     try {
       const hRes = await fetch('/api/earn/history', { headers: earnAuthHeaders() });
@@ -435,7 +470,7 @@
       historyList.innerHTML = '';
       if (!hRes.ok || !hData.ok || !Array.isArray(hData.entries)) {
         activityCount.textContent = '—';
-        historyList.innerHTML = '<p class="earn-note" style="margin:0">Activity could not be loaded. Retry this page; no empty history is assumed.</p>';
+        historyList.innerHTML = '<p class="earn-note" style="margin:0">' + t('activityError') + '</p>';
       } else if (hData.entries.length) {
         activityCount.textContent = String(hData.entries.length);
         hData.entries.slice(0, 20).forEach(e => {
@@ -448,33 +483,33 @@
           clearance.className = 'earn-note'; clearance.style.margin = '2px 0 0'; clearance.textContent = clearanceText(e);
           const right = document.createElement('div'), amount = document.createElement('span'), state = document.createElement('span');
           const value = formatThc(e.amount);
-          amount.className = 'amt'; amount.textContent = value === null ? 'Amount unavailable' : (value === '0.00' && String(e.state || '').toLowerCase() === 'pending' ? 'Provider amount pending' : '+' + value + ' THC');
+          amount.className = 'amt'; amount.textContent = value === null ? t('amtUnavail') : (value === '0.00' && String(e.state || '').toLowerCase() === 'pending' ? t('amtPending') : '+' + value + ' THC');
           state.className = 'st st-' + String(e.state || 'pending').replace(/[^a-z-]/g, ''); state.textContent = e.state || 'pending';
           left.append(source, provider, receipt, clearance); right.append(amount, state); div.append(left, right);
           historyList.appendChild(div);
         });
       } else {
         activityCount.textContent = '0';
-        historyList.innerHTML = '<p class="earn-note" style="margin:0">No verified Earn receipts yet.</p>';
+        historyList.innerHTML = '<p class="earn-note" style="margin:0">' + t('noReceipts') + '</p>';
       }
     } catch (_) {
       activityCount.textContent = '—';
-      historyList.innerHTML = '<p class="earn-note" style="margin:0">Activity could not be loaded. Retry this page; no empty history is assumed.</p>';
+      historyList.innerHTML = '<p class="earn-note" style="margin:0">' + t('activityError') + '</p>';
     }
     try {
       const pRes = await fetch('/api/earn/providers', { headers: earnAuthHeaders() });
       const pData = await pRes.json().catch(() => ({}));
       const bitco = pData.providers && pData.providers.find(p => p.id === 'bitcotasks');
       if (pRes.ok && pData.ok && bitco && bitco.enabled) {
-        bitcoButton.disabled = false; bitcoButton.textContent = 'Open BitcoTasks';
-        $('bitcotasks-copy').textContent = 'Tasks and offers selected for your account.';
-        $('bitcotasks-status').textContent = 'Available now'; bitcoProvider.classList.remove('is-unavailable');
+        bitcoButton.disabled = false; bitcoButton.textContent = t('openBitco');
+        $('bitcotasks-copy').textContent = t('bitcoReady');
+        $('bitcotasks-status').textContent = t('bitcoAvail'); bitcoProvider.classList.remove('is-unavailable');
       }
       const pure = pData.providers && pData.providers.find(p => p.id === 'pure');
       if (pRes.ok && pData.ok && pure && pure.enabled) {
-        pureButton.disabled = false; pureButton.textContent = 'Open Surveys';
-        $('pure-copy').textContent = 'Variety surveys for your account.';
-        $('pure-status').textContent = 'Available now'; pureProvider.classList.remove('is-unavailable');
+        pureButton.disabled = false; pureButton.textContent = t('openPure');
+        $('pure-copy').textContent = t('pureReady');
+        $('pure-status').textContent = t('pureAvail'); pureProvider.classList.remove('is-unavailable');
       }
     } catch (_) {}
     try {
@@ -491,10 +526,10 @@
   const _t2eDailyCap = 3;
 
   $('t2e-log-workout').addEventListener('click', async () => {
-    const dur = prompt('Workout duration in minutes (minimum 15):');
+    const dur = prompt(t('workoutPrompt'));
     if (!dur) return;
     const minutes = parseInt(dur, 10);
-    if (!minutes || minutes < 15) { setStatus('Minimum workout duration is 15 minutes.', true); return; }
+    if (!minutes || minutes < 15) { setStatus(t('workoutMin'), true); return; }
     try {
       const res = await fetch('/api/earn/t2e/workout', {
         method: 'POST', headers: { ...earnAuthHeaders(), 'Content-Type': 'application/json' },
@@ -502,13 +537,13 @@
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.ok) {
-        setStatus('Workout logged! Earned ' + data.reward_thc + ' THC');
+        setStatus(t('workoutLogged').replace('{v}', data.reward_thc));
         refreshDashboard();
       } else {
         setStatus((data.error || 'Could not log workout.').replace(/_/g, ' '), true);
       }
     } catch (e) {
-      setStatus('Could not log workout.', true);
+      setStatus(t('workoutFailed'), true);
     }
   });
 
@@ -533,7 +568,7 @@
         await showMain();
         if (requestedView === 'activity') activityDialog.showModal();
       } else if (requestedView === 'activity') {
-        setStatus('Sign in to view your Earn balance and activity.', false);
+        setStatus(t('signInView'), false);
       }
     } catch (_) { /* Showing the sign-in form is the safe fallback. */ }
   })();

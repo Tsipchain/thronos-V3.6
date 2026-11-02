@@ -346,6 +346,38 @@ async function _fetchBtcBalance(btcAddr) {
   } catch { return null; }
 }
 
+async function _fetchBtcTxHistory(btcAddr) {
+  if (!btcAddr) return [];
+  try {
+    const r = await fetch(`https://blockstream.info/api/address/${encodeURIComponent(btcAddr)}/txs`, { signal: AbortSignal.timeout(10000) });
+    if (!r.ok) return [];
+    const txs = await r.json();
+    if (!Array.isArray(txs)) return [];
+    return txs.map(tx => {
+      const inputSats = (tx.vin || []).reduce((s, v) => s + (v.prevout?.scriptpubkey_address === btcAddr ? (v.prevout.value || 0) : 0), 0);
+      const outputSats = (tx.vout || []).reduce((s, v) => s + (v.scriptpubkey_address === btcAddr ? (v.value || 0) : 0), 0);
+      const dir = inputSats > 0 ? 'out' : 'in';
+      const amtSats = dir === 'in' ? outputSats : (inputSats - outputSats);
+      return {
+        event_type: 'transfer',
+        kind: 'transfer',
+        chain: 'btc',
+        asset_symbol: 'BTC',
+        asset: 'BTC',
+        direction: dir,
+        amount: Math.abs(amtSats) / 1e8,
+        fee_burned: (tx.fee || 0) / 1e8,
+        tx_hash: tx.txid || '',
+        external_txid: tx.txid || '',
+        timestamp: tx.status?.block_time || null,
+        status: tx.status?.confirmed ? 'confirmed' : 'pending',
+        from: dir === 'in' ? (tx.vin?.[0]?.prevout?.scriptpubkey_address || '') : btcAddr,
+        to: dir === 'out' ? ((tx.vout || []).find(v => v.scriptpubkey_address !== btcAddr)?.scriptpubkey_address || '') : btcAddr,
+      };
+    });
+  } catch { return []; }
+}
+
 async function _fetchEvmNative(evmAddr, rpcUrl) {
   if (!evmAddr || !rpcUrl) return null;
   try {
@@ -2954,7 +2986,7 @@ async function showMultiChain() {
       });
     }
 
-    const fmt = (v, d=8) => v == null ? '—' : v === 0 ? '0.00' : v.toFixed(d);
+    const fmt = (v, d=8) => v == null ? '—' : v === 0 ? (0).toFixed(d) : v.toFixed(d);
     const chains = [
       { icon:'₿', label:'Bitcoin',         sym:'BTC',  val:bal.btc,      color:'#f7931a', net:'bitcoin',  addr:btcAddr },
       { icon:'Ξ', label:'Ethereum',         sym:'ETH',  val:bal.eth,      color:'#627eea', net:'ethereum', addr:bal.evmAddr },
@@ -4365,22 +4397,22 @@ function _renderHistoryRow(tx) {
   let amountHtml;
   if (kind === 'swap' && tx.amount_out !== undefined) {
     const symOut = (tx.symbol_out || '').toUpperCase();
-    amountHtml = `<span style="color:#ff6b6b">-${Number(amount || 0).toLocaleString(undefined,{maximumFractionDigits:6})} ${symbol}</span>
+    amountHtml = `<span style="color:#ff6b6b">-${Number(amount || 0).toLocaleString(undefined,{maximumFractionDigits:8})} ${symbol}</span>
       <span style="color:var(--muted)"> → </span>
-      <span style="color:#00ff66">+${Number(tx.amount_out).toLocaleString(undefined,{maximumFractionDigits:6})} ${symOut}</span>`;
+      <span style="color:#00ff66">+${Number(tx.amount_out).toLocaleString(undefined,{maximumFractionDigits:8})} ${symOut}</span>`;
   } else if (kind === 'liquidity' && Array.isArray(tx.amounts)) {
-    amountHtml = tx.amounts.map(a => `<span style="color:#fff">${Number(a.amount || a).toLocaleString(undefined,{maximumFractionDigits:6})} ${(a.symbol || '').toUpperCase()}</span>`).join(' / ');
+    amountHtml = tx.amounts.map(a => `<span style="color:#fff">${Number(a.amount || a).toLocaleString(undefined,{maximumFractionDigits:8})} ${(a.symbol || '').toUpperCase()}</span>`).join(' / ');
   } else {
     const sign = direction === 'in' ? '+' : (direction === 'out' ? '-' : '');
     const color = direction === 'in' ? '#00ff66' : (direction === 'out' ? '#ff6b6b' : '#fff');
-    amountHtml = `<span style="color:${color}">${sign}${Number(amount || 0).toLocaleString(undefined,{maximumFractionDigits:6})} ${symbol}</span>`;
+    amountHtml = `<span style="color:${color}">${sign}${Number(amount || 0).toLocaleString(undefined,{maximumFractionDigits:8})} ${symbol}</span>`;
   }
 
   const counterparty = tx.to || tx.from || tx.counterparty || '';
   const cpLabel = direction === 'in' ? 'From' : (direction === 'out' ? 'To' : '');
   const cpHtml = counterparty && cpLabel ? `<div style="font-size:.7rem;color:var(--muted);">${cpLabel}: <span style="font-family:'Courier New',monospace;color:#b08cf8">${_shortAddr(counterparty)}</span></div>` : '';
 
-  const feeHtml = tx.fee_burned ? `<div style="font-size:.72rem;color:var(--muted)">Fee: ${Number(tx.fee_burned).toLocaleString(undefined,{maximumFractionDigits:6})} THR</div>` : '';
+  const feeHtml = tx.fee_burned ? `<div style="font-size:.72rem;color:var(--muted)">Fee: ${Number(tx.fee_burned).toLocaleString(undefined,{maximumFractionDigits:8})} THR</div>` : '';
   const noteHtml = tx.note ? `<div style="font-size:.72rem;color:var(--muted);margin-top:2px">${tx.note}</div>` : '';
   const networkLabel = tx.network_label || (tx.chain ? tx.chain.toUpperCase() : '');
   const netBadge = networkLabel ? `<span style="font-size:.68rem;background:#1a1040;border:1px solid #2a2050;border-radius:4px;padding:1px 5px;color:var(--muted)">${networkLabel}</span>` : '';
@@ -4593,7 +4625,7 @@ async function showHistory(address) {
       } else {
         const id = raw.id || raw.event_id || raw.tx_id || raw.internal_txid || '';
         key = id ? chain + '|id|' + String(id)
-          : chain + '|fallback|' + type + '|' + String(raw.timestamp || '') + '|' + asset + '|' + Number(raw.amount || 0).toFixed(6) + '|' + String(raw.external_from || raw.from || '') + '|' + String(raw.external_to || raw.to || '');
+          : chain + '|fallback|' + type + '|' + String(raw.timestamp || '') + '|' + asset + '|' + Number(raw.amount || 0).toFixed(8) + '|' + String(raw.external_from || raw.from || '') + '|' + String(raw.external_to || raw.to || '');
       }
 
       const existing = groups.get(key);
@@ -4659,6 +4691,15 @@ async function showHistory(address) {
           ...v1.map(e => ({ ...e, kind: e.event_type || e.kind || 'transfer', asset_symbol: e.asset || e.asset_symbol })),
           ...legacy,
         ];
+      }
+
+      // Fetch BTC on-chain transactions from Blockstream (non-blocking)
+      const btcAddr = localStorage.getItem(`thr_btc_address_${address}`) || '';
+      if (btcAddr) {
+        try {
+          const btcTxs = await _fetchBtcTxHistory(btcAddr);
+          if (btcTxs.length) sourceEvents = [...sourceEvents, ...btcTxs];
+        } catch {}
       }
 
       allTx = _dedupeUnifiedWalletHistory(sourceEvents)

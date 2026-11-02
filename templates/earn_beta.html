@@ -194,7 +194,7 @@
       $('promo-desc').textContent = ad.desc;
       const visitBtn = $('promo-visit');
       visitBtn.dataset.url = ad.url; visitBtn.textContent = ad.cta;
-      visitBtn.onclick = () => { window.open(ad.url, '_blank'); };
+      visitBtn.onclick = () => { window.open(ad.url, 'thronos_survey'); done(); };
       const countdownEl = $('promo-countdown');
       const skipBtn = $('promo-skip');
       let seconds = durationSec;
@@ -328,7 +328,7 @@
       if (!res.ok || !data.ok) throw new Error(data.error || 'Surveys unavailable.');
       await showPromo(15);
       if (isMobile) {
-        window.open(data.url, '_blank') || window.location.assign(data.url);
+        window.open(data.url, 'thronos_survey') || window.location.assign(data.url);
       } else {
         frame.src = data.url; frame.style.display = 'block';
         frame.classList.add('is-mobile-survey');
@@ -342,36 +342,30 @@
 
   bitcoButton.addEventListener('click', async () => {
     const isMobile = window.matchMedia('(max-width: 700px)').matches;
-    const providerTab = isMobile ? window.open('', '_blank') : null;
     try {
       const res = await fetch('/api/earn/bitcotasks/offerwall', { headers: earnAuthHeaders() });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ok) throw new Error(data.error || 'BitcoTasks is unavailable.');
       if (isMobile) {
-        if (providerTab) providerTab.location.replace(data.url);
-        else window.location.assign(data.url);
+        window.open(data.url, 'thronos_survey') || window.location.assign(data.url);
       } else { frame.src = data.url; frame.style.display = 'block'; }
       setStatus('Connected to BitcoTasks.');
     } catch (e) {
-      if (providerTab) providerTab.close();
       setStatus((e.message || 'Could not load BitcoTasks.').replace(/_/g, ' '), true);
     }
   });
 
   pureButton.addEventListener('click', async () => {
     const isMobile = window.matchMedia('(max-width: 700px)').matches;
-    const providerTab = isMobile ? window.open('', '_blank') : null;
     try {
       const res = await fetch('/api/earn/pure/offerwall', { headers: earnAuthHeaders() });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ok) throw new Error(data.error || 'PureSpectrum is unavailable.');
       if (isMobile) {
-        if (providerTab) providerTab.location.replace(data.url);
-        else window.location.assign(data.url);
+        window.open(data.url, 'thronos_survey') || window.location.assign(data.url);
       } else { frame.src = data.url; frame.style.display = 'block'; }
       setStatus('Connected to PureSpectrum surveys.');
     } catch (e) {
-      if (providerTab) providerTab.close();
       setStatus((e.message || 'Could not load PureSpectrum.').replace(/_/g, ' '), true);
     }
   });

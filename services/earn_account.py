@@ -845,6 +845,84 @@ class EarnAccountStore:
             ).fetchall()
             return [self._ledger_dict(r) for r in rows]
 
+    def leaderboard(
+        self,
+        *,
+        month_start: int | None = None,
+        limit: int = 50,
+        caller_user_id: str | None = None,
+    ) -> dict[str, Any]:
+        import calendar
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc)
+        if month_start is None:
+            month_start = int(
+                datetime(now.year, now.month, 1, tzinfo=timezone.utc).timestamp()
+            )
+        month_dt = datetime.fromtimestamp(month_start, tz=timezone.utc)
+        _, last_day = calendar.monthrange(month_dt.year, month_dt.month)
+        month_end = int(
+            datetime(
+                month_dt.year, month_dt.month, last_day, 23, 59, 59,
+                tzinfo=timezone.utc,
+            ).timestamp()
+        )
+        limit = min(max(limit, 1), 50)
+
+        with self._tx() as con:
+            rows = con.execute(
+                """SELECT l.earn_user_id, a.email, l.amount
+                   FROM thc_ledger l
+                   JOIN earn_accounts a ON a.earn_user_id = l.earn_user_id
+                   WHERE l.state IN ('confirmed', 'payable', 'paid')
+                     AND l.created_at >= ? AND l.created_at <= ?""",
+                (month_start, month_end),
+            ).fetchall()
+
+        totals: dict[str, tuple[Decimal, str, int]] = {}
+        for r in rows:
+            uid = r["earn_user_id"]
+            amt = Decimal(r["amount"])
+            if uid in totals:
+                prev_amt, email, count = totals[uid]
+                totals[uid] = (prev_amt + amt, email, count + 1)
+            else:
+                totals[uid] = (amt, r["email"] or "", 1)
+
+        ranked = sorted(
+            ((uid, amt, email, count) for uid, (amt, email, count) in totals.items() if amt > 0),
+            key=lambda x: x[1],
+            reverse=True,
+        )
+
+        caller_rank = None
+        if caller_user_id:
+            for i, (uid, *_) in enumerate(ranked, 1):
+                if uid == caller_user_id:
+                    caller_rank = i
+                    break
+
+        entries = []
+        for i, (uid, amt, email, count) in enumerate(ranked[:limit], 1):
+            at = email.find("@")
+            masked = (email[:2] + "***" + email[at:]) if at > 2 else (email[:1] + "***")
+            entries.append({
+                "rank": i,
+                "display_name": masked,
+                "total_earned": str(amt.quantize(_THC_SCALE)),
+                "completions": count,
+                "is_caller": uid == caller_user_id if caller_user_id else False,
+            })
+
+        return {
+            "month": month_dt.strftime("%Y-%m"),
+            "month_label": month_dt.strftime("%B %Y"),
+            "total_active": len(ranked),
+            "your_rank": caller_rank,
+            "entries": entries,
+        }
+
     @staticmethod
     def _ledger_dict(row: sqlite3.Row) -> dict[str, Any]:
         d = dict(row)
@@ -1708,6 +1786,14 @@ def register_earn_account_routes(
             return jsonify(ok=False, error="earn_auth_required"), 401
         entries = store.thc_history(user["earn_user_id"])
         return jsonify(ok=True, entries=entries)
+
+    @app.get("/api/earn/leaderboard")
+    def earn_leaderboard():
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        data = store.leaderboard(caller_user_id=user["earn_user_id"])
+        return jsonify(ok=True, **data)
 
     @app.get("/api/earn/providers")
     def earn_providers():

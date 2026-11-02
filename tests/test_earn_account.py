@@ -1540,8 +1540,7 @@ class TestEarnTemplateCookieSession:
 
     def test_mobile_provider_tab_preserves_earn_dashboard(self):
         template = (Path(__file__).parent.parent / "templates" / "earn_beta.html").read_text()
-        assert "window.open('', '_blank')" in template
-        assert "providerTab.location.replace(data.url)" in template
+        assert "window.open(data.url, 'thronos_survey')" in template
         assert "window.addEventListener('focus'" in template
         assert "visibilitychange" in template
 

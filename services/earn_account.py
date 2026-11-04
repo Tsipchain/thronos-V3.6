@@ -334,7 +334,7 @@ class EarnAccountStore:
         opened that provider through Earn.
         """
         provider = (provider or "").strip().lower()
-        if provider not in ("bitcotasks", "pure"):
+        if provider not in ("bitcotasks", "pure", "timewall"):
             raise EarnError("unsupported_earn_provider")
         with self._tx() as con:
             existing = con.execute(
@@ -355,7 +355,7 @@ class EarnAccountStore:
                 f"{provider}:{earn_user_id}".encode("utf-8"),
                 hashlib.sha256,
             ).hexdigest()
-            prefix = {"bitcotasks": "bt_", "pure": "ps_"}[provider]
+            prefix = {"bitcotasks": "bt_", "pure": "ps_", "timewall": "tw_"}[provider]
             provider_user_id = prefix + digest[:28]
             con.execute(
                 """INSERT INTO earn_provider_identities
@@ -1491,6 +1491,22 @@ def build_pure_offerwall_url(provider_user_id: str) -> str:
     return f"{base}?{query}"
 
 
+def build_timewall_offerwall_url(provider_user_id: str) -> str:
+    """Build the server-configured TimeWall placement URL.
+
+    Placement parameter names differ by TimeWall account. The Railway-only
+    template must therefore contain {user_id}; we never guess a URL.
+    """
+    template = os.getenv("TIMEWALL_PLACEMENT_URL", "").strip()
+    if not template:
+        raise EarnError("timewall_not_configured")
+    if not provider_user_id or len(provider_user_id) > 32:
+        raise EarnError("invalid_timewall_user")
+    if not template.startswith("https://") or "{user_id}" not in template:
+        raise EarnError("invalid_timewall_placement")
+    return template.replace("{user_id}", urlencode({"v": provider_user_id})[2:])
+
+
 def verify_pure_postback_signature(
     trans_id: str, respondent_id: str, signature: str,
 ) -> bool:
@@ -1810,6 +1826,9 @@ def register_earn_account_routes(
                  "enabled": os.getenv("BITCOTASKS_ENABLED", "0") == "1"},
                 {"id": "pure", "label": "PureSpectrum", "kind": "surveys",
                  "enabled": os.getenv("PURE_ENABLED", "0") == "1"},
+                {"id": "timewall", "label": "TimeWall", "kind": "tasks",
+                 "enabled": os.getenv("TIMEWALL_ENABLED", "0") == "1"
+                 and bool(os.getenv("TIMEWALL_PLACEMENT_URL", "").strip())},
             ],
         )
 
@@ -1928,6 +1947,25 @@ def register_earn_account_routes(
                 ok=True,
                 provider="pure",
                 url=build_pure_offerwall_url(provider_user_id),
+            )
+        except EarnError as exc:
+            return jsonify(ok=False, error=str(exc)), 503
+
+    @app.get("/api/earn/timewall/offerwall")
+    def earn_timewall_offerwall():
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        if os.getenv("TIMEWALL_ENABLED", "0") != "1":
+            return jsonify(ok=False, error="timewall_not_enabled"), 503
+        try:
+            provider_user_id = store.provider_user_id(
+                user["earn_user_id"], "timewall",
+            )
+            return jsonify(
+                ok=True,
+                provider="timewall",
+                url=build_timewall_offerwall_url(provider_user_id),
             )
         except EarnError as exc:
             return jsonify(ok=False, error=str(exc)), 503

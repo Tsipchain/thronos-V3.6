@@ -241,3 +241,68 @@ class TestTenantSubscriptionsAndOffers:
                 provider_ref="fake", amount_eur="999", period_start=start,
                 period_end=start + 86400,
             )
+
+
+class TestChallengesAndLeaderboard:
+    def _challenge(self, store, gym_id, code="steps"):
+        return store.create_challenge(
+            gym_id=gym_id, challenge_code=code, title="First 10k steps",
+            description="Complete a verified activity target", target_value="10",
+            unit="steps", reward_t2e="2.50", status="active",
+        )
+
+    def test_challenge_enrollment_is_idempotent(self, store, gym_with_key):
+        gym, _ = gym_with_key
+        challenge = self._challenge(store, gym["gym_id"])
+        first = store.enroll_challenge(
+            earn_user_id="earn_athlete", challenge_id=challenge["challenge_id"],
+        )
+        second = store.enroll_challenge(
+            earn_user_id="earn_athlete", challenge_id=challenge["challenge_id"],
+        )
+        assert first["progress_id"] == second["progress_id"]
+
+    def test_progress_reaches_eligibility_without_crediting_thc(self, store, gym_with_key):
+        gym, _ = gym_with_key
+        challenge = self._challenge(store, gym["gym_id"])
+        store.enroll_challenge(
+            earn_user_id="earn_athlete", challenge_id=challenge["challenge_id"],
+        )
+        progress = store.record_challenge_progress(
+            earn_user_id="earn_athlete", challenge_id=challenge["challenge_id"],
+            value="12",
+        )
+        assert progress["status"] == "completed"
+        assert progress["reward_status"] == "eligible"
+        assert "thc" not in {key.lower() for key in progress}
+
+    def test_completed_challenge_cannot_be_credited_twice(self, store, gym_with_key):
+        gym, _ = gym_with_key
+        challenge = self._challenge(store, gym["gym_id"])
+        store.enroll_challenge(
+            earn_user_id="earn_athlete", challenge_id=challenge["challenge_id"],
+        )
+        first = store.record_challenge_progress(
+            earn_user_id="earn_athlete", challenge_id=challenge["challenge_id"], value="10",
+        )
+        second = store.record_challenge_progress(
+            earn_user_id="earn_athlete", challenge_id=challenge["challenge_id"], value="10",
+        )
+        assert first["progress_id"] == second["progress_id"]
+        assert second["current_value"] == "10"
+
+    def test_leaderboard_is_tenant_scoped_and_pseudonymous(self, store, gym_with_key):
+        gym_a, _ = gym_with_key
+        gym_b, _ = store.register_gym(name="Second Gym")
+        challenge_a = self._challenge(store, gym_a["gym_id"], code="a")
+        challenge_b = self._challenge(store, gym_b["gym_id"], code="b")
+        for user, challenge in (("earn_a", challenge_a), ("earn_b", challenge_b)):
+            store.enroll_challenge(earn_user_id=user, challenge_id=challenge["challenge_id"])
+            store.record_challenge_progress(
+                earn_user_id=user, challenge_id=challenge["challenge_id"], value="10",
+            )
+        board = store.get_leaderboard(gym_a["gym_id"])
+        assert len(board) == 1
+        assert board[0]["display_ref"].startswith("athlete_")
+        assert "earn_a" not in str(board[0])
+        assert store.get_leaderboard(gym_b["gym_id"])[0]["display_ref"] != board[0]["display_ref"]

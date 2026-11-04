@@ -19,6 +19,8 @@ from services.earn_account import (  # noqa: E402
     EarnError,
     build_timewall_offerwall_url,
     register_earn_account_routes,
+    timewall_postback_hash,
+    verify_timewall_postback_signature,
 )
 
 
@@ -130,6 +132,56 @@ class TestTimeWallRoutes:
         assert "/api/earn/timewall/offerwall" in {
             r.rule for r in client.application.url_map.iter_rules()
         }
+
+    def test_timewall_postback_is_disabled_until_live_flag(self, client):
+        response = client.get("/api/earn/timewall/postback")
+        assert response.status_code == 503
+
+    def test_timewall_hash_uses_exact_revenue_string(self):
+        expected = timewall_postback_hash("tw_test", "0.002", "secret")
+        assert verify_timewall_postback_signature("tw_test", "0.002", expected) is False
+        with patch.dict(os.environ, {"TIMEWALL_SECRET_KEY": "secret"}):
+            assert verify_timewall_postback_signature("tw_test", "0.002", expected)
+            assert not verify_timewall_postback_signature("tw_test", "0.0020", expected)
+
+    def test_signed_postback_is_exactly_once_and_pending(self, client, store):
+        token = _login(client)
+        with patch.dict(os.environ, {
+            "TIMEWALL_ENABLED": "1",
+            "TIMEWALL_PLACEMENT_URL": "https://wall.timewall.io/p/abc?user={user_id}",
+            "TIMEWALL_POSTBACK_LIVE": "1",
+            "TIMEWALL_SECRET_KEY": "secret",
+            "TIMEWALL_POSTBACK_IPS": "127.0.0.1",
+            "TIMEWALL_THC_CONVERSION": "680",
+        }):
+            wall = client.get("/api/earn/timewall/offerwall", headers=_auth(token)).get_json()
+            user_id = wall["url"].split("user=", 1)[1]
+            payload = {
+                "user_ID": user_id,
+                "revenue": "0.10",
+                "hash": timewall_postback_hash(user_id, "0.10", "secret"),
+                "withdrawid": "tw-event-001",
+                "type": "survey",
+                "reason": "completed",
+                "offername": "Test survey",
+            }
+            first = client.get("/api/earn/timewall/postback", query_string=payload)
+            second = client.get("/api/earn/timewall/postback", query_string=payload)
+        assert first.status_code == 200
+        assert second.status_code == 200
+        assert store.thc_balance("earn_" + "missing")["pending"] == "0.000000"
+        with __import__("sqlite3").connect(store.db_path) as con:
+            assert con.execute("SELECT COUNT(*) FROM timewall_receipts").fetchone()[0] == 1
+            assert con.execute("SELECT amount FROM thc_ledger WHERE source='timewall'").fetchone()[0] == "68.000000"
+
+    def test_postback_ip_allowlist_rejects_unlisted_sender(self, client):
+        with patch.dict(os.environ, {
+            "TIMEWALL_POSTBACK_LIVE": "1",
+            "TIMEWALL_SECRET_KEY": "secret",
+            "TIMEWALL_POSTBACK_IPS": "203.0.113.10",
+        }):
+            response = client.get("/api/earn/timewall/postback")
+        assert response.status_code == 403
 
 
 class TestTimeWallTemplate:

@@ -273,6 +273,24 @@ class EarnAccountStore:
                 CREATE INDEX IF NOT EXISTS idx_pure_receipts_user
                     ON pure_receipts(earn_user_id);
 
+                CREATE TABLE IF NOT EXISTS timewall_receipts (
+                    event_id        TEXT PRIMARY KEY,
+                    earn_user_id    TEXT NOT NULL
+                        REFERENCES earn_accounts(earn_user_id),
+                    revenue_raw     TEXT NOT NULL,
+                    amount_thc      TEXT NOT NULL,
+                    event_type      TEXT,
+                    reason          TEXT,
+                    offer_name      TEXT,
+                    offer_detail    TEXT,
+                    thc_entry_id    TEXT,
+                    received_at     INTEGER NOT NULL,
+                    payload         TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_timewall_receipts_user
+                    ON timewall_receipts(earn_user_id);
+
                 -- A wallet link is a cryptographic identity binding, never a
                 -- user-supplied address claim.  One wallet and one Earn
                 -- account are intentionally a 1:1 relation for this beta.
@@ -1257,6 +1275,82 @@ class EarnAccountStore:
                 "SELECT * FROM pure_receipts WHERE trans_id = ?", (trans_id,),
             ).fetchone()), True
 
+    def record_timewall_receipt(
+        self,
+        *,
+        event_id: str,
+        provider_user_id: str,
+        revenue_raw: str,
+        event_type: str = "",
+        reason: str = "",
+        offer_name: str = "",
+        offer_detail: str = "",
+        payload: dict[str, Any],
+    ) -> tuple[dict[str, Any], bool]:
+        """Record one verified TimeWall event as a pending THC receipt.
+
+        TimeWall's signed callback supplies revenue in the exact string form
+        received from its query parameter.  We preserve that raw value for
+        audit/hash purposes and convert it with the configured placement rate;
+        no UI or browser action can clear the resulting ledger entry.
+        """
+        if not event_id or len(event_id) > 200:
+            raise EarnError("invalid_timewall_event")
+        if not provider_user_id or len(provider_user_id) > 32:
+            raise EarnError("invalid_timewall_user")
+        try:
+            revenue = Decimal(str(revenue_raw))
+            conversion = Decimal(os.getenv("TIMEWALL_THC_CONVERSION", "680"))
+            amount = (revenue * conversion).quantize(_THC_SCALE, rounding=ROUND_DOWN)
+            if revenue <= 0 or conversion <= 0 or amount <= 0:
+                raise ValueError
+        except (TypeError, ValueError, InvalidOperation):
+            raise EarnError("invalid_timewall_revenue")
+        now = int(time.time())
+        payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        with self._tx() as con:
+            identity = con.execute(
+                """SELECT earn_user_id FROM earn_provider_identities
+                   WHERE provider = 'timewall' AND provider_user_id = ?""",
+                (provider_user_id,),
+            ).fetchone()
+            if not identity:
+                raise EarnError("unknown_provider_user")
+            uid = identity["earn_user_id"]
+            prior = con.execute(
+                "SELECT * FROM timewall_receipts WHERE event_id = ?",
+                (event_id,),
+            ).fetchone()
+            if prior:
+                if prior["earn_user_id"] != uid:
+                    raise EarnError("timewall_receipt_conflict")
+                return dict(prior), False
+            entry_id = "thc_" + secrets.token_urlsafe(18)
+            con.execute(
+                """INSERT INTO thc_ledger
+                   (entry_id, earn_user_id, source, source_ref, amount,
+                    state, note, provider_status, received_at, created_at, updated_at)
+                   VALUES (?,?,?,?,?,'pending',?,'received_pending_clearance',?,?,?)""",
+                (
+                    entry_id, uid, "timewall", event_id, str(amount),
+                    f"{event_type}:{offer_name}"[:300], now, now, now,
+                ),
+            )
+            con.execute(
+                """INSERT INTO timewall_receipts
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    event_id, uid, str(revenue_raw), str(amount),
+                    str(event_type)[:100], str(reason)[:500],
+                    str(offer_name)[:500], str(offer_detail)[:1000],
+                    entry_id, now, payload_json,
+                ),
+            )
+            return dict(con.execute(
+                "SELECT * FROM timewall_receipts WHERE event_id = ?",
+                (event_id,),
+            ).fetchone()), True
+
     # ── CPX receipt handling ──────────────────────────────────────────────
 
     def record_cpx_receipt(
@@ -1518,6 +1612,31 @@ def verify_pure_postback_signature(
         f"{trans_id}{respondent_id}{secret}".encode("utf-8"),
     ).hexdigest()
     return hmac.compare_digest(expected, str(signature).strip().lower())
+
+
+def timewall_postback_hash(user_id: str, revenue: str, secret: str) -> str:
+    """TimeWall callback formula: sha256(user_ID + revenue + SecretKey)."""
+    return hashlib.sha256(
+        f"{user_id}{revenue}{secret}".encode("utf-8"),
+    ).hexdigest()
+
+
+def verify_timewall_postback_signature(
+    user_id: str, revenue: str, signature: str,
+) -> bool:
+    secret = os.getenv("TIMEWALL_SECRET_KEY", "").strip()
+    if not secret or not user_id or not revenue or not signature:
+        return False
+    expected = timewall_postback_hash(user_id, revenue, secret)
+    return hmac.compare_digest(expected, str(signature).strip().lower())
+
+
+def timewall_allowed_ips() -> set[str]:
+    configured = os.getenv(
+        "TIMEWALL_POSTBACK_IPS",
+        "18.156.132.55,51.81.120.73,142.111.248.18",
+    )
+    return {item.strip() for item in configured.split(",") if item.strip()}
 
 
 def cpx_postback_hash(trans_id: str, secret: str) -> str:
@@ -1969,6 +2088,43 @@ def register_earn_account_routes(
             )
         except EarnError as exc:
             return jsonify(ok=False, error=str(exc)), 503
+
+    @app.route("/api/earn/timewall/postback", methods=["GET", "POST"])
+    def earn_timewall_postback():
+        """Receive a signed TimeWall event; disabled until explicitly enabled."""
+        if os.getenv("TIMEWALL_POSTBACK_LIVE", "0") != "1":
+            return "ERROR", 503
+        if request.remote_addr not in timewall_allowed_ips():
+            return "ERROR", 403
+        params = (
+            request.values.to_dict()
+            if request.values
+            else (request.get_json(silent=True) or {})
+        )
+        user_id = str(params.get("user_ID") or params.get("user_id") or "").strip()
+        # Preserve the provider's exact revenue string for signature validation.
+        revenue_value = params.get("revenue")
+        revenue = revenue_value if isinstance(revenue_value, str) else str(revenue_value or "")
+        received_hash = str(params.get("hash") or "").strip()
+        event_id = str(params.get("withdrawid") or "").strip()
+        if not event_id or not verify_timewall_postback_signature(
+            user_id, revenue, received_hash,
+        ):
+            return "ERROR", 403
+        try:
+            store.record_timewall_receipt(
+                event_id=event_id,
+                provider_user_id=user_id,
+                revenue_raw=revenue,
+                event_type=str(params.get("type") or ""),
+                reason=str(params.get("reason") or ""),
+                offer_name=str(params.get("offername") or ""),
+                offer_detail=str(params.get("offerdetail") or ""),
+                payload=params,
+            )
+        except (EarnError, ValueError):
+            return "ERROR", 400
+        return "OK", 200
 
     @app.route("/api/earn/pure/postback", methods=["GET", "POST"])
     def earn_pure_postback():

@@ -1300,7 +1300,7 @@ class EarnAccountStore:
             raise EarnError("invalid_timewall_user")
         try:
             revenue = Decimal(str(revenue_raw))
-            conversion = Decimal(os.getenv("TIMEWALL_THC_CONVERSION", "680"))
+            conversion = Decimal(os.getenv("TIMEWALL_THC_CONVERSION", "675"))
             amount = (revenue * conversion).quantize(_THC_SCALE, rounding=ROUND_DOWN)
             if revenue <= 0 or conversion <= 0 or amount <= 0:
                 raise ValueError
@@ -1589,16 +1589,16 @@ def build_timewall_offerwall_url(provider_user_id: str) -> str:
     """Build the server-configured TimeWall placement URL.
 
     Placement parameter names differ by TimeWall account. The Railway-only
-    template must therefore contain {user_id}; we never guess a URL.
+    template must therefore contain {userId}; we never guess a URL.
     """
     template = os.getenv("TIMEWALL_PLACEMENT_URL", "").strip()
     if not template:
         raise EarnError("timewall_not_configured")
     if not provider_user_id or len(provider_user_id) > 32:
         raise EarnError("invalid_timewall_user")
-    if not template.startswith("https://") or "{user_id}" not in template:
+    if not template.startswith("https://") or "{userId}" not in template:
         raise EarnError("invalid_timewall_placement")
-    return template.replace("{user_id}", urlencode({"v": provider_user_id})[2:])
+    return template.replace("{userId}", urlencode({"v": provider_user_id})[2:])
 
 
 def verify_pure_postback_signature(
@@ -2101,7 +2101,10 @@ def register_earn_account_routes(
             if request.values
             else (request.get_json(silent=True) or {})
         )
-        user_id = str(params.get("user_ID") or params.get("user_id") or "").strip()
+        user_id = str(
+            params.get("userId") or params.get("user_ID")
+            or params.get("user_id") or "",
+        ).strip()
         # Preserve the provider's exact revenue string for signature validation.
         revenue_value = params.get("revenue")
         revenue = revenue_value if isinstance(revenue_value, str) else str(revenue_value or "")

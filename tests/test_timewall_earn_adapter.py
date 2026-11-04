@@ -69,7 +69,7 @@ class TestTimeWallConfiguration:
     def test_builder_replaces_only_server_side_user_id(self):
         with patch.dict(os.environ, {
             "TIMEWALL_PLACEMENT_URL":
-            "https://wall.timewall.io/placement/abc?user={user_id}",
+            "https://wall.timewall.io/placement/abc?user={userId}",
         }):
             url = build_timewall_offerwall_url("tw_opaque123")
         assert url == "https://wall.timewall.io/placement/abc?user=tw_opaque123"
@@ -101,7 +101,7 @@ class TestTimeWallRoutes:
         token = _login(client)
         with patch.dict(os.environ, {
             "TIMEWALL_ENABLED": "1",
-            "TIMEWALL_PLACEMENT_URL": "https://wall.timewall.io/p/abc?user={user_id}",
+            "TIMEWALL_PLACEMENT_URL": "https://wall.timewall.io/p/abc?user={userId}",
             "TIMEWALL_SECRET_KEY": "must-never-be-returned",
         }):
             response = client.get("/api/earn/timewall/offerwall", headers=_auth(token))
@@ -124,7 +124,7 @@ class TestTimeWallRoutes:
         token = _login(client)
         with patch.dict(os.environ, {
             "TIMEWALL_ENABLED": "1",
-            "TIMEWALL_PLACEMENT_URL": "https://wall.timewall.io/p/abc?user={user_id}",
+            "TIMEWALL_PLACEMENT_URL": "https://wall.timewall.io/p/abc?user={userId}",
         }):
             first = client.get("/api/earn/timewall/offerwall", headers=_auth(token))
             second = client.get("/api/earn/timewall/offerwall", headers=_auth(token))
@@ -148,16 +148,16 @@ class TestTimeWallRoutes:
         token = _login(client)
         with patch.dict(os.environ, {
             "TIMEWALL_ENABLED": "1",
-            "TIMEWALL_PLACEMENT_URL": "https://wall.timewall.io/p/abc?user={user_id}",
+            "TIMEWALL_PLACEMENT_URL": "https://wall.timewall.io/p/abc?user={userId}",
             "TIMEWALL_POSTBACK_LIVE": "1",
             "TIMEWALL_SECRET_KEY": "secret",
             "TIMEWALL_POSTBACK_IPS": "127.0.0.1",
-            "TIMEWALL_THC_CONVERSION": "680",
+            "TIMEWALL_THC_CONVERSION": "675",
         }):
             wall = client.get("/api/earn/timewall/offerwall", headers=_auth(token)).get_json()
             user_id = wall["url"].split("user=", 1)[1]
             payload = {
-                "user_ID": user_id,
+                "userId": user_id,
                 "revenue": "0.10",
                 "hash": timewall_postback_hash(user_id, "0.10", "secret"),
                 "withdrawid": "tw-event-001",
@@ -172,7 +172,7 @@ class TestTimeWallRoutes:
         assert store.thc_balance("earn_" + "missing")["pending"] == "0.000000"
         with __import__("sqlite3").connect(store.db_path) as con:
             assert con.execute("SELECT COUNT(*) FROM timewall_receipts").fetchone()[0] == 1
-            assert con.execute("SELECT amount FROM thc_ledger WHERE source='timewall'").fetchone()[0] == "68.000000"
+            assert con.execute("SELECT amount FROM thc_ledger WHERE source='timewall'").fetchone()[0] == "67.500000"
 
     def test_postback_ip_allowlist_rejects_unlisted_sender(self, client):
         with patch.dict(os.environ, {

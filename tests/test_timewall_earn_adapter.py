@@ -160,7 +160,7 @@ class TestTimeWallRoutes:
                 "userId": user_id,
                 "revenue": "0.10",
                 "hash": timewall_postback_hash(user_id, "0.10", "secret"),
-                "withdrawid": "tw-event-001",
+                "transactionId": "tw-event-001",
                 "type": "survey",
                 "reason": "completed",
                 "offername": "Test survey",
@@ -172,7 +172,7 @@ class TestTimeWallRoutes:
         assert store.thc_balance("earn_" + "missing")["pending"] == "0.000000"
         with __import__("sqlite3").connect(store.db_path) as con:
             assert con.execute("SELECT COUNT(*) FROM timewall_receipts").fetchone()[0] == 1
-            assert con.execute("SELECT amount FROM thc_ledger WHERE source='timewall'").fetchone()[0] == "67.500000"
+            assert con.execute("SELECT amount FROM thc_ledger WHERE source='timewall'").fetchone()[0] == "68.000000"
 
     def test_postback_ip_allowlist_rejects_unlisted_sender(self, client):
         with patch.dict(os.environ, {

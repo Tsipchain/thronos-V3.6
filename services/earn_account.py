@@ -24,7 +24,7 @@ import secrets
 import sqlite3
 import time
 from contextlib import contextmanager
-from decimal import Decimal, InvalidOperation, ROUND_DOWN
+from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
@@ -1301,7 +1301,10 @@ class EarnAccountStore:
         try:
             revenue = Decimal(str(revenue_raw))
             conversion = Decimal(os.getenv("TIMEWALL_THC_CONVERSION", "675"))
-            amount = (revenue * conversion).quantize(_THC_SCALE, rounding=ROUND_DOWN)
+            allow_decimals = os.getenv("TIMEWALL_ALLOW_DECIMALS", "0") == "1"
+            amount_scale = _THC_SCALE if allow_decimals else Decimal("1")
+            rounding = ROUND_DOWN if allow_decimals else ROUND_HALF_UP
+            amount = (revenue * conversion).quantize(amount_scale, rounding=rounding)
             if revenue <= 0 or conversion <= 0 or amount <= 0:
                 raise ValueError
         except (TypeError, ValueError, InvalidOperation):
@@ -2109,7 +2112,10 @@ def register_earn_account_routes(
         revenue_value = params.get("revenue")
         revenue = revenue_value if isinstance(revenue_value, str) else str(revenue_value or "")
         received_hash = str(params.get("hash") or "").strip()
-        event_id = str(params.get("withdrawid") or "").strip()
+        event_id = str(
+            params.get("transactionId") or params.get("transaction_id")
+            or params.get("withdrawid") or "",
+        ).strip()
         if not event_id or not verify_timewall_postback_signature(
             user_id, revenue, received_hash,
         ):

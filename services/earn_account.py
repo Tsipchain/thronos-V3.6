@@ -1603,7 +1603,7 @@ def build_timewall_offerwall_url(provider_user_id: str) -> str:
         raise EarnError("timewall_not_configured")
     if not provider_user_id or len(provider_user_id) > 32:
         raise EarnError("invalid_timewall_user")
-    placeholders = ("{userId}", "{userID}", "{user_ID}", "{user_id}")
+    placeholders = ("{UNIQUE_USER_ID}", "{userId}", "{userID}", "{user_ID}", "{user_id}")
     if not template.startswith("https://") or not any(
         placeholder in template for placeholder in placeholders
     ):

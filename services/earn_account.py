@@ -389,6 +389,74 @@ class EarnAccountStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_earn_referrals_referrer
                     ON earn_referrals(referrer_id);
+
+                CREATE TABLE IF NOT EXISTS earn_ad_campaigns (
+                    campaign_id    TEXT PRIMARY KEY,
+                    advertiser_id  TEXT NOT NULL,
+                    name           TEXT NOT NULL,
+                    campaign_type  TEXT NOT NULL DEFAULT 'cpm',
+                    bid_amount     TEXT NOT NULL DEFAULT '1.000000',
+                    daily_budget   TEXT NOT NULL DEFAULT '0',
+                    total_budget   TEXT NOT NULL DEFAULT '0',
+                    country_targets TEXT DEFAULT '',
+                    placement      TEXT NOT NULL DEFAULT 'earn',
+                    status         TEXT NOT NULL DEFAULT 'pending_review',
+                    reject_reason  TEXT,
+                    impressions    INTEGER NOT NULL DEFAULT 0,
+                    clicks         INTEGER NOT NULL DEFAULT 0,
+                    spent          TEXT NOT NULL DEFAULT '0.000000',
+                    created_at     INTEGER NOT NULL,
+                    updated_at     INTEGER NOT NULL,
+                    starts_at      INTEGER,
+                    ends_at        INTEGER
+                );
+                CREATE INDEX IF NOT EXISTS idx_earn_ad_campaigns_advertiser
+                    ON earn_ad_campaigns(advertiser_id);
+                CREATE INDEX IF NOT EXISTS idx_earn_ad_campaigns_status
+                    ON earn_ad_campaigns(status);
+
+                CREATE TABLE IF NOT EXISTS earn_ad_creatives (
+                    creative_id  TEXT PRIMARY KEY,
+                    campaign_id  TEXT NOT NULL
+                        REFERENCES earn_ad_campaigns(campaign_id),
+                    title        TEXT NOT NULL,
+                    image_url    TEXT NOT NULL,
+                    target_url   TEXT NOT NULL,
+                    status       TEXT NOT NULL DEFAULT 'pending_review',
+                    reject_reason TEXT,
+                    created_at   INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_earn_ad_creatives_campaign
+                    ON earn_ad_creatives(campaign_id);
+
+                CREATE TABLE IF NOT EXISTS earn_ad_escrow (
+                    escrow_id      TEXT PRIMARY KEY,
+                    campaign_id    TEXT NOT NULL
+                        REFERENCES earn_ad_campaigns(campaign_id),
+                    advertiser_id  TEXT NOT NULL,
+                    action         TEXT NOT NULL,
+                    amount         TEXT NOT NULL,
+                    balance_after  TEXT NOT NULL,
+                    note           TEXT,
+                    created_at     INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_earn_ad_escrow_campaign
+                    ON earn_ad_escrow(campaign_id);
+
+                CREATE TABLE IF NOT EXISTS earn_ad_events (
+                    event_id      TEXT PRIMARY KEY,
+                    campaign_id   TEXT NOT NULL,
+                    creative_id   TEXT NOT NULL,
+                    event_type    TEXT NOT NULL,
+                    country       TEXT DEFAULT '',
+                    earn_user_id  TEXT,
+                    cost          TEXT NOT NULL DEFAULT '0.000000',
+                    created_at    INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_earn_ad_events_campaign
+                    ON earn_ad_events(campaign_id, created_at);
+                CREATE INDEX IF NOT EXISTS idx_earn_ad_events_type
+                    ON earn_ad_events(event_type, created_at);
             """)
             # Existing production Earn databases predate the provider
             # clearance and separate internal hold fields. SQLite lacks ADD COLUMN IF NOT
@@ -1426,6 +1494,609 @@ class EarnAccountStore:
                     "email_hint": r["email"][:2] + "***",
                 }
                 for r in rows
+            ]
+
+    # ── Ad Marketplace — Campaigns ────────────────────────────────────
+
+    def create_campaign(
+        self,
+        advertiser_id: str,
+        name: str,
+        campaign_type: str = "cpm",
+        bid_amount: str = "1.000000",
+        daily_budget: str = "0",
+        total_budget: str = "0",
+        country_targets: str = "",
+        placement: str = "earn",
+        starts_at: int | None = None,
+        ends_at: int | None = None,
+    ) -> dict[str, Any]:
+        if campaign_type not in ("cpm", "cpc"):
+            raise EarnError("invalid_campaign_type")
+        bid = Decimal(bid_amount)
+        if bid <= 0:
+            raise EarnError("bid_must_be_positive")
+        campaign_id = "camp_" + secrets.token_hex(8)
+        now = int(time.time())
+        with self._tx() as con:
+            user = con.execute(
+                "SELECT 1 FROM earn_accounts WHERE earn_user_id = ?",
+                (advertiser_id,),
+            ).fetchone()
+            if not user:
+                raise EarnError("advertiser_not_found")
+            con.execute(
+                """INSERT INTO earn_ad_campaigns
+                   (campaign_id, advertiser_id, name, campaign_type,
+                    bid_amount, daily_budget, total_budget,
+                    country_targets, placement, status,
+                    impressions, clicks, spent,
+                    created_at, updated_at, starts_at, ends_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,'pending_review',
+                           0,0,'0.000000',?,?,?,?)""",
+                (campaign_id, advertiser_id, name, campaign_type,
+                 str(bid.quantize(_THC_SCALE)),
+                 str(Decimal(daily_budget).quantize(_THC_SCALE)),
+                 str(Decimal(total_budget).quantize(_THC_SCALE)),
+                 country_targets, placement,
+                 now, now, starts_at, ends_at),
+            )
+        return {
+            "campaign_id": campaign_id,
+            "name": name,
+            "status": "pending_review",
+        }
+
+    def get_campaign(self, campaign_id: str) -> dict[str, Any] | None:
+        with self._tx() as con:
+            row = con.execute(
+                "SELECT * FROM earn_ad_campaigns WHERE campaign_id = ?",
+                (campaign_id,),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def list_advertiser_campaigns(
+        self, advertiser_id: str,
+    ) -> list[dict[str, Any]]:
+        with self._tx() as con:
+            rows = con.execute(
+                """SELECT * FROM earn_ad_campaigns
+                   WHERE advertiser_id = ?
+                   ORDER BY created_at DESC""",
+                (advertiser_id,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    _CAMPAIGN_UPDATABLE = frozenset((
+        "name", "bid_amount", "daily_budget", "total_budget",
+        "country_targets", "starts_at", "ends_at",
+    ))
+    _CAMPAIGN_EDITABLE_STATES = frozenset((
+        "pending_review", "approved", "paused",
+    ))
+
+    def update_campaign(
+        self, campaign_id: str, advertiser_id: str, **kwargs: Any,
+    ) -> dict[str, Any]:
+        fields = {
+            k: v for k, v in kwargs.items()
+            if k in self._CAMPAIGN_UPDATABLE and v is not None
+        }
+        if not fields:
+            raise EarnError("nothing_to_update")
+        for money_col in ("bid_amount", "daily_budget", "total_budget"):
+            if money_col in fields:
+                fields[money_col] = str(
+                    Decimal(fields[money_col]).quantize(_THC_SCALE),
+                )
+        if "bid_amount" in fields and Decimal(fields["bid_amount"]) <= 0:
+            raise EarnError("bid_must_be_positive")
+        now = int(time.time())
+        fields["updated_at"] = now
+        set_clause = ", ".join(f"{k} = ?" for k in fields)
+        vals = list(fields.values())
+        with self._tx() as con:
+            row = con.execute(
+                "SELECT status FROM earn_ad_campaigns WHERE campaign_id = ? AND advertiser_id = ?",
+                (campaign_id, advertiser_id),
+            ).fetchone()
+            if not row:
+                raise EarnError("campaign_not_found")
+            if row["status"] not in self._CAMPAIGN_EDITABLE_STATES:
+                raise EarnError("campaign_not_editable")
+            con.execute(
+                f"UPDATE earn_ad_campaigns SET {set_clause} WHERE campaign_id = ?",
+                vals + [campaign_id],
+            )
+        return {"campaign_id": campaign_id, "updated": True}
+
+    def pause_campaign(
+        self, campaign_id: str, advertiser_id: str,
+    ) -> dict[str, Any]:
+        now = int(time.time())
+        with self._tx() as con:
+            row = con.execute(
+                "SELECT status FROM earn_ad_campaigns WHERE campaign_id = ? AND advertiser_id = ?",
+                (campaign_id, advertiser_id),
+            ).fetchone()
+            if not row:
+                raise EarnError("campaign_not_found")
+            if row["status"] != "active":
+                raise EarnError("only_active_campaigns_can_pause")
+            con.execute(
+                "UPDATE earn_ad_campaigns SET status = 'paused', updated_at = ? WHERE campaign_id = ?",
+                (now, campaign_id),
+            )
+        return {"campaign_id": campaign_id, "status": "paused"}
+
+    def resume_campaign(
+        self, campaign_id: str, advertiser_id: str,
+    ) -> dict[str, Any]:
+        now = int(time.time())
+        with self._tx() as con:
+            row = con.execute(
+                "SELECT status FROM earn_ad_campaigns WHERE campaign_id = ? AND advertiser_id = ?",
+                (campaign_id, advertiser_id),
+            ).fetchone()
+            if not row:
+                raise EarnError("campaign_not_found")
+            if row["status"] != "paused":
+                raise EarnError("only_paused_campaigns_can_resume")
+            con.execute(
+                "UPDATE earn_ad_campaigns SET status = 'active', updated_at = ? WHERE campaign_id = ?",
+                (now, campaign_id),
+            )
+        return {"campaign_id": campaign_id, "status": "active"}
+
+    # ── Ad Marketplace — Creatives ────────────────────────────────────
+
+    def add_creative(
+        self,
+        campaign_id: str,
+        advertiser_id: str,
+        title: str,
+        image_url: str,
+        target_url: str,
+    ) -> dict[str, Any]:
+        creative_id = "crtv_" + secrets.token_hex(8)
+        now = int(time.time())
+        with self._tx() as con:
+            row = con.execute(
+                "SELECT 1 FROM earn_ad_campaigns WHERE campaign_id = ? AND advertiser_id = ?",
+                (campaign_id, advertiser_id),
+            ).fetchone()
+            if not row:
+                raise EarnError("campaign_not_found")
+            con.execute(
+                """INSERT INTO earn_ad_creatives
+                   (creative_id, campaign_id, title, image_url,
+                    target_url, status, created_at)
+                   VALUES (?,?,?,?,?,'pending_review',?)""",
+                (creative_id, campaign_id, title, image_url,
+                 target_url, now),
+            )
+        return {
+            "creative_id": creative_id,
+            "campaign_id": campaign_id,
+            "status": "pending_review",
+        }
+
+    def list_creatives(
+        self, campaign_id: str, advertiser_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        with self._tx() as con:
+            if advertiser_id:
+                owner = con.execute(
+                    "SELECT 1 FROM earn_ad_campaigns WHERE campaign_id = ? AND advertiser_id = ?",
+                    (campaign_id, advertiser_id),
+                ).fetchone()
+                if not owner:
+                    raise EarnError("campaign_not_found")
+            rows = con.execute(
+                "SELECT * FROM earn_ad_creatives WHERE campaign_id = ? ORDER BY created_at DESC",
+                (campaign_id,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    # ── Ad Marketplace — Moderation ───────────────────────────────────
+
+    def moderate_campaign(
+        self, campaign_id: str, action: str, reason: str = "",
+    ) -> dict[str, Any]:
+        if action not in ("approve", "reject"):
+            raise EarnError("invalid_moderation_action")
+        now = int(time.time())
+        with self._tx() as con:
+            row = con.execute(
+                "SELECT status FROM earn_ad_campaigns WHERE campaign_id = ?",
+                (campaign_id,),
+            ).fetchone()
+            if not row:
+                raise EarnError("campaign_not_found")
+            if action == "approve":
+                con.execute(
+                    "UPDATE earn_ad_campaigns SET status = 'approved', updated_at = ? WHERE campaign_id = ?",
+                    (now, campaign_id),
+                )
+                return {"campaign_id": campaign_id, "status": "approved"}
+            con.execute(
+                "UPDATE earn_ad_campaigns SET status = 'rejected', reject_reason = ?, updated_at = ? WHERE campaign_id = ?",
+                (reason, now, campaign_id),
+            )
+            return {"campaign_id": campaign_id, "status": "rejected"}
+
+    def moderate_creative(
+        self, creative_id: str, action: str, reason: str = "",
+    ) -> dict[str, Any]:
+        if action not in ("approve", "reject"):
+            raise EarnError("invalid_moderation_action")
+        with self._tx() as con:
+            row = con.execute(
+                "SELECT status FROM earn_ad_creatives WHERE creative_id = ?",
+                (creative_id,),
+            ).fetchone()
+            if not row:
+                raise EarnError("creative_not_found")
+            if action == "approve":
+                con.execute(
+                    "UPDATE earn_ad_creatives SET status = 'approved' WHERE creative_id = ?",
+                    (creative_id,),
+                )
+                return {"creative_id": creative_id, "status": "approved"}
+            con.execute(
+                "UPDATE earn_ad_creatives SET status = 'rejected', reject_reason = ? WHERE creative_id = ?",
+                (reason, creative_id),
+            )
+            return {"creative_id": creative_id, "status": "rejected"}
+
+    # ── Ad Marketplace — Escrow Accounting ────────────────────────────
+
+    def escrow_deposit(
+        self, campaign_id: str, advertiser_id: str, amount: str,
+    ) -> dict[str, Any]:
+        deposit = Decimal(amount)
+        if deposit <= 0:
+            raise EarnError("deposit_must_be_positive")
+        escrow_id = "esc_" + secrets.token_hex(8)
+        now = int(time.time())
+        with self._tx() as con:
+            row = con.execute(
+                "SELECT 1 FROM earn_ad_campaigns WHERE campaign_id = ? AND advertiser_id = ?",
+                (campaign_id, advertiser_id),
+            ).fetchone()
+            if not row:
+                raise EarnError("campaign_not_found")
+            bal = self._escrow_balance_in_tx(con, campaign_id)
+            new_bal = (bal + deposit).quantize(_THC_SCALE)
+            con.execute(
+                """INSERT INTO earn_ad_escrow
+                   (escrow_id, campaign_id, advertiser_id, action,
+                    amount, balance_after, note, created_at)
+                   VALUES (?,?,?,'deposit',?,?,?,?)""",
+                (escrow_id, campaign_id, advertiser_id,
+                 str(deposit.quantize(_THC_SCALE)),
+                 str(new_bal), "escrow deposit", now),
+            )
+        return {
+            "escrow_id": escrow_id,
+            "balance_after": str(new_bal),
+        }
+
+    def _escrow_balance_in_tx(
+        self, con: sqlite3.Connection, campaign_id: str,
+    ) -> Decimal:
+        rows = con.execute(
+            "SELECT action, amount FROM earn_ad_escrow WHERE campaign_id = ?",
+            (campaign_id,),
+        ).fetchall()
+        bal = Decimal("0")
+        for r in rows:
+            amt = Decimal(r["amount"]).quantize(_THC_SCALE)
+            if r["action"] == "deposit":
+                bal += amt
+            else:
+                bal -= amt
+        return bal.quantize(_THC_SCALE)
+
+    def escrow_balance(self, campaign_id: str) -> str:
+        with self._tx() as con:
+            return str(self._escrow_balance_in_tx(con, campaign_id))
+
+    def escrow_refund(
+        self,
+        campaign_id: str,
+        advertiser_id: str,
+        amount: str | None = None,
+    ) -> dict[str, Any]:
+        escrow_id = "esc_" + secrets.token_hex(8)
+        now = int(time.time())
+        with self._tx() as con:
+            row = con.execute(
+                "SELECT 1 FROM earn_ad_campaigns WHERE campaign_id = ? AND advertiser_id = ?",
+                (campaign_id, advertiser_id),
+            ).fetchone()
+            if not row:
+                raise EarnError("campaign_not_found")
+            bal = self._escrow_balance_in_tx(con, campaign_id)
+            if bal <= 0:
+                raise EarnError("no_escrow_balance")
+            refund_amt = Decimal(amount).quantize(_THC_SCALE) if amount else bal
+            if refund_amt <= 0:
+                raise EarnError("refund_must_be_positive")
+            if refund_amt > bal:
+                raise EarnError("insufficient_escrow_balance")
+            new_bal = (bal - refund_amt).quantize(_THC_SCALE)
+            con.execute(
+                """INSERT INTO earn_ad_escrow
+                   (escrow_id, campaign_id, advertiser_id, action,
+                    amount, balance_after, note, created_at)
+                   VALUES (?,?,?,'refund',?,?,?,?)""",
+                (escrow_id, campaign_id, advertiser_id,
+                 str(refund_amt), str(new_bal), "escrow refund", now),
+            )
+        return {"escrow_id": escrow_id, "balance_after": str(new_bal)}
+
+    def _escrow_spend_in_tx(
+        self,
+        con: sqlite3.Connection,
+        campaign_id: str,
+        advertiser_id: str,
+        amount: Decimal,
+    ) -> None:
+        bal = self._escrow_balance_in_tx(con, campaign_id)
+        new_bal = (bal - amount).quantize(_THC_SCALE)
+        if new_bal < 0:
+            new_bal = Decimal("0").quantize(_THC_SCALE)
+        escrow_id = "esc_" + secrets.token_hex(8)
+        now = int(time.time())
+        con.execute(
+            """INSERT INTO earn_ad_escrow
+               (escrow_id, campaign_id, advertiser_id, action,
+                amount, balance_after, note, created_at)
+               VALUES (?,?,?,'spend',?,?,?,?)""",
+            (escrow_id, campaign_id, advertiser_id,
+             str(amount.quantize(_THC_SCALE)),
+             str(new_bal), "ad spend", now),
+        )
+
+    # ── Ad Marketplace — Serving ──────────────────────────────────────
+
+    def serve_campaign_ads(
+        self,
+        placement: str = "earn",
+        country: str = "",
+        viewer_id: str | None = None,
+        limit: int = 3,
+    ) -> list[dict[str, Any]]:
+        now = int(time.time())
+        with self._tx() as con:
+            rows = con.execute(
+                """SELECT c.campaign_id, c.advertiser_id, c.campaign_type,
+                          c.bid_amount, c.total_budget, c.spent,
+                          c.daily_budget, c.country_targets,
+                          cr.creative_id, cr.title, cr.image_url,
+                          cr.target_url
+                     FROM earn_ad_campaigns c
+                     JOIN earn_ad_creatives cr ON cr.campaign_id = c.campaign_id
+                    WHERE c.status = 'active'
+                      AND c.placement = ?
+                      AND cr.status = 'approved'
+                      AND (c.starts_at IS NULL OR c.starts_at <= ?)
+                      AND (c.ends_at IS NULL OR c.ends_at > ?)
+                 ORDER BY c.bid_amount DESC
+                    LIMIT ?""",
+                (placement, now, now, limit * 5),
+            ).fetchall()
+            sorted_rows = sorted(
+                rows, key=lambda r: Decimal(r["bid_amount"]), reverse=True,
+            )
+            results: list[dict[str, Any]] = []
+            day_start = now - (now % 86400)
+            for r in sorted_rows:
+                if len(results) >= limit:
+                    break
+                targets = str(r["country_targets"] or "").strip()
+                if targets and country:
+                    allowed = {
+                        c.strip().upper() for c in targets.split(",") if c.strip()
+                    }
+                    if country.upper() not in allowed:
+                        continue
+                tb = Decimal(r["total_budget"])
+                if tb > 0 and Decimal(r["spent"]) >= tb:
+                    continue
+                db = Decimal(r["daily_budget"])
+                if db > 0:
+                    cost_rows = con.execute(
+                        """SELECT cost FROM earn_ad_events
+                           WHERE campaign_id = ? AND created_at >= ?""",
+                        (r["campaign_id"], day_start),
+                    ).fetchall()
+                    day_spent = sum(
+                        (Decimal(cr["cost"]) for cr in cost_rows), Decimal("0"),
+                    )
+                    if day_spent >= db:
+                        continue
+                results.append({
+                    "campaign_id": r["campaign_id"],
+                    "creative_id": r["creative_id"],
+                    "title": r["title"],
+                    "image_url": r["image_url"],
+                    "target_url": r["target_url"],
+                    "campaign_type": r["campaign_type"],
+                })
+            return results
+
+    def record_campaign_event(
+        self,
+        campaign_id: str,
+        creative_id: str,
+        event_type: str,
+        country: str = "",
+        viewer_id: str | None = None,
+    ) -> dict[str, Any]:
+        if event_type not in ("impression", "click"):
+            raise EarnError("invalid_event_type")
+        event_id = "evt_" + secrets.token_hex(8)
+        now = int(time.time())
+        with self._tx() as con:
+            camp = con.execute(
+                "SELECT campaign_type, bid_amount, advertiser_id, total_budget, spent FROM earn_ad_campaigns WHERE campaign_id = ?",
+                (campaign_id,),
+            ).fetchone()
+            if not camp:
+                raise EarnError("campaign_not_found")
+            bid = Decimal(camp["bid_amount"])
+            if camp["campaign_type"] == "cpm" and event_type == "impression":
+                cost = (bid / 1000).quantize(_THC_SCALE)
+            elif camp["campaign_type"] == "cpc" and event_type == "click":
+                cost = bid.quantize(_THC_SCALE)
+            else:
+                cost = Decimal("0").quantize(_THC_SCALE)
+            con.execute(
+                """INSERT INTO earn_ad_events
+                   (event_id, campaign_id, creative_id, event_type,
+                    country, earn_user_id, cost, created_at)
+                   VALUES (?,?,?,?,?,?,?,?)""",
+                (event_id, campaign_id, creative_id, event_type,
+                 country, viewer_id,
+                 str(cost), now),
+            )
+            cur_spent = Decimal(camp["spent"])
+            new_spent_str = str((cur_spent + cost).quantize(_THC_SCALE))
+            if event_type == "impression":
+                con.execute(
+                    "UPDATE earn_ad_campaigns SET impressions = impressions + 1, spent = ? WHERE campaign_id = ?",
+                    (new_spent_str, campaign_id),
+                )
+            else:
+                con.execute(
+                    "UPDATE earn_ad_campaigns SET clicks = clicks + 1, spent = ? WHERE campaign_id = ?",
+                    (new_spent_str, campaign_id),
+                )
+            if cost > 0:
+                self._escrow_spend_in_tx(
+                    con, campaign_id, camp["advertiser_id"], cost,
+                )
+            tb = Decimal(camp["total_budget"])
+            if tb > 0 and Decimal(new_spent_str) >= tb:
+                con.execute(
+                    "UPDATE earn_ad_campaigns SET status = 'completed' WHERE campaign_id = ?",
+                    (campaign_id,),
+                )
+        return {"event_id": event_id, "cost": str(cost)}
+
+    # ── Ad Marketplace — Reporting ────────────────────────────────────
+
+    def campaign_report(
+        self, campaign_id: str, advertiser_id: str,
+    ) -> dict[str, Any]:
+        with self._tx() as con:
+            camp = con.execute(
+                "SELECT * FROM earn_ad_campaigns WHERE campaign_id = ? AND advertiser_id = ?",
+                (campaign_id, advertiser_id),
+            ).fetchone()
+            if not camp:
+                raise EarnError("campaign_not_found")
+            camp_d = dict(camp)
+            imps = camp_d["impressions"]
+            clicks = camp_d["clicks"]
+            ctr = round(clicks / imps * 100, 2) if imps > 0 else 0.0
+            bal = str(self._escrow_balance_in_tx(con, campaign_id))
+            cutoff = int(time.time()) - 30 * 86400
+            daily_rows = con.execute(
+                """SELECT (created_at / 86400) AS day_bucket,
+                          event_type, cost
+                     FROM earn_ad_events
+                    WHERE campaign_id = ? AND created_at >= ?
+                 ORDER BY day_bucket""",
+                (campaign_id, cutoff),
+            ).fetchall()
+            day_buckets: dict[int, dict[str, Any]] = {}
+            for r in daily_rows:
+                b = r["day_bucket"]
+                if b not in day_buckets:
+                    day_buckets[b] = {"imps": 0, "clks": 0, "cost": Decimal("0")}
+                if r["event_type"] == "impression":
+                    day_buckets[b]["imps"] += 1
+                else:
+                    day_buckets[b]["clks"] += 1
+                day_buckets[b]["cost"] += Decimal(r["cost"])
+            events_by_day = [
+                {
+                    "date": time.strftime(
+                        "%Y-%m-%d", time.gmtime(b * 86400),
+                    ),
+                    "impressions": v["imps"],
+                    "clicks": v["clks"],
+                    "cost": str(v["cost"].quantize(_THC_SCALE)),
+                }
+                for b, v in sorted(day_buckets.items())
+            ]
+            country_rows = con.execute(
+                """SELECT COALESCE(NULLIF(country,''), 'unknown') AS cc,
+                          COUNT(*) AS cnt
+                     FROM earn_ad_events
+                    WHERE campaign_id = ?
+                 GROUP BY cc ORDER BY cnt DESC""",
+                (campaign_id,),
+            ).fetchall()
+            events_by_country = [
+                {"country": r["cc"], "events": r["cnt"]}
+                for r in country_rows
+            ]
+        return {
+            "campaign_id": campaign_id,
+            "name": camp_d["name"],
+            "status": camp_d["status"],
+            "impressions": imps,
+            "clicks": clicks,
+            "ctr": ctr,
+            "spent": camp_d["spent"],
+            "escrow_balance": bal,
+            "events_by_day": events_by_day,
+            "events_by_country": events_by_country,
+        }
+
+    def campaign_report_daily(
+        self, campaign_id: str, advertiser_id: str, days: int = 30,
+    ) -> list[dict[str, Any]]:
+        with self._tx() as con:
+            row = con.execute(
+                "SELECT 1 FROM earn_ad_campaigns WHERE campaign_id = ? AND advertiser_id = ?",
+                (campaign_id, advertiser_id),
+            ).fetchone()
+            if not row:
+                raise EarnError("campaign_not_found")
+            cutoff = int(time.time()) - days * 86400
+            rows = con.execute(
+                """SELECT (created_at / 86400) AS day_bucket,
+                          event_type, cost
+                     FROM earn_ad_events
+                    WHERE campaign_id = ? AND created_at >= ?
+                 ORDER BY day_bucket""",
+                (campaign_id, cutoff),
+            ).fetchall()
+            buckets: dict[int, dict[str, Any]] = {}
+            for r in rows:
+                b = r["day_bucket"]
+                if b not in buckets:
+                    buckets[b] = {"imps": 0, "clks": 0, "cost": Decimal("0")}
+                if r["event_type"] == "impression":
+                    buckets[b]["imps"] += 1
+                else:
+                    buckets[b]["clks"] += 1
+                buckets[b]["cost"] += Decimal(r["cost"])
+            return [
+                {
+                    "date": time.strftime(
+                        "%Y-%m-%d", time.gmtime(b * 86400),
+                    ),
+                    "impressions": v["imps"],
+                    "clicks": v["clks"],
+                    "cost": str(v["cost"].quantize(_THC_SCALE)),
+                }
+                for b, v in sorted(buckets.items())
             ]
 
     @staticmethod
@@ -2618,6 +3289,259 @@ def register_earn_account_routes(
             return jsonify(ok=False, error="missing_ad_id"), 400
         deleted = store.delete_ad(ad_id)
         return jsonify(ok=True, deleted=deleted)
+
+    # ── Ad Marketplace API Routes ─────────────────────────────────────
+
+    @app.post("/api/earn/ads/campaign/create")
+    def earn_campaign_create():
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        data = request.get_json(silent=True) or {}
+        name = str(data.get("name", "")).strip()
+        if not name:
+            return jsonify(ok=False, error="missing_name"), 400
+        try:
+            result = store.create_campaign(
+                advertiser_id=user["earn_user_id"],
+                name=name,
+                campaign_type=str(data.get("campaign_type", "cpm")).strip(),
+                bid_amount=str(data.get("bid_amount", "1.000000")).strip(),
+                daily_budget=str(data.get("daily_budget", "0")).strip(),
+                total_budget=str(data.get("total_budget", "0")).strip(),
+                country_targets=str(data.get("country_targets", "")).strip(),
+                placement=str(data.get("placement", "earn")).strip(),
+                starts_at=int(data["starts_at"]) if data.get("starts_at") else None,
+                ends_at=int(data["ends_at"]) if data.get("ends_at") else None,
+            )
+        except (EarnError, InvalidOperation, ValueError) as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, **result)
+
+    @app.get("/api/earn/ads/campaign/list")
+    def earn_campaign_list():
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        campaigns = store.list_advertiser_campaigns(user["earn_user_id"])
+        return jsonify(ok=True, campaigns=campaigns)
+
+    @app.get("/api/earn/ads/campaign/<campaign_id>")
+    def earn_campaign_get(campaign_id):
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        camp = store.get_campaign(campaign_id)
+        if not camp or camp["advertiser_id"] != user["earn_user_id"]:
+            return jsonify(ok=False, error="campaign_not_found"), 404
+        return jsonify(ok=True, campaign=camp)
+
+    @app.post("/api/earn/ads/campaign/<campaign_id>/update")
+    def earn_campaign_update(campaign_id):
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        data = request.get_json(silent=True) or {}
+        try:
+            result = store.update_campaign(
+                campaign_id, user["earn_user_id"], **data,
+            )
+        except (EarnError, InvalidOperation, ValueError) as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, **result)
+
+    @app.post("/api/earn/ads/campaign/<campaign_id>/pause")
+    def earn_campaign_pause(campaign_id):
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        try:
+            result = store.pause_campaign(campaign_id, user["earn_user_id"])
+        except EarnError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, **result)
+
+    @app.post("/api/earn/ads/campaign/<campaign_id>/resume")
+    def earn_campaign_resume(campaign_id):
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        try:
+            result = store.resume_campaign(campaign_id, user["earn_user_id"])
+        except EarnError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, **result)
+
+    @app.post("/api/earn/ads/campaign/<campaign_id>/creative/add")
+    def earn_creative_add(campaign_id):
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        data = request.get_json(silent=True) or {}
+        title = str(data.get("title", "")).strip()
+        image_url = str(data.get("image_url", "")).strip()
+        target_url = str(data.get("target_url", "")).strip()
+        if not title or not image_url or not target_url:
+            return jsonify(ok=False, error="missing_fields"), 400
+        try:
+            result = store.add_creative(
+                campaign_id, user["earn_user_id"],
+                title, image_url, target_url,
+            )
+        except EarnError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, **result)
+
+    @app.get("/api/earn/ads/campaign/<campaign_id>/creative/list")
+    def earn_creative_list(campaign_id):
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        try:
+            creatives = store.list_creatives(
+                campaign_id, user["earn_user_id"],
+            )
+        except EarnError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, creatives=creatives)
+
+    @app.post("/api/earn/ads/moderate/campaign")
+    def earn_moderate_campaign():
+        mgmt_token = request.headers.get("X-Admin-Key", "").strip()
+        if not mgmt_token or mgmt_token != os.getenv("EARN_MGMT_TOKEN", "").strip():
+            return jsonify(ok=False, error="unauthorized"), 403
+        data = request.get_json(silent=True) or {}
+        campaign_id = str(data.get("campaign_id", "")).strip()
+        action = str(data.get("action", "")).strip()
+        reason = str(data.get("reason", "")).strip()
+        if not campaign_id or not action:
+            return jsonify(ok=False, error="missing_fields"), 400
+        try:
+            result = store.moderate_campaign(campaign_id, action, reason)
+        except EarnError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, **result)
+
+    @app.post("/api/earn/ads/moderate/creative")
+    def earn_moderate_creative():
+        mgmt_token = request.headers.get("X-Admin-Key", "").strip()
+        if not mgmt_token or mgmt_token != os.getenv("EARN_MGMT_TOKEN", "").strip():
+            return jsonify(ok=False, error="unauthorized"), 403
+        data = request.get_json(silent=True) or {}
+        creative_id = str(data.get("creative_id", "")).strip()
+        action = str(data.get("action", "")).strip()
+        reason = str(data.get("reason", "")).strip()
+        if not creative_id or not action:
+            return jsonify(ok=False, error="missing_fields"), 400
+        try:
+            result = store.moderate_creative(creative_id, action, reason)
+        except EarnError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, **result)
+
+    @app.post("/api/earn/ads/escrow/deposit")
+    def earn_escrow_deposit():
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        data = request.get_json(silent=True) or {}
+        campaign_id = str(data.get("campaign_id", "")).strip()
+        amount = str(data.get("amount", "")).strip()
+        if not campaign_id or not amount:
+            return jsonify(ok=False, error="missing_fields"), 400
+        try:
+            result = store.escrow_deposit(
+                campaign_id, user["earn_user_id"], amount,
+            )
+        except (EarnError, InvalidOperation, ValueError) as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, **result)
+
+    @app.get("/api/earn/ads/escrow/balance/<campaign_id>")
+    def earn_escrow_balance(campaign_id):
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        camp = store.get_campaign(campaign_id)
+        if not camp or camp["advertiser_id"] != user["earn_user_id"]:
+            return jsonify(ok=False, error="campaign_not_found"), 404
+        balance = store.escrow_balance(campaign_id)
+        return jsonify(ok=True, balance=balance)
+
+    @app.post("/api/earn/ads/escrow/refund")
+    def earn_escrow_refund():
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        data = request.get_json(silent=True) or {}
+        campaign_id = str(data.get("campaign_id", "")).strip()
+        if not campaign_id:
+            return jsonify(ok=False, error="missing_campaign_id"), 400
+        amount = data.get("amount")
+        try:
+            result = store.escrow_refund(
+                campaign_id, user["earn_user_id"],
+                str(amount) if amount else None,
+            )
+        except (EarnError, InvalidOperation, ValueError) as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, **result)
+
+    @app.get("/api/earn/ads/serve")
+    def earn_ads_serve():
+        placement = request.args.get("placement", "earn")
+        country = request.args.get("country", "")
+        limit = min(int(request.args.get("limit", "3")), 10)
+        ads = store.serve_campaign_ads(
+            placement=placement, country=country, limit=limit,
+        )
+        return jsonify(ok=True, ads=ads)
+
+    @app.post("/api/earn/ads/serve/event")
+    def earn_ads_serve_event():
+        data = request.get_json(silent=True) or {}
+        campaign_id = str(data.get("campaign_id", "")).strip()
+        creative_id = str(data.get("creative_id", "")).strip()
+        event_type = str(data.get("event_type", "")).strip()
+        if not campaign_id or not creative_id or not event_type:
+            return jsonify(ok=False, error="missing_fields"), 400
+        country = str(data.get("country", "")).strip()
+        viewer_id = str(data.get("viewer_id", "")).strip() or None
+        try:
+            result = store.record_campaign_event(
+                campaign_id, creative_id, event_type,
+                country=country, viewer_id=viewer_id,
+            )
+        except EarnError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, **result)
+
+    @app.get("/api/earn/ads/campaign/<campaign_id>/report")
+    def earn_campaign_report(campaign_id):
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        try:
+            report = store.campaign_report(
+                campaign_id, user["earn_user_id"],
+            )
+        except EarnError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, **report)
+
+    @app.get("/api/earn/ads/campaign/<campaign_id>/report/daily")
+    def earn_campaign_report_daily(campaign_id):
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        days = min(int(request.args.get("days", "30")), 90)
+        try:
+            daily = store.campaign_report_daily(
+                campaign_id, user["earn_user_id"], days=days,
+            )
+        except EarnError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, daily=daily)
 
     @app.get("/api/earn/referral/code")
     def earn_referral_code():

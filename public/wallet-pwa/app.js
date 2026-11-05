@@ -2135,8 +2135,25 @@ async function showEarn() {
           <button id="earnAvailableCard" type="button" style="flex:1;background:#0d0a1a;border:0;border-radius:9px;padding:10px;text-align:left;cursor:pointer"><div style="font-size:.66rem;color:var(--muted)">AVAILABLE</div><div style="font-size:1.1rem;color:var(--accent);font-weight:700">${availableText}</div></button>
           <button id="earnPendingCard" type="button" style="flex:1;background:#0d0a1a;border:0;border-radius:9px;padding:10px;text-align:left;cursor:pointer"><div style="font-size:.66rem;color:var(--muted)">PENDING</div><div style="font-size:1.1rem;color:#e8bf5a;font-weight:700">${pendingText}</div></button>
       </div>
-      <button class="btn btn--primary" id="openSurveyBtn" style="width:100%;padding:11px">Open Surveys</button>
-      <button class="btn" id="openEarnCenterBtn" style="width:100%;padding:10px;margin-top:8px">Earn history &amp; account</button>
+      <div style="margin-top:4px">
+        <div style="font-size:.7rem;color:var(--muted);letter-spacing:.08em;margin-bottom:8px">EARN PROVIDERS</div>
+        <div id="earnProviderGrid" style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <button class="btn earn-provider-btn" data-earn-provider="cpx" type="button" style="padding:10px;text-align:left">
+            <strong>CPX Research</strong><small class="provider-state" style="display:block;color:var(--muted);margin-top:3px">Surveys</small>
+          </button>
+          <button class="btn earn-provider-btn" data-earn-provider="bitcotasks" type="button" style="padding:10px;text-align:left">
+            <strong>BitcoTasks</strong><small class="provider-state" style="display:block;color:var(--muted);margin-top:3px">Offers &amp; tasks</small>
+          </button>
+          <button class="btn earn-provider-btn" data-earn-provider="pure" type="button" style="padding:10px;text-align:left">
+            <strong>PureSpectrum</strong><small class="provider-state" style="display:block;color:var(--muted);margin-top:3px">Provider pending</small>
+          </button>
+          <button class="btn earn-provider-btn" data-earn-provider="timewall" type="button" style="padding:10px;text-align:left">
+            <span style="display:flex;align-items:center;gap:6px"><img src="https://timewall.io/favicon.ico" alt="" width="18" height="18" style="border-radius:4px" onerror="this.style.display='none'"><strong>TimeWall</strong></span>
+            <small class="provider-state" style="display:block;color:var(--muted);margin-top:3px">Tasks, clicks &amp; surveys</small>
+          </button>
+        </div>
+      </div>
+      <button class="btn" id="openEarnCenterBtn" style="width:100%;padding:10px;margin-top:10px">Earn history &amp; account</button>
       ${me.wallet_address ? `<p style="font-size:.72rem;color:#55d6a7;line-height:1.45;margin:10px 0 0">✓ Linked wallet: ${escHtml(me.wallet_address.slice(0, 10))}…</p>` : `<button class="btn" id="linkEarnWalletBtn" style="width:100%;padding:10px;margin-top:8px">Link active Thronos wallet</button>`}
       <p id="earnPwaMessage" style="font-size:.72rem;color:var(--muted);line-height:1.45;margin:12px 0 4px">Rewards remain pending until verified CPX clearance. No wallet settlement or payout is claimed here.</p>
       <div style="margin-top:12px"><div style="font-size:.7rem;color:var(--muted);letter-spacing:.08em">RECENT REWARDS</div>${rows}</div>
@@ -2207,24 +2224,55 @@ async function showEarn() {
         message.textContent = `Could not link wallet: ${error.message || 'unknown_error'}`;
       }
     });
-    document.getElementById('openSurveyBtn').addEventListener('click', async () => {
+    const providerDefinitions = {
+      cpx: { endpoint: '/api/earn/cpx/offerwall', label: 'CPX Research' },
+      bitcotasks: { endpoint: '/api/earn/bitcotasks/offerwall', label: 'BitcoTasks' },
+      pure: { endpoint: '/api/earn/pure/offerwall', label: 'PureSpectrum' },
+      timewall: { endpoint: '/api/earn/timewall/offerwall', label: 'TimeWall' },
+    };
+    const openEarnProvider = async (provider, definition) => {
       const message = document.getElementById('earnPwaMessage');
-      message.textContent = 'Opening available surveys…';
+      message.textContent = 'Opening ' + definition.label + '…';
       try {
-        const response = await fetch(`${earnBase}/api/earn/cpx/offerwall`, { credentials: 'include' });
+        const response = await fetch(earnBase + definition.endpoint, { credentials: 'include' });
         const offerwall = await response.json().catch(() => null);
-        if (!response.ok || !offerwall?.ok || !offerwall.url) throw new Error(offerwall?.error || 'survey_unavailable');
-        const promoWin = window.open('https://bitcotasks.com/promote/81663', '_blank');
-        message.textContent = 'Surveys open in 30 seconds…';
-        let seconds = 30;
-        const countdown = setInterval(() => {
-          seconds--;
-          if (seconds > 0) { message.textContent = 'Surveys open in ' + seconds + 's…'; return; }
-          clearInterval(countdown);
-          try { if (promoWin && !promoWin.closed) promoWin.close(); } catch (_) {}
-          window.location.assign(offerwall.url);
-        }, 1000);
-      } catch {
+        if (!response.ok || !offerwall?.ok || !offerwall.url) {
+          throw new Error(offerwall?.error || 'provider_unavailable');
+        }
+        // Providers recommend an external browser for mobile file uploads.
+        const target = window.open(offerwall.url, '_blank', 'noopener,noreferrer');
+        if (!target) window.location.assign(offerwall.url);
+        message.textContent = definition.label + ' opened in an external browser.';
+      } catch (error) {
+        message.textContent = definition.label + ' is temporarily unavailable. Your Earn balance remains unchanged.';
+      }
+    };
+    document.querySelectorAll('[data-earn-provider]').forEach(button => {
+      button.addEventListener('click', () => {
+        const provider = button.dataset.earnProvider;
+        const definition = providerDefinitions[provider];
+        if (definition) openEarnProvider(provider, definition);
+      });
+    });
+    try {
+      const providerResponse = await fetch(earnBase + '/api/earn/providers', { credentials: 'include' });
+      const providerData = await providerResponse.json().catch(() => null);
+      for (const provider of (providerData?.providers || [])) {
+        const button = document.querySelector('[data-earn-provider="' + provider.id + '"]');
+        if (!button) continue;
+        const state = button.querySelector('.provider-state');
+        if (provider.enabled) {
+          button.disabled = false;
+          if (state && provider.id !== 'timewall') state.textContent = 'Available';
+        } else {
+          button.disabled = true;
+          if (state) state.textContent = provider.id === 'pure' ? 'Provider pending' : 'Coming soon';
+        }
+      }
+    } catch (_) {
+      // The provider grid remains visible; individual endpoint errors are fail-closed.
+    }
+  } catch {
         message.textContent = 'Surveys are temporarily unavailable. Your Earn balance remains unchanged.';
       }
     });

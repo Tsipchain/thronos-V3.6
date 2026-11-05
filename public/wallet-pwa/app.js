@@ -1546,6 +1546,57 @@ function _renderHomeAssetRow(icon, label, sym, val, color, addr, evmMeta) {
   </div>`;
 }
 
+async function loadWalletAdsSidebar() {
+  const panel = document.getElementById('walletAdsSidebar');
+  if (!panel) return;
+  try {
+    const placements = ['general', 'earn', 'basketball'];
+    const responses = await Promise.all(placements.map(p =>
+      fetch(`${API_WRITE}/api/earn/ads?placement=${encodeURIComponent(p)}`, { credentials: 'include', cache: 'no-store' })
+        .then(r => r.ok ? r.json() : null).catch(() => null)
+    ));
+    const seen = new Set();
+    const ads = responses.flatMap(r => Array.isArray(r?.ads) ? r.ads : [])
+      .filter(ad => ad?.ad_id && !seen.has(ad.ad_id) && seen.add(ad.ad_id));
+    if (!ads.length) return;
+    panel.style.display = 'block';
+    panel.innerHTML = `<div style="font-size:.68rem;color:var(--muted);letter-spacing:.08em;margin:0 0 7px">SPONSORED</div>${ads.map(ad => `
+      <div style="background:#0d0a1a;border:1px solid #2a2050;border-radius:10px;padding:10px;margin-bottom:7px">
+        <div style="font-size:.84rem;font-weight:700;color:#fff">${escHtml(ad.title || 'Sponsored offer')}</div>
+        <a href="${escHtml(ad.target_url || '#')}" target="_blank" rel="noopener noreferrer sponsored" data-wallet-ad-click="${escHtml(ad.ad_id)}" style="display:inline-block;margin-top:7px;color:var(--accent);font-size:.72rem">Learn more →</a>
+      </div>`).join('')}`;
+    ads.forEach(ad => fetch(`${API_WRITE}/api/earn/ads/impression`, { method: 'POST', credentials: 'include', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ ad_id: ad.ad_id }) }).catch(() => {}));
+    panel.querySelectorAll('[data-wallet-ad-click]').forEach(link => link.addEventListener('click', () => {
+      fetch(`${API_WRITE}/api/earn/ads/click`, { method: 'POST', credentials: 'include', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ ad_id: link.dataset.walletAdClick }) }).catch(() => {});
+    }));
+  } catch (_) { /* Ads are best-effort and never block the wallet. */ }
+}
+
+async function loadWalletReferralPanel() {
+  const panel = document.getElementById('walletReferralPanel');
+  if (!panel) return;
+  try {
+    const headers = { 'Accept': 'application/json' };
+    const [codeRes, statsRes] = await Promise.all([
+      fetch(`${API_WRITE}/api/earn/referral/code`, { credentials: 'include', headers }).then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch(`${API_WRITE}/api/earn/referral/stats`, { credentials: 'include', headers }).then(r => r.ok ? r.json() : null).catch(() => null),
+    ]);
+    const code = codeRes?.ref_code || codeRes?.code;
+    if (!code) return;
+    const count = Number(statsRes?.referral_count || statsRes?.count || 0);
+    panel.innerHTML = `<div style="background:#0d0a1a;border:1px solid #2a2050;border-radius:10px;padding:11px 12px">
+      <div style="font-size:.68rem;color:var(--muted);letter-spacing:.08em">REFERRALS</div>
+      <div style="font-size:.84rem;font-weight:700;margin-top:5px">Invite friends to Earn</div>
+      <div style="display:flex;gap:6px;margin-top:8px"><input id="walletReferralCode" class="input" readonly value="${escHtml(code)}" style="margin:0;flex:1;font-size:.75rem"><button id="walletReferralCopy" class="btn" type="button" style="font-size:.72rem">Copy</button></div>
+      <div style="font-size:.7rem;color:var(--muted);margin-top:6px">${count} referral${count === 1 ? '' : 's'} connected</div>
+    </div>`;
+    document.getElementById('walletReferralCopy')?.addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(code); } catch {}
+      const b = document.getElementById('walletReferralCopy'); if (b) { b.textContent = 'Copied'; setTimeout(() => { b.textContent = 'Copy'; }, 1200); }
+    });
+  } catch (_) { /* Referral is optional and never blocks wallet startup. */ }
+}
+
 async function showWallet() {
   const address = getActiveAddr();
   if (!address || !unlocked.has(address)) { showUnlock(); return; }
@@ -1597,6 +1648,11 @@ async function showWallet() {
           <div class="balance-amount balance-amount--loading">···</div>
         </div>
       </div>
+
+      <!-- Wallet home sidebar: ads stay outside payment/signing screens. -->
+      <aside id="walletAdsSidebar" aria-label="Sponsored offers" style="display:none;margin-bottom:10px"></aside>
+      <section id="walletLeaderboardPanel" aria-label="30-day Earn leaderboard" style="margin-bottom:10px"></section>
+      <section id="walletReferralPanel" aria-label="Earn referrals" style="margin-bottom:10px"></section>
 
       <!-- LP Positions panel (populated async) -->
       <div id="lpPositionsPanel"></div>
@@ -1682,6 +1738,13 @@ async function showWallet() {
   document.getElementById('epochBtn').addEventListener('click', showEpoch);
   document.getElementById('historyBtn').addEventListener('click', () => showHistory(address));
   document.getElementById('withdrawBtn').addEventListener('click', () => showWithdraw(address));
+
+  loadWalletAdsSidebar();
+  window.ThronosEarnLeaderboard?.mount(
+    document.getElementById('walletLeaderboardPanel'),
+    { base: API_WRITE },
+  );
+  loadWalletReferralPanel();
 
   const setAddrBarValue = (full) => {
     const lineEl = document.getElementById('addrLine');

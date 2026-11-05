@@ -2239,8 +2239,22 @@ async function showEarn() {
         if (!response.ok || !offerwall?.ok || !offerwall.url) {
           throw new Error(offerwall?.error || 'provider_unavailable');
         }
-        // Providers recommend an external browser for mobile file uploads.
-        const target = window.open(offerwall.url, '_blank', 'noopener,noreferrer');
+        // Reuse one external provider tab per provider. Repeated taps update/focus
+        // the existing tab instead of opening a stack of duplicate CPX/TimeWall tabs.
+        window.__thronosEarnProviderWindows ||= {};
+        let target = window.__thronosEarnProviderWindows[provider];
+        if (!target || target.closed) {
+          // A named target is required for browser tab reuse. Clear its opener
+          // immediately so the provider cannot navigate the wallet PWA.
+          target = window.open(offerwall.url, 'thronosEarn_' + provider);
+          if (target) {
+            try { target.opener = null; } catch (_) {}
+            window.__thronosEarnProviderWindows[provider] = target;
+          }
+        } else {
+          target.location.href = offerwall.url;
+          try { target.focus(); } catch (_) {}
+        }
         if (!target) window.location.assign(offerwall.url);
         message.textContent = definition.label + ' opened in an external browser.';
       } catch (error) {

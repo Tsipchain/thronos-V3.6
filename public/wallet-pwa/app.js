@@ -2162,7 +2162,9 @@ async function showEarn() {
       ${me.wallet_address ? `<p style="font-size:.72rem;color:#55d6a7;line-height:1.45;margin:10px 0 0">✓ Linked wallet: ${escHtml(me.wallet_address.slice(0, 10))}…</p>` : `<button class="btn" id="linkEarnWalletBtn" style="width:100%;padding:10px;margin-top:8px">Link active Thronos wallet</button>`}
       <p id="earnPwaMessage" style="font-size:.72rem;color:var(--muted);line-height:1.45;margin:12px 0 4px">Rewards remain pending until verified CPX clearance. No wallet settlement or payout is claimed here.</p>
       <div style="margin-top:12px"><div style="font-size:.7rem;color:var(--muted);letter-spacing:.08em">RECENT REWARDS</div>${rows}</div>
+      <section id="earnPwaLeaderboard" aria-label="30-day Earn leaderboard"></section>
     `;
+    window.ThronosEarnLeaderboard.mount(document.getElementById('earnPwaLeaderboard'), { base: earnBase });
     const openReceiptDetails = (event) => {
       const button = event.target.closest('[data-earn-receipt]');
       if (button) window.ThronosEarnReceipts.open(button.dataset.earnReceipt, { base: earnBase });

@@ -162,38 +162,7 @@
         <button id="t2e-log-workout" class="earn-action" type="button" data-i18n="logWorkout">Log Workout</button>
         <div id="t2e-status" class="earn-provider-status" aria-live="polite"></div>
       </div>
-      <div class="earn-leaderboard" id="earn-leaderboard" style="display:none">
-        <div class="earn-leaderboard-head">
-          <h3>&#x1F3C6; <span data-i18n="lbTitle">Monthly Leaderboard</span></h3>
-          <span class="lb-month" id="lb-month"></span>
-        </div>
-        <div class="earn-lb-list" id="lb-list">
-          <p class="earn-lb-empty" data-i18n="lbEmpty">No earnings this month yet. Be the first!</p>
-        </div>
-        <div class="earn-lb-stats" id="lb-stats" style="display:none">
-          <div class="lb-stat"><span class="lb-stat-label" data-i18n="lbYourRank">Your rank</span><span class="lb-stat-value" id="lb-your-rank">—</span></div>
-          <div class="lb-stat"><span class="lb-stat-label" data-i18n="lbActiveEarners">Active earners</span><span class="lb-stat-value" id="lb-active">0</span></div>
-        </div>
-        <div class="earn-lb-rewards">
-          <h4 data-i18n="lbRewardsTitle">Monthly Rewards</h4>
-          <ul>
-            <li><span class="reward-icon">&#x1F947;</span> <span data-i18n="lbReward1">1st — 1 THR credited by PYTHEIA + free THR Wallet (if not linked)</span></li>
-            <li class="reward-sub" data-i18n="lbReward1Wallet">Already have a THR Wallet? Loyalty bonus: priority staking pool access + extra THC</li>
-            <li><span class="reward-icon">&#x1F948;</span> <span data-i18n="lbReward2">2nd–3rd — Share 5,000 THR from the rewards pool</span></li>
-            <li><span class="reward-icon">&#x1F4C8;</span> <span data-i18n="lbRewardScale">At 1,000+ earners, top 50 share the monthly pool</span></li>
-          </ul>
-        </div>
-        <div class="earn-lb-staking" id="lb-staking">
-          <h4>&#x1F4B0; <span data-i18n="lbStakingTitle">Loyalty Staking Pool</span> <span class="staking-badge" data-i18n="lbStakingBadge">COMING SOON</span></h4>
-          <p data-i18n="lbStakingDesc">Earn leaderboard users with a linked THR Wallet can stake THC in the loyalty pool and earn APY rewards. Top earners get boosted rates.</p>
-          <ul style="list-style:none;padding:0;margin:0">
-            <li style="color:#cbd5e1;font-size:12px;padding:3px 0;display:flex;gap:6px"><span>&#x2705;</span> <span data-i18n="lbStake1">Stake THC from your linked wallet</span></li>
-            <li style="color:#cbd5e1;font-size:12px;padding:3px 0;display:flex;gap:6px"><span>&#x2705;</span> <span data-i18n="lbStake2">Earn APY — boosted rates for top monthly earners</span></li>
-            <li style="color:#cbd5e1;font-size:12px;padding:3px 0;display:flex;gap:6px"><span>&#x2705;</span> <span data-i18n="lbStake3">Pool funded by Thronos THC rewards allocation</span></li>
-            <li style="color:#cbd5e1;font-size:12px;padding:3px 0;display:flex;gap:6px"><span>&#x1F512;</span> <span data-i18n="lbStake4">Requires linked THR Wallet and leaderboard activity</span></li>
-          </ul>
-        </div>
-      </div>
+      <section id="earn-leaderboard" aria-label="30-day Earn leaderboard"></section>
       <button id="earn-logout" class="earn-toggle" type="button" data-i18n="signOut">Sign out</button>
       <div class="earn-history" id="earn-history">
         <button id="earn-activity-trigger" class="earn-activity-trigger" type="button" aria-haspopup="dialog" aria-label="Open recent activity">
@@ -233,6 +202,7 @@
 </div>
 <script src="/wallet-pwa/earn-provider-tabs.js"></script>
 <script src="/wallet-pwa/earn-receipt-details.js"></script>
+<script src="/wallet-pwa/earn-leaderboard.js"></script>
 <script>
 (() => {
   const $ = id => document.getElementById(id);
@@ -418,6 +388,7 @@
 
   $('earn-logout').addEventListener('click', async () => {
     window.ThronosEarnTabs.reset();
+    $('earn-leaderboard').__earnLeaderboard?.stop();
     await fetch('/api/earn/logout', { method:'POST', headers: earnAuthHeaders() }).catch(()=>{});
     token = null; mainSection.style.display = 'none'; authSection.style.display = ''; frame.style.display = 'none';
     setStatus(t('signedOut'));
@@ -471,40 +442,9 @@
   surveyClose.addEventListener('click', closeSurvey);
 
   async function refreshLeaderboard() {
-    const lb = $('earn-leaderboard');
-    try {
-      const res = await fetch('/api/earn/leaderboard', { headers: earnAuthHeaders() });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.ok) { lb.style.display = 'none'; return; }
-      lb.style.display = '';
-      $('lb-month').textContent = data.month_label || '';
-      const list = $('lb-list');
-      list.innerHTML = '';
-      if (!data.entries || !data.entries.length) {
-        list.innerHTML = '<p class="earn-lb-empty">' + t('lbEmpty') + '</p>';
-      } else {
-        data.entries.forEach(e => {
-          const row = document.createElement('div');
-          row.className = 'earn-lb-row' + (e.is_caller ? ' is-you' : '');
-          const rank = document.createElement('div');
-          rank.className = 'earn-lb-rank ' + (e.rank === 1 ? 'gold' : e.rank === 2 ? 'silver' : e.rank === 3 ? 'bronze' : 'other');
-          rank.textContent = e.rank <= 3 ? ['', '\u{1F947}', '\u{1F948}', '\u{1F949}'][e.rank] : '#' + e.rank;
-          const name = document.createElement('div');
-          name.className = 'earn-lb-name';
-          name.textContent = e.display_name;
-          if (e.is_caller) { const tag = document.createElement('span'); tag.className = 'you-tag'; tag.textContent = t('lbYou'); name.appendChild(tag); }
-          const earned = document.createElement('div');
-          earned.className = 'earn-lb-earned';
-          earned.textContent = '+' + e.total_earned + ' THC';
-          row.append(rank, name, earned);
-          list.appendChild(row);
-        });
-      }
-      const stats = $('lb-stats');
-      stats.style.display = '';
-      $('lb-your-rank').textContent = data.your_rank ? '#' + data.your_rank : t('lbUnranked');
-      $('lb-active').textContent = String(data.total_active || 0);
-    } catch (_) { lb.style.display = 'none'; }
+    await window.ThronosEarnLeaderboard.mount($('earn-leaderboard'), {
+      headers: earnAuthHeaders, language: _lang,
+    });
   }
 
   async function refreshDashboard() {

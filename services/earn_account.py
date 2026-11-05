@@ -25,11 +25,17 @@ import sqlite3
 import time
 from contextlib import contextmanager
 from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_HALF_UP
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
 _THC_SCALE = Decimal("0.000001")
+# First authorized 30-day beta cycle: Athens midnight, end exclusive. Fixed
+# boundaries survive deploys/restarts; a new cycle requires a separate release.
+_LEADERBOARD_START = int(datetime.fromisoformat("2026-11-05T00:00:00+02:00").timestamp())
+_LEADERBOARD_END = _LEADERBOARD_START + 30 * 86400
+_LEADERBOARD_CAMPAIGN = "earn-beta-2026-11-05"
 _CLEARANCE_DAYS = int(os.getenv("EARN_CLEARANCE_DAYS", "7"))
 
 logger = logging.getLogger(__name__)
@@ -896,81 +902,92 @@ class EarnAccountStore:
                 raise EarnError("unknown_provider_user")
 
     def leaderboard(
-        self,
-        *,
-        month_start: int | None = None,
-        limit: int = 50,
-        caller_user_id: str | None = None,
+        self, *, limit: int = 50, caller_user_id: str | None = None,
+        at_time: int | None = None,
     ) -> dict[str, Any]:
-        import calendar
-        from datetime import datetime, timezone
+        """One 30-day cycle of verified receipts; pending score is provisional.
 
-        now = datetime.now(timezone.utc)
-        if month_start is None:
-            month_start = int(
-                datetime(now.year, now.month, 1, tzinfo=timezone.utc).timestamp()
-            )
-        month_dt = datetime.fromtimestamp(month_start, tz=timezone.utc)
-        _, last_day = calendar.monthrange(month_dt.year, month_dt.month)
-        month_end = int(
-            datetime(
-                month_dt.year, month_dt.month, last_day, 23, 59, 59,
-                tzinfo=timezone.utc,
-            ).timestamp()
-        )
+        Only durable provider receipts may contribute. This read never clears
+        rewards, releases funds or awards competition prizes. Boundaries use
+        receipt time, so later clearance does not move a reward to another cycle.
+        """
+        now = int(time.time()) if at_time is None else int(at_time)
         limit = min(max(limit, 1), 50)
-
         with self._tx() as con:
             rows = con.execute(
-                """SELECT l.earn_user_id, a.email, l.amount
+                """SELECT l.earn_user_id, l.amount, l.state
                    FROM thc_ledger l
-                   JOIN earn_accounts a ON a.earn_user_id = l.earn_user_id
-                   WHERE l.state IN ('confirmed', 'payable', 'paid')
-                     AND l.created_at >= ? AND l.created_at <= ?""",
-                (month_start, month_end),
+                   WHERE l.state IN ('pending', 'confirmed', 'payable', 'paid')
+                     AND COALESCE(l.received_at, l.created_at) >= ?
+                     AND COALESCE(l.received_at, l.created_at) < ?
+                     AND COALESCE(l.received_at, l.created_at) <= ?
+                     AND (
+                       (l.source IN ('cpx_survey', 'cpx') AND EXISTS (
+                         SELECT 1 FROM cpx_receipts r WHERE r.trans_id=l.source_ref
+                         AND r.earn_user_id=l.earn_user_id AND r.thc_entry_id=l.entry_id AND r.status=1))
+                       OR (l.source='bitcotasks' AND EXISTS (
+                         SELECT 1 FROM bitcotasks_receipts r WHERE r.trans_id=l.source_ref
+                         AND r.earn_user_id=l.earn_user_id AND r.thc_entry_id=l.entry_id AND r.status=1))
+                       OR (l.source='pure' AND EXISTS (
+                         SELECT 1 FROM pure_receipts r WHERE r.trans_id=l.source_ref
+                         AND r.earn_user_id=l.earn_user_id AND r.thc_entry_id=l.entry_id AND r.status=1))
+                       OR (l.source='timewall' AND EXISTS (
+                         SELECT 1 FROM timewall_receipts r WHERE r.event_id=l.source_ref
+                         AND r.earn_user_id=l.earn_user_id AND r.thc_entry_id=l.entry_id))
+                     )""",
+                (_LEADERBOARD_START, _LEADERBOARD_END, now),
             ).fetchall()
 
-        totals: dict[str, tuple[Decimal, str, int]] = {}
-        for r in rows:
-            uid = r["earn_user_id"]
-            amt = Decimal(r["amount"])
-            if uid in totals:
-                prev_amt, email, count = totals[uid]
-                totals[uid] = (prev_amt + amt, email, count + 1)
-            else:
-                totals[uid] = (amt, r["email"] or "", 1)
+        totals: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            amount = Decimal(row["amount"])
+            if not amount.is_finite() or amount <= 0:
+                continue
+            uid = row["earn_user_id"]
+            total = totals.setdefault(uid, {"pending": Decimal("0"), "cleared": Decimal("0"), "completions": 0})
+            total["pending" if row["state"] == "pending" else "cleared"] += amount
+            total["completions"] += 1
 
-        ranked = sorted(
-            ((uid, amt, email, count) for uid, (amt, email, count) in totals.items() if amt > 0),
-            key=lambda x: x[1],
-            reverse=True,
-        )
+        def alias(uid):
+            digest = hmac.new(self._identity_key, f"leaderboard:{uid}".encode(), hashlib.sha256).hexdigest()
+            return "Earner-" + digest[:10].upper()
 
-        caller_rank = None
-        if caller_user_id:
-            for i, (uid, *_) in enumerate(ranked, 1):
-                if uid == caller_user_id:
-                    caller_rank = i
-                    break
-
+        ranked = sorted(totals, key=lambda uid: (-(totals[uid]["pending"] + totals[uid]["cleared"]), alias(uid)))
         entries = []
-        for i, (uid, amt, email, count) in enumerate(ranked[:limit], 1):
-            at = email.find("@")
-            masked = (email[:2] + "***" + email[at:]) if at > 2 else (email[:1] + "***")
-            entries.append({
-                "rank": i,
-                "display_name": masked,
-                "total_earned": str(amt.quantize(_THC_SCALE)),
-                "completions": count,
-                "is_caller": uid == caller_user_id if caller_user_id else False,
-            })
+        your_rank = None
+        your_score = {"total_earned": "0.000000", "pending_earned": "0.000000", "cleared_earned": "0.000000", "completions": 0}
+        previous_score = None
+        rank = 0
+        for position, uid in enumerate(ranked, 1):
+            total = totals[uid]
+            score = total["pending"] + total["cleared"]
+            if score != previous_score:
+                rank = position
+            previous_score = score
+            entry = {
+                "rank": rank, "display_name": alias(uid),
+                "total_earned": str(score.quantize(_THC_SCALE)),
+                "pending_earned": str(total["pending"].quantize(_THC_SCALE)),
+                "cleared_earned": str(total["cleared"].quantize(_THC_SCALE)),
+                "completions": total["completions"],
+                "is_caller": uid == caller_user_id,
+            }
+            if uid == caller_user_id:
+                your_rank = rank
+                your_score = {key: entry[key] for key in your_score}
+            if position <= limit:
+                entries.append(entry)
 
         return {
-            "month": month_dt.strftime("%Y-%m"),
-            "month_label": month_dt.strftime("%B %Y"),
-            "total_active": len(ranked),
-            "your_rank": caller_rank,
-            "entries": entries,
+            "campaign_id": _LEADERBOARD_CAMPAIGN,
+            "starts_at": _LEADERBOARD_START, "ends_at": _LEADERBOARD_END,
+            "server_now": now, "seconds_remaining": max(0, _LEADERBOARD_END - now),
+            "phase": "upcoming" if now < _LEADERBOARD_START else "running" if now < _LEADERBOARD_END else "ended",
+            "score_policy": "verified_provider_receipts_pending_and_cleared",
+            "provisional": any(t["pending"] > 0 for t in totals.values()),
+            "prizes_enabled": False,
+            "total_active": len(ranked), "your_rank": your_rank,
+            "your_score": your_score, "entries": entries,
         }
 
     @staticmethod
@@ -1297,7 +1314,9 @@ class EarnAccountStore:
                 )
             con.execute(
                 """INSERT INTO pure_receipts
-                   VALUES (?,?,?,?,?,?,?,?)""",
+                   (trans_id, earn_user_id, status, amount_thc, payout_usd,
+                    survey_id, thc_entry_id, received_at, payload)
+                   VALUES (?,?,?,?,?,?,?,?,?)""",
                 (
                     trans_id, uid, status, str(amount), str(payout_usd),
                     str(survey_id)[:200], entry_id, now, payload_json,
@@ -1998,7 +2017,9 @@ def register_earn_account_routes(
         if not user:
             return jsonify(ok=False, error="earn_auth_required"), 401
         data = store.leaderboard(caller_user_id=user["earn_user_id"])
-        return jsonify(ok=True, **data)
+        response = jsonify(ok=True, **data)
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     @app.get("/api/earn/providers")
     def earn_providers():

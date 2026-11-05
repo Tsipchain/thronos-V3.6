@@ -63,7 +63,7 @@ def test_details_expose_real_receipt_and_audit_without_raw_payload(setup):
     assert data['entry']['state'] == 'pending'
     assert data['entry']['note'] == 'survey:Completed survey'
     assert data['entry']['estimated_clearance_at'] is None
-    assert len(data['events']) == 1
+    assert len(data['events']) == 2
     assert data['events'][0]['event_type'] == 'provider_receipt'
     assert response.headers['Cache-Control'] == 'no-store'
     assert 'private-' not in response.get_data(as_text=True)
@@ -81,7 +81,7 @@ def test_expired_estimate_never_clears_a_receipt_on_read(setup):
         data = client.get('/api/earn/history/' + entry['entry_id'], headers=auth).get_json()
         assert data['entry']['state'] == 'pending'
         assert data['entry']['cleared_at'] is None
-        assert len(data['events']) == 1
+        assert len(data['events']) == 2
 
 
 def test_verified_clearance_is_visible_on_original_receipt(setup):
@@ -91,9 +91,10 @@ def test_verified_clearance_is_visible_on_original_receipt(setup):
         event_ref='verified-provider-clearance', new_state='confirmed', provider_status='cleared', cleared_at=1700000000)
     entry = store.thc_history(user['earn_user_id'])[0]
     data = client.get('/api/earn/history/' + entry['entry_id'], headers=auth).get_json()
-    assert data['entry']['state'] == 'confirmed'
+    assert data['entry']['state'] == 'pending'
+    assert data['entry']['earn_hold_phase'] == 'waiting'
     assert data['entry']['cleared_at'] == 1700000000
-    assert len(data['events']) == 2
+    assert len(data['events']) == 3
     assert len(store.thc_history(user['earn_user_id'])) == 1
 
 
@@ -118,7 +119,7 @@ def test_disabled_preflight_verifies_without_credit_and_can_be_retried_live(setu
     assert len(entries) == 1
     assert entries[0]['state'] == 'pending'
     assert entries[0]['amount'] == '67.000000'
-    assert len(store.thc_receipt_details(user['earn_user_id'], entries[0]['entry_id'])['events']) == 1
+    assert len(store.thc_receipt_details(user['earn_user_id'], entries[0]['entry_id'])['events']) == 2
 
 
 @pytest.mark.parametrize('invalid', ['hash', 'ip', 'unknown_user', 'revenue'])

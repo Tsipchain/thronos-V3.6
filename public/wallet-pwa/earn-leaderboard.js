@@ -25,13 +25,14 @@
     const period = el('p'); period.style.cssText = 'font-size:12px;color:#bdc5da;line-height:1.5';
     const timer = el('p'); timer.style.cssText = 'font-size:19px;font-weight:700;color:#f2c14e;font-variant-numeric:tabular-nums';
     const stats = el('p'); stats.style.cssText = 'font-size:13px;line-height:1.7';
+    const loyalty = el('p'); loyalty.style.cssText = 'padding:10px;border:1px solid #675588;border-radius:9px;font-size:13px;line-height:1.5';
     const rules = el('p', tr(
       'Verified provider receipts count toward the score. Pending THC is provisional; reversals are removed. Equal scores share a rank. Prizes will be announced separately.',
       'Μετρούν οι επαληθευμένες αμοιβές παρόχων. Τα pending THC δίνουν προσωρινή βαθμολογία· οι ακυρώσεις αφαιρούνται. Ίδια βαθμολογία σημαίνει ίδια θέση. Τα βραβεία θα ανακοινωθούν χωριστά.'));
     rules.style.cssText = 'font-size:12px;line-height:1.55;color:#aeb9d0';
     const notice = el('p', tr('Loading ranking…', 'Φόρτωση κατάταξης…')); notice.setAttribute('role', 'status'); notice.style.fontSize = '12px';
     const list = el('ol'); list.style.cssText = 'list-style:none;padding:0;margin:0';
-    container.append(head, period, timer, stats, rules, notice, list);
+    container.append(head, period, timer, loyalty, stats, rules, notice, list);
 
     function stop() {
       stopped = true; clearInterval(ticker); clearInterval(poller);
@@ -62,6 +63,10 @@
         if (!response.ok || !result.ok || !Array.isArray(result.entries)) throw new Error('unavailable');
         if (stopped || !container.isConnected) return;
         data = result; sampledAt = performance.now();
+        loyalty.textContent = data.loyalty?.vip
+          ? tr('⭐ Wallet Loyalty VIP · Verified THR wallet link. Benefits will be announced separately.', '⭐ Wallet Loyalty VIP · Επιβεβαιωμένη σύνδεση THR wallet. Τα προνόμια θα ανακοινωθούν χωριστά.')
+          : tr('Wallet Loyalty VIP · Link your THR wallet from Wallet PWA to activate your loyalty membership.', 'Wallet Loyalty VIP · Σύνδεσε το THR wallet σου από το Wallet PWA για να ενεργοποιηθεί η ιδιότητα loyalty.');
+        loyalty.style.color = data.loyalty?.vip ? '#f2c14e' : '#bdc5da';
         period.textContent = [data.starts_at, data.ends_at].map(t => new Date(t * 1000).toLocaleString(greek ? 'el-GR' : 'en-GB', { timeZone: 'Europe/Athens' })).join(' → ') + tr(' · Athens time', ' · ώρα Ελλάδας');
         const score = data.your_score;
         stats.textContent = tr('Your rank: ', 'Η θέση σου: ') + (data.your_rank == null ? '—' : '#' + data.your_rank)

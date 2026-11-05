@@ -675,14 +675,17 @@ class TestReversalHandling:
         assert Decimal(balance["pending"]) == Decimal("0")
         assert Decimal(balance["available"]) == Decimal("0")
 
-    def test_reversal_of_confirmed_entry(self, store, user_a):
+    def test_reversal_of_confirmed_entry(self, store, user_a, monkeypatch):
         _, t = store.login("alice@example.com", "password123")
         u = store.user_for_session(t)
         r, _ = store.record_cpx_receipt(
             trans_id="tx-rev2", cpx_ext_user_id=u["cpx_ext_user_id"],
             status=1, amount_local="200", payload={},
         )
-        store.transition_thc(r["thc_entry_id"], "confirmed")
+        deadline = store.thc_history(user_a["earn_user_id"])[0]["earn_hold_until"]
+        monkeypatch.setattr("services.earn_account.time.time", lambda: deadline)
+        with patch.dict(os.environ, {"NODE_ROLE": "master", "READ_ONLY": "0", "SCHEDULER_ENABLED": "1"}):
+            assert store.release_mature_earn_holds() == 1
         assert Decimal(store.thc_balance(user_a["earn_user_id"])["available"]) == Decimal("200")
 
         store.record_cpx_receipt(
@@ -732,7 +735,7 @@ class TestProviderClearancePresentation:
             "cleared_at", "reversal_reason",
         } <= columns
 
-    def test_verified_clearance_updates_same_entry_exactly_once(self, store, user_a):
+    def test_verified_clearance_updates_same_entry_exactly_once(self, store, user_a, monkeypatch):
         receipt = self._pending_receipt(store, user_a)
         entry_id = receipt["thc_entry_id"]
         confirmed, changed = store.record_verified_clearance(
@@ -744,7 +747,7 @@ class TestProviderClearancePresentation:
         )
         assert changed is True
         assert confirmed["entry_id"] == entry_id
-        assert confirmed["state"] == "confirmed"
+        assert confirmed["state"] == "pending"  # provider evidence cannot bypass the Earn hold
         assert confirmed["provider_status"] == "confirmed_by_provider"
         assert confirmed["cleared_at"] is not None
 
@@ -757,6 +760,10 @@ class TestProviderClearancePresentation:
         )
         assert replay_changed is False
         assert replay["entry_id"] == entry_id
+        deadline = replay["earn_hold_until"]
+        monkeypatch.setattr("services.earn_account.time.time", lambda: deadline)
+        with patch.dict(os.environ, {"NODE_ROLE": "master", "READ_ONLY": "0", "SCHEDULER_ENABLED": "1"}):
+            assert store.release_mature_earn_holds() == 1
 
         payable, payable_changed = store.record_verified_clearance(
             source="cpx_survey",
@@ -777,7 +784,7 @@ class TestProviderClearancePresentation:
                 "SELECT COUNT(*) FROM thc_ledger_audit WHERE entry_id = ?", (entry_id,),
             ).fetchone()[0]
         assert ledger_count == 1
-        assert audit_count == 3  # receipt, confirmed, payable
+        assert audit_count == 5  # receipt, hold start, provider clearance, hold release, payable
         balance = store.thc_balance(user_a["earn_user_id"])
         assert Decimal(balance["pending"]) == Decimal("0")
         assert Decimal(balance["available"]) == Decimal("150")

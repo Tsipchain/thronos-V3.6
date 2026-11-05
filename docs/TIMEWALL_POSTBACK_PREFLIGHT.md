@@ -29,9 +29,11 @@ any payout is performed by this change.
 
 Each Earn history row has a Details button that fetches the caller-owned
 receipt, real provider reference, dates, state and recorded audit events.
-The countdown uses only a stored provider ETA; an expired estimate remains
-pending until verified clearance. A publisher's weekly billing cycle is not
-automatically an individual receipt's clearance date.
+The subsequent internal Earn policy starts a separate seven-day hold when a
+verified receipt reaches Earn. Details show this receipt's own hold and countdown
+separately from any stored provider ETA. TimeWall task approval before delivery
+to Earn and publisher billing are separate events. See
+[Earn hold and loyalty](EARN_INTERNAL_HOLD_AND_LOYALTY.md).
 
 Provider deposits to the system BTC address, treasury reserve funding,
 internal BTC ledger transfers and external BTC payouts remain separate

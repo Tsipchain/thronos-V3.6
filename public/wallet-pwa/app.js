@@ -1614,6 +1614,7 @@ async function showWallet() {
         <button class="action-btn" id="connectBtn"><span class="action-btn__icon">⬡</span>Connect</button>
         <button class="action-btn" id="musicBtn"><span class="action-btn__icon">🎵</span>Music</button>
         <button class="action-btn" id="earnBtn"><span class="action-btn__icon">✨</span>Earn</button>
+        <button class="action-btn" id="loyaltyBtn" style="grid-column:span 2"><span class="action-btn__icon">🏆</span>Leaderboard / VIP</button>
         <button class="action-btn" id="historyBtn"><span class="action-btn__icon">📋</span>History</button>
         <button class="action-btn" id="createTokenBtn"><span class="action-btn__icon">🪙</span>Create Token</button>
         <button class="action-btn" id="nftBtn"><span class="action-btn__icon">🖼️</span>NFTs</button>
@@ -1675,6 +1676,7 @@ async function showWallet() {
   document.getElementById('connectBtn').addEventListener('click', showWalletConnect);
   document.getElementById('musicBtn').addEventListener('click', showMusic);
   document.getElementById('earnBtn').addEventListener('click', showEarn);
+  document.getElementById('loyaltyBtn').addEventListener('click', () => showEarn({ focusLeaderboard: true }));
   document.getElementById('createTokenBtn').addEventListener('click', showCreateToken);
   document.getElementById('nftBtn').addEventListener('click', showNFTs);
   document.getElementById('epochBtn').addEventListener('click', showEpoch);
@@ -2056,6 +2058,11 @@ function _formatEarnClearance(entry) {
   if (['confirmed', 'payable', 'paid'].includes(entry.state)) {
     return `Recorded state: ${entry.state}`;
   }
+  if (entry.earn_hold_until) {
+    const days = Math.max(0, Math.ceil((entry.earn_hold_until * 1000 - Date.now()) / 86400000));
+    return days ? `Seven-day Earn hold: ${days} day${days === 1 ? '' : 's'} remaining`
+      : 'Earn hold elapsed. Awaiting server release.';
+  }
   const eta = Number(entry.estimated_clearance_at);
   if (!Number.isInteger(eta) || eta <= 0) {
     return 'Clearance date not yet received from provider.';
@@ -2066,7 +2073,7 @@ function _formatEarnClearance(entry) {
   return `Estimated clearance: ${_formatEarnReceiptDate(eta)} (${remaining} day${remaining === 1 ? '' : 's'} remaining)`;
 }
 
-async function showEarn() {
+async function showEarn(options = {}) {
   render(`
     <div class="screen">
       <div class="header">
@@ -2160,11 +2167,13 @@ async function showEarn() {
       </div>
       <button class="btn" id="openEarnCenterBtn" style="width:100%;padding:10px;margin-top:10px">Earn history &amp; account</button>
       ${me.wallet_address ? `<p style="font-size:.72rem;color:#55d6a7;line-height:1.45;margin:10px 0 0">✓ Linked wallet: ${escHtml(me.wallet_address.slice(0, 10))}…</p>` : `<button class="btn" id="linkEarnWalletBtn" style="width:100%;padding:10px;margin-top:8px">Link active Thronos wallet</button>`}
-      <p id="earnPwaMessage" style="font-size:.72rem;color:var(--muted);line-height:1.45;margin:12px 0 4px">Rewards remain pending until verified CPX clearance. No wallet settlement or payout is claimed here.</p>
+      <p id="earnPwaMessage" style="font-size:.72rem;color:var(--muted);line-height:1.45;margin:12px 0 4px">Verified provider receipts stay pending during the seven-day Earn hold. Select a receipt to see its own countdown and status.</p>
       <div style="margin-top:12px"><div style="font-size:.7rem;color:var(--muted);letter-spacing:.08em">RECENT REWARDS</div>${rows}</div>
       <section id="earnPwaLeaderboard" aria-label="30-day Earn leaderboard"></section>
     `;
-    window.ThronosEarnLeaderboard.mount(document.getElementById('earnPwaLeaderboard'), { base: earnBase });
+    window.ThronosEarnLeaderboard.mount(document.getElementById('earnPwaLeaderboard'), { base: earnBase }).then(() => {
+      if (options.focusLeaderboard) document.getElementById('earnPwaLeaderboard')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
     const openReceiptDetails = (event) => {
       const button = event.target.closest('[data-earn-receipt]');
       if (button) window.ThronosEarnReceipts.open(button.dataset.earnReceipt, { base: earnBase });

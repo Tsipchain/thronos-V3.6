@@ -11,6 +11,7 @@ on:
       - "tests/test_earn_account.py"
       - "tests/test_earn_wallet_link.py"
       - "tests/test_timewall_earn_adapter.py"
+      - "tests/test_earn_provider_tabs.mjs"
       - ".github/workflows/earn-account-tests.yml"
 
 permissions:
@@ -23,6 +24,11 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Test provider tab lifecycle
+        run: node --test tests/test_earn_provider_tabs.mjs
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"

@@ -1540,7 +1540,9 @@ class TestEarnTemplateCookieSession:
 
     def test_mobile_provider_tab_preserves_earn_dashboard(self):
         template = (Path(__file__).parent.parent / "templates" / "earn_beta.html").read_text()
-        assert "window.open(data.url, 'thronos_survey')" in template
+        assert '<script src="/wallet-pwa/earn-provider-tabs.js"></script>' in template
+        assert "window.ThronosEarnTabs.open(provider" in template
+        assert "window.location.assign(data.url)" not in template
         assert "window.addEventListener('focus'" in template
         assert "visibilitychange" in template
 

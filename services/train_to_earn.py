@@ -164,6 +164,42 @@ class TrainToEarnStore:
                 CREATE INDEX IF NOT EXISTS idx_t2e_offers_gym
                     ON t2e_offers(gym_id, status);
 
+                CREATE TABLE IF NOT EXISTS t2e_challenges (
+                    challenge_id     TEXT PRIMARY KEY,
+                    gym_id           TEXT NOT NULL REFERENCES t2e_gyms(gym_id),
+                    challenge_code   TEXT NOT NULL,
+                    title            TEXT NOT NULL,
+                    description      TEXT NOT NULL DEFAULT '',
+                    target_value     TEXT NOT NULL,
+                    unit             TEXT NOT NULL,
+                    reward_t2e       TEXT NOT NULL,
+                    status           TEXT NOT NULL DEFAULT 'draft',
+                    starts_at        INTEGER,
+                    ends_at          INTEGER,
+                    created_at       INTEGER NOT NULL,
+                    updated_at       INTEGER NOT NULL,
+                    UNIQUE (gym_id, challenge_code)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_t2e_challenges_gym
+                    ON t2e_challenges(gym_id, status, starts_at, ends_at);
+
+                CREATE TABLE IF NOT EXISTS t2e_challenge_progress (
+                    progress_id      TEXT PRIMARY KEY,
+                    challenge_id     TEXT NOT NULL REFERENCES t2e_challenges(challenge_id),
+                    earn_user_id     TEXT NOT NULL,
+                    current_value    TEXT NOT NULL DEFAULT '0',
+                    status           TEXT NOT NULL DEFAULT 'enrolled',
+                    reward_status    TEXT NOT NULL DEFAULT 'not_eligible',
+                    completed_at     INTEGER,
+                    created_at       INTEGER NOT NULL,
+                    updated_at       INTEGER NOT NULL,
+                    UNIQUE (challenge_id, earn_user_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_t2e_progress_user
+                    ON t2e_challenge_progress(earn_user_id, status);
+
                 CREATE TABLE IF NOT EXISTS t2e_streaks (
                     earn_user_id    TEXT PRIMARY KEY,
                     current_streak  INTEGER NOT NULL DEFAULT 0,
@@ -357,6 +393,175 @@ class TrainToEarnStore:
                 query += " AND status = 'active'"
             query += " ORDER BY created_at DESC"
             return [dict(row) for row in con.execute(query, params).fetchall()]
+        finally:
+            con.close()
+
+    # ── Challenges and pseudonymous leaderboard ─────────────────────────
+
+    def create_challenge(
+        self, *, gym_id: str, challenge_code: str, title: str,
+        description: str, target_value: str, unit: str, reward_t2e: str,
+        status: str = "draft", starts_at: int | None = None,
+        ends_at: int | None = None,
+    ) -> dict[str, Any]:
+        if not challenge_code or not title or not unit:
+            raise T2EError("invalid_challenge")
+        if status not in ("draft", "active", "paused", "ended"):
+            raise T2EError("invalid_challenge_status")
+        try:
+            target = Decimal(str(target_value))
+            reward = Decimal(str(reward_t2e))
+        except Exception as exc:
+            raise T2EError("invalid_challenge_numbers") from exc
+        if target <= 0 or reward < 0 or (ends_at and starts_at and ends_at <= starts_at):
+            raise T2EError("invalid_challenge_numbers")
+        now = int(time.time())
+        challenge_id = "challenge_" + secrets.token_urlsafe(12)
+        with self._tx() as con:
+            gym = con.execute(
+                "SELECT gym_id FROM t2e_gyms WHERE gym_id = ? AND is_active = 1",
+                (gym_id,),
+            ).fetchone()
+            if not gym:
+                raise T2EError("gym_not_found")
+            try:
+                con.execute(
+                    """INSERT INTO t2e_challenges
+                       (challenge_id, gym_id, challenge_code, title, description,
+                        target_value, unit, reward_t2e, status, starts_at,
+                        ends_at, created_at, updated_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (challenge_id, gym_id, challenge_code, title, description,
+                     str(target), unit, str(reward), status, starts_at, ends_at,
+                     now, now),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise T2EError("challenge_already_exists") from exc
+            return dict(con.execute(
+                "SELECT * FROM t2e_challenges WHERE challenge_id = ?",
+                (challenge_id,),
+            ).fetchone())
+
+    def list_challenges(self, gym_id: str, *, active_only: bool = True) -> list[dict[str, Any]]:
+        con = self._connect()
+        try:
+            query = "SELECT * FROM t2e_challenges WHERE gym_id = ?"
+            params: list[Any] = [gym_id]
+            if active_only:
+                query += " AND status = 'active'"
+            query += " ORDER BY created_at DESC"
+            return [dict(row) for row in con.execute(query, params).fetchall()]
+        finally:
+            con.close()
+
+    def enroll_challenge(self, *, earn_user_id: str, challenge_id: str) -> dict[str, Any]:
+        if not earn_user_id or not challenge_id:
+            raise T2EError("missing_challenge_fields")
+        now = int(time.time())
+        progress_id = "progress_" + secrets.token_urlsafe(12)
+        with self._tx() as con:
+            challenge = con.execute(
+                "SELECT * FROM t2e_challenges WHERE challenge_id = ? AND status = 'active'",
+                (challenge_id,),
+            ).fetchone()
+            if not challenge:
+                raise T2EError("challenge_not_found")
+            existing = con.execute(
+                "SELECT * FROM t2e_challenge_progress WHERE challenge_id = ? AND earn_user_id = ?",
+                (challenge_id, earn_user_id),
+            ).fetchone()
+            if existing:
+                return dict(existing)
+            con.execute(
+                """INSERT INTO t2e_challenge_progress
+                   (progress_id, challenge_id, earn_user_id, current_value,
+                    status, reward_status, created_at, updated_at)
+                   VALUES (?,?,?,'0','enrolled','not_eligible',?,?)""",
+                (progress_id, challenge_id, earn_user_id, now, now),
+            )
+            return dict(con.execute(
+                "SELECT * FROM t2e_challenge_progress WHERE progress_id = ?",
+                (progress_id,),
+            ).fetchone())
+
+    def record_challenge_progress(
+        self, *, earn_user_id: str, challenge_id: str, value: str,
+    ) -> dict[str, Any]:
+        try:
+            increment = Decimal(str(value))
+        except Exception as exc:
+            raise T2EError("invalid_progress_value") from exc
+        if increment <= 0:
+            raise T2EError("invalid_progress_value")
+        now = int(time.time())
+        with self._tx() as con:
+            challenge = con.execute(
+                "SELECT * FROM t2e_challenges WHERE challenge_id = ? AND status = 'active'",
+                (challenge_id,),
+            ).fetchone()
+            if not challenge:
+                raise T2EError("challenge_not_found")
+            progress = con.execute(
+                "SELECT * FROM t2e_challenge_progress WHERE challenge_id = ? AND earn_user_id = ?",
+                (challenge_id, earn_user_id),
+            ).fetchone()
+            if not progress:
+                raise T2EError("challenge_not_enrolled")
+            if progress["status"] == "completed":
+                return dict(progress)
+            target = Decimal(challenge["target_value"])
+            current = min(target, Decimal(progress["current_value"]) + increment)
+            completed = current >= target
+            status = "completed" if completed else "in_progress"
+            reward_status = "eligible" if completed else "not_eligible"
+            completed_at = now if completed else None
+            con.execute(
+                """UPDATE t2e_challenge_progress
+                   SET current_value=?, status=?, reward_status=?,
+                       completed_at=?, updated_at=? WHERE progress_id=?""",
+                (str(current), status, reward_status, completed_at, now,
+                 progress["progress_id"]),
+            )
+            return dict(con.execute(
+                "SELECT * FROM t2e_challenge_progress WHERE progress_id = ?",
+                (progress["progress_id"],),
+            ).fetchone())
+
+    def get_leaderboard(self, gym_id: str, *, limit: int = 50) -> list[dict[str, Any]]:
+        limit = max(1, min(int(limit), 100))
+        con = self._connect()
+        try:
+            rows = con.execute(
+                """SELECT p.earn_user_id, c.reward_t2e
+                   FROM t2e_challenge_progress p
+                   JOIN t2e_challenges c ON c.challenge_id = p.challenge_id
+                   WHERE c.gym_id = ? AND p.status = 'completed'""",
+                (gym_id,),
+            ).fetchall()
+            totals: dict[str, dict[str, Any]] = {}
+            for row in rows:
+                item = totals.setdefault(row["earn_user_id"], {
+                    "completed_challenges": 0, "total_reward": Decimal("0"),
+                })
+                item["completed_challenges"] += 1
+                item["total_reward"] += Decimal(row["reward_t2e"])
+            ranked = sorted(
+                totals.items(),
+                key=lambda pair: (pair[1]["completed_challenges"], pair[1]["total_reward"]),
+                reverse=True,
+            )[:limit]
+            result = []
+            for position, (earn_user_id, item) in enumerate(ranked, start=1):
+                digest = hmac.new(
+                    self._identity_key, earn_user_id.encode("utf-8"), hashlib.sha256,
+                ).hexdigest()[:10]
+                result.append({
+                    "rank": position,
+                    "display_ref": f"athlete_{digest}",
+                    "completed_challenges": item["completed_challenges"],
+                    "total_reward_t2e": str(item["total_reward"].quantize(_THC_SCALE)),
+                })
+            return result
         finally:
             con.close()
 
@@ -703,6 +908,76 @@ def register_t2e_routes(app, earn_store):
         history = t2e_store.get_history(user["earn_user_id"])
         return jsonify(ok=True, activities=history)
 
+    @app.get("/api/earn/t2e/dashboard")
+    def t2e_dashboard():
+        """Return the authenticated athlete's tenant-scoped dashboard."""
+        user = _earn_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        memberships = t2e_store.get_memberships(user["earn_user_id"])
+        tenants = []
+        for membership in memberships:
+            gym_id = membership["gym_id"]
+            tenants.append({
+                "gym": {"gym_id": gym_id, "name": membership["gym_name"]},
+                "challenges": t2e_store.list_challenges(gym_id),
+                "leaderboard": t2e_store.get_leaderboard(gym_id),
+                "stats": t2e_store.get_stats(user["earn_user_id"]),
+            })
+        return jsonify(ok=True, earn_user_id=user["earn_user_id"], tenants=tenants)
+
+    @app.post("/api/earn/t2e/challenges/<challenge_id>/enroll")
+    def t2e_enroll_challenge(challenge_id: str):
+        user = _earn_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        try:
+            progress = t2e_store.enroll_challenge(
+                earn_user_id=user["earn_user_id"], challenge_id=challenge_id,
+            )
+            return jsonify(ok=True, progress=progress)
+        except T2EError as e:
+            return jsonify(ok=False, error=str(e)), 400
+
+    @app.post("/api/earn/t2e/challenges/<challenge_id>/progress")
+    def t2e_challenge_progress(challenge_id: str):
+        """Accept progress only from a verified gym key, never from a browser."""
+        gym = _gym_from_key()
+        if not gym:
+            return jsonify(ok=False, error="invalid_gym_key"), 401
+        data = request.get_json(silent=True) or {}
+        member_code = str(data.get("member_code") or "").strip()
+        if not member_code:
+            return jsonify(ok=False, error="missing_member_code"), 400
+        con = t2e_store._connect()
+        try:
+            membership = con.execute(
+                """SELECT earn_user_id FROM t2e_memberships
+                   WHERE gym_id = ? AND member_code = ? AND is_active = 1""",
+                (gym["gym_id"], member_code),
+            ).fetchone()
+        finally:
+            con.close()
+        if not membership:
+            return jsonify(ok=False, error="unknown_member"), 404
+        try:
+            progress = t2e_store.record_challenge_progress(
+                earn_user_id=membership["earn_user_id"], challenge_id=challenge_id,
+                value=str(data.get("value") or ""),
+            )
+            return jsonify(ok=True, progress=progress)
+        except T2EError as e:
+            return jsonify(ok=False, error=str(e)), 400
+
+    @app.get("/api/earn/t2e/leaderboard/<gym_id>")
+    def t2e_leaderboard(gym_id: str):
+        user = _earn_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        if not any(m["gym_id"] == gym_id for m in t2e_store.get_memberships(user["earn_user_id"])):
+            return jsonify(ok=False, error="gym_membership_required"), 403
+        return jsonify(ok=True, gym_id=gym_id, leaderboard=t2e_store.get_leaderboard(gym_id))
+
     @app.post("/api/earn/t2e/gym/register")
     def t2e_register_gym():
         admin_key = os.getenv("T2E_ADMIN_KEY", "").strip()
@@ -719,5 +994,27 @@ def register_t2e_routes(app, earn_store):
                 reward_thc=data.get("reward_thc"),
             )
             return jsonify(ok=True, gym_id=gym["gym_id"], api_key=api_key)
+        except T2EError as e:
+            return jsonify(ok=False, error=str(e)), 400
+
+    @app.post("/api/earn/t2e/gym/challenge")
+    def t2e_create_challenge():
+        admin_key = os.getenv("T2E_ADMIN_KEY", "").strip()
+        if not admin_key or request.headers.get("X-Admin-Key") != admin_key:
+            return jsonify(ok=False, error="unauthorized"), 401
+        data = request.get_json(silent=True) or {}
+        try:
+            challenge = t2e_store.create_challenge(
+                gym_id=str(data.get("gym_id") or "").strip(),
+                challenge_code=str(data.get("challenge_code") or "").strip(),
+                title=str(data.get("title") or "").strip(),
+                description=str(data.get("description") or "").strip(),
+                target_value=str(data.get("target_value") or ""),
+                unit=str(data.get("unit") or "").strip(),
+                reward_t2e=str(data.get("reward_t2e") or "0"),
+                status=str(data.get("status") or "draft").strip(),
+                starts_at=data.get("starts_at"), ends_at=data.get("ends_at"),
+            )
+            return jsonify(ok=True, challenge=challenge)
         except T2EError as e:
             return jsonify(ok=False, error=str(e)), 400

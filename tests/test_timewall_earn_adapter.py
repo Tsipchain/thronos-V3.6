@@ -225,3 +225,15 @@ class TestTimeWallTemplate:
                        "earn-timewall", "/api/earn/timewall/offerwall"):
             assert marker in html
         assert "TIMEWALL_SECRET_KEY" not in html
+
+
+def test_pending_balance_does_not_invent_clearance_eta(store):
+    user = store.register("clearance@example.com", "password123")
+    store.record_thc_credit(
+        user["earn_user_id"], "cpx", "clearance-event-001", "10",
+    )
+    balance = store.thc_balance(user["earn_user_id"])
+    assert balance["clearance_status"] == "provider_eta_pending"
+    assert balance["clearance_message"] == "Clearance date not yet received from provider."
+    assert "days_remaining" not in balance
+    assert "earliest_clears_at" not in balance

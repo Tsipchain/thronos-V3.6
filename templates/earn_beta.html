@@ -231,6 +231,7 @@
     <button class="promo-skip" id="promo-skip" type="button" data-i18n="skip">Skip</button>
   </div>
 </div>
+<script src="/wallet-pwa/earn-provider-tabs.js"></script>
 <script>
 (() => {
   const $ = id => document.getElementById(id);
@@ -298,7 +299,7 @@
       $('promo-desc').textContent = ad.desc;
       const visitBtn = $('promo-visit');
       visitBtn.dataset.url = ad.url; visitBtn.textContent = ad.cta;
-      visitBtn.onclick = () => { window.open(ad.url, 'thronos_survey'); done(); };
+      visitBtn.onclick = () => { window.open(ad.url, '_blank', 'noopener,noreferrer'); done(); };
       const countdownEl = $('promo-countdown');
       const skipBtn = $('promo-skip');
       let seconds = durationSec;
@@ -409,6 +410,7 @@
   });
 
   $('earn-logout').addEventListener('click', async () => {
+    window.ThronosEarnTabs.reset();
     await fetch('/api/earn/logout', { method:'POST', headers: earnAuthHeaders() }).catch(()=>{});
     token = null; mainSection.style.display = 'none'; authSection.style.display = ''; frame.style.display = 'none';
     setStatus(t('signedOut'));
@@ -422,73 +424,35 @@
   $('earn-activity-close').addEventListener('click', () => activityDialog.close());
   activityDialog.addEventListener('click', e => { if (e.target === activityDialog) activityDialog.close(); });
 
-  $('earn-surveys').addEventListener('click', async () => {
+  function openProvider(provider, endpoint, connected, unavailable) {
     setStatus(t('loadingSurveys'));
-    const isMobile = window.matchMedia('(max-width: 700px)').matches;
-    try {
-      const res = await fetch('/api/earn/cpx/offerwall', { headers: earnAuthHeaders() });
+    // Reserve the external tab in the click handler, before any async work.
+    // Repeated clicks only focus the existing survey; they do not restart it.
+    return window.ThronosEarnTabs.open(provider, async () => {
+      const res = await fetch(endpoint, { headers: earnAuthHeaders() });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.ok) throw new Error(data.error || t('surveysUnavail'));
-      await showPromo(15);
-      if (isMobile) {
-        window.open(data.url, 'thronos_survey') || window.location.assign(data.url);
-      } else {
-        frame.src = data.url; frame.style.display = 'block';
-        frame.classList.add('is-mobile-survey');
-        surveyClose.classList.add('is-visible');
-      }
-      setStatus(t('connectedSurvey'));
-    } catch (e) {
-      setStatus(e.message || t('couldNotSurvey'), true);
-    }
-  });
+      if (!res.ok || !data.ok || !data.url) throw new Error(data.error || unavailable);
+      return data.url;
+    }).then(() => setStatus(connected)).catch(error => {
+      const message = error.message === 'popup_blocked'
+        ? (_lang === 'el' ? 'Επίτρεψε τα αναδυόμενα παράθυρα για αυτή τη σελίδα και πάτησε ξανά.'
+          : 'Allow pop-ups for this site, then tap the provider again.')
+        : (error.message || unavailable).replace(/_/g, ' ');
+      setStatus(message, true);
+    });
+  }
 
-  bitcoButton.addEventListener('click', async () => {
-    const isMobile = window.matchMedia('(max-width: 700px)').matches;
-    try {
-      const res = await fetch('/api/earn/bitcotasks/offerwall', { headers: earnAuthHeaders() });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.ok) throw new Error(data.error || t('bitcoUnavail'));
-      if (isMobile) {
-        window.open(data.url, 'thronos_survey') || window.location.assign(data.url);
-      } else { frame.src = data.url; frame.style.display = 'block'; }
-      setStatus(t('connectedBitco'));
-    } catch (e) {
-      setStatus((e.message || t('couldNotBitco')).replace(/_/g, ' '), true);
-    }
+  $('earn-surveys').addEventListener('click', () => {
+    openProvider('cpx', '/api/earn/cpx/offerwall', t('connectedSurvey'), t('surveysUnavail'));
   });
-
-  pureButton.addEventListener('click', async () => {
-    const isMobile = window.matchMedia('(max-width: 700px)').matches;
-    try {
-      const res = await fetch('/api/earn/pure/offerwall', { headers: earnAuthHeaders() });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.ok) throw new Error(data.error || t('pureUnavail'));
-      if (isMobile) {
-        window.open(data.url, 'thronos_survey') || window.location.assign(data.url);
-      } else { frame.src = data.url; frame.style.display = 'block'; }
-      setStatus(t('connectedPure'));
-    } catch (e) {
-      setStatus((e.message || t('couldNotPure')).replace(/_/g, ' '), true);
-    }
+  bitcoButton.addEventListener('click', () => {
+    openProvider('bitcotasks', '/api/earn/bitcotasks/offerwall', t('connectedBitco'), t('bitcoUnavail'));
   });
-
-  timewallButton.addEventListener('click', async () => {
-    const isMobile = window.matchMedia('(max-width: 700px)').matches;
-    const providerTab = isMobile ? window.open('', '_blank') : null;
-    try {
-      const res = await fetch('/api/earn/timewall/offerwall', { headers: earnAuthHeaders() });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.ok) throw new Error(data.error || 'TimeWall is unavailable.');
-      if (isMobile) {
-        if (providerTab) providerTab.location.replace(data.url);
-        else window.location.assign(data.url);
-      } else { frame.src = data.url; frame.style.display = 'block'; }
-      setStatus('Connected to TimeWall tasks and surveys.');
-    } catch (e) {
-      if (providerTab) providerTab.close();
-      setStatus((e.message || 'Could not load TimeWall.').replace(/_/g, ' '), true);
-    }
+  pureButton.addEventListener('click', () => {
+    openProvider('pure', '/api/earn/pure/offerwall', t('connectedPure'), t('pureUnavail'));
+  });
+  timewallButton.addEventListener('click', () => {
+    openProvider('timewall', '/api/earn/timewall/offerwall', 'Connected to TimeWall tasks and surveys.', 'TimeWall is unavailable.');
   });
 
   function closeSurvey() {

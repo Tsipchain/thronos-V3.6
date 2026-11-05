@@ -1624,6 +1624,7 @@ async function showWallet() {
   `);
 
   document.getElementById('lockBtn').addEventListener('click', () => {
+    window.ThronosEarnTabs?.reset();
     sessionStorage.removeItem(`thr_sk_${address}`);
     unlocked.delete(address);
     _pwaSigningCtx = null;
@@ -2234,31 +2235,19 @@ async function showEarn() {
       const message = document.getElementById('earnPwaMessage');
       message.textContent = 'Opening ' + definition.label + '…';
       try {
-        const response = await fetch(earnBase + definition.endpoint, { credentials: 'include' });
-        const offerwall = await response.json().catch(() => null);
-        if (!response.ok || !offerwall?.ok || !offerwall.url) {
-          throw new Error(offerwall?.error || 'provider_unavailable');
-        }
-        // Reuse one external provider tab per provider. Repeated taps update/focus
-        // the existing tab instead of opening a stack of duplicate CPX/TimeWall tabs.
-        window.__thronosEarnProviderWindows ||= {};
-        let target = window.__thronosEarnProviderWindows[provider];
-        if (!target || target.closed) {
-          // A named target is required for browser tab reuse. Clear its opener
-          // immediately so the provider cannot navigate the wallet PWA.
-          target = window.open(offerwall.url, 'thronosEarn_' + provider);
-          if (target) {
-            try { target.opener = null; } catch (_) {}
-            window.__thronosEarnProviderWindows[provider] = target;
+        await window.ThronosEarnTabs.open(provider, async () => {
+          const response = await fetch(earnBase + definition.endpoint, { credentials: 'include' });
+          const offerwall = await response.json().catch(() => null);
+          if (!response.ok || !offerwall?.ok || !offerwall.url) {
+            throw new Error(offerwall?.error || 'provider_unavailable');
           }
-        } else {
-          target.location.href = offerwall.url;
-          try { target.focus(); } catch (_) {}
-        }
-        if (!target) window.location.assign(offerwall.url);
-        message.textContent = definition.label + ' opened in an external browser.';
+          return offerwall.url;
+        }, me.earn_user_id);
+        message.textContent = definition.label + ' opened in a browser tab. Tap again to return to it.';
       } catch (error) {
-        message.textContent = definition.label + ' is temporarily unavailable. Your Earn balance remains unchanged.';
+        message.textContent = error.message === 'popup_blocked'
+          ? 'Allow pop-ups for this site, then tap ' + definition.label + ' again.'
+          : definition.label + ' is temporarily unavailable. Your Earn balance remains unchanged.';
       }
     };
     document.querySelectorAll('[data-earn-provider]').forEach(button => {

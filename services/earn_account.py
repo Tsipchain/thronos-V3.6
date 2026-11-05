@@ -1855,6 +1855,16 @@ def timewall_allowed_ips() -> set[str]:
     return {item.strip() for item in configured.split(",") if item.strip()}
 
 
+def timewall_enforce_ip_allowlist() -> bool:
+    """Require the configured provider IP list in addition to the signature.
+
+    TimeWall may deliver callbacks through changing proxy/worker addresses. The
+    signed callback is the stable authentication mechanism; IP enforcement is
+    available as an explicit extra restriction for deployments that need it.
+    """
+    return os.getenv("TIMEWALL_POSTBACK_IP_ENFORCE", "0").strip() == "1"
+
+
 def cpx_postback_hash(trans_id: str, secret: str) -> str:
     """Documented CPX callback formula: md5(trans_id + "-" + CPX_APP_SECURE_HASH)."""
     return hashlib.md5(
@@ -2325,8 +2335,6 @@ def register_earn_account_routes(
     def earn_timewall_postback():
         """Receive a signed TimeWall event; disabled until explicitly enabled."""
         live = os.getenv("TIMEWALL_POSTBACK_LIVE", "0") == "1"
-        if request.remote_addr not in timewall_allowed_ips():
-            return "ERROR", 403 if live else 503
         params = (
             request.values.to_dict()
             if request.values
@@ -2348,6 +2356,10 @@ def register_earn_account_routes(
         if not event_id or not verify_timewall_postback_signature(
             user_id, revenue, received_hash,
         ):
+            return "ERROR", 403 if live else 503
+        # Keep the disabled/preflight path conservative; once explicitly live,
+        # signature validation remains sufficient unless strict IP mode is set.
+        if (not live or timewall_enforce_ip_allowlist()) and request.remote_addr not in timewall_allowed_ips():
             return "ERROR", 403 if live else 503
         if not live:
             # Verify genuine callbacks while credits remain disabled. Keep the
@@ -2425,3 +2437,4 @@ def register_earn_account_routes(
             ok=True, access_token=new_token, expires_in=_SESSION_TTL,
         )
         return _set_session_cookie(response, new_token)
+

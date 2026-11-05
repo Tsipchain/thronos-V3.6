@@ -2053,11 +2053,15 @@ function _formatEarnClearance(entry) {
   if (String(entry.state || '').toLowerCase() === 'reversed') {
     return entry.reversal_reason ? `Reversed: ${String(entry.reversal_reason)}` : 'Reversed by provider';
   }
+  if (['confirmed', 'payable', 'paid'].includes(entry.state)) {
+    return `Recorded state: ${entry.state}`;
+  }
   const eta = Number(entry.estimated_clearance_at);
   if (!Number.isInteger(eta) || eta <= 0) {
     return 'Clearance date not yet received from provider.';
   }
   // This is presentation only: no local clock or timer can transition THC.
+  if (eta * 1000 <= Date.now()) return 'Estimated time elapsed. Awaiting verified clearance.';
   const remaining = Math.max(0, Math.ceil((eta * 1000 - Date.now()) / 86400000));
   return `Estimated clearance: ${_formatEarnReceiptDate(eta)} (${remaining} day${remaining === 1 ? '' : 's'} remaining)`;
 }
@@ -2123,9 +2127,9 @@ async function showEarn() {
         ? 'Provider amount pending'
         : '+' + amount + ' THC';
       return `
-        <div style="display:flex;justify-content:space-between;gap:8px;padding:9px 0;border-top:1px solid #ffffff14">
+        <div data-earn-receipt="${escHtml(entry.entry_id)}" style="display:flex;justify-content:space-between;gap:8px;padding:9px 0;border-top:1px solid #ffffff14;cursor:pointer">
           <div style="min-width:0"><div style="font-size:.8rem">${escHtml(entry.source || 'Earn reward')}</div><div style="font-size:.68rem;color:var(--muted)">${escHtml(entry.provider_status || entry.state || 'pending')} · ${escHtml(_formatEarnReceiptDate(entry.received_at))}</div><div style="font-size:.68rem;color:var(--muted);margin-top:2px">${escHtml(_formatEarnClearance(entry))}</div></div>
-          <div style="font-size:.82rem;color:var(--accent)">${escHtml(amountText)}</div>
+          <div style="font-size:.82rem;color:var(--accent)">${escHtml(amountText)}<button type="button" class="btn" data-earn-receipt="${escHtml(entry.entry_id)}" style="display:block;margin-top:6px;font-size:.7rem">Details</button></div>
         </div>`;
     };
     const rows = entries.length ? entries.map(renderEntry).join('') : '<p style="color:var(--muted);font-size:.82rem">No verified rewards yet.</p>';
@@ -2159,6 +2163,11 @@ async function showEarn() {
       <p id="earnPwaMessage" style="font-size:.72rem;color:var(--muted);line-height:1.45;margin:12px 0 4px">Rewards remain pending until verified CPX clearance. No wallet settlement or payout is claimed here.</p>
       <div style="margin-top:12px"><div style="font-size:.7rem;color:var(--muted);letter-spacing:.08em">RECENT REWARDS</div>${rows}</div>
     `;
+    const openReceiptDetails = (event) => {
+      const button = event.target.closest('[data-earn-receipt]');
+      if (button) window.ThronosEarnReceipts.open(button.dataset.earnReceipt, { base: earnBase });
+    };
+    body.addEventListener('click', openReceiptDetails);
     const openEarnActivity = () => {
       const overlay = document.createElement('div');
       overlay.setAttribute('role', 'dialog');
@@ -2192,6 +2201,7 @@ async function showEarn() {
           <div style="margin-top:6px">${activityRows}</div>
         </div>`;
       document.body.appendChild(overlay);
+      overlay.addEventListener('click', openReceiptDetails);
       overlay.querySelector('#closeEarnActivity').addEventListener('click', () => overlay.remove());
       overlay.addEventListener('click', (event) => { if (event.target === overlay) overlay.remove(); });
       overlay.querySelector('#linkEarnWalletFromActivity')?.addEventListener('click', async (event) => {

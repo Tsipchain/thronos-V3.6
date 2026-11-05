@@ -232,6 +232,7 @@
   </div>
 </div>
 <script src="/wallet-pwa/earn-provider-tabs.js"></script>
+<script src="/wallet-pwa/earn-receipt-details.js"></script>
 <script>
 (() => {
   const $ = id => document.getElementById(id);
@@ -348,8 +349,14 @@
     if (String(entry.state || '').toLowerCase() === 'reversed') {
       return entry.reversal_reason ? t('reversed').replace('{r}', String(entry.reversal_reason)) : t('reversedBy');
     }
+    if (['confirmed', 'payable', 'paid'].includes(entry.state)) {
+      return (_lang === 'el' ? 'Καταγεγραμμένη κατάσταση: ' : 'Recorded state: ') + entry.state;
+    }
     const eta = Number(entry.estimated_clearance_at);
     if (!Number.isInteger(eta) || eta <= 0) return t('clearanceNotRecv');
+    if (eta * 1000 <= Date.now()) return _lang === 'el'
+      ? 'Η εκτίμηση χρόνου έληξε. Αναμονή επιβεβαιωμένης εκκαθάρισης.'
+      : 'Estimated time elapsed. Awaiting verified clearance.';
     const days = Math.max(0, Math.ceil((eta * 1000 - Date.now()) / 86400000));
     return (days === 1 ? t('estClearance') : t('estClearancePlural')).replace('{d}', formatReceiptDate(eta)).replace('{n}', days);
   }
@@ -527,11 +534,8 @@
         pendingValue.textContent = pending + ' THC';
         const cs = $('earn-clearance-summary');
         if (cs) {
-          if (bData.days_remaining != null && pending !== '0.00') {
-            const d = bData.days_remaining;
-            cs.textContent = d > 0
-              ? (d === 1 ? t('daysClearance') : t('daysClearancePlural')).replace('{n}', d).replace('{d}', bData.clearance_days)
-              : t('readyClearance');
+          if (bData.earliest_clears_at && pending !== '0.00') {
+            cs.textContent = clearanceText({ state: 'pending', estimated_clearance_at: bData.earliest_clears_at });
           } else if (pending !== '0.00') {
             cs.textContent = t('clearanceNotRecv');
           } else {
@@ -562,6 +566,12 @@
         activityCount.textContent = String(hData.entries.length);
         hData.entries.slice(0, 20).forEach(e => {
           const div = document.createElement('div'); div.className = 'earn-history-item';
+          const details = document.createElement('button');
+          details.type = 'button'; details.textContent = _lang === 'el' ? 'Στοιχεία' : 'Details';
+          div.style.cursor = 'pointer';
+          div.addEventListener('click', () => window.ThronosEarnReceipts.open(e.entry_id, {
+            headers: earnAuthHeaders(), language: _lang,
+          }));
           const left = document.createElement('div'), source = document.createElement('span');
           source.className = 'src'; source.textContent = (e.source || '').replace(/_/g, ' ');
           const provider = document.createElement('div'), receipt = document.createElement('div'), clearance = document.createElement('div');
@@ -572,7 +582,7 @@
           const value = formatThc(e.amount);
           amount.className = 'amt'; amount.textContent = value === null ? t('amtUnavail') : (value === '0.00' && String(e.state || '').toLowerCase() === 'pending' ? t('amtPending') : '+' + value + ' THC');
           state.className = 'st st-' + String(e.state || 'pending').replace(/[^a-z-]/g, ''); state.textContent = e.state || 'pending';
-          left.append(source, provider, receipt, clearance); right.append(amount, state); div.append(left, right);
+          left.append(source, provider, receipt, clearance); right.append(amount, state, details); div.append(left, right);
           historyList.appendChild(div);
         });
       } else {

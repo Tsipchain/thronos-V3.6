@@ -864,6 +864,37 @@ class EarnAccountStore:
             ).fetchall()
             return [self._ledger_dict(r) for r in rows]
 
+    def thc_receipt_details(self, earn_user_id: str, entry_id: str) -> dict[str, Any]:
+        """Read only the caller's receipt and safe audit fields, never raw payloads."""
+        with self._tx() as con:
+            row = con.execute(
+                """SELECT entry_id, source, source_ref, amount, state, note,
+                          settlement_ref, provider_status, received_at,
+                          estimated_clearance_at, cleared_at, reversal_reason,
+                          created_at, updated_at
+                   FROM thc_ledger WHERE earn_user_id = ? AND entry_id = ?""",
+                (earn_user_id, entry_id),
+            ).fetchone()
+            if not row:
+                raise EarnError("receipt_not_found")
+            events = con.execute(
+                """SELECT event_ref, event_type, state, provider_status, occurred_at
+                   FROM thc_ledger_audit WHERE entry_id = ?
+                   ORDER BY occurred_at, rowid""", (entry_id,),
+            ).fetchall()
+            return {"entry": self._ledger_dict(row), "events": [dict(e) for e in events]}
+
+    def validate_timewall_identity(self, provider_user_id: str) -> None:
+        """Read-only callback preflight. Does not create an identity or reward."""
+        with self._tx() as con:
+            row = con.execute(
+                """SELECT 1 FROM earn_provider_identities
+                   WHERE provider = 'timewall' AND provider_user_id = ?""",
+                (provider_user_id,),
+            ).fetchone()
+            if not row:
+                raise EarnError("unknown_provider_user")
+
     def leaderboard(
         self,
         *,
@@ -1299,21 +1330,7 @@ class EarnAccountStore:
             raise EarnError("invalid_timewall_event")
         if not provider_user_id or len(provider_user_id) > 32:
             raise EarnError("invalid_timewall_user")
-        try:
-            revenue = Decimal(str(revenue_raw))
-            conversion = Decimal(os.getenv("TIMEWALL_THC_CONVERSION", "670"))
-            allow_decimals = os.getenv("TIMEWALL_ALLOW_DECIMALS", "0") == "1"
-            amount_scale = _THC_SCALE if allow_decimals else Decimal("1")
-            rounding = ROUND_DOWN if allow_decimals else ROUND_HALF_UP
-            amount = (revenue * conversion).quantize(amount_scale, rounding=rounding)
-            if revenue <= 0 or conversion <= 0 or amount <= 0:
-                raise ValueError
-            # Keep the durable ledger representation at the same six-decimal
-            # scale used by balance/history APIs, even when the provider
-            # placement itself disallows fractional THC.
-            ledger_amount = amount.quantize(_THC_SCALE)
-        except (TypeError, ValueError, InvalidOperation):
-            raise EarnError("invalid_timewall_revenue")
+        ledger_amount = timewall_reward_amount(revenue_raw)
         now = int(time.time())
         payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         with self._tx() as con:
@@ -1353,6 +1370,12 @@ class EarnAccountStore:
                     str(offer_name)[:500], str(offer_detail)[:1000],
                     entry_id, now, payload_json,
                 ),
+            )
+            self._append_ledger_audit_in_tx(
+                con, entry_id=entry_id,
+                event_ref=f"timewall:receipt:{event_id}",
+                event_type="provider_receipt", state="pending",
+                provider_status="received_pending_clearance", occurred_at=now,
             )
             return dict(con.execute(
                 "SELECT * FROM timewall_receipts WHERE event_id = ?",
@@ -1591,6 +1614,26 @@ def build_pure_offerwall_url(provider_user_id: str) -> str:
         "https://offerwall.spectrumsurveys.com/publisher_offers",
     )
     return f"{base}?{query}"
+
+
+def timewall_reward_amount(revenue_raw: str) -> Decimal:
+    """Validate the same Decimal conversion in preflight and live receipt handling."""
+    try:
+        revenue = Decimal(str(revenue_raw))
+        conversion = Decimal(os.getenv("TIMEWALL_THC_CONVERSION", "670"))
+        allow_decimals = os.getenv("TIMEWALL_ALLOW_DECIMALS", "0") == "1"
+        amount_scale = _THC_SCALE if allow_decimals else Decimal("1")
+        rounding = ROUND_DOWN if allow_decimals else ROUND_HALF_UP
+        amount = (revenue * conversion).quantize(amount_scale, rounding=rounding)
+        if revenue <= 0 or conversion <= 0 or amount <= 0:
+            raise ValueError
+        # Keep the durable ledger representation at the same six-decimal
+        # scale used by balance/history APIs, even when the provider
+        # placement itself disallows fractional THC.
+        ledger_amount = amount.quantize(_THC_SCALE)
+    except (TypeError, ValueError, InvalidOperation):
+        raise EarnError("invalid_timewall_revenue")
+    return ledger_amount
 
 
 def build_timewall_offerwall_url(provider_user_id: str) -> str:
@@ -1936,6 +1979,19 @@ def register_earn_account_routes(
         entries = store.thc_history(user["earn_user_id"])
         return jsonify(ok=True, entries=entries)
 
+    @app.get("/api/earn/history/<entry_id>")
+    def earn_receipt_details(entry_id):
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        try:
+            details = store.thc_receipt_details(user["earn_user_id"], entry_id)
+        except EarnError:
+            return jsonify(ok=False, error="receipt_not_found"), 404
+        response = jsonify(ok=True, **details)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
     @app.get("/api/earn/leaderboard")
     def earn_leaderboard():
         user, _ = _current_user()
@@ -2106,10 +2162,9 @@ def register_earn_account_routes(
     @app.route("/api/earn/timewall/postback", methods=["GET", "POST"])
     def earn_timewall_postback():
         """Receive a signed TimeWall event; disabled until explicitly enabled."""
-        if os.getenv("TIMEWALL_POSTBACK_LIVE", "0") != "1":
-            return "ERROR", 503
+        live = os.getenv("TIMEWALL_POSTBACK_LIVE", "0") == "1"
         if request.remote_addr not in timewall_allowed_ips():
-            return "ERROR", 403
+            return "ERROR", 403 if live else 503
         params = (
             request.values.to_dict()
             if request.values
@@ -2131,7 +2186,24 @@ def register_earn_account_routes(
         if not event_id or not verify_timewall_postback_signature(
             user_id, revenue, received_hash,
         ):
-            return "ERROR", 403
+            return "ERROR", 403 if live else 503
+        if not live:
+            # Verify genuine callbacks while credits remain disabled. Keep the
+            # non-200 response so the provider does not consider a reward paid.
+            # Only a fingerprint is logged; no signature/user/IP/raw payload.
+            try:
+                store.validate_timewall_identity(user_id)
+                if len(event_id) > 200:
+                    raise EarnError("invalid_timewall_event")
+                timewall_reward_amount(revenue)
+            except (EarnError, InvalidOperation, ValueError):
+                return "ERROR", 503
+            event_ref = hashlib.sha256(event_id.encode("utf-8")).hexdigest()[:16]
+            logger.info(
+                "[TimeWall preflight] verified_callback event_ref=%s "
+                "credit_enabled=false ledger_write=false retry_required=true", event_ref,
+            )
+            return "ERROR", 503
         try:
             store.record_timewall_receipt(
                 event_id=event_id,

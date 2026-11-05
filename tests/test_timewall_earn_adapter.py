@@ -1,7 +1,7 @@
 """TimeWall provider-card and placement-boundary tests.
 
-The provider's postback formula is intentionally not implemented here: the
-account manager still needs to supply the official signed callback contract.
+The receiver follows the provider's documented signed callback formula and
+accepts the identifier aliases emitted by the approved placement templates.
 """
 import os
 import sqlite3
@@ -70,6 +70,14 @@ class TestTimeWallConfiguration:
         with patch.dict(os.environ, {
             "TIMEWALL_PLACEMENT_URL":
             "https://wall.timewall.io/placement/abc?user={userId}",
+        }):
+            url = build_timewall_offerwall_url("tw_opaque123")
+        assert url == "https://wall.timewall.io/placement/abc?user=tw_opaque123"
+
+    def test_builder_accepts_provider_case_variant_placeholder(self):
+        with patch.dict(os.environ, {
+            "TIMEWALL_PLACEMENT_URL":
+            "https://wall.timewall.io/placement/abc?user={userID}",
         }):
             url = build_timewall_offerwall_url("tw_opaque123")
         assert url == "https://wall.timewall.io/placement/abc?user=tw_opaque123"
@@ -173,6 +181,32 @@ class TestTimeWallRoutes:
         with __import__("sqlite3").connect(store.db_path) as con:
             assert con.execute("SELECT COUNT(*) FROM timewall_receipts").fetchone()[0] == 1
             assert con.execute("SELECT amount FROM thc_ledger WHERE source='timewall'").fetchone()[0] == "68.000000"
+
+    def test_postback_accepts_timewall_dashboard_aliases(self, client, store):
+        token = _login(client)
+        with patch.dict(os.environ, {
+            "TIMEWALL_ENABLED": "1",
+            "TIMEWALL_PLACEMENT_URL": "https://wall.timewall.io/p/abc?user={userID}",
+            "TIMEWALL_POSTBACK_LIVE": "1",
+            "TIMEWALL_SECRET_KEY": "secret",
+            "TIMEWALL_POSTBACK_IPS": "127.0.0.1",
+            "TIMEWALL_THC_CONVERSION": "675",
+        }):
+            wall = client.get("/api/earn/timewall/offerwall", headers=_auth(token)).get_json()
+            user_id = wall["url"].split("user=", 1)[1]
+            payload = {
+                "userID": user_id,
+                "revenue": "0.01",
+                "hash": timewall_postback_hash(user_id, "0.01", "secret"),
+                "txid": "tw-alias-event-001",
+            }
+            response = client.get("/api/earn/timewall/postback", query_string=payload)
+        assert response.status_code == 200
+        with sqlite3.connect(store.db_path) as con:
+            assert con.execute(
+                "SELECT COUNT(*) FROM timewall_receipts WHERE event_id = ?",
+                ("tw-alias-event-001",),
+            ).fetchone()[0] == 1
 
     def test_postback_ip_allowlist_rejects_unlisted_sender(self, client):
         with patch.dict(os.environ, {

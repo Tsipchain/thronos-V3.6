@@ -77,6 +77,18 @@
   .earn-lb-staking h4 { color:#00a86b; font-size:13px; margin:0 0 6px; display:flex; align-items:center; gap:6px; }
   .earn-lb-staking p { color:#cbd5e1; font-size:12px; margin:0 0 8px; line-height:1.5; }
   .earn-lb-staking .staking-badge { display:inline-block; background:#00a86b22; color:#00a86b; font-size:10px; font-weight:700; padding:2px 8px; border-radius:99px; border:1px solid #00a86b44; }
+  .earn-ad-banner { background:linear-gradient(135deg,#0b1220,#162030); border:1px solid #2e587444; border-radius:12px; padding:12px; overflow:hidden; }
+  .earn-ad-banner a { display:block; text-decoration:none; color:inherit; }
+  .earn-ad-banner img { width:100%; border-radius:8px; display:block; }
+  .earn-ad-banner .ad-title { font-size:11px; color:#7fb8d8; margin-top:6px; text-align:center; }
+  .earn-ad-banner .ad-label { font-size:9px; color:#475569; text-transform:uppercase; letter-spacing:.08em; text-align:right; margin-top:4px; }
+  .earn-referral { background:linear-gradient(135deg,#0b1220,#162030); border:1px solid #2e587444; border-radius:12px; padding:14px; margin-top:14px; }
+  .earn-referral h4 { color:#e2e8f0; font-size:14px; margin:0 0 8px; }
+  .earn-referral .ref-link { display:flex; gap:6px; align-items:center; }
+  .earn-referral .ref-link input { flex:1; background:#0a0f1a; border:1px solid #2e5874; border-radius:8px; color:#b8d9ee; padding:8px 10px; font-size:12px; }
+  .earn-referral .ref-link button { background:#1e40af; color:#fff; border:none; border-radius:8px; padding:8px 14px; font-size:12px; cursor:pointer; white-space:nowrap; }
+  .earn-referral .ref-stats { display:flex; gap:16px; margin-top:10px; font-size:12px; color:#7fb8d8; }
+  .earn-referral .ref-stats span { font-weight:700; color:#e2e8f0; }
   .earn-lb-empty { color:#91a7b8; font-size:13px; text-align:center; padding:24px 0; }
   .earn-activity-trigger { display:flex; align-items:center; gap:8px; color:#b8d9ee; background:#101827; border:1px solid #2e5874; border-radius:999px; padding:8px 12px; cursor:pointer; float:right; }
   .earn-activity-count { min-width:18px; height:18px; line-height:18px; border-radius:99px; text-align:center; background:#f2c14e; color:#101827; font-size:11px; font-weight:800; }
@@ -152,6 +164,18 @@
           <div id="timewall-status" class="earn-provider-status" aria-live="polite">Placement setup pending</div>
         </section>
       </div>
+      <div id="earn-ad-banner" class="earn-ad-banner" style="display:none;margin-top:14px"></div>
+      <div id="earn-referral" class="earn-referral" style="display:none">
+        <h4 data-i18n="referralTitle">Invite Friends</h4>
+        <p style="color:#94a3b8;font-size:12px;margin:0 0 8px" data-i18n="referralDesc">Share your link and grow the Thronos Earn community.</p>
+        <div class="ref-link">
+          <input id="ref-link-input" readonly>
+          <button id="ref-copy-btn" data-i18n="referralCopy">Copy</button>
+        </div>
+        <div class="ref-stats">
+          <div data-i18n="referralFriends">Friends joined: <span id="ref-count">0</span></div>
+        </div>
+      </div>
       <div id="t2e-section" class="earn-provider" style="margin-top:14px;display:none">
         <h3 style="margin-bottom:8px" data-i18n="t2eTitle">Train-to-Earn</h3>
         <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px">
@@ -163,6 +187,18 @@
         <div id="t2e-status" class="earn-provider-status" aria-live="polite"></div>
       </div>
       <section id="earn-leaderboard" aria-label="30-day Earn leaderboard"></section>
+      <div class="earn-lb-staking" id="lb-staking">
+        <h4>&#x1F4B0; <span data-i18n="lbStakingTitle">Loyalty Staking Pool</span></h4>
+        <p data-i18n="lbStakingDesc">Earn leaderboard users with a linked THR Wallet can stake THC/THR in the loyalty pool and earn APY rewards. Top earners get boosted rates.</p>
+        <div id="staking-pools-container" class="earn-staking-pools"></div>
+        <div id="staking-positions-container" class="earn-positions" style="display:none">
+          <h5 data-i18n="stakingYourPositions">Your Staking Positions</h5>
+          <div id="staking-positions-list"></div>
+        </div>
+        <div id="staking-no-wallet" style="display:none;margin-top:10px">
+          <p style="color:#fbbf24;font-size:12px;display:flex;align-items:center;gap:6px">&#x1F512; <span data-i18n="stakingNeedWallet">Link a THR Wallet to access the staking pool</span></p>
+        </div>
+      </div>
       <button id="earn-logout" class="earn-toggle" type="button" data-i18n="signOut">Sign out</button>
       <div class="earn-history" id="earn-history">
         <button id="earn-activity-trigger" class="earn-activity-trigger" type="button" aria-haspopup="dialog" aria-label="Open recent activity">
@@ -348,7 +384,10 @@
   function doRegisterAndLogin(email, pw) {
     return new Promise(async (resolve, reject) => {
       try {
-        const res = await fetch('/api/earn/register', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({email, password: pw}) });
+        const refParam = new URLSearchParams(window.location.search).get('ref') || '';
+        const regBody = {email, password: pw};
+        if (refParam) regBody.ref = refParam;
+        const res = await fetch('/api/earn/register', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(regBody) });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data.ok) throw new Error(data.error || 'Request failed.');
         const login = await fetch('/api/earn/login', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({email, password: pw}) });
@@ -574,6 +613,48 @@
       }
     } catch (_) {}
     await refreshLeaderboard();
+    // Load ads
+    try {
+      const adRes = await fetch('/api/earn/ads?placement=earn', { credentials: 'include' });
+      const adData = await adRes.json().catch(() => ({}));
+      const banner = $('earn-ad-banner');
+      if (adRes.ok && adData.ok && adData.ads && adData.ads.length && banner) {
+        const ad = adData.ads[0];
+        banner.style.display = '';
+        const link = document.createElement('a');
+        link.href = ad.target_url; link.target = '_blank'; link.rel = 'noopener';
+        link.dataset.adId = ad.ad_id;
+        link.innerHTML = '<img src="' + ad.image_url + '" alt="' + (ad.title || 'Ad') + '" loading="lazy">' +
+          '<div class="ad-title">' + (ad.title || '') + '</div>';
+        banner.appendChild(link);
+        banner.insertAdjacentHTML('beforeend', '<div class="ad-label">sponsored</div>');
+        fetch('/api/earn/ads/impression', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ad_id: ad.ad_id }) }).catch(() => {});
+        link.addEventListener('click', () => {
+          fetch('/api/earn/ads/click', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ad_id: ad.ad_id }) }).catch(() => {});
+        });
+      }
+    } catch (_) {}
+    try {
+      const refRes = await fetch('/api/earn/referral/code', { headers: earnAuthHeaders() });
+      const refData = await refRes.json().catch(() => ({}));
+      if (refRes.ok && refData.ok && refData.ref_code) {
+        const refSection = $('earn-referral');
+        refSection.style.display = '';
+        const baseUrl = window.location.origin + '/earn?ref=' + encodeURIComponent(refData.ref_code);
+        $('ref-link-input').value = baseUrl;
+        $('ref-copy-btn').addEventListener('click', () => {
+          navigator.clipboard.writeText(baseUrl).then(() => {
+            $('ref-copy-btn').textContent = _lang === 'el' ? 'Copied!' : 'Copied!';
+            setTimeout(() => { $('ref-copy-btn').textContent = _lang === 'el' ? 'Copy' : 'Copy'; }, 2000);
+          }).catch(() => {});
+        });
+        const statsRes = await fetch('/api/earn/referral/stats', { headers: earnAuthHeaders() });
+        const statsData = await statsRes.json().catch(() => ({}));
+        if (statsRes.ok && statsData.ok) {
+          $('ref-count').textContent = String(statsData.referral_count || 0);
+        }
+      }
+    } catch (_) {}
   }
   const _t2eDailyCap = 3;
 

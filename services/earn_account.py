@@ -338,6 +338,57 @@ class EarnAccountStore:
 
                 CREATE INDEX IF NOT EXISTS idx_earn_wallet_challenges_expiry
                     ON earn_wallet_challenges(expires_at);
+
+                CREATE TABLE IF NOT EXISTS earn_staking_pools (
+                    pool_id          TEXT PRIMARY KEY,
+                    token            TEXT NOT NULL,
+                    label            TEXT NOT NULL,
+                    base_apy_bps     INTEGER NOT NULL,
+                    boosted_apy_bps  INTEGER NOT NULL,
+                    min_stake        TEXT NOT NULL,
+                    status           TEXT NOT NULL DEFAULT 'active',
+                    created_at       INTEGER NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS earn_staking_positions (
+                    position_id          TEXT PRIMARY KEY,
+                    pool_id              TEXT NOT NULL
+                        REFERENCES earn_staking_pools(pool_id),
+                    earn_user_id         TEXT NOT NULL
+                        REFERENCES earn_accounts(earn_user_id),
+                    wallet_address       TEXT NOT NULL,
+                    amount               TEXT NOT NULL,
+                    status               TEXT NOT NULL DEFAULT 'active',
+                    staked_at            INTEGER NOT NULL,
+                    unstake_requested_at INTEGER
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_earn_staking_positions_user
+                    ON earn_staking_positions(earn_user_id);
+
+                CREATE TABLE IF NOT EXISTS earn_ads (
+                    ad_id       TEXT PRIMARY KEY,
+                    title       TEXT NOT NULL,
+                    image_url   TEXT NOT NULL,
+                    target_url  TEXT NOT NULL,
+                    placement   TEXT NOT NULL DEFAULT 'earn',
+                    priority    INTEGER NOT NULL DEFAULT 0,
+                    status      TEXT NOT NULL DEFAULT 'active',
+                    impressions INTEGER NOT NULL DEFAULT 0,
+                    clicks      INTEGER NOT NULL DEFAULT 0,
+                    created_at  INTEGER NOT NULL,
+                    expires_at  INTEGER
+                );
+
+                CREATE TABLE IF NOT EXISTS earn_referrals (
+                    referrer_id    TEXT NOT NULL,
+                    referred_id    TEXT NOT NULL,
+                    ref_code       TEXT NOT NULL,
+                    created_at     INTEGER NOT NULL,
+                    PRIMARY KEY (referred_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_earn_referrals_referrer
+                    ON earn_referrals(referrer_id);
             """)
             # Existing production Earn databases predate the provider
             # clearance and separate internal hold fields. SQLite lacks ADD COLUMN IF NOT
@@ -424,7 +475,9 @@ class EarnAccountStore:
 
     # ── Registration ─────────────────────────────────────────────────────
 
-    def register(self, email: str, password: str) -> dict[str, Any]:
+    def register(
+        self, email: str, password: str, ref_code: str | None = None,
+    ) -> dict[str, Any]:
         email = _validate_email(email)
         password = _validate_password(password)
         uid = "earn_" + secrets.token_urlsafe(18)
@@ -444,6 +497,18 @@ class EarnAccountStore:
                    VALUES (?,?,?,0,?,?,?)""",
                 (uid, email, pw_hash, cpx_id, now, now),
             )
+            if ref_code:
+                referrer = con.execute(
+                    "SELECT earn_user_id FROM earn_accounts WHERE earn_user_id = ?",
+                    (ref_code,),
+                ).fetchone()
+                if referrer:
+                    con.execute(
+                        """INSERT OR IGNORE INTO earn_referrals
+                           (referrer_id, referred_id, ref_code, created_at)
+                           VALUES (?,?,?,?)""",
+                        (ref_code, uid, ref_code, now),
+                    )
         return {"earn_user_id": uid, "email": email, "email_verified": False}
 
     # ── Rate limiting ────────────────────────────────────────────────────
@@ -1089,6 +1154,279 @@ class EarnAccountStore:
             "your_score": your_score, "entries": entries,
             "loyalty": self.loyalty_status(caller_user_id),
         }
+
+    # ── Staking Pool ────────────────────────────────────────────────────
+
+    _DEFAULT_POOLS = [
+        {
+            "pool_id": "pool_thc_loyalty",
+            "token": "THC",
+            "label": "THC Loyalty Pool",
+            "base_apy_bps": 800,
+            "boosted_apy_bps": 1200,
+            "min_stake": "10",
+        },
+        {
+            "pool_id": "pool_thr_staking",
+            "token": "THR",
+            "label": "THR Staking Pool",
+            "base_apy_bps": 500,
+            "boosted_apy_bps": 800,
+            "min_stake": "1",
+        },
+    ]
+
+    def _ensure_staking_pools(self, con: sqlite3.Connection) -> None:
+        now = int(time.time())
+        for pool in self._DEFAULT_POOLS:
+            existing = con.execute(
+                "SELECT 1 FROM earn_staking_pools WHERE pool_id = ?",
+                (pool["pool_id"],),
+            ).fetchone()
+            if not existing:
+                con.execute(
+                    """INSERT INTO earn_staking_pools
+                       (pool_id, token, label, base_apy_bps, boosted_apy_bps,
+                        min_stake, status, created_at)
+                       VALUES (?,?,?,?,?,?,'active',?)""",
+                    (
+                        pool["pool_id"], pool["token"], pool["label"],
+                        pool["base_apy_bps"], pool["boosted_apy_bps"],
+                        pool["min_stake"], now,
+                    ),
+                )
+
+    def staking_pools(self) -> list[dict[str, Any]]:
+        with self._tx() as con:
+            self._ensure_staking_pools(con)
+            pools = con.execute(
+                "SELECT * FROM earn_staking_pools WHERE status = 'active'"
+            ).fetchall()
+            result = []
+            for p in pools:
+                stats = con.execute(
+                    """SELECT COUNT(*) AS cnt,
+                              COALESCE(SUM(CASE WHEN amount != '' THEN 1 ELSE 0 END), 0) AS pos_count
+                       FROM earn_staking_positions
+                       WHERE pool_id = ? AND status = 'active'""",
+                    (p["pool_id"],),
+                ).fetchone()
+                active_rows = con.execute(
+                    "SELECT amount FROM earn_staking_positions WHERE pool_id = ? AND status = 'active'",
+                    (p["pool_id"],),
+                ).fetchall()
+                total_staked = sum((Decimal(r["amount"]) for r in active_rows), Decimal(0))
+                result.append({
+                    "pool_id": p["pool_id"],
+                    "token": p["token"],
+                    "label": p["label"],
+                    "base_apy_bps": p["base_apy_bps"],
+                    "boosted_apy_bps": p["boosted_apy_bps"],
+                    "base_apy": str(Decimal(p["base_apy_bps"]) / 100),
+                    "boosted_apy": str(Decimal(p["boosted_apy_bps"]) / 100),
+                    "min_stake": p["min_stake"],
+                    "total_staked": str(total_staked.quantize(_THC_SCALE)),
+                    "stakers": stats["cnt"] if stats else 0,
+                })
+            return result
+
+    def staking_positions(self, earn_user_id: str) -> list[dict[str, Any]]:
+        now = int(time.time())
+        with self._tx() as con:
+            self._ensure_staking_pools(con)
+            rows = con.execute(
+                """SELECT sp.*, p.token, p.label AS pool_label,
+                          p.base_apy_bps, p.boosted_apy_bps
+                   FROM earn_staking_positions sp
+                   JOIN earn_staking_pools p ON p.pool_id = sp.pool_id
+                   WHERE sp.earn_user_id = ?
+                   ORDER BY sp.staked_at DESC""",
+                (earn_user_id,),
+            ).fetchall()
+            result = []
+            for r in rows:
+                amt = Decimal(r["amount"])
+                staked_seconds = max(now - r["staked_at"], 0)
+                apy_bps = r["base_apy_bps"]
+                projected_annual = amt * Decimal(apy_bps) / Decimal(10000)
+                projected_earned = (
+                    projected_annual * Decimal(staked_seconds)
+                    / Decimal(365 * 86400)
+                ).quantize(_THC_SCALE)
+                result.append({
+                    "position_id": r["position_id"],
+                    "pool_id": r["pool_id"],
+                    "pool_label": r["pool_label"],
+                    "token": r["token"],
+                    "amount": str(amt.quantize(_THC_SCALE)),
+                    "status": r["status"],
+                    "staked_at": r["staked_at"],
+                    "unstake_requested_at": r["unstake_requested_at"],
+                    "apy": str(Decimal(apy_bps) / 100),
+                    "projected_rewards": str(projected_earned),
+                })
+            return result
+
+    def create_stake(
+        self, earn_user_id: str, pool_id: str, amount: str,
+    ) -> dict[str, Any]:
+        try:
+            amt = Decimal(str(amount)).quantize(_THC_SCALE, rounding=ROUND_DOWN)
+            if amt <= 0:
+                raise ValueError
+        except (TypeError, ValueError, InvalidOperation):
+            raise EarnError("invalid_stake_amount")
+        with self._tx() as con:
+            self._ensure_staking_pools(con)
+            pool = con.execute(
+                "SELECT * FROM earn_staking_pools WHERE pool_id = ? AND status = 'active'",
+                (pool_id,),
+            ).fetchone()
+            if not pool:
+                raise EarnError("pool_not_found")
+            if amt < Decimal(pool["min_stake"]):
+                raise EarnError("below_minimum_stake")
+            link = con.execute(
+                "SELECT wallet_address FROM earn_wallet_links WHERE earn_user_id = ?",
+                (earn_user_id,),
+            ).fetchone()
+            if not link:
+                raise EarnError("wallet_not_linked")
+            now = int(time.time())
+            position_id = "pos_" + secrets.token_urlsafe(18)
+            con.execute(
+                """INSERT INTO earn_staking_positions
+                   (position_id, pool_id, earn_user_id, wallet_address,
+                    amount, status, staked_at)
+                   VALUES (?,?,?,?,?,'active',?)""",
+                (
+                    position_id, pool_id, earn_user_id,
+                    link["wallet_address"], str(amt), now,
+                ),
+            )
+            return {
+                "position_id": position_id,
+                "pool_id": pool_id,
+                "token": pool["token"],
+                "amount": str(amt),
+                "status": "active",
+                "staked_at": now,
+                "wallet_address": link["wallet_address"],
+            }
+
+    def request_unstake(
+        self, earn_user_id: str, position_id: str,
+    ) -> dict[str, Any]:
+        with self._tx() as con:
+            row = con.execute(
+                """SELECT * FROM earn_staking_positions
+                   WHERE position_id = ? AND earn_user_id = ? AND status = 'active'""",
+                (position_id, earn_user_id),
+            ).fetchone()
+            if not row:
+                raise EarnError("position_not_found")
+            now = int(time.time())
+            con.execute(
+                """UPDATE earn_staking_positions
+                   SET status = 'unstaking', unstake_requested_at = ?
+                   WHERE position_id = ?""",
+                (now, position_id),
+            )
+            return {
+                "position_id": position_id,
+                "status": "unstaking",
+                "unstake_requested_at": now,
+            }
+
+    def list_ads(self, placement: str = "earn") -> list[dict[str, Any]]:
+        now = int(time.time())
+        with self._tx() as con:
+            rows = con.execute(
+                """SELECT ad_id, title, image_url, target_url, placement,
+                          priority, impressions, clicks
+                     FROM earn_ads
+                    WHERE status = 'active'
+                      AND placement = ?
+                      AND (expires_at IS NULL OR expires_at > ?)
+                 ORDER BY priority DESC, created_at DESC""",
+                (placement, now),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def record_ad_impression(self, ad_id: str) -> None:
+        with self._tx() as con:
+            con.execute(
+                "UPDATE earn_ads SET impressions = impressions + 1 WHERE ad_id = ?",
+                (ad_id,),
+            )
+
+    def record_ad_click(self, ad_id: str) -> None:
+        with self._tx() as con:
+            con.execute(
+                "UPDATE earn_ads SET clicks = clicks + 1 WHERE ad_id = ?",
+                (ad_id,),
+            )
+
+    def create_ad(
+        self,
+        title: str,
+        image_url: str,
+        target_url: str,
+        placement: str = "earn",
+        priority: int = 0,
+        expires_at: int | None = None,
+    ) -> dict[str, Any]:
+        ad_id = "ad_" + secrets.token_hex(8)
+        now = int(time.time())
+        with self._tx() as con:
+            con.execute(
+                """INSERT INTO earn_ads
+                   (ad_id, title, image_url, target_url, placement,
+                    priority, status, impressions, clicks, created_at, expires_at)
+                   VALUES (?, ?, ?, ?, ?, ?, 'active', 0, 0, ?, ?)""",
+                (ad_id, title, image_url, target_url, placement,
+                 priority, now, expires_at),
+            )
+        return {"ad_id": ad_id, "title": title, "placement": placement}
+
+    def delete_ad(self, ad_id: str) -> bool:
+        with self._tx() as con:
+            cur = con.execute(
+                "UPDATE earn_ads SET status = 'inactive' WHERE ad_id = ?",
+                (ad_id,),
+            )
+            return cur.rowcount > 0
+
+    # ── Referrals ──────────────────────────────────────────────────────
+
+    def referral_code(self, earn_user_id: str) -> str:
+        return earn_user_id
+
+    def referral_stats(self, earn_user_id: str) -> dict[str, Any]:
+        with self._tx() as con:
+            row = con.execute(
+                "SELECT COUNT(*) AS cnt FROM earn_referrals WHERE referrer_id = ?",
+                (earn_user_id,),
+            ).fetchone()
+            return {"referral_count": row["cnt"] if row else 0}
+
+    def referral_list(self, earn_user_id: str) -> list[dict[str, Any]]:
+        with self._tx() as con:
+            rows = con.execute(
+                """SELECT r.referred_id, r.created_at, a.email
+                   FROM earn_referrals r
+                   JOIN earn_accounts a ON a.earn_user_id = r.referred_id
+                   WHERE r.referrer_id = ?
+                   ORDER BY r.created_at DESC LIMIT 50""",
+                (earn_user_id,),
+            ).fetchall()
+            return [
+                {
+                    "created_at": r["created_at"],
+                    "email_hint": r["email"][:2] + "***",
+                }
+                for r in rows
+            ]
 
     @staticmethod
     def _ledger_dict(row: sqlite3.Row) -> dict[str, Any]:
@@ -1998,10 +2336,12 @@ def register_earn_account_routes(
     @app.post("/api/earn/register")
     def earn_register():
         data = request.get_json(silent=True) or {}
+        ref_code = str(data.get("ref", "")).strip() or None
         try:
             user = store.register(
                 str(data.get("email", "")),
                 str(data.get("password", "")),
+                ref_code=ref_code,
             )
         except EarnError as exc:
             return jsonify(ok=False, error=str(exc)), 400
@@ -2171,6 +2511,131 @@ def register_earn_account_routes(
         response = jsonify(ok=True, **data)
         response.headers["Cache-Control"] = "no-store"
         return response
+
+    @app.get("/api/earn/staking/pools")
+    def earn_staking_pools():
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        pools = store.staking_pools()
+        return jsonify(ok=True, pools=pools)
+
+    @app.get("/api/earn/staking/positions")
+    def earn_staking_positions():
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        positions = store.staking_positions(user["earn_user_id"])
+        return jsonify(ok=True, positions=positions)
+
+    @app.post("/api/earn/staking/stake")
+    def earn_staking_stake():
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        data = request.get_json(silent=True) or {}
+        try:
+            position = store.create_stake(
+                user["earn_user_id"],
+                str(data.get("pool_id", "")),
+                str(data.get("amount", "")),
+            )
+        except EarnError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, **position)
+
+    @app.post("/api/earn/staking/unstake")
+    def earn_staking_unstake():
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        data = request.get_json(silent=True) or {}
+        try:
+            result = store.request_unstake(
+                user["earn_user_id"],
+                str(data.get("position_id", "")),
+            )
+        except EarnError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, **result)
+
+    @app.get("/api/earn/ads")
+    def earn_ads():
+        placement = request.args.get("placement", "earn")
+        if placement not in ("earn", "basketball", "general"):
+            return jsonify(ok=False, error="invalid_placement"), 400
+        ads = store.list_ads(placement)
+        return jsonify(ok=True, ads=ads)
+
+    @app.post("/api/earn/ads/impression")
+    def earn_ad_impression():
+        data = request.get_json(silent=True) or {}
+        ad_id = str(data.get("ad_id", "")).strip()
+        if ad_id:
+            store.record_ad_impression(ad_id)
+        return jsonify(ok=True)
+
+    @app.post("/api/earn/ads/click")
+    def earn_ad_click():
+        data = request.get_json(silent=True) or {}
+        ad_id = str(data.get("ad_id", "")).strip()
+        if ad_id:
+            store.record_ad_click(ad_id)
+        return jsonify(ok=True)
+
+    @app.post("/api/earn/ads/create")
+    def earn_ad_create():
+        mgmt_token = request.headers.get("X-Admin-Key", "").strip()
+        if not mgmt_token or mgmt_token != os.getenv("EARN_MGMT_TOKEN", "").strip():
+            return jsonify(ok=False, error="unauthorized"), 403
+        data = request.get_json(silent=True) or {}
+        title = str(data.get("title", "")).strip()
+        image_url = str(data.get("image_url", "")).strip()
+        target_url = str(data.get("target_url", "")).strip()
+        if not title or not image_url or not target_url:
+            return jsonify(ok=False, error="missing_fields"), 400
+        placement = str(data.get("placement", "earn")).strip()
+        priority = int(data.get("priority", 0))
+        expires_at = data.get("expires_at")
+        result = store.create_ad(
+            title=title,
+            image_url=image_url,
+            target_url=target_url,
+            placement=placement,
+            priority=priority,
+            expires_at=int(expires_at) if expires_at else None,
+        )
+        return jsonify(ok=True, **result)
+
+    @app.post("/api/earn/ads/delete")
+    def earn_ad_delete():
+        mgmt_token = request.headers.get("X-Admin-Key", "").strip()
+        if not mgmt_token or mgmt_token != os.getenv("EARN_MGMT_TOKEN", "").strip():
+            return jsonify(ok=False, error="unauthorized"), 403
+        data = request.get_json(silent=True) or {}
+        ad_id = str(data.get("ad_id", "")).strip()
+        if not ad_id:
+            return jsonify(ok=False, error="missing_ad_id"), 400
+        deleted = store.delete_ad(ad_id)
+        return jsonify(ok=True, deleted=deleted)
+
+    @app.get("/api/earn/referral/code")
+    def earn_referral_code():
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="not_authenticated"), 401
+        code = store.referral_code(user["earn_user_id"])
+        return jsonify(ok=True, ref_code=code)
+
+    @app.get("/api/earn/referral/stats")
+    def earn_referral_stats():
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="not_authenticated"), 401
+        uid = user["earn_user_id"]
+        stats = store.referral_stats(uid)
+        refs = store.referral_list(uid)
+        return jsonify(ok=True, **stats, referrals=refs)
 
     @app.get("/api/earn/providers")
     def earn_providers():

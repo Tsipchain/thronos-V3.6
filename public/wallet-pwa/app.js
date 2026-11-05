@@ -1655,11 +1655,6 @@ async function showWallet() {
         </div>
       </div>
 
-      <!-- Wallet home sidebar: ads stay outside payment/signing screens. -->
-      <aside id="walletAdsSidebar" aria-label="Sponsored offers" style="display:none;margin-bottom:10px"></aside>
-      <section id="walletLeaderboardPanel" aria-label="30-day Earn leaderboard" style="margin-bottom:10px"></section>
-      <section id="walletReferralPanel" aria-label="Earn referrals" style="margin-bottom:10px"></section>
-
       <!-- LP Positions panel (populated async) -->
       <div id="lpPositionsPanel"></div>
 
@@ -1744,13 +1739,6 @@ async function showWallet() {
   document.getElementById('epochBtn').addEventListener('click', showEpoch);
   document.getElementById('historyBtn').addEventListener('click', () => showHistory(address));
   document.getElementById('withdrawBtn').addEventListener('click', () => showWithdraw(address));
-
-  loadWalletAdsSidebar();
-  window.ThronosEarnLeaderboard?.mount(
-    document.getElementById('walletLeaderboardPanel'),
-    { base: API_WRITE },
-  );
-  loadWalletReferralPanel();
 
   const setAddrBarValue = (full) => {
     const lineEl = document.getElementById('addrLine');
@@ -2239,6 +2227,8 @@ async function showEarn(options = {}) {
       <p id="earnPwaMessage" style="font-size:.72rem;color:var(--muted);line-height:1.45;margin:12px 0 4px">Verified provider receipts stay pending during the seven-day Earn hold. Select a receipt to see its own countdown and status.</p>
       <div style="margin-top:12px"><div style="font-size:.7rem;color:var(--muted);letter-spacing:.08em">RECENT REWARDS</div>${rows}</div>
       <section id="earnPwaLeaderboard" aria-label="30-day Earn leaderboard"></section>
+      <aside id="walletAdsSidebar" aria-label="Sponsored offers" style="display:none;margin-top:12px"></aside>
+      <section id="walletReferralPanel" aria-label="Earn referrals" style="margin-top:12px"></section>
       <div id="earnStakingSection" style="margin-top:16px;border-top:1px solid #ffffff14;padding-top:14px">
         <div style="font-size:.7rem;color:var(--muted);letter-spacing:.08em;margin-bottom:10px">STAKING POOLS</div>
         <div id="earnStakingPools"></div>
@@ -2251,6 +2241,8 @@ async function showEarn(options = {}) {
     window.ThronosEarnLeaderboard.mount(document.getElementById('earnPwaLeaderboard'), { base: earnBase }).then(() => {
       if (options.focusLeaderboard) document.getElementById('earnPwaLeaderboard')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
+    loadWalletAdsSidebar();
+    loadWalletReferralPanel();
     const openReceiptDetails = (event) => {
       const button = event.target.closest('[data-earn-receipt]');
       if (button) window.ThronosEarnReceipts.open(button.dataset.earnReceipt, { base: earnBase });

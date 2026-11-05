@@ -2273,10 +2273,6 @@ async function showEarn() {
       // The provider grid remains visible; individual endpoint errors are fail-closed.
     }
   } catch {
-        message.textContent = 'Surveys are temporarily unavailable. Your Earn balance remains unchanged.';
-      }
-    });
-  } catch {
     body.innerHTML = `
       <p style="color:var(--muted);margin:0 0 12px">Earn data could not be loaded. No zero balance is assumed; your wallet and rewards remain unchanged.</p>
       <button class="btn" id="retryEarnLoadBtn" type="button" style="width:100%;padding:10px">Retry Earn data</button>

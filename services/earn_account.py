@@ -1300,7 +1300,7 @@ class EarnAccountStore:
             raise EarnError("invalid_timewall_user")
         try:
             revenue = Decimal(str(revenue_raw))
-            conversion = Decimal(os.getenv("TIMEWALL_THC_CONVERSION", "675"))
+            conversion = Decimal(os.getenv("TIMEWALL_THC_CONVERSION", "670"))
             allow_decimals = os.getenv("TIMEWALL_ALLOW_DECIMALS", "0") == "1"
             amount_scale = _THC_SCALE if allow_decimals else Decimal("1")
             rounding = ROUND_DOWN if allow_decimals else ROUND_HALF_UP

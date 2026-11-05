@@ -1599,9 +1599,15 @@ def build_timewall_offerwall_url(provider_user_id: str) -> str:
         raise EarnError("timewall_not_configured")
     if not provider_user_id or len(provider_user_id) > 32:
         raise EarnError("invalid_timewall_user")
-    if not template.startswith("https://") or "{userId}" not in template:
+    placeholders = ("{userId}", "{userID}", "{user_ID}", "{user_id}")
+    if not template.startswith("https://") or not any(
+        placeholder in template for placeholder in placeholders
+    ):
         raise EarnError("invalid_timewall_placement")
-    return template.replace("{userId}", urlencode({"v": provider_user_id})[2:])
+    encoded_user_id = urlencode({"v": provider_user_id})[2:]
+    for placeholder in placeholders:
+        template = template.replace(placeholder, encoded_user_id)
+    return template
 
 
 def verify_pure_postback_signature(
@@ -2105,15 +2111,16 @@ def register_earn_account_routes(
             else (request.get_json(silent=True) or {})
         )
         user_id = str(
-            params.get("userId") or params.get("user_ID")
-            or params.get("user_id") or "",
+            params.get("userId") or params.get("userID")
+            or params.get("user_ID") or params.get("user_id") or "",
         ).strip()
         # Preserve the provider's exact revenue string for signature validation.
         revenue_value = params.get("revenue")
         revenue = revenue_value if isinstance(revenue_value, str) else str(revenue_value or "")
         received_hash = str(params.get("hash") or "").strip()
         event_id = str(
-            params.get("transactionId") or params.get("transaction_id")
+            params.get("transactionId") or params.get("transactionID")
+            or params.get("txid") or params.get("transaction_id")
             or params.get("withdrawid") or "",
         ).strip()
         if not event_id or not verify_timewall_postback_signature(

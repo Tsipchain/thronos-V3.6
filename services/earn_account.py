@@ -1307,6 +1307,10 @@ class EarnAccountStore:
             amount = (revenue * conversion).quantize(amount_scale, rounding=rounding)
             if revenue <= 0 or conversion <= 0 or amount <= 0:
                 raise ValueError
+            # Keep the durable ledger representation at the same six-decimal
+            # scale used by balance/history APIs, even when the provider
+            # placement itself disallows fractional THC.
+            ledger_amount = amount.quantize(_THC_SCALE)
         except (TypeError, ValueError, InvalidOperation):
             raise EarnError("invalid_timewall_revenue")
         now = int(time.time())
@@ -1335,7 +1339,7 @@ class EarnAccountStore:
                     state, note, provider_status, received_at, created_at, updated_at)
                    VALUES (?,?,?,?,?,'pending',?,'received_pending_clearance',?,?,?)""",
                 (
-                    entry_id, uid, "timewall", event_id, str(amount),
+                    entry_id, uid, "timewall", event_id, str(ledger_amount),
                     f"{event_type}:{offer_name}"[:300], now, now, now,
                 ),
             )
@@ -1343,7 +1347,7 @@ class EarnAccountStore:
                 """INSERT INTO timewall_receipts
                    VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
                 (
-                    event_id, uid, str(revenue_raw), str(amount),
+                    event_id, uid, str(revenue_raw), str(ledger_amount),
                     str(event_type)[:100], str(reason)[:500],
                     str(offer_name)[:500], str(offer_detail)[:1000],
                     entry_id, now, payload_json,

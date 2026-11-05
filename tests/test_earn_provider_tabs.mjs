@@ -50,6 +50,15 @@ test('rapid taps share one pending request and one tab', async () => {
   assert.equal(opened[0].tab.navigations.length, 1);
 });
 
+test('cross-origin window properties are not inspected during promise resolution', async () => {
+  const { tabs, opened } = setup();
+  const pending = tabs.open('cpx', () => 'https://example.com/survey');
+  Object.defineProperty(opened[0].tab, 'then', {
+    get() { throw new Error('cross-origin property access'); },
+  });
+  assert.equal(await pending, true);
+});
+
 test('reopening an active survey only focuses it without navigating or refetching', async () => {
   const { tabs, opened } = setup();
   await tabs.open('timewall', () => 'https://example.com/start');

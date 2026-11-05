@@ -47,7 +47,9 @@
       }
       tab.location.replace(url.href);
       try { tab.focus(); } catch (_) {}
-      return tab;
+      // Do not resolve a promise with a cross-origin WindowProxy: promise
+      // assimilation would read its forbidden `then` property.
+      return true;
     }).catch(error => {
       if (tabs.get(provider) === entry) tabs.delete(provider);
       close(tab);

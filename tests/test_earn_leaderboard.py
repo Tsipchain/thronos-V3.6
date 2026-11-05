@@ -67,12 +67,15 @@ def test_all_provider_receipts_count_as_provisional_without_wallet(store, provid
     assert store.thc_balance(user['earn_user_id'])['available'] == '0.000000'
 
 
-def test_pending_and_cleared_are_separate_and_clearance_does_not_double_count(store):
+def test_pending_and_cleared_are_separate_and_clearance_does_not_double_count(store, monkeypatch):
     user, _ = account(store, 'splits')
     receipt(store, user, 'one', '0.100001')
-    receipt(store, user, 'two', '0.200002')
+    receipt(store, user, 'two', '0.200002', at=START + 200)
     store.record_verified_clearance(source='cpx_survey', source_ref='one', event_ref='verified-clearance',
         new_state='confirmed', provider_status='cleared', cleared_at=END + 100)
+    monkeypatch.setattr('services.earn_account.time.time', lambda: START + 100 + 7 * 86400)
+    with patch.dict('os.environ', {'NODE_ROLE': 'master', 'READ_ONLY': '0', 'SCHEDULER_ENABLED': '1'}):
+        assert store.release_mature_earn_holds() == 1
     result = store.leaderboard(caller_user_id=user['earn_user_id'], at_time=END + 200)
     assert result['your_score'] == {'total_earned': '0.300003', 'pending_earned': '0.200002', 'cleared_earned': '0.100001', 'completions': 2}
     assert result['phase'] == 'ended'

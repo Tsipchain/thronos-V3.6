@@ -36,6 +36,22 @@ _THC_SCALE = Decimal("0.000001")
 _LEADERBOARD_START = int(datetime.fromisoformat("2026-11-05T00:00:00+02:00").timestamp())
 _LEADERBOARD_END = _LEADERBOARD_START + 30 * 86400
 _LEADERBOARD_CAMPAIGN = "earn-beta-2026-11-05"
+_EARN_HOLD_SECONDS = 7 * 86400
+_EARN_HOLD_POLICY = "earn-seven-day-v1"
+_VERIFIED_PROVIDER_RECEIPT_SQL = """(
+                       (l.source IN ('cpx_survey', 'cpx') AND EXISTS (
+                         SELECT 1 FROM cpx_receipts r WHERE r.trans_id=l.source_ref
+                         AND r.earn_user_id=l.earn_user_id AND r.thc_entry_id=l.entry_id AND r.status=1))
+                       OR (l.source='bitcotasks' AND EXISTS (
+                         SELECT 1 FROM bitcotasks_receipts r WHERE r.trans_id=l.source_ref
+                         AND r.earn_user_id=l.earn_user_id AND r.thc_entry_id=l.entry_id AND r.status=1))
+                       OR (l.source='pure' AND EXISTS (
+                         SELECT 1 FROM pure_receipts r WHERE r.trans_id=l.source_ref
+                         AND r.earn_user_id=l.earn_user_id AND r.thc_entry_id=l.entry_id AND r.status=1))
+                       OR (l.source='timewall' AND EXISTS (
+                         SELECT 1 FROM timewall_receipts r WHERE r.event_id=l.source_ref
+                         AND r.earn_user_id=l.earn_user_id AND r.thc_entry_id=l.entry_id))
+                     )"""
 _CLEARANCE_DAYS = int(os.getenv("EARN_CLEARANCE_DAYS", "7"))
 
 logger = logging.getLogger(__name__)
@@ -138,6 +154,7 @@ class EarnAccountStore:
 
     def _init_db(self) -> None:
         con = sqlite3.connect(self.db_path, timeout=15)
+        con.row_factory = sqlite3.Row
         try:
             con.executescript("""
                 PRAGMA journal_mode = WAL;
@@ -323,7 +340,7 @@ class EarnAccountStore:
                     ON earn_wallet_challenges(expires_at);
             """)
             # Existing production Earn databases predate the provider
-            # clearance presentation fields.  SQLite lacks ADD COLUMN IF NOT
+            # clearance and separate internal hold fields. SQLite lacks ADD COLUMN IF NOT
             # EXISTS, so use a narrow, fixed migration list rather than any
             # dynamic SQL based on external input.
             existing = {
@@ -335,9 +352,25 @@ class EarnAccountStore:
                 ("estimated_clearance_at", "INTEGER"),
                 ("cleared_at", "INTEGER"),
                 ("reversal_reason", "TEXT"),
+                ("earn_hold_started_at", "INTEGER"),
+                ("earn_hold_until", "INTEGER"),
+                ("earn_hold_released_at", "INTEGER"),
+                ("earn_hold_policy", "TEXT"),
             ):
                 if column not in existing:
                     con.execute(f"ALTER TABLE thc_ledger ADD COLUMN {column} {definition}")
+            con.commit()
+            con.execute("BEGIN IMMEDIATE")
+            # Apply the newly authorized internal policy only to verified,
+            # still-pending receipts; never relock an existing available balance.
+            rows = con.execute(
+                f"""SELECT l.entry_id, COALESCE(l.received_at, l.created_at) AS first_received
+                    FROM thc_ledger l WHERE l.state='pending' AND l.earn_hold_until IS NULL
+                    AND {_VERIFIED_PROVIDER_RECEIPT_SQL}""",
+            ).fetchall()
+            for row in rows:
+                self._attach_earn_hold_in_tx(con, row["entry_id"], row["first_received"])
+            con.commit()
         finally:
             con.close()
 
@@ -797,6 +830,8 @@ class EarnAccountStore:
                 raise EarnError("thc_entry_not_found")
             if row["state"] == new_state:
                 return self._ledger_dict(row)
+            if row["state"] == "pending" and new_state in ("confirmed", "payable", "paid") and row["earn_hold_until"]:
+                raise EarnError("earn_hold_requires_server_release")
             if new_state not in _THC_TRANSITIONS[row["state"]]:
                 raise EarnError("invalid_thc_transition")
             if new_state == "paid" and not settlement_ref:
@@ -818,22 +853,88 @@ class EarnAccountStore:
                 ).fetchone(),
             )
 
+    def loyalty_status(self, earn_user_id: str | None) -> dict[str, Any]:
+        linked = bool(earn_user_id and self.wallet_link_for_user(earn_user_id))
+        return {
+            "wallet_linked": linked, "vip": linked,
+            "tier": "wallet_loyalty_vip" if linked else "earn_account",
+            "basis": "verified_wallet_link" if linked else "wallet_not_linked",
+        }
+
+    def _attach_earn_hold_in_tx(self, con, entry_id: str, received_at: int) -> None:
+        row = con.execute("SELECT * FROM thc_ledger WHERE entry_id=?", (entry_id,)).fetchone()
+        if not row or row["state"] != "pending" or row["earn_hold_until"]:
+            return
+        amount = Decimal(row["amount"])
+        if not amount.is_finite() or amount <= 0 or not received_at or int(received_at) <= 0:
+            return
+        started = int(received_at)
+        con.execute(
+            """UPDATE thc_ledger SET earn_hold_started_at=?, earn_hold_until=?,
+               earn_hold_policy=? WHERE entry_id=? AND earn_hold_until IS NULL""",
+            (started, started + _EARN_HOLD_SECONDS, _EARN_HOLD_POLICY, entry_id),
+        )
+        self._append_ledger_audit_in_tx(
+            con, entry_id=entry_id, event_ref=f"earn:hold:start:{entry_id}",
+            event_type="earn_hold_started", state="pending", occurred_at=started,
+            provider_status=row["provider_status"], details=_EARN_HOLD_POLICY,
+        )
+
+    def release_mature_earn_holds(self) -> int:
+        """Master scheduler only: release the internal hold, never send money."""
+        def setting(name, default):
+            return os.getenv(name, default).strip().strip("\"'").lower()
+        if (setting("NODE_ROLE", "") != "master"
+                or setting("READ_ONLY", "0") in ("1", "true", "yes")
+                or setting("SCHEDULER_ENABLED", "0") not in ("1", "true", "yes")):
+            return 0
+        now = int(time.time())
+        released = 0
+        with self._tx() as con:
+            rows = con.execute(
+                f"""SELECT l.* FROM thc_ledger l WHERE l.state='pending'
+                    AND l.earn_hold_policy=? AND l.earn_hold_until<=?
+                    AND l.earn_hold_until=l.earn_hold_started_at+?
+                    AND l.earn_hold_released_at IS NULL
+                    AND {_VERIFIED_PROVIDER_RECEIPT_SQL}
+                    ORDER BY l.earn_hold_until LIMIT 500""", (_EARN_HOLD_POLICY, now, _EARN_HOLD_SECONDS),
+            ).fetchall()
+            for row in rows:
+                amount = Decimal(row["amount"])
+                if not amount.is_finite() or amount <= 0:
+                    continue
+                con.execute(
+                    """UPDATE thc_ledger SET state='confirmed', earn_hold_released_at=?,
+                       updated_at=? WHERE entry_id=? AND state='pending'""",
+                    (now, now, row["entry_id"]),
+                )
+                self._append_ledger_audit_in_tx(
+                    con, entry_id=row["entry_id"], event_ref=f"earn:hold:release:{row['entry_id']}",
+                    event_type="earn_hold_released", state="confirmed", occurred_at=now,
+                    provider_status=row["provider_status"], details=_EARN_HOLD_POLICY,
+                )
+                released += 1
+        return released
+
     def thc_balance(self, earn_user_id: str) -> dict[str, Any]:
         now = int(time.time())
         with self._tx() as con:
             rows = con.execute(
-                "SELECT state, amount, created_at, estimated_clearance_at"
+                "SELECT state, amount, created_at, estimated_clearance_at, earn_hold_until"
                 " FROM thc_ledger WHERE earn_user_id = ?",
                 (earn_user_id,),
             ).fetchall()
         by_state: dict[str, Decimal] = {}
         earliest_clears: int | None = None
+        earliest_hold: int | None = None
         for r in rows:
             s = r["state"]
             by_state[s] = by_state.get(s, Decimal("0")) + Decimal(r["amount"])
             if s == "pending":
-                # Only a verified provider ETA may drive a clearance display.
-                # Never derive a countdown from local policy or receipt time.
+                hold = int(r["earn_hold_until"] or 0)
+                if hold and (earliest_hold is None or hold < earliest_hold):
+                    earliest_hold = hold
+                # Provider ETA stays distinct from the authorized internal hold.
                 eta = int(r["estimated_clearance_at"] or 0)
                 if eta and (earliest_clears is None or eta < earliest_clears):
                     earliest_clears = eta
@@ -853,6 +954,15 @@ class EarnAccountStore:
             remaining = max(0, earliest_clears - now)
             result["earliest_clears_at"] = earliest_clears
             result["days_remaining"] = remaining // 86400 + (1 if remaining % 86400 else 0)
+        if earliest_hold:
+            remaining = max(0, earliest_hold - now)
+            result.update(
+                earliest_earn_hold_until=earliest_hold,
+                earn_hold_days_remaining=(remaining + 86399) // 86400,
+                earn_hold_seconds_remaining=remaining,
+                clearance_status="earn_hold_active" if remaining else "earn_hold_due",
+                clearance_message="Seven-day Earn hold after verified provider receipt.",
+            )
         return result
 
     def thc_history(
@@ -863,6 +973,7 @@ class EarnAccountStore:
                 """SELECT entry_id, source, source_ref, amount, state,
                           note, settlement_ref, provider_status, received_at,
                           estimated_clearance_at, cleared_at, reversal_reason,
+                          earn_hold_started_at, earn_hold_until, earn_hold_released_at, earn_hold_policy,
                           created_at, updated_at
                    FROM thc_ledger WHERE earn_user_id = ?
                    ORDER BY created_at DESC LIMIT ?""",
@@ -877,6 +988,7 @@ class EarnAccountStore:
                 """SELECT entry_id, source, source_ref, amount, state, note,
                           settlement_ref, provider_status, received_at,
                           estimated_clearance_at, cleared_at, reversal_reason,
+                          earn_hold_started_at, earn_hold_until, earn_hold_released_at, earn_hold_policy,
                           created_at, updated_at
                    FROM thc_ledger WHERE earn_user_id = ? AND entry_id = ?""",
                 (earn_user_id, entry_id),
@@ -915,26 +1027,13 @@ class EarnAccountStore:
         limit = min(max(limit, 1), 50)
         with self._tx() as con:
             rows = con.execute(
-                """SELECT l.earn_user_id, l.amount, l.state
+                f"""SELECT l.earn_user_id, l.amount, l.state
                    FROM thc_ledger l
                    WHERE l.state IN ('pending', 'confirmed', 'payable', 'paid')
                      AND COALESCE(l.received_at, l.created_at) >= ?
                      AND COALESCE(l.received_at, l.created_at) < ?
                      AND COALESCE(l.received_at, l.created_at) <= ?
-                     AND (
-                       (l.source IN ('cpx_survey', 'cpx') AND EXISTS (
-                         SELECT 1 FROM cpx_receipts r WHERE r.trans_id=l.source_ref
-                         AND r.earn_user_id=l.earn_user_id AND r.thc_entry_id=l.entry_id AND r.status=1))
-                       OR (l.source='bitcotasks' AND EXISTS (
-                         SELECT 1 FROM bitcotasks_receipts r WHERE r.trans_id=l.source_ref
-                         AND r.earn_user_id=l.earn_user_id AND r.thc_entry_id=l.entry_id AND r.status=1))
-                       OR (l.source='pure' AND EXISTS (
-                         SELECT 1 FROM pure_receipts r WHERE r.trans_id=l.source_ref
-                         AND r.earn_user_id=l.earn_user_id AND r.thc_entry_id=l.entry_id AND r.status=1))
-                       OR (l.source='timewall' AND EXISTS (
-                         SELECT 1 FROM timewall_receipts r WHERE r.event_id=l.source_ref
-                         AND r.earn_user_id=l.earn_user_id AND r.thc_entry_id=l.entry_id))
-                     )""",
+                     AND {_VERIFIED_PROVIDER_RECEIPT_SQL}""",
                 (_LEADERBOARD_START, _LEADERBOARD_END, now),
             ).fetchall()
 
@@ -988,6 +1087,7 @@ class EarnAccountStore:
             "prizes_enabled": False,
             "total_active": len(ranked), "your_rank": your_rank,
             "your_score": your_score, "entries": entries,
+            "loyalty": self.loyalty_status(caller_user_id),
         }
 
     @staticmethod
@@ -996,6 +1096,21 @@ class EarnAccountStore:
         if "amount" in d:
             d["amount"] = str(Decimal(d["amount"]).quantize(_THC_SCALE))
         d.pop("password_hash", None)
+        until = int(d.get("earn_hold_until") or 0)
+        if until:
+            left = max(0, until - int(time.time()))
+            d["earn_hold_seconds_remaining"] = left
+            d["earn_hold_days_remaining"] = (left + 86399) // 86400
+            d["earn_hold_phase"] = (
+                "cancelled" if d.get("state") == "reversed" else
+                "released" if d.get("earn_hold_released_at") else
+                "waiting" if left else "due"
+            )
+            d["earn_pending_reason"] = (
+                "provider_reversed" if d.get("state") == "reversed" else
+                "earn_hold_active" if d["earn_hold_phase"] == "waiting" else
+                "earn_hold_due" if d["earn_hold_phase"] == "due" else ""
+            )
         return d
 
     @staticmethod
@@ -1100,6 +1215,23 @@ class EarnAccountStore:
                 return self._ledger_dict(row), False
             if row["state"] == "reversed":
                 raise EarnError("invalid_thc_transition")
+            if row["state"] == "pending" and row["earn_hold_until"]:
+                if new_state != "confirmed":
+                    raise EarnError("invalid_thc_transition")
+                con.execute(
+                    """UPDATE thc_ledger SET provider_status=?,
+                       estimated_clearance_at=COALESCE(?, estimated_clearance_at),
+                       cleared_at=?, updated_at=? WHERE entry_id=?""",
+                    (provider_status, eta, provider_cleared_at or now, now, row["entry_id"]),
+                )
+                self._append_ledger_audit_in_tx(
+                    con, entry_id=row["entry_id"], event_ref=event_ref,
+                    event_type="provider_clearance", state="pending",
+                    provider_status=provider_status, occurred_at=provider_cleared_at or now,
+                )
+                return self._ledger_dict(con.execute(
+                    "SELECT * FROM thc_ledger WHERE entry_id=?", (row["entry_id"],),
+                ).fetchone()), True
             if row["state"] != new_state:
                 if new_state not in _THC_TRANSITIONS.get(row["state"], set()):
                     raise EarnError("invalid_thc_transition")
@@ -1230,6 +1362,8 @@ class EarnAccountStore:
                     now, payload_json,
                 ),
             )
+            if entry_id:
+                self._attach_earn_hold_in_tx(con, entry_id, now)
             return dict(con.execute(
                 "SELECT * FROM bitcotasks_receipts WHERE trans_id = ?", (trans_id,),
             ).fetchone()), True
@@ -1322,6 +1456,8 @@ class EarnAccountStore:
                     str(survey_id)[:200], entry_id, now, payload_json,
                 ),
             )
+            if entry_id:
+                self._attach_earn_hold_in_tx(con, entry_id, now)
             return dict(con.execute(
                 "SELECT * FROM pure_receipts WHERE trans_id = ?", (trans_id,),
             ).fetchone()), True
@@ -1396,6 +1532,8 @@ class EarnAccountStore:
                 event_type="provider_receipt", state="pending",
                 provider_status="received_pending_clearance", occurred_at=now,
             )
+            if entry_id:
+                self._attach_earn_hold_in_tx(con, entry_id, now)
             return dict(con.execute(
                 "SELECT * FROM timewall_receipts WHERE event_id = ?",
                 (event_id,),
@@ -1526,6 +1664,8 @@ class EarnAccountStore:
                     payload_json,
                 ),
             )
+            if thc_entry_id:
+                self._attach_earn_hold_in_tx(con, thc_entry_id, now)
             return dict(
                 con.execute(
                     "SELECT * FROM cpx_receipts WHERE trans_id = ?",
@@ -1898,6 +2038,7 @@ def register_earn_account_routes(
             email=user["email"],
             email_verified=bool(user["email_verified"]),
             wallet_address=link["wallet_address"] if link else None,
+            loyalty=store.loyalty_status(user["earn_user_id"]),
         )
 
     @app.post("/api/earn/wallet-link/challenge")
@@ -2007,7 +2148,7 @@ def register_earn_account_routes(
             details = store.thc_receipt_details(user["earn_user_id"], entry_id)
         except EarnError:
             return jsonify(ok=False, error="receipt_not_found"), 404
-        response = jsonify(ok=True, **details)
+        response = jsonify(ok=True, server_now=int(time.time()), **details)
         response.headers["Cache-Control"] = "no-store"
         return response
 

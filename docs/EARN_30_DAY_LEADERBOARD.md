@@ -16,7 +16,9 @@ TimeWall receipt count. The receipt must belong to the same account and ledger
 entry. Receipt time determines the cycle, including historical receipts already
 received since the start of this launch day. Earlier pilot receipts are excluded.
 
-The score is pending plus cleared THC, calculated with Decimal. Pending amounts
+The score is pending plus available THC, calculated with Decimal. The API's
+`cleared_earned` field groups confirmed, payable and paid Earn entries; it does
+not prove provider treasury payment. Pending amounts
 are provisional and are displayed separately from cleared amounts. Reversed
 receipts are removed, including reversals arriving after the deadline. Generic
 credits, browser activity, workouts and wallet balances cannot inflate a score.
@@ -29,9 +31,13 @@ countdown uses the server timestamp and monotonic elapsed time instead of the
 device's wall clock. API errors are shown as unavailable refreshes, not as an
 invented zero-user ranking.
 
-Ranking reads do not write rewards or audit events. Prize payment, staking,
-wallet unlock, reward clearance, treasury transfers and cash-out are not enabled
-by this release. Prizes for this cycle will be announced separately.
+Ranking reads do not write rewards or audit events. The separate seven-day hold
+worker releases eligible original receipts; this changes the pending/available
+split without duplicating score. Wallet PWA has direct Leaderboard / VIP access,
+and the shared card displays the caller's membership from a verified wallet
+link. See [Earn hold and loyalty](EARN_INTERNAL_HOLD_AND_LOYALTY.md).
+Prize payment, staking, wallet unlock, treasury transfers and cash-out are not
+enabled by the ranking. Prizes for this cycle will be announced separately.
 
 The all-provider tests also exposed an existing PureSpectrum INSERT with eight
 placeholders for nine columns. The release fixes that INSERT with an explicit

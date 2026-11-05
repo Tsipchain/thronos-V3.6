@@ -1,11 +1,12 @@
 // Bump when a shell asset changes so installed PWAs fetch the new UI.
-const CACHE = 'thr-wallet-pwa-v10';
+const CACHE = 'thr-wallet-pwa-v11';
 
 const PRECACHE = [
   '/wallet-pwa/',
   '/wallet-pwa/index.html',
   '/wallet-pwa/app.js',
   '/wallet-pwa/earn-provider-tabs.js',
+  '/wallet-pwa/earn-receipt-details.js',
   '/wallet-pwa/app.css',
   '/wallet-pwa/manifest.json',
   '/static/img/thronos-token.png'

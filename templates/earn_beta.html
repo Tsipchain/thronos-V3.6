@@ -232,6 +232,7 @@
   </div>
 </div>
 <script src="/wallet-pwa/earn-provider-tabs.js"></script>
+<script src="/wallet-pwa/earn-receipt-details.js"></script>
 <script>
 (() => {
   const $ = id => document.getElementById(id);
@@ -347,6 +348,9 @@
   function clearanceText(entry) {
     if (String(entry.state || '').toLowerCase() === 'reversed') {
       return entry.reversal_reason ? t('reversed').replace('{r}', String(entry.reversal_reason)) : t('reversedBy');
+    }
+    if (['confirmed', 'payable', 'paid'].includes(entry.state)) {
+      return (_lang === 'el' ? 'Καταγεγραμμένη κατάσταση: ' : 'Recorded state: ') + entry.state;
     }
     const eta = Number(entry.estimated_clearance_at);
     if (!Number.isInteger(eta) || eta <= 0) return t('clearanceNotRecv');
@@ -562,6 +566,12 @@
         activityCount.textContent = String(hData.entries.length);
         hData.entries.slice(0, 20).forEach(e => {
           const div = document.createElement('div'); div.className = 'earn-history-item';
+          const details = document.createElement('button');
+          details.type = 'button'; details.textContent = _lang === 'el' ? 'Στοιχεία' : 'Details';
+          div.style.cursor = 'pointer';
+          div.addEventListener('click', () => window.ThronosEarnReceipts.open(e.entry_id, {
+            headers: earnAuthHeaders(), language: _lang,
+          }));
           const left = document.createElement('div'), source = document.createElement('span');
           source.className = 'src'; source.textContent = (e.source || '').replace(/_/g, ' ');
           const provider = document.createElement('div'), receipt = document.createElement('div'), clearance = document.createElement('div');
@@ -572,7 +582,7 @@
           const value = formatThc(e.amount);
           amount.className = 'amt'; amount.textContent = value === null ? t('amtUnavail') : (value === '0.00' && String(e.state || '').toLowerCase() === 'pending' ? t('amtPending') : '+' + value + ' THC');
           state.className = 'st st-' + String(e.state || 'pending').replace(/[^a-z-]/g, ''); state.textContent = e.state || 'pending';
-          left.append(source, provider, receipt, clearance); right.append(amount, state); div.append(left, right);
+          left.append(source, provider, receipt, clearance); right.append(amount, state, details); div.append(left, right);
           historyList.appendChild(div);
         });
       } else {

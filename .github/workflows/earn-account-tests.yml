@@ -12,6 +12,8 @@ on:
       - "tests/test_earn_wallet_link.py"
       - "tests/test_timewall_earn_adapter.py"
       - "tests/test_earn_provider_tabs.mjs"
+      - "tests/test_earn_receipt_details.py"
+      - "tests/test_earn_receipt_details.mjs"
       - ".github/workflows/earn-account-tests.yml"
 
 permissions:
@@ -28,7 +30,7 @@ jobs:
         with:
           node-version: "20"
       - name: Test provider tab lifecycle
-        run: node --test tests/test_earn_provider_tabs.mjs
+        run: node --test tests/test_earn_provider_tabs.mjs tests/test_earn_receipt_details.mjs
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -44,4 +46,4 @@ jobs:
           TIMEWALL_ENABLED: "0"
           TIMEWALL_POSTBACK_LIVE: "0"
         run: |
-          python -m pytest tests/test_earn_account.py tests/test_earn_wallet_link.py tests/test_timewall_earn_adapter.py -v
+          python -m pytest tests/test_earn_account.py tests/test_earn_wallet_link.py tests/test_timewall_earn_adapter.py tests/test_earn_receipt_details.py -v

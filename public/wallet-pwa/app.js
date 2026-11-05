@@ -1558,9 +1558,15 @@ async function loadWalletAdsSidebar() {
     const seen = new Set();
     const ads = responses.flatMap(r => Array.isArray(r?.ads) ? r.ads : [])
       .filter(ad => ad?.ad_id && !seen.has(ad.ad_id) && seen.add(ad.ad_id));
-    if (!ads.length) return;
+    const fallbackAds = [
+      { ad_id: '', title: 'Thronos Earn', target_url: '/earn' },
+      { ad_id: '', title: 'TransferMarktBasket', target_url: 'https://transfermarktbasket.com' },
+      { ad_id: '', title: 'LitBits Faucet', target_url: 'https://t.me/litebits_faucet_bot/app' },
+      { ad_id: '', title: 'BitcoTasks', target_url: 'https://bitcotasks.com/promote/81663' },
+    ];
+    const visibleAds = ads.length ? ads : fallbackAds;
     panel.style.display = 'block';
-    panel.innerHTML = `<div style="font-size:.68rem;color:var(--muted);letter-spacing:.08em;margin:0 0 7px">SPONSORED</div>${ads.map(ad => `
+    panel.innerHTML = `<div style="font-size:.68rem;color:var(--muted);letter-spacing:.08em;margin:0 0 7px">SPONSORED</div>${visibleAds.map(ad => `
       <div style="background:#0d0a1a;border:1px solid #2a2050;border-radius:10px;padding:10px;margin-bottom:7px">
         <div style="font-size:.84rem;font-weight:700;color:#fff">${escHtml(ad.title || 'Sponsored offer')}</div>
         <a href="${escHtml(ad.target_url || '#')}" target="_blank" rel="noopener noreferrer sponsored" data-wallet-ad-click="${escHtml(ad.ad_id)}" style="display:inline-block;margin-top:7px;color:var(--accent);font-size:.72rem">Learn more →</a>

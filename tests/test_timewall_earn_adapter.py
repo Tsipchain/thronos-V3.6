@@ -225,3 +225,15 @@ class TestTimeWallTemplate:
                        "earn-timewall", "/api/earn/timewall/offerwall"):
             assert marker in html
         assert "TIMEWALL_SECRET_KEY" not in html
+
+
+def test_builder_accepts_timewall_unique_user_id_macro():
+    """Use the exact macro emitted by the approved TimeWall placement."""
+    with patch.dict(os.environ, {
+        "TIMEWALL_PLACEMENT_URL":
+        "https://timewall.io/users/login?oid=076621e9c8a31732&uid={UNIQUE_USER_ID}",
+    }):
+        url = build_timewall_offerwall_url("tw_opaque123")
+    assert url == (
+        "https://timewall.io/users/login?oid=076621e9c8a31732&uid=tw_opaque123"
+    )

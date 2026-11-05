@@ -77,6 +77,11 @@
   .earn-lb-staking h4 { color:#00a86b; font-size:13px; margin:0 0 6px; display:flex; align-items:center; gap:6px; }
   .earn-lb-staking p { color:#cbd5e1; font-size:12px; margin:0 0 8px; line-height:1.5; }
   .earn-lb-staking .staking-badge { display:inline-block; background:#00a86b22; color:#00a86b; font-size:10px; font-weight:700; padding:2px 8px; border-radius:99px; border:1px solid #00a86b44; }
+  .earn-ad-banner { background:linear-gradient(135deg,#0b1220,#162030); border:1px solid #2e587444; border-radius:12px; padding:12px; overflow:hidden; }
+  .earn-ad-banner a { display:block; text-decoration:none; color:inherit; }
+  .earn-ad-banner img { width:100%; border-radius:8px; display:block; }
+  .earn-ad-banner .ad-title { font-size:11px; color:#7fb8d8; margin-top:6px; text-align:center; }
+  .earn-ad-banner .ad-label { font-size:9px; color:#475569; text-transform:uppercase; letter-spacing:.08em; text-align:right; margin-top:4px; }
   .earn-lb-empty { color:#91a7b8; font-size:13px; text-align:center; padding:24px 0; }
   .earn-activity-trigger { display:flex; align-items:center; gap:8px; color:#b8d9ee; background:#101827; border:1px solid #2e5874; border-radius:999px; padding:8px 12px; cursor:pointer; float:right; }
   .earn-activity-count { min-width:18px; height:18px; line-height:18px; border-radius:99px; text-align:center; background:#f2c14e; color:#101827; font-size:11px; font-weight:800; }
@@ -152,6 +157,7 @@
           <div id="timewall-status" class="earn-provider-status" aria-live="polite">Placement setup pending</div>
         </section>
       </div>
+      <div id="earn-ad-banner" class="earn-ad-banner" style="display:none;margin-top:14px"></div>
       <div id="t2e-section" class="earn-provider" style="margin-top:14px;display:none">
         <h3 style="margin-bottom:8px" data-i18n="t2eTitle">Train-to-Earn</h3>
         <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px">
@@ -586,6 +592,24 @@
       }
     } catch (_) {}
     await refreshLeaderboard();
+    // Load ads
+    try {
+      const adRes = await fetch('/api/earn/ads?placement=earn', { credentials: 'include' });
+      const adData = await adRes.json().catch(() => ({}));
+      const banner = $('earn-ad-banner');
+      if (adRes.ok && adData.ok && adData.ads && adData.ads.length && banner) {
+        const ad = adData.ads[0];
+        banner.style.display = '';
+        banner.innerHTML = '<a href="' + ad.target_url + '" target="_blank" rel="noopener" data-ad-id="' + ad.ad_id + '">' +
+          '<img src="' + ad.image_url + '" alt="' + (ad.title || 'Ad') + '" loading="lazy">' +
+          '<div class="ad-title">' + (ad.title || '') + '</div></a>' +
+          '<div class="ad-label">sponsored</div>';
+        fetch('/api/earn/ads/impression', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ad_id: ad.ad_id }) }).catch(() => {});
+        banner.querySelector('a')?.addEventListener('click', () => {
+          fetch('/api/earn/ads/click', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ad_id: ad.ad_id }) }).catch(() => {});
+        });
+      }
+    } catch (_) {}
   }
   const _t2eDailyCap = 3;
 

@@ -365,6 +365,20 @@ class EarnAccountStore:
 
                 CREATE INDEX IF NOT EXISTS idx_earn_staking_positions_user
                     ON earn_staking_positions(earn_user_id);
+
+                CREATE TABLE IF NOT EXISTS earn_ads (
+                    ad_id       TEXT PRIMARY KEY,
+                    title       TEXT NOT NULL,
+                    image_url   TEXT NOT NULL,
+                    target_url  TEXT NOT NULL,
+                    placement   TEXT NOT NULL DEFAULT 'earn',
+                    priority    INTEGER NOT NULL DEFAULT 0,
+                    status      TEXT NOT NULL DEFAULT 'active',
+                    impressions INTEGER NOT NULL DEFAULT 0,
+                    clicks      INTEGER NOT NULL DEFAULT 0,
+                    created_at  INTEGER NOT NULL,
+                    expires_at  INTEGER
+                );
             """)
             # Existing production Earn databases predate the provider
             # clearance and separate internal hold fields. SQLite lacks ADD COLUMN IF NOT
@@ -1299,6 +1313,65 @@ class EarnAccountStore:
                 "status": "unstaking",
                 "unstake_requested_at": now,
             }
+
+    def list_ads(self, placement: str = "earn") -> list[dict[str, Any]]:
+        now = int(time.time())
+        with self._tx() as con:
+            rows = con.execute(
+                """SELECT ad_id, title, image_url, target_url, placement,
+                          priority, impressions, clicks
+                     FROM earn_ads
+                    WHERE status = 'active'
+                      AND placement = ?
+                      AND (expires_at IS NULL OR expires_at > ?)
+                 ORDER BY priority DESC, created_at DESC""",
+                (placement, now),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def record_ad_impression(self, ad_id: str) -> None:
+        with self._tx() as con:
+            con.execute(
+                "UPDATE earn_ads SET impressions = impressions + 1 WHERE ad_id = ?",
+                (ad_id,),
+            )
+
+    def record_ad_click(self, ad_id: str) -> None:
+        with self._tx() as con:
+            con.execute(
+                "UPDATE earn_ads SET clicks = clicks + 1 WHERE ad_id = ?",
+                (ad_id,),
+            )
+
+    def create_ad(
+        self,
+        title: str,
+        image_url: str,
+        target_url: str,
+        placement: str = "earn",
+        priority: int = 0,
+        expires_at: int | None = None,
+    ) -> dict[str, Any]:
+        ad_id = "ad_" + secrets.token_hex(8)
+        now = int(time.time())
+        with self._tx() as con:
+            con.execute(
+                """INSERT INTO earn_ads
+                   (ad_id, title, image_url, target_url, placement,
+                    priority, status, impressions, clicks, created_at, expires_at)
+                   VALUES (?, ?, ?, ?, ?, ?, 'active', 0, 0, ?, ?)""",
+                (ad_id, title, image_url, target_url, placement,
+                 priority, now, expires_at),
+            )
+        return {"ad_id": ad_id, "title": title, "placement": placement}
+
+    def delete_ad(self, ad_id: str) -> bool:
+        with self._tx() as con:
+            cur = con.execute(
+                "UPDATE earn_ads SET status = 'inactive' WHERE ad_id = ?",
+                (ad_id,),
+            )
+            return cur.rowcount > 0
 
     @staticmethod
     def _ledger_dict(row: sqlite3.Row) -> dict[str, Any]:
@@ -2418,6 +2491,66 @@ def register_earn_account_routes(
         except EarnError as exc:
             return jsonify(ok=False, error=str(exc)), 400
         return jsonify(ok=True, **result)
+
+    @app.get("/api/earn/ads")
+    def earn_ads():
+        placement = request.args.get("placement", "earn")
+        if placement not in ("earn", "basketball", "general"):
+            return jsonify(ok=False, error="invalid_placement"), 400
+        ads = store.list_ads(placement)
+        return jsonify(ok=True, ads=ads)
+
+    @app.post("/api/earn/ads/impression")
+    def earn_ad_impression():
+        data = request.get_json(silent=True) or {}
+        ad_id = str(data.get("ad_id", "")).strip()
+        if ad_id:
+            store.record_ad_impression(ad_id)
+        return jsonify(ok=True)
+
+    @app.post("/api/earn/ads/click")
+    def earn_ad_click():
+        data = request.get_json(silent=True) or {}
+        ad_id = str(data.get("ad_id", "")).strip()
+        if ad_id:
+            store.record_ad_click(ad_id)
+        return jsonify(ok=True)
+
+    @app.post("/api/earn/ads/create")
+    def earn_ad_create():
+        mgmt_token = request.headers.get("X-Admin-Key", "").strip()
+        if not mgmt_token or mgmt_token != os.getenv("EARN_MGMT_TOKEN", "").strip():
+            return jsonify(ok=False, error="unauthorized"), 403
+        data = request.get_json(silent=True) or {}
+        title = str(data.get("title", "")).strip()
+        image_url = str(data.get("image_url", "")).strip()
+        target_url = str(data.get("target_url", "")).strip()
+        if not title or not image_url or not target_url:
+            return jsonify(ok=False, error="missing_fields"), 400
+        placement = str(data.get("placement", "earn")).strip()
+        priority = int(data.get("priority", 0))
+        expires_at = data.get("expires_at")
+        result = store.create_ad(
+            title=title,
+            image_url=image_url,
+            target_url=target_url,
+            placement=placement,
+            priority=priority,
+            expires_at=int(expires_at) if expires_at else None,
+        )
+        return jsonify(ok=True, **result)
+
+    @app.post("/api/earn/ads/delete")
+    def earn_ad_delete():
+        mgmt_token = request.headers.get("X-Admin-Key", "").strip()
+        if not mgmt_token or mgmt_token != os.getenv("EARN_MGMT_TOKEN", "").strip():
+            return jsonify(ok=False, error="unauthorized"), 403
+        data = request.get_json(silent=True) or {}
+        ad_id = str(data.get("ad_id", "")).strip()
+        if not ad_id:
+            return jsonify(ok=False, error="missing_ad_id"), 400
+        deleted = store.delete_ad(ad_id)
+        return jsonify(ok=True, deleted=deleted)
 
     @app.get("/api/earn/providers")
     def earn_providers():

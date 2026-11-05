@@ -1,0 +1,34 @@
+name: Train2Earn regression tests
+
+on:
+  push:
+    branches: ["codex/train2earn-challenges"]
+  pull_request:
+    paths:
+      - "services/train_to_earn.py"
+      - "tests/test_train_to_earn.py"
+      - ".github/workflows/train2earn-regression.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  train2earn:
+    name: Train2Earn backend tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --disable-pip-version-check -r requirements.txt pytest
+      - name: Run Train2Earn tests
+        env:
+          T2E_ENABLED: "0"
+          T2E_REWARDS_LIVE: "0"
+        run: python -m pytest tests/test_train_to_earn.py -v

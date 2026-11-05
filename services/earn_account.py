@@ -826,9 +826,9 @@ class EarnAccountStore:
             s = r["state"]
             by_state[s] = by_state.get(s, Decimal("0")) + Decimal(r["amount"])
             if s == "pending":
-                eta = int(r["estimated_clearance_at"] or 0) or (
-                    int(r["created_at"] or 0) + _CLEARANCE_DAYS * 86400
-                )
+                # Only a verified provider ETA may drive a clearance display.
+                # Never derive a countdown from local policy or receipt time.
+                eta = int(r["estimated_clearance_at"] or 0)
                 if eta and (earliest_clears is None or eta < earliest_clears):
                     earliest_clears = eta
         confirmed = by_state.get("confirmed", Decimal("0"))
@@ -840,7 +840,8 @@ class EarnAccountStore:
             "pending": str(pending.quantize(_THC_SCALE)),
             "total_earned": str((confirmed + payable + paid).quantize(_THC_SCALE)),
             "paid_out": str(paid.quantize(_THC_SCALE)),
-            "clearance_days": _CLEARANCE_DAYS,
+            "clearance_status": "provider_eta_pending",
+            "clearance_message": "Clearance date not yet received from provider.",
         }
         if earliest_clears:
             remaining = max(0, earliest_clears - now)

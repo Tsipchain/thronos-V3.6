@@ -213,6 +213,7 @@ class TestTimeWallRoutes:
             "TIMEWALL_POSTBACK_LIVE": "1",
             "TIMEWALL_SECRET_KEY": "secret",
             "TIMEWALL_POSTBACK_IPS": "203.0.113.10",
+            "TIMEWALL_POSTBACK_IP_ENFORCE": "1",
         }):
             response = client.get("/api/earn/timewall/postback")
         assert response.status_code == 403
@@ -254,3 +255,4 @@ def test_pending_balance_does_not_invent_clearance_eta(store):
     assert balance["clearance_message"] == "Clearance date not yet received from provider."
     assert "days_remaining" not in balance
     assert "earliest_clears_at" not in balance
+

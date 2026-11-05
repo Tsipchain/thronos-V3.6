@@ -600,12 +600,15 @@
       if (adRes.ok && adData.ok && adData.ads && adData.ads.length && banner) {
         const ad = adData.ads[0];
         banner.style.display = '';
-        banner.innerHTML = '<a href="' + ad.target_url + '" target="_blank" rel="noopener" data-ad-id="' + ad.ad_id + '">' +
-          '<img src="' + ad.image_url + '" alt="' + (ad.title || 'Ad') + '" loading="lazy">' +
-          '<div class="ad-title">' + (ad.title || '') + '</div></a>' +
-          '<div class="ad-label">sponsored</div>';
+        const link = document.createElement('a');
+        link.href = ad.target_url; link.target = '_blank'; link.rel = 'noopener';
+        link.dataset.adId = ad.ad_id;
+        link.innerHTML = '<img src="' + ad.image_url + '" alt="' + (ad.title || 'Ad') + '" loading="lazy">' +
+          '<div class="ad-title">' + (ad.title || '') + '</div>';
+        banner.appendChild(link);
+        banner.insertAdjacentHTML('beforeend', '<div class="ad-label">sponsored</div>');
         fetch('/api/earn/ads/impression', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ad_id: ad.ad_id }) }).catch(() => {});
-        banner.querySelector('a')?.addEventListener('click', () => {
+        link.addEventListener('click', () => {
           fetch('/api/earn/ads/click', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ad_id: ad.ad_id }) }).catch(() => {});
         });
       }

@@ -82,6 +82,13 @@
   .earn-ad-banner img { width:100%; border-radius:8px; display:block; }
   .earn-ad-banner .ad-title { font-size:11px; color:#7fb8d8; margin-top:6px; text-align:center; }
   .earn-ad-banner .ad-label { font-size:9px; color:#475569; text-transform:uppercase; letter-spacing:.08em; text-align:right; margin-top:4px; }
+  .earn-referral { background:linear-gradient(135deg,#0b1220,#162030); border:1px solid #2e587444; border-radius:12px; padding:14px; margin-top:14px; }
+  .earn-referral h4 { color:#e2e8f0; font-size:14px; margin:0 0 8px; }
+  .earn-referral .ref-link { display:flex; gap:6px; align-items:center; }
+  .earn-referral .ref-link input { flex:1; background:#0a0f1a; border:1px solid #2e5874; border-radius:8px; color:#b8d9ee; padding:8px 10px; font-size:12px; }
+  .earn-referral .ref-link button { background:#1e40af; color:#fff; border:none; border-radius:8px; padding:8px 14px; font-size:12px; cursor:pointer; white-space:nowrap; }
+  .earn-referral .ref-stats { display:flex; gap:16px; margin-top:10px; font-size:12px; color:#7fb8d8; }
+  .earn-referral .ref-stats span { font-weight:700; color:#e2e8f0; }
   .earn-lb-empty { color:#91a7b8; font-size:13px; text-align:center; padding:24px 0; }
   .earn-activity-trigger { display:flex; align-items:center; gap:8px; color:#b8d9ee; background:#101827; border:1px solid #2e5874; border-radius:999px; padding:8px 12px; cursor:pointer; float:right; }
   .earn-activity-count { min-width:18px; height:18px; line-height:18px; border-radius:99px; text-align:center; background:#f2c14e; color:#101827; font-size:11px; font-weight:800; }
@@ -158,6 +165,17 @@
         </section>
       </div>
       <div id="earn-ad-banner" class="earn-ad-banner" style="display:none;margin-top:14px"></div>
+      <div id="earn-referral" class="earn-referral" style="display:none">
+        <h4 data-i18n="referralTitle">Invite Friends</h4>
+        <p style="color:#94a3b8;font-size:12px;margin:0 0 8px" data-i18n="referralDesc">Share your link and grow the Thronos Earn community.</p>
+        <div class="ref-link">
+          <input id="ref-link-input" readonly>
+          <button id="ref-copy-btn" data-i18n="referralCopy">Copy</button>
+        </div>
+        <div class="ref-stats">
+          <div data-i18n="referralFriends">Friends joined: <span id="ref-count">0</span></div>
+        </div>
+      </div>
       <div id="t2e-section" class="earn-provider" style="margin-top:14px;display:none">
         <h3 style="margin-bottom:8px" data-i18n="t2eTitle">Train-to-Earn</h3>
         <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px">
@@ -366,7 +384,10 @@
   function doRegisterAndLogin(email, pw) {
     return new Promise(async (resolve, reject) => {
       try {
-        const res = await fetch('/api/earn/register', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({email, password: pw}) });
+        const refParam = new URLSearchParams(window.location.search).get('ref') || '';
+        const regBody = {email, password: pw};
+        if (refParam) regBody.ref = refParam;
+        const res = await fetch('/api/earn/register', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(regBody) });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data.ok) throw new Error(data.error || 'Request failed.');
         const login = await fetch('/api/earn/login', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({email, password: pw}) });
@@ -611,6 +632,27 @@
         link.addEventListener('click', () => {
           fetch('/api/earn/ads/click', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ad_id: ad.ad_id }) }).catch(() => {});
         });
+      }
+    } catch (_) {}
+    try {
+      const refRes = await fetch('/api/earn/referral/code', { headers: earnAuthHeaders() });
+      const refData = await refRes.json().catch(() => ({}));
+      if (refRes.ok && refData.ok && refData.ref_code) {
+        const refSection = $('earn-referral');
+        refSection.style.display = '';
+        const baseUrl = window.location.origin + '/earn?ref=' + encodeURIComponent(refData.ref_code);
+        $('ref-link-input').value = baseUrl;
+        $('ref-copy-btn').addEventListener('click', () => {
+          navigator.clipboard.writeText(baseUrl).then(() => {
+            $('ref-copy-btn').textContent = _lang === 'el' ? 'Copied!' : 'Copied!';
+            setTimeout(() => { $('ref-copy-btn').textContent = _lang === 'el' ? 'Copy' : 'Copy'; }, 2000);
+          }).catch(() => {});
+        });
+        const statsRes = await fetch('/api/earn/referral/stats', { headers: earnAuthHeaders() });
+        const statsData = await statsRes.json().catch(() => ({}));
+        if (statsRes.ok && statsData.ok) {
+          $('ref-count').textContent = String(statsData.referral_count || 0);
+        }
       }
     } catch (_) {}
   }

@@ -379,6 +379,16 @@ class EarnAccountStore:
                     created_at  INTEGER NOT NULL,
                     expires_at  INTEGER
                 );
+
+                CREATE TABLE IF NOT EXISTS earn_referrals (
+                    referrer_id    TEXT NOT NULL,
+                    referred_id    TEXT NOT NULL,
+                    ref_code       TEXT NOT NULL,
+                    created_at     INTEGER NOT NULL,
+                    PRIMARY KEY (referred_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_earn_referrals_referrer
+                    ON earn_referrals(referrer_id);
             """)
             # Existing production Earn databases predate the provider
             # clearance and separate internal hold fields. SQLite lacks ADD COLUMN IF NOT
@@ -465,7 +475,9 @@ class EarnAccountStore:
 
     # ── Registration ─────────────────────────────────────────────────────
 
-    def register(self, email: str, password: str) -> dict[str, Any]:
+    def register(
+        self, email: str, password: str, ref_code: str | None = None,
+    ) -> dict[str, Any]:
         email = _validate_email(email)
         password = _validate_password(password)
         uid = "earn_" + secrets.token_urlsafe(18)
@@ -485,6 +497,18 @@ class EarnAccountStore:
                    VALUES (?,?,?,0,?,?,?)""",
                 (uid, email, pw_hash, cpx_id, now, now),
             )
+            if ref_code:
+                referrer = con.execute(
+                    "SELECT earn_user_id FROM earn_accounts WHERE earn_user_id = ?",
+                    (ref_code,),
+                ).fetchone()
+                if referrer:
+                    con.execute(
+                        """INSERT OR IGNORE INTO earn_referrals
+                           (referrer_id, referred_id, ref_code, created_at)
+                           VALUES (?,?,?,?)""",
+                        (ref_code, uid, ref_code, now),
+                    )
         return {"earn_user_id": uid, "email": email, "email_verified": False}
 
     # ── Rate limiting ────────────────────────────────────────────────────
@@ -1372,6 +1396,37 @@ class EarnAccountStore:
                 (ad_id,),
             )
             return cur.rowcount > 0
+
+    # ── Referrals ──────────────────────────────────────────────────────
+
+    def referral_code(self, earn_user_id: str) -> str:
+        return earn_user_id
+
+    def referral_stats(self, earn_user_id: str) -> dict[str, Any]:
+        with self._tx() as con:
+            row = con.execute(
+                "SELECT COUNT(*) AS cnt FROM earn_referrals WHERE referrer_id = ?",
+                (earn_user_id,),
+            ).fetchone()
+            return {"referral_count": row["cnt"] if row else 0}
+
+    def referral_list(self, earn_user_id: str) -> list[dict[str, Any]]:
+        with self._tx() as con:
+            rows = con.execute(
+                """SELECT r.referred_id, r.created_at, a.email
+                   FROM earn_referrals r
+                   JOIN earn_accounts a ON a.earn_user_id = r.referred_id
+                   WHERE r.referrer_id = ?
+                   ORDER BY r.created_at DESC LIMIT 50""",
+                (earn_user_id,),
+            ).fetchall()
+            return [
+                {
+                    "created_at": r["created_at"],
+                    "email_hint": r["email"][:2] + "***",
+                }
+                for r in rows
+            ]
 
     @staticmethod
     def _ledger_dict(row: sqlite3.Row) -> dict[str, Any]:
@@ -2271,10 +2326,12 @@ def register_earn_account_routes(
     @app.post("/api/earn/register")
     def earn_register():
         data = request.get_json(silent=True) or {}
+        ref_code = str(data.get("ref", "")).strip() or None
         try:
             user = store.register(
                 str(data.get("email", "")),
                 str(data.get("password", "")),
+                ref_code=ref_code,
             )
         except EarnError as exc:
             return jsonify(ok=False, error=str(exc)), 400
@@ -2551,6 +2608,24 @@ def register_earn_account_routes(
             return jsonify(ok=False, error="missing_ad_id"), 400
         deleted = store.delete_ad(ad_id)
         return jsonify(ok=True, deleted=deleted)
+
+    @app.get("/api/earn/referral/code")
+    def earn_referral_code():
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="not_authenticated"), 401
+        code = store.referral_code(user["earn_user_id"])
+        return jsonify(ok=True, ref_code=code)
+
+    @app.get("/api/earn/referral/stats")
+    def earn_referral_stats():
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="not_authenticated"), 401
+        uid = user["earn_user_id"]
+        stats = store.referral_stats(uid)
+        refs = store.referral_list(uid)
+        return jsonify(ok=True, **stats, referrals=refs)
 
     @app.get("/api/earn/providers")
     def earn_providers():

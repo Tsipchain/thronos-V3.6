@@ -237,3 +237,15 @@ def test_builder_accepts_timewall_unique_user_id_macro():
     assert url == (
         "https://timewall.io/users/login?oid=076621e9c8a31732&uid=tw_opaque123"
     )
+
+
+def test_pending_balance_does_not_invent_clearance_eta(store):
+    user = store.register("clearance@example.com", "password123")
+    store.record_thc_credit(
+        user["earn_user_id"], "cpx", "clearance-event-001", "10",
+    )
+    balance = store.thc_balance(user["earn_user_id"])
+    assert balance["clearance_status"] == "provider_eta_pending"
+    assert balance["clearance_message"] == "Clearance date not yet received from provider."
+    assert "days_remaining" not in balance
+    assert "earliest_clears_at" not in balance

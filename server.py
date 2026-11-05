@@ -34086,6 +34086,12 @@ if NODE_ROLE == "master" and SCHEDULER_ENABLED and ENABLE_CHAIN:
     scheduler.add_job(_with_app_context(update_telemetry_cache_job), "interval", seconds=30,
                      coalesce=True, max_instances=1, id="telemetry_cache")
 
+    # Internal Earn policy: verified receipts become available after seven days.
+    # The store rechecks writer/scheduler role and durable receipt evidence.
+    if globals().get("_earn_acct_store") is not None and "earn_me" in app.view_functions:
+        scheduler.add_job(_earn_acct_store.release_mature_earn_holds, "interval", minutes=1,
+                         coalesce=True, max_instances=1, id="earn_internal_hold_release")
+
     # Daily Pool Volume Reset – reset 24h volumes at midnight UTC
     scheduler.add_job(_reset_daily_pool_volumes, "cron",
                      hour=0, minute=0, id="reset_daily_volumes",

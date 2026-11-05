@@ -1614,6 +1614,7 @@ async function showWallet() {
         <button class="action-btn" id="connectBtn"><span class="action-btn__icon">⬡</span>Connect</button>
         <button class="action-btn" id="musicBtn"><span class="action-btn__icon">🎵</span>Music</button>
         <button class="action-btn" id="earnBtn"><span class="action-btn__icon">✨</span>Earn</button>
+        <button class="action-btn" id="loyaltyBtn" style="grid-column:span 2"><span class="action-btn__icon">🏆</span>Leaderboard / VIP</button>
         <button class="action-btn" id="historyBtn"><span class="action-btn__icon">📋</span>History</button>
         <button class="action-btn" id="createTokenBtn"><span class="action-btn__icon">🪙</span>Create Token</button>
         <button class="action-btn" id="nftBtn"><span class="action-btn__icon">🖼️</span>NFTs</button>
@@ -1624,6 +1625,7 @@ async function showWallet() {
   `);
 
   document.getElementById('lockBtn').addEventListener('click', () => {
+    window.ThronosEarnTabs?.reset();
     sessionStorage.removeItem(`thr_sk_${address}`);
     unlocked.delete(address);
     _pwaSigningCtx = null;
@@ -1674,6 +1676,7 @@ async function showWallet() {
   document.getElementById('connectBtn').addEventListener('click', showWalletConnect);
   document.getElementById('musicBtn').addEventListener('click', showMusic);
   document.getElementById('earnBtn').addEventListener('click', showEarn);
+  document.getElementById('loyaltyBtn').addEventListener('click', () => showEarn({ focusLeaderboard: true }));
   document.getElementById('createTokenBtn').addEventListener('click', showCreateToken);
   document.getElementById('nftBtn').addEventListener('click', showNFTs);
   document.getElementById('epochBtn').addEventListener('click', showEpoch);
@@ -2052,16 +2055,25 @@ function _formatEarnClearance(entry) {
   if (String(entry.state || '').toLowerCase() === 'reversed') {
     return entry.reversal_reason ? `Reversed: ${String(entry.reversal_reason)}` : 'Reversed by provider';
   }
+  if (['confirmed', 'payable', 'paid'].includes(entry.state)) {
+    return `Recorded state: ${entry.state}`;
+  }
+  if (entry.earn_hold_until) {
+    const days = Math.max(0, Math.ceil((entry.earn_hold_until * 1000 - Date.now()) / 86400000));
+    return days ? `Seven-day Earn hold: ${days} day${days === 1 ? '' : 's'} remaining`
+      : 'Earn hold elapsed. Awaiting server release.';
+  }
   const eta = Number(entry.estimated_clearance_at);
   if (!Number.isInteger(eta) || eta <= 0) {
     return 'Clearance date not yet received from provider.';
   }
   // This is presentation only: no local clock or timer can transition THC.
+  if (eta * 1000 <= Date.now()) return 'Estimated time elapsed. Awaiting verified clearance.';
   const remaining = Math.max(0, Math.ceil((eta * 1000 - Date.now()) / 86400000));
   return `Estimated clearance: ${_formatEarnReceiptDate(eta)} (${remaining} day${remaining === 1 ? '' : 's'} remaining)`;
 }
 
-async function showEarn() {
+async function showEarn(options = {}) {
   render(`
     <div class="screen">
       <div class="header">
@@ -2122,9 +2134,9 @@ async function showEarn() {
         ? 'Provider amount pending'
         : '+' + amount + ' THC';
       return `
-        <div style="display:flex;justify-content:space-between;gap:8px;padding:9px 0;border-top:1px solid #ffffff14">
+        <div data-earn-receipt="${escHtml(entry.entry_id)}" style="display:flex;justify-content:space-between;gap:8px;padding:9px 0;border-top:1px solid #ffffff14;cursor:pointer">
           <div style="min-width:0"><div style="font-size:.8rem">${escHtml(entry.source || 'Earn reward')}</div><div style="font-size:.68rem;color:var(--muted)">${escHtml(entry.provider_status || entry.state || 'pending')} · ${escHtml(_formatEarnReceiptDate(entry.received_at))}</div><div style="font-size:.68rem;color:var(--muted);margin-top:2px">${escHtml(_formatEarnClearance(entry))}</div></div>
-          <div style="font-size:.82rem;color:var(--accent)">${escHtml(amountText)}</div>
+          <div style="font-size:.82rem;color:var(--accent)">${escHtml(amountText)}<button type="button" class="btn" data-earn-receipt="${escHtml(entry.entry_id)}" style="display:block;margin-top:6px;font-size:.7rem">Details</button></div>
         </div>`;
     };
     const rows = entries.length ? entries.map(renderEntry).join('') : '<p style="color:var(--muted);font-size:.82rem">No verified rewards yet.</p>';
@@ -2135,11 +2147,29 @@ async function showEarn() {
           <button id="earnAvailableCard" type="button" style="flex:1;background:#0d0a1a;border:0;border-radius:9px;padding:10px;text-align:left;cursor:pointer"><div style="font-size:.66rem;color:var(--muted)">AVAILABLE</div><div style="font-size:1.1rem;color:var(--accent);font-weight:700">${availableText}</div></button>
           <button id="earnPendingCard" type="button" style="flex:1;background:#0d0a1a;border:0;border-radius:9px;padding:10px;text-align:left;cursor:pointer"><div style="font-size:.66rem;color:var(--muted)">PENDING</div><div style="font-size:1.1rem;color:#e8bf5a;font-weight:700">${pendingText}</div></button>
       </div>
-      <button class="btn btn--primary" id="openSurveyBtn" style="width:100%;padding:11px">Open Surveys</button>
-      <button class="btn" id="openEarnCenterBtn" style="width:100%;padding:10px;margin-top:8px">Earn history &amp; account</button>
+      <div style="margin-top:4px">
+        <div style="font-size:.7rem;color:var(--muted);letter-spacing:.08em;margin-bottom:8px">EARN PROVIDERS</div>
+        <div id="earnProviderGrid" style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <button class="btn earn-provider-btn" data-earn-provider="cpx" type="button" style="padding:10px;text-align:left">
+            <strong>CPX Research</strong><small class="provider-state" style="display:block;color:var(--muted);margin-top:3px">Surveys</small>
+          </button>
+          <button class="btn earn-provider-btn" data-earn-provider="bitcotasks" type="button" style="padding:10px;text-align:left">
+            <strong>BitcoTasks</strong><small class="provider-state" style="display:block;color:var(--muted);margin-top:3px">Offers &amp; tasks</small>
+          </button>
+          <button class="btn earn-provider-btn" data-earn-provider="pure" type="button" style="padding:10px;text-align:left">
+            <strong>PureSpectrum</strong><small class="provider-state" style="display:block;color:var(--muted);margin-top:3px">Provider pending</small>
+          </button>
+          <button class="btn earn-provider-btn" data-earn-provider="timewall" type="button" style="padding:10px;text-align:left">
+            <span style="display:flex;align-items:center;gap:6px"><img src="https://timewall.io/favicon.ico" alt="" width="18" height="18" style="border-radius:4px" onerror="this.style.display='none'"><strong>TimeWall</strong></span>
+            <small class="provider-state" style="display:block;color:var(--muted);margin-top:3px">Tasks, clicks &amp; surveys</small>
+          </button>
+        </div>
+      </div>
+      <button class="btn" id="openEarnCenterBtn" style="width:100%;padding:10px;margin-top:10px">Earn history &amp; account</button>
       ${me.wallet_address ? `<p style="font-size:.72rem;color:#55d6a7;line-height:1.45;margin:10px 0 0">✓ Linked wallet: ${escHtml(me.wallet_address.slice(0, 10))}…</p>` : `<button class="btn" id="linkEarnWalletBtn" style="width:100%;padding:10px;margin-top:8px">Link active Thronos wallet</button>`}
-      <p id="earnPwaMessage" style="font-size:.72rem;color:var(--muted);line-height:1.45;margin:12px 0 4px">Rewards remain pending until verified CPX clearance. No wallet settlement or payout is claimed here.</p>
+      <p id="earnPwaMessage" style="font-size:.72rem;color:var(--muted);line-height:1.45;margin:12px 0 4px">Verified provider receipts stay pending during the seven-day Earn hold. Select a receipt to see its own countdown and status.</p>
       <div style="margin-top:12px"><div style="font-size:.7rem;color:var(--muted);letter-spacing:.08em">RECENT REWARDS</div>${rows}</div>
+      <section id="earnPwaLeaderboard" aria-label="30-day Earn leaderboard"></section>
       <div id="earnStakingSection" style="margin-top:16px;border-top:1px solid #ffffff14;padding-top:14px">
         <div style="font-size:.7rem;color:var(--muted);letter-spacing:.08em;margin-bottom:10px">STAKING POOLS</div>
         <div id="earnStakingPools"></div>
@@ -2149,6 +2179,14 @@ async function showEarn() {
         </div>
       </div>
     `;
+    window.ThronosEarnLeaderboard.mount(document.getElementById('earnPwaLeaderboard'), { base: earnBase }).then(() => {
+      if (options.focusLeaderboard) document.getElementById('earnPwaLeaderboard')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+    const openReceiptDetails = (event) => {
+      const button = event.target.closest('[data-earn-receipt]');
+      if (button) window.ThronosEarnReceipts.open(button.dataset.earnReceipt, { base: earnBase });
+    };
+    body.addEventListener('click', openReceiptDetails);
     const openEarnActivity = () => {
       const overlay = document.createElement('div');
       overlay.setAttribute('role', 'dialog');
@@ -2182,6 +2220,7 @@ async function showEarn() {
           <div style="margin-top:6px">${activityRows}</div>
         </div>`;
       document.body.appendChild(overlay);
+      overlay.addEventListener('click', openReceiptDetails);
       overlay.querySelector('#closeEarnActivity').addEventListener('click', () => overlay.remove());
       overlay.addEventListener('click', (event) => { if (event.target === overlay) overlay.remove(); });
       overlay.querySelector('#linkEarnWalletFromActivity')?.addEventListener('click', async (event) => {
@@ -2215,27 +2254,56 @@ async function showEarn() {
         message.textContent = `Could not link wallet: ${error.message || 'unknown_error'}`;
       }
     });
-    document.getElementById('openSurveyBtn').addEventListener('click', async () => {
+    const providerDefinitions = {
+      cpx: { endpoint: '/api/earn/cpx/offerwall', label: 'CPX Research' },
+      bitcotasks: { endpoint: '/api/earn/bitcotasks/offerwall', label: 'BitcoTasks' },
+      pure: { endpoint: '/api/earn/pure/offerwall', label: 'PureSpectrum' },
+      timewall: { endpoint: '/api/earn/timewall/offerwall', label: 'TimeWall' },
+    };
+    const openEarnProvider = async (provider, definition) => {
       const message = document.getElementById('earnPwaMessage');
-      message.textContent = 'Opening available surveys…';
+      message.textContent = 'Opening ' + definition.label + '…';
       try {
-        const response = await fetch(`${earnBase}/api/earn/cpx/offerwall`, { credentials: 'include' });
-        const offerwall = await response.json().catch(() => null);
-        if (!response.ok || !offerwall?.ok || !offerwall.url) throw new Error(offerwall?.error || 'survey_unavailable');
-        const promoWin = window.open('https://bitcotasks.com/promote/81663', '_blank');
-        message.textContent = 'Surveys open in 30 seconds…';
-        let seconds = 30;
-        const countdown = setInterval(() => {
-          seconds--;
-          if (seconds > 0) { message.textContent = 'Surveys open in ' + seconds + 's…'; return; }
-          clearInterval(countdown);
-          try { if (promoWin && !promoWin.closed) promoWin.close(); } catch (_) {}
-          window.location.assign(offerwall.url);
-        }, 1000);
-      } catch {
-        message.textContent = 'Surveys are temporarily unavailable. Your Earn balance remains unchanged.';
+        await window.ThronosEarnTabs.open(provider, async () => {
+          const response = await fetch(earnBase + definition.endpoint, { credentials: 'include' });
+          const offerwall = await response.json().catch(() => null);
+          if (!response.ok || !offerwall?.ok || !offerwall.url) {
+            throw new Error(offerwall?.error || 'provider_unavailable');
+          }
+          return offerwall.url;
+        }, me.earn_user_id);
+        message.textContent = definition.label + ' opened in a browser tab. Tap again to return to it.';
+      } catch (error) {
+        message.textContent = error.message === 'popup_blocked'
+          ? 'Allow pop-ups for this site, then tap ' + definition.label + ' again.'
+          : definition.label + ' is temporarily unavailable. Your Earn balance remains unchanged.';
       }
+    };
+    document.querySelectorAll('[data-earn-provider]').forEach(button => {
+      button.addEventListener('click', () => {
+        const provider = button.dataset.earnProvider;
+        const definition = providerDefinitions[provider];
+        if (definition) openEarnProvider(provider, definition);
+      });
     });
+    try {
+      const providerResponse = await fetch(earnBase + '/api/earn/providers', { credentials: 'include' });
+      const providerData = await providerResponse.json().catch(() => null);
+      for (const provider of (providerData?.providers || [])) {
+        const button = document.querySelector('[data-earn-provider="' + provider.id + '"]');
+        if (!button) continue;
+        const state = button.querySelector('.provider-state');
+        if (provider.enabled) {
+          button.disabled = false;
+          if (state && provider.id !== 'timewall') state.textContent = 'Available';
+        } else {
+          button.disabled = true;
+          if (state) state.textContent = provider.id === 'pure' ? 'Provider pending' : 'Coming soon';
+        }
+      }
+    } catch (_) {
+      // The provider grid remains visible; individual endpoint errors are fail-closed.
+    }
     // Staking pools
     try {
       const [poolsRes, posRes] = await Promise.all([

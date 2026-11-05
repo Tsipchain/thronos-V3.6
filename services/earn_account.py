@@ -24,12 +24,34 @@ import secrets
 import sqlite3
 import time
 from contextlib import contextmanager
-from decimal import Decimal, InvalidOperation, ROUND_DOWN
+from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_HALF_UP
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
 _THC_SCALE = Decimal("0.000001")
+# First authorized 30-day beta cycle: Athens midnight, end exclusive. Fixed
+# boundaries survive deploys/restarts; a new cycle requires a separate release.
+_LEADERBOARD_START = int(datetime.fromisoformat("2026-11-05T00:00:00+02:00").timestamp())
+_LEADERBOARD_END = _LEADERBOARD_START + 30 * 86400
+_LEADERBOARD_CAMPAIGN = "earn-beta-2026-11-05"
+_EARN_HOLD_SECONDS = 7 * 86400
+_EARN_HOLD_POLICY = "earn-seven-day-v1"
+_VERIFIED_PROVIDER_RECEIPT_SQL = """(
+                       (l.source IN ('cpx_survey', 'cpx') AND EXISTS (
+                         SELECT 1 FROM cpx_receipts r WHERE r.trans_id=l.source_ref
+                         AND r.earn_user_id=l.earn_user_id AND r.thc_entry_id=l.entry_id AND r.status=1))
+                       OR (l.source='bitcotasks' AND EXISTS (
+                         SELECT 1 FROM bitcotasks_receipts r WHERE r.trans_id=l.source_ref
+                         AND r.earn_user_id=l.earn_user_id AND r.thc_entry_id=l.entry_id AND r.status=1))
+                       OR (l.source='pure' AND EXISTS (
+                         SELECT 1 FROM pure_receipts r WHERE r.trans_id=l.source_ref
+                         AND r.earn_user_id=l.earn_user_id AND r.thc_entry_id=l.entry_id AND r.status=1))
+                       OR (l.source='timewall' AND EXISTS (
+                         SELECT 1 FROM timewall_receipts r WHERE r.event_id=l.source_ref
+                         AND r.earn_user_id=l.earn_user_id AND r.thc_entry_id=l.entry_id))
+                     )"""
 _CLEARANCE_DAYS = int(os.getenv("EARN_CLEARANCE_DAYS", "7"))
 
 logger = logging.getLogger(__name__)
@@ -132,6 +154,7 @@ class EarnAccountStore:
 
     def _init_db(self) -> None:
         con = sqlite3.connect(self.db_path, timeout=15)
+        con.row_factory = sqlite3.Row
         try:
             con.executescript("""
                 PRAGMA journal_mode = WAL;
@@ -273,6 +296,24 @@ class EarnAccountStore:
                 CREATE INDEX IF NOT EXISTS idx_pure_receipts_user
                     ON pure_receipts(earn_user_id);
 
+                CREATE TABLE IF NOT EXISTS timewall_receipts (
+                    event_id        TEXT PRIMARY KEY,
+                    earn_user_id    TEXT NOT NULL
+                        REFERENCES earn_accounts(earn_user_id),
+                    revenue_raw     TEXT NOT NULL,
+                    amount_thc      TEXT NOT NULL,
+                    event_type      TEXT,
+                    reason          TEXT,
+                    offer_name      TEXT,
+                    offer_detail    TEXT,
+                    thc_entry_id    TEXT,
+                    received_at     INTEGER NOT NULL,
+                    payload         TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_timewall_receipts_user
+                    ON timewall_receipts(earn_user_id);
+
                 -- A wallet link is a cryptographic identity binding, never a
                 -- user-supplied address claim.  One wallet and one Earn
                 -- account are intentionally a 1:1 relation for this beta.
@@ -326,7 +367,7 @@ class EarnAccountStore:
                     ON earn_staking_positions(earn_user_id);
             """)
             # Existing production Earn databases predate the provider
-            # clearance presentation fields.  SQLite lacks ADD COLUMN IF NOT
+            # clearance and separate internal hold fields. SQLite lacks ADD COLUMN IF NOT
             # EXISTS, so use a narrow, fixed migration list rather than any
             # dynamic SQL based on external input.
             existing = {
@@ -338,9 +379,25 @@ class EarnAccountStore:
                 ("estimated_clearance_at", "INTEGER"),
                 ("cleared_at", "INTEGER"),
                 ("reversal_reason", "TEXT"),
+                ("earn_hold_started_at", "INTEGER"),
+                ("earn_hold_until", "INTEGER"),
+                ("earn_hold_released_at", "INTEGER"),
+                ("earn_hold_policy", "TEXT"),
             ):
                 if column not in existing:
                     con.execute(f"ALTER TABLE thc_ledger ADD COLUMN {column} {definition}")
+            con.commit()
+            con.execute("BEGIN IMMEDIATE")
+            # Apply the newly authorized internal policy only to verified,
+            # still-pending receipts; never relock an existing available balance.
+            rows = con.execute(
+                f"""SELECT l.entry_id, COALESCE(l.received_at, l.created_at) AS first_received
+                    FROM thc_ledger l WHERE l.state='pending' AND l.earn_hold_until IS NULL
+                    AND {_VERIFIED_PROVIDER_RECEIPT_SQL}""",
+            ).fetchall()
+            for row in rows:
+                self._attach_earn_hold_in_tx(con, row["entry_id"], row["first_received"])
+            con.commit()
         finally:
             con.close()
 
@@ -361,7 +418,7 @@ class EarnAccountStore:
         opened that provider through Earn.
         """
         provider = (provider or "").strip().lower()
-        if provider not in ("bitcotasks", "pure"):
+        if provider not in ("bitcotasks", "pure", "timewall"):
             raise EarnError("unsupported_earn_provider")
         with self._tx() as con:
             existing = con.execute(
@@ -382,7 +439,7 @@ class EarnAccountStore:
                 f"{provider}:{earn_user_id}".encode("utf-8"),
                 hashlib.sha256,
             ).hexdigest()
-            prefix = {"bitcotasks": "bt_", "pure": "ps_"}[provider]
+            prefix = {"bitcotasks": "bt_", "pure": "ps_", "timewall": "tw_"}[provider]
             provider_user_id = prefix + digest[:28]
             con.execute(
                 """INSERT INTO earn_provider_identities
@@ -800,6 +857,8 @@ class EarnAccountStore:
                 raise EarnError("thc_entry_not_found")
             if row["state"] == new_state:
                 return self._ledger_dict(row)
+            if row["state"] == "pending" and new_state in ("confirmed", "payable", "paid") and row["earn_hold_until"]:
+                raise EarnError("earn_hold_requires_server_release")
             if new_state not in _THC_TRANSITIONS[row["state"]]:
                 raise EarnError("invalid_thc_transition")
             if new_state == "paid" and not settlement_ref:
@@ -821,23 +880,89 @@ class EarnAccountStore:
                 ).fetchone(),
             )
 
+    def loyalty_status(self, earn_user_id: str | None) -> dict[str, Any]:
+        linked = bool(earn_user_id and self.wallet_link_for_user(earn_user_id))
+        return {
+            "wallet_linked": linked, "vip": linked,
+            "tier": "wallet_loyalty_vip" if linked else "earn_account",
+            "basis": "verified_wallet_link" if linked else "wallet_not_linked",
+        }
+
+    def _attach_earn_hold_in_tx(self, con, entry_id: str, received_at: int) -> None:
+        row = con.execute("SELECT * FROM thc_ledger WHERE entry_id=?", (entry_id,)).fetchone()
+        if not row or row["state"] != "pending" or row["earn_hold_until"]:
+            return
+        amount = Decimal(row["amount"])
+        if not amount.is_finite() or amount <= 0 or not received_at or int(received_at) <= 0:
+            return
+        started = int(received_at)
+        con.execute(
+            """UPDATE thc_ledger SET earn_hold_started_at=?, earn_hold_until=?,
+               earn_hold_policy=? WHERE entry_id=? AND earn_hold_until IS NULL""",
+            (started, started + _EARN_HOLD_SECONDS, _EARN_HOLD_POLICY, entry_id),
+        )
+        self._append_ledger_audit_in_tx(
+            con, entry_id=entry_id, event_ref=f"earn:hold:start:{entry_id}",
+            event_type="earn_hold_started", state="pending", occurred_at=started,
+            provider_status=row["provider_status"], details=_EARN_HOLD_POLICY,
+        )
+
+    def release_mature_earn_holds(self) -> int:
+        """Master scheduler only: release the internal hold, never send money."""
+        def setting(name, default):
+            return os.getenv(name, default).strip().strip("\"'").lower()
+        if (setting("NODE_ROLE", "") != "master"
+                or setting("READ_ONLY", "0") in ("1", "true", "yes")
+                or setting("SCHEDULER_ENABLED", "0") not in ("1", "true", "yes")):
+            return 0
+        now = int(time.time())
+        released = 0
+        with self._tx() as con:
+            rows = con.execute(
+                f"""SELECT l.* FROM thc_ledger l WHERE l.state='pending'
+                    AND l.earn_hold_policy=? AND l.earn_hold_until<=?
+                    AND l.earn_hold_until=l.earn_hold_started_at+?
+                    AND l.earn_hold_released_at IS NULL
+                    AND {_VERIFIED_PROVIDER_RECEIPT_SQL}
+                    ORDER BY l.earn_hold_until LIMIT 500""", (_EARN_HOLD_POLICY, now, _EARN_HOLD_SECONDS),
+            ).fetchall()
+            for row in rows:
+                amount = Decimal(row["amount"])
+                if not amount.is_finite() or amount <= 0:
+                    continue
+                con.execute(
+                    """UPDATE thc_ledger SET state='confirmed', earn_hold_released_at=?,
+                       updated_at=? WHERE entry_id=? AND state='pending'""",
+                    (now, now, row["entry_id"]),
+                )
+                self._append_ledger_audit_in_tx(
+                    con, entry_id=row["entry_id"], event_ref=f"earn:hold:release:{row['entry_id']}",
+                    event_type="earn_hold_released", state="confirmed", occurred_at=now,
+                    provider_status=row["provider_status"], details=_EARN_HOLD_POLICY,
+                )
+                released += 1
+        return released
+
     def thc_balance(self, earn_user_id: str) -> dict[str, Any]:
         now = int(time.time())
         with self._tx() as con:
             rows = con.execute(
-                "SELECT state, amount, created_at, estimated_clearance_at"
+                "SELECT state, amount, created_at, estimated_clearance_at, earn_hold_until"
                 " FROM thc_ledger WHERE earn_user_id = ?",
                 (earn_user_id,),
             ).fetchall()
         by_state: dict[str, Decimal] = {}
         earliest_clears: int | None = None
+        earliest_hold: int | None = None
         for r in rows:
             s = r["state"]
             by_state[s] = by_state.get(s, Decimal("0")) + Decimal(r["amount"])
             if s == "pending":
-                eta = int(r["estimated_clearance_at"] or 0) or (
-                    int(r["created_at"] or 0) + _CLEARANCE_DAYS * 86400
-                )
+                hold = int(r["earn_hold_until"] or 0)
+                if hold and (earliest_hold is None or hold < earliest_hold):
+                    earliest_hold = hold
+                # Provider ETA stays distinct from the authorized internal hold.
+                eta = int(r["estimated_clearance_at"] or 0)
                 if eta and (earliest_clears is None or eta < earliest_clears):
                     earliest_clears = eta
         confirmed = by_state.get("confirmed", Decimal("0"))
@@ -849,12 +974,22 @@ class EarnAccountStore:
             "pending": str(pending.quantize(_THC_SCALE)),
             "total_earned": str((confirmed + payable + paid).quantize(_THC_SCALE)),
             "paid_out": str(paid.quantize(_THC_SCALE)),
-            "clearance_days": _CLEARANCE_DAYS,
+            "clearance_status": "provider_eta_pending",
+            "clearance_message": "Clearance date not yet received from provider.",
         }
         if earliest_clears:
             remaining = max(0, earliest_clears - now)
             result["earliest_clears_at"] = earliest_clears
             result["days_remaining"] = remaining // 86400 + (1 if remaining % 86400 else 0)
+        if earliest_hold:
+            remaining = max(0, earliest_hold - now)
+            result.update(
+                earliest_earn_hold_until=earliest_hold,
+                earn_hold_days_remaining=(remaining + 86399) // 86400,
+                earn_hold_seconds_remaining=remaining,
+                clearance_status="earn_hold_active" if remaining else "earn_hold_due",
+                clearance_message="Seven-day Earn hold after verified provider receipt.",
+            )
         return result
 
     def thc_history(
@@ -865,6 +1000,7 @@ class EarnAccountStore:
                 """SELECT entry_id, source, source_ref, amount, state,
                           note, settlement_ref, provider_status, received_at,
                           estimated_clearance_at, cleared_at, reversal_reason,
+                          earn_hold_started_at, earn_hold_until, earn_hold_released_at, earn_hold_policy,
                           created_at, updated_at
                    FROM thc_ledger WHERE earn_user_id = ?
                    ORDER BY created_at DESC LIMIT ?""",
@@ -872,82 +1008,113 @@ class EarnAccountStore:
             ).fetchall()
             return [self._ledger_dict(r) for r in rows]
 
+    def thc_receipt_details(self, earn_user_id: str, entry_id: str) -> dict[str, Any]:
+        """Read only the caller's receipt and safe audit fields, never raw payloads."""
+        with self._tx() as con:
+            row = con.execute(
+                """SELECT entry_id, source, source_ref, amount, state, note,
+                          settlement_ref, provider_status, received_at,
+                          estimated_clearance_at, cleared_at, reversal_reason,
+                          earn_hold_started_at, earn_hold_until, earn_hold_released_at, earn_hold_policy,
+                          created_at, updated_at
+                   FROM thc_ledger WHERE earn_user_id = ? AND entry_id = ?""",
+                (earn_user_id, entry_id),
+            ).fetchone()
+            if not row:
+                raise EarnError("receipt_not_found")
+            events = con.execute(
+                """SELECT event_ref, event_type, state, provider_status, occurred_at
+                   FROM thc_ledger_audit WHERE entry_id = ?
+                   ORDER BY occurred_at, rowid""", (entry_id,),
+            ).fetchall()
+            return {"entry": self._ledger_dict(row), "events": [dict(e) for e in events]}
+
+    def validate_timewall_identity(self, provider_user_id: str) -> None:
+        """Read-only callback preflight. Does not create an identity or reward."""
+        with self._tx() as con:
+            row = con.execute(
+                """SELECT 1 FROM earn_provider_identities
+                   WHERE provider = 'timewall' AND provider_user_id = ?""",
+                (provider_user_id,),
+            ).fetchone()
+            if not row:
+                raise EarnError("unknown_provider_user")
+
     def leaderboard(
-        self,
-        *,
-        month_start: int | None = None,
-        limit: int = 50,
-        caller_user_id: str | None = None,
+        self, *, limit: int = 50, caller_user_id: str | None = None,
+        at_time: int | None = None,
     ) -> dict[str, Any]:
-        import calendar
-        from datetime import datetime, timezone
+        """One 30-day cycle of verified receipts; pending score is provisional.
 
-        now = datetime.now(timezone.utc)
-        if month_start is None:
-            month_start = int(
-                datetime(now.year, now.month, 1, tzinfo=timezone.utc).timestamp()
-            )
-        month_dt = datetime.fromtimestamp(month_start, tz=timezone.utc)
-        _, last_day = calendar.monthrange(month_dt.year, month_dt.month)
-        month_end = int(
-            datetime(
-                month_dt.year, month_dt.month, last_day, 23, 59, 59,
-                tzinfo=timezone.utc,
-            ).timestamp()
-        )
+        Only durable provider receipts may contribute. This read never clears
+        rewards, releases funds or awards competition prizes. Boundaries use
+        receipt time, so later clearance does not move a reward to another cycle.
+        """
+        now = int(time.time()) if at_time is None else int(at_time)
         limit = min(max(limit, 1), 50)
-
         with self._tx() as con:
             rows = con.execute(
-                """SELECT l.earn_user_id, a.email, l.amount
+                f"""SELECT l.earn_user_id, l.amount, l.state
                    FROM thc_ledger l
-                   JOIN earn_accounts a ON a.earn_user_id = l.earn_user_id
-                   WHERE l.state IN ('confirmed', 'payable', 'paid')
-                     AND l.created_at >= ? AND l.created_at <= ?""",
-                (month_start, month_end),
+                   WHERE l.state IN ('pending', 'confirmed', 'payable', 'paid')
+                     AND COALESCE(l.received_at, l.created_at) >= ?
+                     AND COALESCE(l.received_at, l.created_at) < ?
+                     AND COALESCE(l.received_at, l.created_at) <= ?
+                     AND {_VERIFIED_PROVIDER_RECEIPT_SQL}""",
+                (_LEADERBOARD_START, _LEADERBOARD_END, now),
             ).fetchall()
 
-        totals: dict[str, tuple[Decimal, str, int]] = {}
-        for r in rows:
-            uid = r["earn_user_id"]
-            amt = Decimal(r["amount"])
-            if uid in totals:
-                prev_amt, email, count = totals[uid]
-                totals[uid] = (prev_amt + amt, email, count + 1)
-            else:
-                totals[uid] = (amt, r["email"] or "", 1)
+        totals: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            amount = Decimal(row["amount"])
+            if not amount.is_finite() or amount <= 0:
+                continue
+            uid = row["earn_user_id"]
+            total = totals.setdefault(uid, {"pending": Decimal("0"), "cleared": Decimal("0"), "completions": 0})
+            total["pending" if row["state"] == "pending" else "cleared"] += amount
+            total["completions"] += 1
 
-        ranked = sorted(
-            ((uid, amt, email, count) for uid, (amt, email, count) in totals.items() if amt > 0),
-            key=lambda x: x[1],
-            reverse=True,
-        )
+        def alias(uid):
+            digest = hmac.new(self._identity_key, f"leaderboard:{uid}".encode(), hashlib.sha256).hexdigest()
+            return "Earner-" + digest[:10].upper()
 
-        caller_rank = None
-        if caller_user_id:
-            for i, (uid, *_) in enumerate(ranked, 1):
-                if uid == caller_user_id:
-                    caller_rank = i
-                    break
-
+        ranked = sorted(totals, key=lambda uid: (-(totals[uid]["pending"] + totals[uid]["cleared"]), alias(uid)))
         entries = []
-        for i, (uid, amt, email, count) in enumerate(ranked[:limit], 1):
-            at = email.find("@")
-            masked = (email[:2] + "***" + email[at:]) if at > 2 else (email[:1] + "***")
-            entries.append({
-                "rank": i,
-                "display_name": masked,
-                "total_earned": str(amt.quantize(_THC_SCALE)),
-                "completions": count,
-                "is_caller": uid == caller_user_id if caller_user_id else False,
-            })
+        your_rank = None
+        your_score = {"total_earned": "0.000000", "pending_earned": "0.000000", "cleared_earned": "0.000000", "completions": 0}
+        previous_score = None
+        rank = 0
+        for position, uid in enumerate(ranked, 1):
+            total = totals[uid]
+            score = total["pending"] + total["cleared"]
+            if score != previous_score:
+                rank = position
+            previous_score = score
+            entry = {
+                "rank": rank, "display_name": alias(uid),
+                "total_earned": str(score.quantize(_THC_SCALE)),
+                "pending_earned": str(total["pending"].quantize(_THC_SCALE)),
+                "cleared_earned": str(total["cleared"].quantize(_THC_SCALE)),
+                "completions": total["completions"],
+                "is_caller": uid == caller_user_id,
+            }
+            if uid == caller_user_id:
+                your_rank = rank
+                your_score = {key: entry[key] for key in your_score}
+            if position <= limit:
+                entries.append(entry)
 
         return {
-            "month": month_dt.strftime("%Y-%m"),
-            "month_label": month_dt.strftime("%B %Y"),
-            "total_active": len(ranked),
-            "your_rank": caller_rank,
-            "entries": entries,
+            "campaign_id": _LEADERBOARD_CAMPAIGN,
+            "starts_at": _LEADERBOARD_START, "ends_at": _LEADERBOARD_END,
+            "server_now": now, "seconds_remaining": max(0, _LEADERBOARD_END - now),
+            "phase": "upcoming" if now < _LEADERBOARD_START else "running" if now < _LEADERBOARD_END else "ended",
+            "score_policy": "verified_provider_receipts_pending_and_cleared",
+            "provisional": any(t["pending"] > 0 for t in totals.values()),
+            "prizes_enabled": False,
+            "total_active": len(ranked), "your_rank": your_rank,
+            "your_score": your_score, "entries": entries,
+            "loyalty": self.loyalty_status(caller_user_id),
         }
 
     # ── Staking Pool ────────────────────────────────────────────────────
@@ -1139,6 +1306,21 @@ class EarnAccountStore:
         if "amount" in d:
             d["amount"] = str(Decimal(d["amount"]).quantize(_THC_SCALE))
         d.pop("password_hash", None)
+        until = int(d.get("earn_hold_until") or 0)
+        if until:
+            left = max(0, until - int(time.time()))
+            d["earn_hold_seconds_remaining"] = left
+            d["earn_hold_days_remaining"] = (left + 86399) // 86400
+            d["earn_hold_phase"] = (
+                "cancelled" if d.get("state") == "reversed" else
+                "released" if d.get("earn_hold_released_at") else
+                "waiting" if left else "due"
+            )
+            d["earn_pending_reason"] = (
+                "provider_reversed" if d.get("state") == "reversed" else
+                "earn_hold_active" if d["earn_hold_phase"] == "waiting" else
+                "earn_hold_due" if d["earn_hold_phase"] == "due" else ""
+            )
         return d
 
     @staticmethod
@@ -1243,6 +1425,23 @@ class EarnAccountStore:
                 return self._ledger_dict(row), False
             if row["state"] == "reversed":
                 raise EarnError("invalid_thc_transition")
+            if row["state"] == "pending" and row["earn_hold_until"]:
+                if new_state != "confirmed":
+                    raise EarnError("invalid_thc_transition")
+                con.execute(
+                    """UPDATE thc_ledger SET provider_status=?,
+                       estimated_clearance_at=COALESCE(?, estimated_clearance_at),
+                       cleared_at=?, updated_at=? WHERE entry_id=?""",
+                    (provider_status, eta, provider_cleared_at or now, now, row["entry_id"]),
+                )
+                self._append_ledger_audit_in_tx(
+                    con, entry_id=row["entry_id"], event_ref=event_ref,
+                    event_type="provider_clearance", state="pending",
+                    provider_status=provider_status, occurred_at=provider_cleared_at or now,
+                )
+                return self._ledger_dict(con.execute(
+                    "SELECT * FROM thc_ledger WHERE entry_id=?", (row["entry_id"],),
+                ).fetchone()), True
             if row["state"] != new_state:
                 if new_state not in _THC_TRANSITIONS.get(row["state"], set()):
                     raise EarnError("invalid_thc_transition")
@@ -1373,6 +1572,8 @@ class EarnAccountStore:
                     now, payload_json,
                 ),
             )
+            if entry_id:
+                self._attach_earn_hold_in_tx(con, entry_id, now)
             return dict(con.execute(
                 "SELECT * FROM bitcotasks_receipts WHERE trans_id = ?", (trans_id,),
             ).fetchone()), True
@@ -1457,14 +1658,95 @@ class EarnAccountStore:
                 )
             con.execute(
                 """INSERT INTO pure_receipts
-                   VALUES (?,?,?,?,?,?,?,?)""",
+                   (trans_id, earn_user_id, status, amount_thc, payout_usd,
+                    survey_id, thc_entry_id, received_at, payload)
+                   VALUES (?,?,?,?,?,?,?,?,?)""",
                 (
                     trans_id, uid, status, str(amount), str(payout_usd),
                     str(survey_id)[:200], entry_id, now, payload_json,
                 ),
             )
+            if entry_id:
+                self._attach_earn_hold_in_tx(con, entry_id, now)
             return dict(con.execute(
                 "SELECT * FROM pure_receipts WHERE trans_id = ?", (trans_id,),
+            ).fetchone()), True
+
+    def record_timewall_receipt(
+        self,
+        *,
+        event_id: str,
+        provider_user_id: str,
+        revenue_raw: str,
+        event_type: str = "",
+        reason: str = "",
+        offer_name: str = "",
+        offer_detail: str = "",
+        payload: dict[str, Any],
+    ) -> tuple[dict[str, Any], bool]:
+        """Record one verified TimeWall event as a pending THC receipt.
+
+        TimeWall's signed callback supplies revenue in the exact string form
+        received from its query parameter.  We preserve that raw value for
+        audit/hash purposes and convert it with the configured placement rate;
+        no UI or browser action can clear the resulting ledger entry.
+        """
+        if not event_id or len(event_id) > 200:
+            raise EarnError("invalid_timewall_event")
+        if not provider_user_id or len(provider_user_id) > 32:
+            raise EarnError("invalid_timewall_user")
+        ledger_amount = timewall_reward_amount(revenue_raw)
+        now = int(time.time())
+        payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        with self._tx() as con:
+            identity = con.execute(
+                """SELECT earn_user_id FROM earn_provider_identities
+                   WHERE provider = 'timewall' AND provider_user_id = ?""",
+                (provider_user_id,),
+            ).fetchone()
+            if not identity:
+                raise EarnError("unknown_provider_user")
+            uid = identity["earn_user_id"]
+            prior = con.execute(
+                "SELECT * FROM timewall_receipts WHERE event_id = ?",
+                (event_id,),
+            ).fetchone()
+            if prior:
+                if prior["earn_user_id"] != uid:
+                    raise EarnError("timewall_receipt_conflict")
+                return dict(prior), False
+            entry_id = "thc_" + secrets.token_urlsafe(18)
+            con.execute(
+                """INSERT INTO thc_ledger
+                   (entry_id, earn_user_id, source, source_ref, amount,
+                    state, note, provider_status, received_at, created_at, updated_at)
+                   VALUES (?,?,?,?,?,'pending',?,'received_pending_clearance',?,?,?)""",
+                (
+                    entry_id, uid, "timewall", event_id, str(ledger_amount),
+                    f"{event_type}:{offer_name}"[:300], now, now, now,
+                ),
+            )
+            con.execute(
+                """INSERT INTO timewall_receipts
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    event_id, uid, str(revenue_raw), str(ledger_amount),
+                    str(event_type)[:100], str(reason)[:500],
+                    str(offer_name)[:500], str(offer_detail)[:1000],
+                    entry_id, now, payload_json,
+                ),
+            )
+            self._append_ledger_audit_in_tx(
+                con, entry_id=entry_id,
+                event_ref=f"timewall:receipt:{event_id}",
+                event_type="provider_receipt", state="pending",
+                provider_status="received_pending_clearance", occurred_at=now,
+            )
+            if entry_id:
+                self._attach_earn_hold_in_tx(con, entry_id, now)
+            return dict(con.execute(
+                "SELECT * FROM timewall_receipts WHERE event_id = ?",
+                (event_id,),
             ).fetchone()), True
 
     # ── CPX receipt handling ──────────────────────────────────────────────
@@ -1592,6 +1874,8 @@ class EarnAccountStore:
                     payload_json,
                 ),
             )
+            if thc_entry_id:
+                self._attach_earn_hold_in_tx(con, thc_entry_id, now)
             return dict(
                 con.execute(
                     "SELECT * FROM cpx_receipts WHERE trans_id = ?",
@@ -1701,6 +1985,48 @@ def build_pure_offerwall_url(provider_user_id: str) -> str:
     return f"{base}?{query}"
 
 
+def timewall_reward_amount(revenue_raw: str) -> Decimal:
+    """Validate the same Decimal conversion in preflight and live receipt handling."""
+    try:
+        revenue = Decimal(str(revenue_raw))
+        conversion = Decimal(os.getenv("TIMEWALL_THC_CONVERSION", "670"))
+        allow_decimals = os.getenv("TIMEWALL_ALLOW_DECIMALS", "0") == "1"
+        amount_scale = _THC_SCALE if allow_decimals else Decimal("1")
+        rounding = ROUND_DOWN if allow_decimals else ROUND_HALF_UP
+        amount = (revenue * conversion).quantize(amount_scale, rounding=rounding)
+        if revenue <= 0 or conversion <= 0 or amount <= 0:
+            raise ValueError
+        # Keep the durable ledger representation at the same six-decimal
+        # scale used by balance/history APIs, even when the provider
+        # placement itself disallows fractional THC.
+        ledger_amount = amount.quantize(_THC_SCALE)
+    except (TypeError, ValueError, InvalidOperation):
+        raise EarnError("invalid_timewall_revenue")
+    return ledger_amount
+
+
+def build_timewall_offerwall_url(provider_user_id: str) -> str:
+    """Build the server-configured TimeWall placement URL.
+
+    Placement parameter names differ by TimeWall account. The Railway-only
+    template must therefore contain {userId}; we never guess a URL.
+    """
+    template = os.getenv("TIMEWALL_PLACEMENT_URL", "").strip()
+    if not template:
+        raise EarnError("timewall_not_configured")
+    if not provider_user_id or len(provider_user_id) > 32:
+        raise EarnError("invalid_timewall_user")
+    placeholders = ("{UNIQUE_USER_ID}", "{userId}", "{userID}", "{user_ID}", "{user_id}")
+    if not template.startswith("https://") or not any(
+        placeholder in template for placeholder in placeholders
+    ):
+        raise EarnError("invalid_timewall_placement")
+    encoded_user_id = urlencode({"v": provider_user_id})[2:]
+    for placeholder in placeholders:
+        template = template.replace(placeholder, encoded_user_id)
+    return template
+
+
 def verify_pure_postback_signature(
     trans_id: str, respondent_id: str, signature: str,
 ) -> bool:
@@ -1712,6 +2038,31 @@ def verify_pure_postback_signature(
         f"{trans_id}{respondent_id}{secret}".encode("utf-8"),
     ).hexdigest()
     return hmac.compare_digest(expected, str(signature).strip().lower())
+
+
+def timewall_postback_hash(user_id: str, revenue: str, secret: str) -> str:
+    """TimeWall callback formula: sha256(user_ID + revenue + SecretKey)."""
+    return hashlib.sha256(
+        f"{user_id}{revenue}{secret}".encode("utf-8"),
+    ).hexdigest()
+
+
+def verify_timewall_postback_signature(
+    user_id: str, revenue: str, signature: str,
+) -> bool:
+    secret = os.getenv("TIMEWALL_SECRET_KEY", "").strip()
+    if not secret or not user_id or not revenue or not signature:
+        return False
+    expected = timewall_postback_hash(user_id, revenue, secret)
+    return hmac.compare_digest(expected, str(signature).strip().lower())
+
+
+def timewall_allowed_ips() -> set[str]:
+    configured = os.getenv(
+        "TIMEWALL_POSTBACK_IPS",
+        "18.156.132.55,51.81.120.73,142.111.248.18",
+    )
+    return {item.strip() for item in configured.split(",") if item.strip()}
 
 
 def cpx_postback_hash(trans_id: str, secret: str) -> str:
@@ -1897,6 +2248,7 @@ def register_earn_account_routes(
             email=user["email"],
             email_verified=bool(user["email_verified"]),
             wallet_address=link["wallet_address"] if link else None,
+            loyalty=store.loyalty_status(user["earn_user_id"]),
         )
 
     @app.post("/api/earn/wallet-link/challenge")
@@ -1997,13 +2349,28 @@ def register_earn_account_routes(
         entries = store.thc_history(user["earn_user_id"])
         return jsonify(ok=True, entries=entries)
 
+    @app.get("/api/earn/history/<entry_id>")
+    def earn_receipt_details(entry_id):
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        try:
+            details = store.thc_receipt_details(user["earn_user_id"], entry_id)
+        except EarnError:
+            return jsonify(ok=False, error="receipt_not_found"), 404
+        response = jsonify(ok=True, server_now=int(time.time()), **details)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
     @app.get("/api/earn/leaderboard")
     def earn_leaderboard():
         user, _ = _current_user()
         if not user:
             return jsonify(ok=False, error="earn_auth_required"), 401
         data = store.leaderboard(caller_user_id=user["earn_user_id"])
-        return jsonify(ok=True, **data)
+        response = jsonify(ok=True, **data)
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     @app.get("/api/earn/staking/pools")
     def earn_staking_pools():
@@ -2067,6 +2434,9 @@ def register_earn_account_routes(
                  "enabled": os.getenv("BITCOTASKS_ENABLED", "0") == "1"},
                 {"id": "pure", "label": "PureSpectrum", "kind": "surveys",
                  "enabled": os.getenv("PURE_ENABLED", "0") == "1"},
+                {"id": "timewall", "label": "TimeWall", "kind": "tasks",
+                 "enabled": os.getenv("TIMEWALL_ENABLED", "0") == "1"
+                 and bool(os.getenv("TIMEWALL_PLACEMENT_URL", "").strip())},
             ],
         )
 
@@ -2188,6 +2558,85 @@ def register_earn_account_routes(
             )
         except EarnError as exc:
             return jsonify(ok=False, error=str(exc)), 503
+
+    @app.get("/api/earn/timewall/offerwall")
+    def earn_timewall_offerwall():
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        if os.getenv("TIMEWALL_ENABLED", "0") != "1":
+            return jsonify(ok=False, error="timewall_not_enabled"), 503
+        try:
+            provider_user_id = store.provider_user_id(
+                user["earn_user_id"], "timewall",
+            )
+            return jsonify(
+                ok=True,
+                provider="timewall",
+                url=build_timewall_offerwall_url(provider_user_id),
+            )
+        except EarnError as exc:
+            return jsonify(ok=False, error=str(exc)), 503
+
+    @app.route("/api/earn/timewall/postback", methods=["GET", "POST"])
+    def earn_timewall_postback():
+        """Receive a signed TimeWall event; disabled until explicitly enabled."""
+        live = os.getenv("TIMEWALL_POSTBACK_LIVE", "0") == "1"
+        if request.remote_addr not in timewall_allowed_ips():
+            return "ERROR", 403 if live else 503
+        params = (
+            request.values.to_dict()
+            if request.values
+            else (request.get_json(silent=True) or {})
+        )
+        user_id = str(
+            params.get("userId") or params.get("userID")
+            or params.get("user_ID") or params.get("user_id") or "",
+        ).strip()
+        # Preserve the provider's exact revenue string for signature validation.
+        revenue_value = params.get("revenue")
+        revenue = revenue_value if isinstance(revenue_value, str) else str(revenue_value or "")
+        received_hash = str(params.get("hash") or "").strip()
+        event_id = str(
+            params.get("transactionId") or params.get("transactionID")
+            or params.get("txid") or params.get("transaction_id")
+            or params.get("withdrawid") or "",
+        ).strip()
+        if not event_id or not verify_timewall_postback_signature(
+            user_id, revenue, received_hash,
+        ):
+            return "ERROR", 403 if live else 503
+        if not live:
+            # Verify genuine callbacks while credits remain disabled. Keep the
+            # non-200 response so the provider does not consider a reward paid.
+            # Only a fingerprint is logged; no signature/user/IP/raw payload.
+            try:
+                store.validate_timewall_identity(user_id)
+                if len(event_id) > 200:
+                    raise EarnError("invalid_timewall_event")
+                timewall_reward_amount(revenue)
+            except (EarnError, InvalidOperation, ValueError):
+                return "ERROR", 503
+            event_ref = hashlib.sha256(event_id.encode("utf-8")).hexdigest()[:16]
+            logger.info(
+                "[TimeWall preflight] verified_callback event_ref=%s "
+                "credit_enabled=false ledger_write=false retry_required=true", event_ref,
+            )
+            return "ERROR", 503
+        try:
+            store.record_timewall_receipt(
+                event_id=event_id,
+                provider_user_id=user_id,
+                revenue_raw=revenue,
+                event_type=str(params.get("type") or ""),
+                reason=str(params.get("reason") or ""),
+                offer_name=str(params.get("offername") or ""),
+                offer_detail=str(params.get("offerdetail") or ""),
+                payload=params,
+            )
+        except (EarnError, ValueError):
+            return "ERROR", 400
+        return "OK", 200
 
     @app.route("/api/earn/pure/postback", methods=["GET", "POST"])
     def earn_pure_postback():

@@ -6,10 +6,19 @@ on:
   pull_request:
     paths:
       - "services/earn_account.py"
+      - "server.py"
       - "templates/earn_beta.html"
       - "public/wallet-pwa/**"
       - "tests/test_earn_account.py"
       - "tests/test_earn_wallet_link.py"
+      - "tests/test_timewall_earn_adapter.py"
+      - "tests/test_earn_provider_tabs.mjs"
+      - "tests/test_earn_receipt_details.py"
+      - "tests/test_earn_receipt_details.mjs"
+      - "tests/test_earn_leaderboard.py"
+      - "tests/test_earn_leaderboard.mjs"
+      - "tests/test_earn_internal_hold.py"
+      - "tests/test_earn_loyalty.py"
       - ".github/workflows/earn-account-tests.yml"
 
 permissions:
@@ -22,6 +31,11 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Test provider tab lifecycle
+        run: node --test tests/test_earn_provider_tabs.mjs tests/test_earn_receipt_details.mjs tests/test_earn_leaderboard.mjs
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -34,5 +48,7 @@ jobs:
           # Tests use temporary state and must never receive live credentials.
           CPX_POSTBACK_LIVE: "0"
           BITCOTASKS_ENABLED: "0"
+          TIMEWALL_ENABLED: "0"
+          TIMEWALL_POSTBACK_LIVE: "0"
         run: |
-          python -m pytest tests/test_earn_account.py tests/test_earn_wallet_link.py -v
+          python -m pytest tests/test_earn_account.py tests/test_earn_wallet_link.py tests/test_timewall_earn_adapter.py tests/test_earn_receipt_details.py tests/test_earn_leaderboard.py tests/test_earn_internal_hold.py tests/test_earn_loyalty.py -v

@@ -160,7 +160,7 @@ class TestTimeWallRoutes:
             "TIMEWALL_POSTBACK_LIVE": "1",
             "TIMEWALL_SECRET_KEY": "secret",
             "TIMEWALL_POSTBACK_IPS": "127.0.0.1",
-            "TIMEWALL_THC_CONVERSION": "675",
+            "TIMEWALL_THC_CONVERSION": "670",
         }):
             wall = client.get("/api/earn/timewall/offerwall", headers=_auth(token)).get_json()
             user_id = wall["url"].split("user=", 1)[1]
@@ -180,7 +180,7 @@ class TestTimeWallRoutes:
         assert store.thc_balance("earn_" + "missing")["pending"] == "0.000000"
         with __import__("sqlite3").connect(store.db_path) as con:
             assert con.execute("SELECT COUNT(*) FROM timewall_receipts").fetchone()[0] == 1
-            assert con.execute("SELECT amount FROM thc_ledger WHERE source='timewall'").fetchone()[0] == "68.000000"
+            assert con.execute("SELECT amount FROM thc_ledger WHERE source='timewall'").fetchone()[0] == "67.000000"
 
     def test_postback_accepts_timewall_dashboard_aliases(self, client, store):
         token = _login(client)
@@ -190,7 +190,7 @@ class TestTimeWallRoutes:
             "TIMEWALL_POSTBACK_LIVE": "1",
             "TIMEWALL_SECRET_KEY": "secret",
             "TIMEWALL_POSTBACK_IPS": "127.0.0.1",
-            "TIMEWALL_THC_CONVERSION": "675",
+            "TIMEWALL_THC_CONVERSION": "670",
         }):
             wall = client.get("/api/earn/timewall/offerwall", headers=_auth(token)).get_json()
             user_id = wall["url"].split("user=", 1)[1]

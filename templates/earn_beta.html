@@ -354,6 +354,9 @@
     }
     const eta = Number(entry.estimated_clearance_at);
     if (!Number.isInteger(eta) || eta <= 0) return t('clearanceNotRecv');
+    if (eta * 1000 <= Date.now()) return _lang === 'el'
+      ? 'Η εκτίμηση χρόνου έληξε. Αναμονή επιβεβαιωμένης εκκαθάρισης.'
+      : 'Estimated time elapsed. Awaiting verified clearance.';
     const days = Math.max(0, Math.ceil((eta * 1000 - Date.now()) / 86400000));
     return (days === 1 ? t('estClearance') : t('estClearancePlural')).replace('{d}', formatReceiptDate(eta)).replace('{n}', days);
   }
@@ -531,11 +534,8 @@
         pendingValue.textContent = pending + ' THC';
         const cs = $('earn-clearance-summary');
         if (cs) {
-          if (bData.days_remaining != null && pending !== '0.00') {
-            const d = bData.days_remaining;
-            cs.textContent = d > 0
-              ? (d === 1 ? t('daysClearance') : t('daysClearancePlural')).replace('{n}', d).replace('{d}', bData.clearance_days)
-              : t('readyClearance');
+          if (bData.earliest_clears_at && pending !== '0.00') {
+            cs.textContent = clearanceText({ state: 'pending', estimated_clearance_at: bData.earliest_clears_at });
           } else if (pending !== '0.00') {
             cs.textContent = t('clearanceNotRecv');
           } else {

@@ -2061,6 +2061,7 @@ function _formatEarnClearance(entry) {
     return 'Clearance date not yet received from provider.';
   }
   // This is presentation only: no local clock or timer can transition THC.
+  if (eta * 1000 <= Date.now()) return 'Estimated time elapsed. Awaiting verified clearance.';
   const remaining = Math.max(0, Math.ceil((eta * 1000 - Date.now()) / 86400000));
   return `Estimated clearance: ${_formatEarnReceiptDate(eta)} (${remaining} day${remaining === 1 ? '' : 's'} remaining)`;
 }

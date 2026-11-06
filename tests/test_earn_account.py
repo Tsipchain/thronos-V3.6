@@ -16,6 +16,7 @@ Covers:
 """
 import hashlib
 import os
+import secrets
 import sys
 import threading
 import time
@@ -1591,6 +1592,27 @@ def _link_wallet(store, earn_user_id, wallet_address, public_key="02" + "ab" * 3
         )
 
 
+def _seed_thr_balance(address, amount):
+    """Seed THR wallet balance for testing."""
+    try:
+        import server as srv
+        ledger = srv.load_json(srv.LEDGER_FILE, {})
+        ledger[address] = round(float(amount), 6)
+        srv.save_json(srv.LEDGER_FILE, ledger)
+    except ImportError:
+        pass
+
+
+def _seed_thc_confirmed(store, earn_user_id, amount):
+    """Seed confirmed THC balance for testing."""
+    store.record_thc_credit(earn_user_id, "test_seed", f"seed-{secrets.token_hex(4)}", str(amount))
+    with store._tx() as con:
+        con.execute(
+            "UPDATE thc_ledger SET state='confirmed' WHERE earn_user_id=? AND state='pending'",
+            (earn_user_id,),
+        )
+
+
 class TestStakingPool:
     def test_list_pools_returns_default_pools(self, store, user_a):
         pools = store.staking_pools()
@@ -1611,19 +1633,26 @@ class TestStakingPool:
     def test_stake_and_unstake_flow(self, store, user_a):
         uid = user_a["earn_user_id"]
         _link_wallet(store, uid, "THR" + "A" * 40)
+        _seed_thc_confirmed(store, uid, "100")
         pools = store.staking_pools()
         thc_pool = next(p for p in pools if p["token"] == "THC")
         pos = store.create_stake(uid, thc_pool["pool_id"], "50")
         assert pos["status"] == "active"
         assert Decimal(pos["amount"]) == Decimal("50")
+        balance = store.thc_balance(uid)
+        assert Decimal(balance["available"]) == Decimal("50.000000")
+        assert Decimal(balance["staked"]) == Decimal("50.000000")
         positions = store.staking_positions(uid)
         assert len(positions) == 1
         assert positions[0]["position_id"] == pos["position_id"]
         assert Decimal(positions[0]["projected_rewards"]) >= 0
         result = store.request_unstake(uid, pos["position_id"])
-        assert result["status"] == "unstaking"
+        assert result["status"] == "unstaked"
+        balance_after = store.thc_balance(uid)
+        assert Decimal(balance_after["available"]) == Decimal("100.000000")
+        assert Decimal(balance_after["staked"]) == Decimal("0.000000")
         positions = store.staking_positions(uid)
-        assert positions[0]["status"] == "unstaking"
+        assert positions[0]["status"] == "unstaked"
 
     def test_stake_below_minimum_rejected(self, store, user_a):
         uid = user_a["earn_user_id"]
@@ -1642,7 +1671,9 @@ class TestStakingPool:
 
     def test_pool_total_staked_updates(self, store, user_a):
         uid = user_a["earn_user_id"]
-        _link_wallet(store, uid, "THR" + "D" * 40)
+        addr = "THR" + "D" * 40
+        _link_wallet(store, uid, addr)
+        _seed_thr_balance(addr, 100)
         pools = store.staking_pools()
         thr_pool = next(p for p in pools if p["token"] == "THR")
         store.create_stake(uid, thr_pool["pool_id"], "5")
@@ -1656,6 +1687,7 @@ class TestStakingPool:
         token = _login(client)
         uid = user_a["earn_user_id"]
         _link_wallet(store, uid, "THR" + "E" * 40)
+        _seed_thc_confirmed(store, uid, "100")
         resp = client.get("/api/earn/staking/pools", headers=_auth(token))
         assert resp.status_code == 200
         data = resp.get_json()
@@ -1683,15 +1715,53 @@ class TestStakingPool:
         uid_a = user_a["earn_user_id"]
         uid_b = user_b["earn_user_id"]
         _link_wallet(store, uid_a, "THR" + "F" * 40)
+        _seed_thc_confirmed(store, uid_a, "50")
         pools = store.staking_pools()
-        pos = store.create_stake(uid_a, pools[0]["pool_id"], "10")
+        thc_pool = next(p for p in pools if p["token"] == "THC")
+        pos = store.create_stake(uid_a, thc_pool["pool_id"], "10")
         with pytest.raises(EarnError, match="position_not_found"):
             store.request_unstake(uid_b, pos["position_id"])
 
     def test_staking_uses_decimal_precision(self, store, user_a):
         uid = user_a["earn_user_id"]
         _link_wallet(store, uid, "THR" + "1" * 40)
+        _seed_thc_confirmed(store, uid, "50")
         pools = store.staking_pools()
         thc_pool = next(p for p in pools if p["token"] == "THC")
         pos = store.create_stake(uid, thc_pool["pool_id"], "10.123456789")
         assert pos["amount"] == "10.123456"
+
+    def test_thr_stake_debits_wallet(self, store, user_a):
+        uid = user_a["earn_user_id"]
+        addr = "THR" + "ab" * 20
+        _link_wallet(store, uid, addr)
+        _seed_thr_balance(addr, 50)
+        pools = store.staking_pools()
+        thr_pool = next(p for p in pools if p["token"] == "THR")
+        pos = store.create_stake(uid, thr_pool["pool_id"], "10")
+        assert pos["status"] == "active"
+        assert pos["wallet_tx_id"] is not None
+        try:
+            import server as srv
+            ledger = srv.load_json(srv.LEDGER_FILE, {})
+            assert ledger[addr] == 40.0
+        except ImportError:
+            pass
+        result = store.request_unstake(uid, pos["position_id"])
+        assert result["status"] == "unstaked"
+        assert result["unstake_tx_id"] is not None
+        try:
+            import server as srv
+            ledger = srv.load_json(srv.LEDGER_FILE, {})
+            assert ledger[addr] == 50.0
+        except ImportError:
+            pass
+
+    def test_thc_stake_insufficient_balance_rejected(self, store, user_a):
+        uid = user_a["earn_user_id"]
+        _link_wallet(store, uid, "THR" + "Z" * 40)
+        _seed_thc_confirmed(store, uid, "5")
+        pools = store.staking_pools()
+        thc_pool = next(p for p in pools if p["token"] == "THC")
+        with pytest.raises(EarnError, match="insufficient_thc_balance"):
+            store.create_stake(uid, thc_pool["pool_id"], "10")

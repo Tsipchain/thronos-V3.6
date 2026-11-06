@@ -156,6 +156,106 @@ def reverse_thr_debit(
     return tx
 
 
+# ── Staking pool operations (fee-free) ──────────────────────────────
+
+
+def staking_pool_vault_address() -> str:
+    srv = _get_server_module()
+    return getattr(srv, "PYTHIA_SYSTEM_THR_ADDRESS", "THR_STAKING_POOL_VAULT")
+
+
+def stake_thr(from_address: str, amount) -> dict[str, Any]:
+    """
+    Fee-free THR transfer from user wallet to the staking pool vault.
+    Same ledger/chain as send_thr_internal but without network fee.
+    """
+    srv = _get_server_module()
+    amount = float(amount)
+    if amount <= 0:
+        raise ValueError("amount_must_be_positive")
+    if not srv.validate_thr_address(from_address):
+        raise ValueError(f"invalid_address: {from_address}")
+
+    pool_vault = staking_pool_vault_address()
+    ledger = srv.load_json(srv.LEDGER_FILE, {})
+    balance = float(ledger.get(from_address, 0.0))
+    if balance < amount:
+        raise ValueError("insufficient_thr_balance")
+
+    ledger[from_address] = round(balance - amount, 6)
+    ledger[pool_vault] = round(float(ledger.get(pool_vault, 0.0)) + amount, 6)
+    srv.save_json(srv.LEDGER_FILE, ledger)
+
+    tx_id = f"TX-STAKE-{int(time.time())}-{secrets.token_hex(4)}"
+    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    tx = {
+        "type": "staking_lock",
+        "timestamp": ts,
+        "from": from_address,
+        "to": pool_vault,
+        "amount": round(amount, 6),
+        "fee_burned": 0.0,
+        "speed": "instant",
+        "tx_id": tx_id,
+        "status": "confirmed",
+        "source": "earn_staking",
+    }
+    chain = srv.load_json(srv.CHAIN_FILE, [])
+    chain.append(tx)
+    srv.save_json(srv.CHAIN_FILE, chain)
+    try:
+        srv.persist_normalized_tx(tx)
+    except RuntimeError:
+        pass
+    return tx
+
+
+def unstake_thr(
+    to_address: str, amount, original_tx_id: str = "",
+) -> dict[str, Any]:
+    """
+    Fee-free THR return from staking pool vault to user wallet.
+    """
+    srv = _get_server_module()
+    amount = float(amount)
+    if amount <= 0:
+        raise ValueError("amount_must_be_positive")
+
+    pool_vault = staking_pool_vault_address()
+    ledger = srv.load_json(srv.LEDGER_FILE, {})
+    vault_balance = float(ledger.get(pool_vault, 0.0))
+    if vault_balance < amount:
+        raise ValueError("pool_vault_insufficient_balance")
+
+    ledger[pool_vault] = round(vault_balance - amount, 6)
+    ledger[to_address] = round(float(ledger.get(to_address, 0.0)) + amount, 6)
+    srv.save_json(srv.LEDGER_FILE, ledger)
+
+    tx_id = f"TX-UNSTAKE-{int(time.time())}-{secrets.token_hex(4)}"
+    ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    tx = {
+        "type": "staking_unlock",
+        "timestamp": ts,
+        "from": pool_vault,
+        "to": to_address,
+        "amount": round(amount, 6),
+        "fee_burned": 0.0,
+        "speed": "instant",
+        "tx_id": tx_id,
+        "original_tx_id": original_tx_id,
+        "status": "confirmed",
+        "source": "earn_staking",
+    }
+    chain = srv.load_json(srv.CHAIN_FILE, [])
+    chain.append(tx)
+    srv.save_json(srv.CHAIN_FILE, chain)
+    try:
+        srv.persist_normalized_tx(tx)
+    except RuntimeError:
+        pass
+    return tx
+
+
 # ── Pythia pool operations ───────────────────────────────────────────
 
 # Canonical pool configs — imported from server at call time

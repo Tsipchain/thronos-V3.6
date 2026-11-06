@@ -362,7 +362,8 @@ class EarnAccountStore:
                     amount               TEXT NOT NULL,
                     status               TEXT NOT NULL DEFAULT 'active',
                     staked_at            INTEGER NOT NULL,
-                    unstake_requested_at INTEGER
+                    unstake_requested_at INTEGER,
+                    wallet_tx_id         TEXT
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_earn_staking_positions_user
@@ -520,6 +521,13 @@ class EarnAccountStore:
             for row in rows:
                 self._attach_earn_hold_in_tx(con, row["entry_id"], row["first_received"])
             con.commit()
+            # Migration: add wallet_tx_id to staking positions for existing DBs
+            pos_cols = {
+                row[1] for row in con.execute("PRAGMA table_info(earn_staking_positions)")
+            }
+            if "wallet_tx_id" not in pos_cols:
+                con.execute("ALTER TABLE earn_staking_positions ADD COLUMN wallet_tx_id TEXT")
+                con.commit()
         finally:
             con.close()
 
@@ -1087,6 +1095,13 @@ class EarnAccountStore:
                 " FROM thc_ledger WHERE earn_user_id = ?",
                 (earn_user_id,),
             ).fetchall()
+            staked_rows = con.execute(
+                """SELECT sp.amount FROM earn_staking_positions sp
+                   JOIN earn_staking_pools p ON p.pool_id = sp.pool_id
+                   WHERE sp.earn_user_id = ? AND sp.status = 'active' AND p.token = 'THC'""",
+                (earn_user_id,),
+            ).fetchall()
+        staked_thc = sum((Decimal(r["amount"]) for r in staked_rows), Decimal(0))
         by_state: dict[str, Decimal] = {}
         earliest_clears: int | None = None
         earliest_hold: int | None = None
@@ -1097,7 +1112,6 @@ class EarnAccountStore:
                 hold = int(r["earn_hold_until"] or 0)
                 if hold and (earliest_hold is None or hold < earliest_hold):
                     earliest_hold = hold
-                # Provider ETA stays distinct from the authorized internal hold.
                 eta = int(r["estimated_clearance_at"] or 0)
                 if eta and (earliest_clears is None or eta < earliest_clears):
                     earliest_clears = eta
@@ -1105,11 +1119,13 @@ class EarnAccountStore:
         payable = by_state.get("payable", Decimal("0"))
         paid = by_state.get("paid", Decimal("0"))
         pending = by_state.get("pending", Decimal("0"))
+        available = max(Decimal(0), confirmed + payable - staked_thc)
         result: dict[str, Any] = {
-            "available": str((confirmed + payable).quantize(_THC_SCALE)),
+            "available": str(available.quantize(_THC_SCALE)),
             "pending": str(pending.quantize(_THC_SCALE)),
             "total_earned": str((confirmed + payable + paid).quantize(_THC_SCALE)),
             "paid_out": str(paid.quantize(_THC_SCALE)),
+            "staked": str(staked_thc.quantize(_THC_SCALE)),
             "clearance_status": "provider_eta_pending",
             "clearance_message": "Clearance date not yet received from provider.",
         }
@@ -1365,6 +1381,51 @@ class EarnAccountStore:
                 })
             return result
 
+    def _debit_wallet_for_stake(
+        self, wallet_address: str, amount: Decimal,
+    ) -> str | None:
+        """Debit THR from wallet to staking pool vault (no fee). Returns tx_id or None if ledger unavailable."""
+        try:
+            from services.thr_ledger import stake_thr
+        except (ImportError, Exception):
+            return None
+        try:
+            tx = stake_thr(wallet_address, amount)
+        except ValueError as exc:
+            raise EarnError(str(exc))
+        return tx["tx_id"]
+
+    def _credit_wallet_for_unstake(
+        self, wallet_address: str, amount: Decimal, original_tx_id: str | None,
+    ) -> str | None:
+        """Credit THR back from staking pool vault to wallet (no fee). Returns tx_id or None if ledger unavailable."""
+        try:
+            from services.thr_ledger import unstake_thr
+        except (ImportError, Exception):
+            return None
+        try:
+            tx = unstake_thr(wallet_address, amount, original_tx_id or "")
+        except ValueError as exc:
+            raise EarnError(str(exc))
+        return tx["tx_id"]
+
+    def _available_thc_for_staking(self, con: sqlite3.Connection, earn_user_id: str) -> Decimal:
+        """Available THC minus active THC staking locks."""
+        rows = con.execute(
+            "SELECT state, amount FROM thc_ledger WHERE earn_user_id = ?",
+            (earn_user_id,),
+        ).fetchall()
+        confirmed = sum((Decimal(r["amount"]) for r in rows if r["state"] == "confirmed"), Decimal(0))
+        payable = sum((Decimal(r["amount"]) for r in rows if r["state"] == "payable"), Decimal(0))
+        staked_rows = con.execute(
+            """SELECT sp.amount FROM earn_staking_positions sp
+               JOIN earn_staking_pools p ON p.pool_id = sp.pool_id
+               WHERE sp.earn_user_id = ? AND sp.status = 'active' AND p.token = 'THC'""",
+            (earn_user_id,),
+        ).fetchall()
+        staked = sum((Decimal(r["amount"]) for r in staked_rows), Decimal(0))
+        return confirmed + payable - staked
+
     def create_stake(
         self, earn_user_id: str, pool_id: str, amount: str,
     ) -> dict[str, Any]:
@@ -1390,26 +1451,35 @@ class EarnAccountStore:
             ).fetchone()
             if not link:
                 raise EarnError("wallet_not_linked")
+            token = pool["token"]
+            wallet_tx_id = None
+            if token == "THR":
+                wallet_tx_id = self._debit_wallet_for_stake(link["wallet_address"], amt)
+            elif token == "THC":
+                available = self._available_thc_for_staking(con, earn_user_id)
+                if available < amt:
+                    raise EarnError("insufficient_thc_balance")
             now = int(time.time())
             position_id = "pos_" + secrets.token_urlsafe(18)
             con.execute(
                 """INSERT INTO earn_staking_positions
                    (position_id, pool_id, earn_user_id, wallet_address,
-                    amount, status, staked_at)
-                   VALUES (?,?,?,?,?,'active',?)""",
+                    amount, status, staked_at, wallet_tx_id)
+                   VALUES (?,?,?,?,?,'active',?,?)""",
                 (
                     position_id, pool_id, earn_user_id,
-                    link["wallet_address"], str(amt), now,
+                    link["wallet_address"], str(amt), now, wallet_tx_id,
                 ),
             )
             return {
                 "position_id": position_id,
                 "pool_id": pool_id,
-                "token": pool["token"],
+                "token": token,
                 "amount": str(amt),
                 "status": "active",
                 "staked_at": now,
                 "wallet_address": link["wallet_address"],
+                "wallet_tx_id": wallet_tx_id,
             }
 
     def request_unstake(
@@ -1417,23 +1487,31 @@ class EarnAccountStore:
     ) -> dict[str, Any]:
         with self._tx() as con:
             row = con.execute(
-                """SELECT * FROM earn_staking_positions
-                   WHERE position_id = ? AND earn_user_id = ? AND status = 'active'""",
+                """SELECT sp.*, p.token FROM earn_staking_positions sp
+                   JOIN earn_staking_pools p ON p.pool_id = sp.pool_id
+                   WHERE sp.position_id = ? AND sp.earn_user_id = ? AND sp.status = 'active'""",
                 (position_id, earn_user_id),
             ).fetchone()
             if not row:
                 raise EarnError("position_not_found")
             now = int(time.time())
+            amt = Decimal(row["amount"])
+            unstake_tx_id = None
+            if row["token"] == "THR":
+                unstake_tx_id = self._credit_wallet_for_unstake(
+                    row["wallet_address"], amt, row["wallet_tx_id"],
+                )
             con.execute(
                 """UPDATE earn_staking_positions
-                   SET status = 'unstaking', unstake_requested_at = ?
+                   SET status = 'unstaked', unstake_requested_at = ?
                    WHERE position_id = ?""",
                 (now, position_id),
             )
             return {
                 "position_id": position_id,
-                "status": "unstaking",
+                "status": "unstaked",
                 "unstake_requested_at": now,
+                "unstake_tx_id": unstake_tx_id,
             }
 
     def list_ads(self, placement: str = "earn") -> list[dict[str, Any]]:

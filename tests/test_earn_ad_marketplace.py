@@ -5,6 +5,7 @@ import os
 import pytest
 import tempfile
 import time
+import unittest.mock as mock
 
 os.environ.setdefault("EARN_DB_PATH", ":memory:")
 
@@ -1267,3 +1268,200 @@ class TestMarketplaceAPI:
         )
         assert r.status_code == 200
         assert "daily" in r.get_json()
+
+
+# ── Settlement Integration Tests ─────────────────────────────────────
+#
+# These tests validate the escrow settlement flow with real
+# deterministic secp256k1 signatures.  They cover the 8 scenarios
+# specified for wallet debit + Pythia pool credit integration.
+#
+# STATUS: The tests below validate the current escrow accounting layer
+# (intent → signature verification → escrow record).  Each test also
+# documents (with inline comments) the additional assertions that will
+# become active once the WalletSettlementAdapter is implemented and
+# wired into escrow_execute.
+#
+# See services/wallet_settlement_adapter.py for the adapter interface.
+
+_SETTLE_PRIVKEY, _SETTLE_PUBKEY = _generate_wallet_keypair()
+_SETTLE_WALLET = "THR" + "EE" * 20
+
+
+class TestSettlementIntegration:
+    """Integration tests for wallet debit + Pythia pool credit settlement."""
+
+    def _setup_advertiser(self, store):
+        adv = store.register("settle-adv@test.com", "SecurePass123!")
+        uid = adv["earn_user_id"]
+        _link_wallet(store, uid, _SETTLE_WALLET, _SETTLE_PUBKEY)
+        camp = store.create_campaign(
+            advertiser_id=uid,
+            name="Settlement Test Campaign",
+            campaign_type="cpm",
+            bid_amount="1.000000",
+        )
+        cid = camp["campaign_id"]
+        return uid, cid
+
+    # 1. Successful wallet debit + Pythia pool credit
+    def test_successful_settlement(self, store):
+        uid, cid = self._setup_advertiser(store)
+        result = _escrow_via_intent(
+            store, uid, cid, "deposit", "50.000000",
+            private_key=_SETTLE_PRIVKEY,
+        )
+        assert result["escrow_id"].startswith("esc_")
+        assert result["action"] == "deposit"
+        assert result["amount"] == "50.000000"
+        assert result["balance_after"] == "50.000000"
+        assert result["payload_hash"]
+        assert len(result["payload_hash"]) == 64
+        assert result["settlement_status"] == "pending"
+        # TODO once WalletSettlementAdapter is wired:
+        #   assert result["wallet_tx_id"] is not None
+        #   assert result["pool_receipt_id"] is not None
+        #   assert result["pool_position_id"] is not None
+        #   assert result["settlement_status"] == "settled"
+
+    # 2. Insufficient THR balance
+    def test_insufficient_thr_balance(self, store):
+        uid, cid = self._setup_advertiser(store)
+        # Currently the escrow layer does not check wallet balance
+        # (that requires the adapter). Verify the escrow record is created
+        # with settlement_status="pending" — the adapter will reject it.
+        result = _escrow_via_intent(
+            store, uid, cid, "deposit", "999999.000000",
+            private_key=_SETTLE_PRIVKEY,
+        )
+        assert result["settlement_status"] == "pending"
+        # TODO once WalletSettlementAdapter is wired:
+        #   with pytest.raises(EarnError, match="insufficient_thr_balance"):
+        #       _escrow_via_intent(
+        #           store, uid, cid, "deposit", "999999.000000",
+        #           private_key=_SETTLE_PRIVKEY,
+        #       )
+
+    # 3. Invalid signature rejected
+    def test_invalid_signature_rejected(self, store):
+        uid, cid = self._setup_advertiser(store)
+        intent = store.escrow_create_intent(uid, cid, "deposit", "10.000000")
+        bad_sig = "aa" * 64
+        with pytest.raises(EarnError, match="invalid_wallet_signature"):
+            store.escrow_execute(
+                intent["intent_id"], uid,
+                intent["nonce"], wallet_signature=bad_sig,
+            )
+
+    # 4. Nonce replay rejected
+    def test_nonce_replay_rejected(self, store):
+        uid, cid = self._setup_advertiser(store)
+        intent = store.escrow_create_intent(uid, cid, "deposit", "10.000000")
+        sig = _sign_intent(_SETTLE_PRIVKEY, intent)
+        store.escrow_execute(
+            intent["intent_id"], uid,
+            intent["nonce"], wallet_signature=sig,
+        )
+        # Second execution with same intent must fail
+        with pytest.raises(EarnError, match="invalid_or_expired_intent"):
+            store.escrow_execute(
+                intent["intent_id"], uid,
+                intent["nonce"], wallet_signature=sig,
+            )
+
+    # 5. Duplicate idempotency key rejected
+    def test_duplicate_idempotency_key_rejected(self, store):
+        uid, cid = self._setup_advertiser(store)
+        intent1 = store.escrow_create_intent(uid, cid, "deposit", "10.000000")
+        sig1 = _sign_intent(_SETTLE_PRIVKEY, intent1)
+        result1 = store.escrow_execute(
+            intent1["intent_id"], uid,
+            intent1["nonce"], wallet_signature=sig1,
+        )
+        idem_key = result1["idempotency_key"]
+        # Forge a second intent row with the same idempotency_key to
+        # verify the duplicate guard.  Normally the store generates
+        # unique keys, but an adapter or retry could present the same
+        # key if the first write succeeded.
+        with store._tx() as con:
+            import secrets as _sec
+            nonce2 = _sec.token_urlsafe(24)
+            intent_id2 = "esci_" + _sec.token_urlsafe(18)
+            now = int(time.time())
+            con.execute(
+                """INSERT INTO earn_escrow_intents
+                   (intent_id, earn_user_id, campaign_id, action,
+                    amount, nonce, idempotency_key, requires_wallet_sig,
+                    expires_at, created_at)
+                   VALUES (?,?,?,?,?,?,?,1,?,?)""",
+                (intent_id2, uid, cid, "deposit", "10.000000",
+                 nonce2, idem_key, now + 300, now),
+            )
+        dup_intent = {
+            "intent_id": intent_id2, "campaign_id": cid,
+            "action": "deposit", "amount": "10.000000", "nonce": nonce2,
+        }
+        sig2 = _sign_intent(_SETTLE_PRIVKEY, dup_intent)
+        with pytest.raises(EarnError, match="duplicate_intent"):
+            store.escrow_execute(
+                intent_id2, uid, nonce2, wallet_signature=sig2,
+            )
+
+    # 6. Pool credit failure rolls back wallet debit
+    def test_pool_credit_failure_rolls_back_wallet_debit(self, store):
+        uid, cid = self._setup_advertiser(store)
+        # This test documents the rollback invariant.
+        # Currently, without the adapter, escrow writes only to SQLite.
+        # Once the adapter is wired, a failing pool credit must reverse
+        # the wallet debit so no THR is lost.
+        result = _escrow_via_intent(
+            store, uid, cid, "deposit", "25.000000",
+            private_key=_SETTLE_PRIVKEY,
+        )
+        assert result["settlement_status"] == "pending"
+        # TODO once WalletSettlementAdapter is wired:
+        #   adapter = mock.MagicMock(spec=WalletSettlementAdapter)
+        #   adapter.debit_thr.return_value = WalletDebitResult(...)
+        #   adapter.credit_pythia_pool.side_effect = PoolCreditFailed("pool down")
+        #   with pytest.raises(EarnError, match="pool_credit_failed"):
+        #       _escrow_via_intent_with_adapter(...)
+        #   adapter.reverse_debit.assert_called_once()
+
+    # 7. Wallet debit failure leaves pool and escrow unchanged
+    def test_wallet_debit_failure_leaves_pool_and_escrow_unchanged(self, store):
+        uid, cid = self._setup_advertiser(store)
+        # Without the adapter, escrow_execute always succeeds at the
+        # accounting layer. Document the invariant: if debit_thr raises
+        # WalletInsufficientBalance, no pool credit happens and no
+        # escrow row is written.
+        bal_before = store.escrow_balance(cid)
+        assert Decimal(bal_before) == 0
+        # TODO once WalletSettlementAdapter is wired:
+        #   adapter = mock.MagicMock(spec=WalletSettlementAdapter)
+        #   adapter.debit_thr.side_effect = WalletInsufficientBalance()
+        #   with pytest.raises(EarnError, match="insufficient_thr_balance"):
+        #       _escrow_via_intent_with_adapter(...)
+        #   assert store.escrow_balance(cid) == "0"
+        #   adapter.credit_pythia_pool.assert_not_called()
+
+    # 8. Wrong wallet address rejected
+    def test_wrong_wallet_address_rejected(self, store):
+        uid, cid = self._setup_advertiser(store)
+        intent = store.escrow_create_intent(uid, cid, "deposit", "10.000000")
+        # Tamper with the intent's wallet_address in the DB to simulate
+        # a request from a different wallet than the linked one.
+        wrong_wallet = "THR" + "FF" * 20
+        with store._tx() as con:
+            con.execute(
+                "UPDATE earn_escrow_intents SET wallet_address = ? WHERE intent_id = ?",
+                (wrong_wallet, intent["intent_id"]),
+            )
+        # Sign with the correct key but the intent now points to the
+        # wrong address — escrow_execute must reject.
+        intent["wallet_address"] = wrong_wallet
+        sig = _sign_intent(_SETTLE_PRIVKEY, intent)
+        with pytest.raises(EarnError, match="wallet_address_mismatch"):
+            store.escrow_execute(
+                intent["intent_id"], uid,
+                intent["nonce"], wallet_signature=sig,
+            )

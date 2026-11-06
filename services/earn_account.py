@@ -441,6 +441,11 @@ class EarnAccountStore:
                     note           TEXT,
                     idempotency_key TEXT UNIQUE,
                     intent_id      TEXT,
+                    wallet_tx_id       TEXT,
+                    pool_receipt_id    TEXT,
+                    pool_position_id   TEXT,
+                    payload_hash       TEXT,
+                    settlement_status  TEXT NOT NULL DEFAULT 'pending',
                     created_at     INTEGER NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_earn_ad_escrow_campaign
@@ -1948,16 +1953,30 @@ class EarnAccountStore:
                 new_bal = (bal - amt).quantize(_THC_SCALE)
             else:
                 raise EarnError("invalid_escrow_action")
+            signed_fields = {
+                "action": str(intent["action"]),
+                "amount": str(intent["amount"]),
+                "campaign_id": str(intent["campaign_id"]),
+                "intent_id": str(intent["intent_id"]),
+                "nonce": str(intent["nonce"]),
+            }
+            if intent["wallet_address"]:
+                signed_fields["wallet_address"] = str(intent["wallet_address"])
+            payload_hash = hashlib.sha256(
+                json.dumps(signed_fields, sort_keys=True, separators=(",", ":")).encode(),
+            ).hexdigest()
             con.execute(
                 """INSERT INTO earn_ad_escrow
                    (escrow_id, campaign_id, advertiser_id, action,
                     amount, balance_after, note, idempotency_key,
-                    intent_id, created_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                    intent_id, payload_hash, settlement_status,
+                    created_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (escrow_id, campaign_id, earn_user_id, action,
                  str(amt), str(new_bal),
                  f"escrow {action} via signed intent",
-                 intent["idempotency_key"], intent_id, now),
+                 intent["idempotency_key"], intent_id,
+                 payload_hash, "pending", now),
             )
         return {
             "escrow_id": escrow_id,
@@ -1965,6 +1984,8 @@ class EarnAccountStore:
             "amount": str(amt),
             "balance_after": str(new_bal),
             "idempotency_key": intent["idempotency_key"],
+            "payload_hash": payload_hash,
+            "settlement_status": "pending",
         }
 
     def _escrow_balance_in_tx(

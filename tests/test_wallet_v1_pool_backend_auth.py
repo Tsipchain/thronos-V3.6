@@ -19,7 +19,6 @@ from server import (
     app, verify_pool_wallet_v1_or_legacy,
     load_json, save_json, POOLS_FILE,
     LEDGER_FILE, WBTC_LEDGER_FILE, L2E_LEDGER_FILE,
-    PLEDGE_FILE
 )
 
 

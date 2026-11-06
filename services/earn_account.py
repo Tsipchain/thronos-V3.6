@@ -129,11 +129,12 @@ def _validate_password(password: str) -> str:
 class EarnAccountStore:
     """SQLite-backed account-first Earn store."""
 
-    def __init__(self, db_path: str, identity_key: str):
+    def __init__(self, db_path: str, identity_key: str, settlement_adapter=None):
         if not identity_key or identity_key == "CHANGE_ME":
             raise EarnError("earn_identity_key_not_configured")
         self.db_path = db_path
         self._identity_key = identity_key.encode("utf-8")
+        self._settlement_adapter = settlement_adapter
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
@@ -1965,18 +1966,48 @@ class EarnAccountStore:
             payload_hash = hashlib.sha256(
                 json.dumps(signed_fields, sort_keys=True, separators=(",", ":")).encode(),
             ).hexdigest()
+
+            wallet_tx_id = None
+            pool_receipt_id = None
+            pool_position_id = None
+            settlement_status = "pending"
+
+            if self._settlement_adapter and action == "deposit":
+                wallet_address = (
+                    intent["wallet_address"]
+                    or (link["wallet_address"] if intent["requires_wallet_sig"] and link else None)
+                )
+                if wallet_address:
+                    from services.wallet_settlement_adapter import (
+                        WalletInsufficientBalance, PoolCreditFailed,
+                    )
+                    try:
+                        wallet_tx, pool_receipt = self._settlement_adapter.settle(
+                            dict(intent), wallet_address, amt,
+                        )
+                        wallet_tx_id = wallet_tx.tx_id
+                        pool_receipt_id = pool_receipt.pool_event_id
+                        pool_position_id = pool_receipt.position_id
+                        settlement_status = "settled"
+                    except WalletInsufficientBalance:
+                        raise EarnError("insufficient_thr_balance")
+                    except PoolCreditFailed:
+                        raise EarnError("pool_credit_failed")
+
             con.execute(
                 """INSERT INTO earn_ad_escrow
                    (escrow_id, campaign_id, advertiser_id, action,
                     amount, balance_after, note, idempotency_key,
-                    intent_id, payload_hash, settlement_status,
-                    created_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    intent_id, wallet_tx_id, pool_receipt_id,
+                    pool_position_id, payload_hash,
+                    settlement_status, created_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (escrow_id, campaign_id, earn_user_id, action,
                  str(amt), str(new_bal),
                  f"escrow {action} via signed intent",
                  intent["idempotency_key"], intent_id,
-                 payload_hash, "pending", now),
+                 wallet_tx_id, pool_receipt_id, pool_position_id,
+                 payload_hash, settlement_status, now),
             )
         return {
             "escrow_id": escrow_id,
@@ -1985,7 +2016,10 @@ class EarnAccountStore:
             "balance_after": str(new_bal),
             "idempotency_key": intent["idempotency_key"],
             "payload_hash": payload_hash,
-            "settlement_status": "pending",
+            "settlement_status": settlement_status,
+            "wallet_tx_id": wallet_tx_id,
+            "pool_receipt_id": pool_receipt_id,
+            "pool_position_id": pool_position_id,
         }
 
     def _escrow_balance_in_tx(

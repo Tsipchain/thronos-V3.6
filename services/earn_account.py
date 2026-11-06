@@ -363,7 +363,8 @@ class EarnAccountStore:
                     status               TEXT NOT NULL DEFAULT 'active',
                     staked_at            INTEGER NOT NULL,
                     unstake_requested_at INTEGER,
-                    wallet_tx_id         TEXT
+                    wallet_tx_id         TEXT,
+                    idempotency_key      TEXT
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_earn_staking_positions_user
@@ -527,6 +528,9 @@ class EarnAccountStore:
             }
             if "wallet_tx_id" not in pos_cols:
                 con.execute("ALTER TABLE earn_staking_positions ADD COLUMN wallet_tx_id TEXT")
+                con.commit()
+            if "idempotency_key" not in pos_cols:
+                con.execute("ALTER TABLE earn_staking_positions ADD COLUMN idempotency_key TEXT")
                 con.commit()
         finally:
             con.close()
@@ -1192,18 +1196,35 @@ class EarnAccountStore:
             if not row:
                 raise EarnError("unknown_provider_user")
 
+    _VALID_LEADERBOARD_PERIODS = ("weekly", "monthly", "all_time")
+
     def leaderboard(
         self, *, limit: int = 50, caller_user_id: str | None = None,
-        at_time: int | None = None,
+        at_time: int | None = None, period: str = "monthly",
     ) -> dict[str, Any]:
-        """One 30-day cycle of verified receipts; pending score is provisional.
+        """Verified receipts leaderboard with period filtering.
 
         Only durable provider receipts may contribute. This read never clears
         rewards, releases funds or awards competition prizes. Boundaries use
         receipt time, so later clearance does not move a reward to another cycle.
+
+        period: 'weekly' (7 days), 'monthly' (30-day cycle, default), 'all_time'.
         """
+        if period not in self._VALID_LEADERBOARD_PERIODS:
+            period = "monthly"
         now = int(time.time()) if at_time is None else int(at_time)
         limit = min(max(limit, 1), 50)
+
+        if period == "weekly":
+            period_start = max(_LEADERBOARD_START, now - 7 * 86400)
+            period_end = _LEADERBOARD_END
+        elif period == "all_time":
+            period_start = 0
+            period_end = now + 1
+        else:
+            period_start = _LEADERBOARD_START
+            period_end = _LEADERBOARD_END
+
         with self._tx() as con:
             rows = con.execute(
                 f"""SELECT l.earn_user_id, l.amount, l.state
@@ -1213,7 +1234,7 @@ class EarnAccountStore:
                      AND COALESCE(l.received_at, l.created_at) < ?
                      AND COALESCE(l.received_at, l.created_at) <= ?
                      AND {_VERIFIED_PROVIDER_RECEIPT_SQL}""",
-                (_LEADERBOARD_START, _LEADERBOARD_END, now),
+                (period_start, period_end, now),
             ).fetchall()
 
         totals: dict[str, dict[str, Any]] = {}
@@ -1245,28 +1266,33 @@ class EarnAccountStore:
             entry = {
                 "rank": rank, "display_name": alias(uid),
                 "total_earned": str(score.quantize(_THC_SCALE)),
-                "pending_earned": str(total["pending"].quantize(_THC_SCALE)),
-                "cleared_earned": str(total["cleared"].quantize(_THC_SCALE)),
                 "completions": total["completions"],
                 "is_caller": uid == caller_user_id,
             }
             if uid == caller_user_id:
                 your_rank = rank
-                your_score = {key: entry[key] for key in your_score}
+                your_score = {
+                    "total_earned": str(score.quantize(_THC_SCALE)),
+                    "pending_earned": str(total["pending"].quantize(_THC_SCALE)),
+                    "cleared_earned": str(total["cleared"].quantize(_THC_SCALE)),
+                    "completions": total["completions"],
+                }
             if position <= limit:
                 entries.append(entry)
 
         return {
             "campaign_id": _LEADERBOARD_CAMPAIGN,
-            "starts_at": _LEADERBOARD_START, "ends_at": _LEADERBOARD_END,
-            "server_now": now, "seconds_remaining": max(0, _LEADERBOARD_END - now),
-            "phase": "upcoming" if now < _LEADERBOARD_START else "running" if now < _LEADERBOARD_END else "ended",
+            "period": period,
+            "starts_at": period_start, "ends_at": period_end,
+            "server_now": now, "seconds_remaining": max(0, period_end - now),
+            "phase": "upcoming" if now < period_start else "running" if now < period_end else "ended",
             "score_policy": "verified_provider_receipts_pending_and_cleared",
             "provisional": any(t["pending"] > 0 for t in totals.values()),
             "prizes_enabled": False,
             "total_active": len(ranked), "your_rank": your_rank,
             "your_score": your_score, "entries": entries,
             "loyalty": self.loyalty_status(caller_user_id),
+            "last_updated": now,
         }
 
     # ── Staking Pool ────────────────────────────────────────────────────
@@ -1428,6 +1454,7 @@ class EarnAccountStore:
 
     def create_stake(
         self, earn_user_id: str, pool_id: str, amount: str,
+        idempotency_key: str = "",
     ) -> dict[str, Any]:
         try:
             amt = Decimal(str(amount)).quantize(_THC_SCALE, rounding=ROUND_DOWN)
@@ -1437,6 +1464,24 @@ class EarnAccountStore:
             raise EarnError("invalid_stake_amount")
         with self._tx() as con:
             self._ensure_staking_pools(con)
+            if idempotency_key:
+                existing = con.execute(
+                    """SELECT sp.*, p.token FROM earn_staking_positions sp
+                       JOIN earn_staking_pools p ON p.pool_id = sp.pool_id
+                       WHERE sp.idempotency_key = ? AND sp.earn_user_id = ?""",
+                    (idempotency_key, earn_user_id),
+                ).fetchone()
+                if existing:
+                    return {
+                        "position_id": existing["position_id"],
+                        "pool_id": existing["pool_id"],
+                        "token": existing["token"],
+                        "amount": existing["amount"],
+                        "status": existing["status"],
+                        "staked_at": existing["staked_at"],
+                        "wallet_address": existing["wallet_address"],
+                        "wallet_tx_id": existing["wallet_tx_id"],
+                    }
             pool = con.execute(
                 "SELECT * FROM earn_staking_pools WHERE pool_id = ? AND status = 'active'",
                 (pool_id,),
@@ -1464,11 +1509,12 @@ class EarnAccountStore:
             con.execute(
                 """INSERT INTO earn_staking_positions
                    (position_id, pool_id, earn_user_id, wallet_address,
-                    amount, status, staked_at, wallet_tx_id)
-                   VALUES (?,?,?,?,?,'active',?,?)""",
+                    amount, status, staked_at, wallet_tx_id, idempotency_key)
+                   VALUES (?,?,?,?,?,'active',?,?,?)""",
                 (
                     position_id, pool_id, earn_user_id,
                     link["wallet_address"], str(amt), now, wallet_tx_id,
+                    idempotency_key or None,
                 ),
             )
             return {
@@ -1489,10 +1535,19 @@ class EarnAccountStore:
             row = con.execute(
                 """SELECT sp.*, p.token FROM earn_staking_positions sp
                    JOIN earn_staking_pools p ON p.pool_id = sp.pool_id
-                   WHERE sp.position_id = ? AND sp.earn_user_id = ? AND sp.status = 'active'""",
+                   WHERE sp.position_id = ? AND sp.earn_user_id = ?""",
                 (position_id, earn_user_id),
             ).fetchone()
             if not row:
+                raise EarnError("position_not_found")
+            if row["status"] == "unstaked":
+                return {
+                    "position_id": position_id,
+                    "status": "unstaked",
+                    "unstake_requested_at": row["unstake_requested_at"],
+                    "unstake_tx_id": None,
+                }
+            if row["status"] != "active":
                 raise EarnError("position_not_found")
             now = int(time.time())
             amt = Decimal(row["amount"])
@@ -3460,9 +3515,11 @@ def register_earn_account_routes(
     @app.get("/api/earn/leaderboard")
     def earn_leaderboard():
         user, _ = _current_user()
-        if not user:
-            return jsonify(ok=False, error="earn_auth_required"), 401
-        data = store.leaderboard(caller_user_id=user["earn_user_id"])
+        period = request.args.get("period", "monthly")
+        data = store.leaderboard(
+            caller_user_id=user["earn_user_id"] if user else None,
+            period=period,
+        )
         response = jsonify(ok=True, **data)
         response.headers["Cache-Control"] = "no-store"
         return response
@@ -3494,6 +3551,7 @@ def register_earn_account_routes(
                 user["earn_user_id"],
                 str(data.get("pool_id", "")),
                 str(data.get("amount", "")),
+                idempotency_key=str(data.get("idempotency_key", "")),
             )
         except EarnError as exc:
             return jsonify(ok=False, error=str(exc)), 400
@@ -3513,6 +3571,23 @@ def register_earn_account_routes(
         except EarnError as exc:
             return jsonify(ok=False, error=str(exc)), 400
         return jsonify(ok=True, **result)
+
+    @app.get("/api/earn/pools/public")
+    def earn_pools_public():
+        pools = store.staking_pools()
+        public_pools = []
+        for p in pools:
+            public_pools.append({
+                "pool_id": p["pool_id"],
+                "token": p["token"],
+                "label": p["label"],
+                "base_apy": p["base_apy"],
+                "boosted_apy": p["boosted_apy"],
+                "min_stake": p["min_stake"],
+                "total_staked": p["total_staked"],
+                "stakers": p["stakers"],
+            })
+        return jsonify(ok=True, pools=public_pools, last_updated=int(time.time()))
 
     @app.get("/api/earn/ads")
     def earn_ads():

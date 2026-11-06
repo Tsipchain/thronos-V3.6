@@ -1765,3 +1765,137 @@ class TestStakingPool:
         thc_pool = next(p for p in pools if p["token"] == "THC")
         with pytest.raises(EarnError, match="insufficient_thc_balance"):
             store.create_stake(uid, thc_pool["pool_id"], "10")
+
+    def test_thr_stake_insufficient_balance_rejected(self, store, user_a):
+        uid = user_a["earn_user_id"]
+        addr = "THR" + "cd" * 20
+        _link_wallet(store, uid, addr)
+        _seed_thr_balance(addr, 0.5)
+        pools = store.staking_pools()
+        thr_pool = next(p for p in pools if p["token"] == "THR")
+        with pytest.raises(EarnError, match="insufficient_thr_balance"):
+            store.create_stake(uid, thr_pool["pool_id"], "5")
+
+    def test_unstake_idempotent_already_unstaked(self, store, user_a):
+        uid = user_a["earn_user_id"]
+        _link_wallet(store, uid, "THR" + "ee" * 20)
+        _seed_thc_confirmed(store, uid, "50")
+        pools = store.staking_pools()
+        thc_pool = next(p for p in pools if p["token"] == "THC")
+        pos = store.create_stake(uid, thc_pool["pool_id"], "10")
+        result1 = store.request_unstake(uid, pos["position_id"])
+        assert result1["status"] == "unstaked"
+        result2 = store.request_unstake(uid, pos["position_id"])
+        assert result2["status"] == "unstaked"
+        assert result2["position_id"] == pos["position_id"]
+
+    def test_stake_unstake_records_chain_history(self, store, user_a):
+        uid = user_a["earn_user_id"]
+        addr = "THR" + "ab" * 20
+        _link_wallet(store, uid, addr)
+        _seed_thr_balance(addr, 100)
+        pools = store.staking_pools()
+        thr_pool = next(p for p in pools if p["token"] == "THR")
+        pos = store.create_stake(uid, thr_pool["pool_id"], "10")
+        assert pos["wallet_tx_id"] is not None
+        assert pos["wallet_tx_id"].startswith("TX-STAKE-")
+        result = store.request_unstake(uid, pos["position_id"])
+        assert result["unstake_tx_id"] is not None
+        assert result["unstake_tx_id"].startswith("TX-UNSTAKE-")
+
+
+class TestLeaderboardFiltering:
+    def test_leaderboard_period_monthly_default(self, store, user_a):
+        data = store.leaderboard(caller_user_id=user_a["earn_user_id"])
+        assert "campaign_id" in data
+        assert "entries" in data
+        assert "last_updated" in data
+        assert data["last_updated"] > 0
+        assert data["your_score"] is not None
+
+    def test_leaderboard_period_weekly(self, store, user_a):
+        data = store.leaderboard(
+            caller_user_id=user_a["earn_user_id"], period="weekly",
+        )
+        assert data["period"] == "weekly"
+        assert "entries" in data
+        assert "last_updated" in data
+
+    def test_leaderboard_period_all_time(self, store, user_a):
+        data = store.leaderboard(
+            caller_user_id=user_a["earn_user_id"], period="all_time",
+        )
+        assert data["period"] == "all_time"
+        assert "entries" in data
+
+    def test_leaderboard_no_private_addresses_in_entries(self, store, user_a, user_b):
+        uid_a = user_a["earn_user_id"]
+        addr = "THR" + "11" * 20
+        _link_wallet(store, uid_a, addr)
+        _seed_thc_confirmed(store, uid_a, "100")
+        data = store.leaderboard()
+        for entry in data.get("entries", []):
+            assert "THR" not in entry.get("display_name", "")
+            assert "wallet_address" not in entry
+            assert "earn_user_id" not in entry
+            assert "email" not in entry
+
+    def test_leaderboard_excludes_unverified_rewards(self, store, user_a):
+        uid = user_a["earn_user_id"]
+        store.record_thc_credit(uid, "manual_test", f"manual-{secrets.token_hex(4)}", "50")
+        data = store.leaderboard(caller_user_id=uid)
+        assert data["total_active"] == 0
+
+    def test_leaderboard_route_no_auth_returns_data(self, store, user_a, client):
+        resp = client.get("/api/earn/leaderboard")
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["ok"] is True
+        assert "entries" in body
+        assert body.get("your_rank") is None
+
+    def test_leaderboard_route_period_param(self, store, user_a, client):
+        token = _login(client)
+        resp = client.get("/api/earn/leaderboard?period=weekly", headers=_auth(token))
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["ok"] is True
+        assert body.get("period") == "weekly"
+
+
+class TestPublicPoolRewards:
+    def test_public_pools_no_auth_required(self, store, user_a, client):
+        resp = client.get("/api/earn/pools/public")
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["ok"] is True
+        assert len(body["pools"]) >= 2
+        assert "last_updated" in body
+
+    def test_public_pools_no_user_positions_exposed(self, store, user_a, client):
+        uid = user_a["earn_user_id"]
+        _link_wallet(store, uid, "THR" + "aa" * 20)
+        _seed_thc_confirmed(store, uid, "100")
+        pools = store.staking_pools()
+        thc_pool = next(p for p in pools if p["token"] == "THC")
+        store.create_stake(uid, thc_pool["pool_id"], "20")
+        resp = client.get("/api/earn/pools/public")
+        body = resp.get_json()
+        for pool in body["pools"]:
+            assert "wallet_address" not in pool
+            assert "earn_user_id" not in pool
+            assert "positions" not in pool
+
+    def test_pool_positions_require_auth(self, store, client):
+        resp = client.get("/api/earn/staking/positions")
+        assert resp.status_code == 401
+
+    def test_pool_rewards_real_data(self, store, user_a, client):
+        resp = client.get("/api/earn/pools/public")
+        body = resp.get_json()
+        assert body["ok"] is True
+        for pool in body["pools"]:
+            assert "base_apy" in pool
+            assert "total_staked" in pool
+            assert "stakers" in pool
+            assert "token" in pool

@@ -1899,3 +1899,61 @@ class TestPublicPoolRewards:
             assert "total_staked" in pool
             assert "stakers" in pool
             assert "token" in pool
+
+
+class TestAdPlacementRegression:
+    """Verify ad interstitials appear on Earn surfaces but NOT on wallet screens."""
+
+    @staticmethod
+    def _read(rel_path):
+        root = Path(__file__).parent.parent
+        return (root / rel_path).read_text()
+
+    def test_earn_web_cpx_shows_ad_before_open(self):
+        src = self._read("templates/earn_beta.html")
+        cpx_idx = src.index("earn-surveys")
+        after_cpx = src[cpx_idx:]
+        promo_call = after_cpx.index("showPromo(")
+        provider_call = after_cpx.index("openProvider('cpx'")
+        assert promo_call < provider_call, "Earn web must show ad before opening CPX surveys"
+
+    def test_earn_web_timewall_shows_ad_before_open(self):
+        src = self._read("templates/earn_beta.html")
+        tw_idx = src.index("timewallButton.addEventListener")
+        after_tw = src[tw_idx:]
+        promo_call = after_tw.index("showPromo(")
+        provider_call = after_tw.index("openProvider('timewall'")
+        assert promo_call < provider_call, "Earn web must show ad before opening TimeWall"
+
+    def test_earn_pwa_cpx_shows_ad_before_open(self):
+        src = self._read("public/wallet-pwa/app.js")
+        handler_idx = src.index("data-earn-provider]")
+        after_handler = src[handler_idx:]
+        assert "provider === 'cpx'" in after_handler, "Earn PWA must trigger ad for CPX"
+        assert "showEarnPromo" in after_handler
+
+    def test_earn_pwa_timewall_shows_ad_before_open(self):
+        src = self._read("public/wallet-pwa/app.js")
+        handler_idx = src.index("data-earn-provider]")
+        after_handler = src[handler_idx:]
+        assert "provider === 'timewall'" in after_handler, "Earn PWA must trigger ad for TimeWall"
+        assert "showEarnPromo" in after_handler
+
+    def test_wallet_home_has_no_ads(self):
+        src = self._read("public/wallet-pwa/app.js")
+        home_start = src.index("<!-- Quick actions")
+        home_end = src.index("</div>\n  `);", home_start)
+        home_html = src[home_start:home_end]
+        assert "showEarnPromo" not in home_html
+        assert "showPromo" not in home_html
+        assert "walletAdsSidebar" not in home_html
+        assert "earn/ads" not in home_html
+
+    def test_wallet_send_receive_has_no_ads(self):
+        src = self._read("public/wallet-pwa/app.js")
+        for fn_name in ("function showSend(", "function showReceive("):
+            fn_idx = src.index(fn_name)
+            fn_block = src[fn_idx:fn_idx + 3000]
+            assert "showEarnPromo" not in fn_block, f"{fn_name} must not contain ad calls"
+            assert "showPromo" not in fn_block, f"{fn_name} must not contain ad calls"
+            assert "earn/ads" not in fn_block, f"{fn_name} must not reference ad API"

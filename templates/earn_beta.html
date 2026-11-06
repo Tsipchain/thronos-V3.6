@@ -510,7 +510,8 @@
     });
   }
 
-  $('earn-surveys').addEventListener('click', () => {
+  $('earn-surveys').addEventListener('click', async () => {
+    await showPromo(10);
     openProvider('cpx', '/api/earn/cpx/offerwall', t('connectedSurvey'), t('surveysUnavail'));
   });
   bitcoButton.addEventListener('click', () => {

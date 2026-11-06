@@ -2429,7 +2429,7 @@ async function showEarn(options = {}) {
         const provider = button.dataset.earnProvider;
         const definition = providerDefinitions[provider];
         if (!definition) return;
-        if (provider === 'timewall') await showEarnPromo(10);
+        if (provider === 'timewall' || provider === 'cpx') await showEarnPromo(10);
         openEarnProvider(provider, definition);
       });
     });

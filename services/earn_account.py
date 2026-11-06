@@ -1850,6 +1850,47 @@ class EarnAccountStore:
             "expires_at": now + _ESCROW_INTENT_TTL,
         }
 
+    @staticmethod
+    def _verify_escrow_signature(
+        intent: dict, wallet_signature: str, public_key: str,
+    ) -> bool:
+        try:
+            from cryptography.hazmat.primitives import hashes
+            from cryptography.hazmat.primitives.asymmetric import ec, utils
+            public_key = str(public_key or "").strip().lower()
+            wallet_signature = str(wallet_signature or "").strip().lower()
+            if len(public_key) < 4 or len(wallet_signature) < 4:
+                return False
+            signed = {
+                "action": str(intent["action"]),
+                "amount": str(intent["amount"]),
+                "campaign_id": str(intent["campaign_id"]),
+                "intent_id": str(intent["intent_id"]),
+                "nonce": str(intent["nonce"]),
+            }
+            if intent.get("wallet_address"):
+                signed["wallet_address"] = str(intent["wallet_address"])
+            message = json.dumps(signed, sort_keys=True, separators=(",", ":")).encode()
+            digest = hashlib.sha256(message).digest()
+            pub_bytes = bytes.fromhex(public_key)
+            if pub_bytes[0] not in (2, 3, 4):
+                return False
+            verifier = ec.EllipticCurvePublicKey.from_encoded_point(
+                ec.SECP256K1(), pub_bytes,
+            )
+            sig_bytes = bytes.fromhex(wallet_signature)
+            der_signature = utils.encode_dss_signature(
+                int.from_bytes(sig_bytes[:32], "big"),
+                int.from_bytes(sig_bytes[32:], "big"),
+            )
+            verifier.verify(
+                der_signature, digest,
+                ec.ECDSA(utils.Prehashed(hashes.SHA256())),
+            )
+            return True
+        except Exception:
+            return False
+
     def escrow_execute(
         self,
         intent_id: str,
@@ -1886,6 +1927,10 @@ class EarnAccountStore:
                     raise EarnError("wallet_not_linked")
                 if intent["wallet_address"] and link["wallet_address"] != intent["wallet_address"]:
                     raise EarnError("wallet_address_mismatch")
+                if not self._verify_escrow_signature(
+                    dict(intent), wallet_signature, link["public_key"],
+                ):
+                    raise EarnError("invalid_wallet_signature")
             con.execute(
                 "UPDATE earn_escrow_intents SET consumed_at = ? WHERE intent_id = ?",
                 (now, intent_id),

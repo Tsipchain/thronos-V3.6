@@ -1,4 +1,6 @@
 """Tests for the Earn advertising marketplace."""
+import hashlib
+import json
 import os
 import pytest
 import tempfile
@@ -6,11 +8,45 @@ import time
 
 os.environ.setdefault("EARN_DB_PATH", ":memory:")
 
+from cryptography.hazmat.primitives.asymmetric import ec, utils as ec_utils
+from cryptography.hazmat.primitives import hashes
 from decimal import Decimal
 from services.earn_account import EarnAccountStore, EarnError
 
 
 _TEST_KEY = "test-identity-key-for-marketplace-abcdef0123"
+
+
+def _generate_wallet_keypair():
+    private_key = ec.generate_private_key(ec.SECP256K1())
+    pub_numbers = private_key.public_key().public_numbers()
+    x = pub_numbers.x.to_bytes(32, "big")
+    y = pub_numbers.y.to_bytes(32, "big")
+    prefix = b"\x02" if y[-1] % 2 == 0 else b"\x03"
+    compressed_hex = (prefix + x).hex()
+    return private_key, compressed_hex
+
+
+def _sign_intent(private_key, intent: dict) -> str:
+    signed = {
+        "action": str(intent["action"]),
+        "amount": str(intent["amount"]),
+        "campaign_id": str(intent["campaign_id"]),
+        "intent_id": str(intent["intent_id"]),
+        "nonce": str(intent["nonce"]),
+    }
+    if intent.get("wallet_address"):
+        signed["wallet_address"] = str(intent["wallet_address"])
+    message = json.dumps(signed, sort_keys=True, separators=(",", ":")).encode()
+    digest = hashlib.sha256(message).digest()
+    sig = private_key.sign(
+        digest, ec.ECDSA(ec_utils.Prehashed(hashes.SHA256())),
+    )
+    r, s = ec_utils.decode_dss_signature(sig)
+    return r.to_bytes(32, "big").hex() + s.to_bytes(32, "big").hex()
+
+
+_DEFAULT_PRIVKEY, _DEFAULT_PUBKEY = _generate_wallet_keypair()
 
 
 @pytest.fixture()
@@ -37,26 +73,31 @@ def campaign(store, advertiser):
     )
 
 
-def _link_wallet(store, earn_user_id, wallet_address="THR" + "AB" * 20):
-    """Link a wallet to the earn account for escrow intent tests."""
+def _link_wallet(store, earn_user_id, wallet_address="THR" + "AB" * 20,
+                 public_key=None):
+    if public_key is None:
+        public_key = _DEFAULT_PUBKEY
     challenge = store.wallet_link_challenge(earn_user_id, wallet_address)
     store.complete_wallet_link(
         challenge_id=challenge["challenge_id"],
         earn_user_id=earn_user_id,
         wallet_address=wallet_address,
-        public_key="04" + "ab" * 32,
+        public_key=public_key,
     )
     return wallet_address
 
 
-def _escrow_via_intent(store, earn_user_id, campaign_id, action, amount):
-    """Full intent -> execute flow for escrow operations in tests."""
+def _escrow_via_intent(store, earn_user_id, campaign_id, action, amount,
+                       private_key=None):
+    if private_key is None:
+        private_key = _DEFAULT_PRIVKEY
     intent = store.escrow_create_intent(
         earn_user_id, campaign_id, action, amount,
     )
+    sig = _sign_intent(private_key, intent)
     return store.escrow_execute(
         intent["intent_id"], earn_user_id,
-        intent["nonce"], wallet_signature="test_sig_placeholder",
+        intent["nonce"], wallet_signature=sig,
     )
 
 
@@ -361,7 +402,7 @@ class TestEscrowIntentFlow:
 
 
 class TestEscrowSecurityGates:
-    """Verify nonce replay, idempotency, wallet signature, and atomic rollback."""
+    """Verify nonce replay, idempotency, wallet signature, crypto verification, and atomic rollback."""
 
     def test_nonce_replay_rejected(self, store, advertiser, campaign):
         _link_wallet(store, advertiser["earn_user_id"])
@@ -369,14 +410,15 @@ class TestEscrowSecurityGates:
             advertiser["earn_user_id"],
             campaign["campaign_id"], "deposit", "50.000000",
         )
+        sig = _sign_intent(_DEFAULT_PRIVKEY, intent)
         store.escrow_execute(
             intent["intent_id"], advertiser["earn_user_id"],
-            intent["nonce"], wallet_signature="sig1",
+            intent["nonce"], wallet_signature=sig,
         )
         with pytest.raises(EarnError, match="invalid_or_expired_intent"):
             store.escrow_execute(
                 intent["intent_id"], advertiser["earn_user_id"],
-                intent["nonce"], wallet_signature="sig2",
+                intent["nonce"], wallet_signature=sig,
             )
 
     def test_wrong_nonce_rejected(self, store, advertiser, campaign):
@@ -388,7 +430,7 @@ class TestEscrowSecurityGates:
         with pytest.raises(EarnError, match="nonce_mismatch"):
             store.escrow_execute(
                 intent["intent_id"], advertiser["earn_user_id"],
-                "wrong_nonce_value", wallet_signature="sig",
+                "wrong_nonce_value", wallet_signature="aa" * 64,
             )
 
     def test_idempotency_key_prevents_duplicate(self, store, advertiser, campaign):
@@ -397,17 +439,19 @@ class TestEscrowSecurityGates:
             advertiser["earn_user_id"],
             campaign["campaign_id"], "deposit", "25.000000",
         )
+        sig = _sign_intent(_DEFAULT_PRIVKEY, intent)
         store.escrow_execute(
             intent["intent_id"], advertiser["earn_user_id"],
-            intent["nonce"], wallet_signature="sig",
+            intent["nonce"], wallet_signature=sig,
         )
         intent2 = store.escrow_create_intent(
             advertiser["earn_user_id"],
             campaign["campaign_id"], "deposit", "25.000000",
         )
+        sig2 = _sign_intent(_DEFAULT_PRIVKEY, intent2)
         result2 = store.escrow_execute(
             intent2["intent_id"], advertiser["earn_user_id"],
-            intent2["nonce"], wallet_signature="sig",
+            intent2["nonce"], wallet_signature=sig2,
         )
         assert Decimal(result2["balance_after"]) == Decimal("50.000000")
 
@@ -423,6 +467,32 @@ class TestEscrowSecurityGates:
                 intent["nonce"], wallet_signature=None,
             )
 
+    def test_invalid_signature_rejected(self, store, advertiser, campaign):
+        _link_wallet(store, advertiser["earn_user_id"])
+        intent = store.escrow_create_intent(
+            advertiser["earn_user_id"],
+            campaign["campaign_id"], "deposit", "50.000000",
+        )
+        with pytest.raises(EarnError, match="invalid_wallet_signature"):
+            store.escrow_execute(
+                intent["intent_id"], advertiser["earn_user_id"],
+                intent["nonce"], wallet_signature="aa" * 64,
+            )
+
+    def test_wrong_key_signature_rejected(self, store, advertiser, campaign):
+        _link_wallet(store, advertiser["earn_user_id"])
+        wrong_key, _ = _generate_wallet_keypair()
+        intent = store.escrow_create_intent(
+            advertiser["earn_user_id"],
+            campaign["campaign_id"], "deposit", "50.000000",
+        )
+        wrong_sig = _sign_intent(wrong_key, intent)
+        with pytest.raises(EarnError, match="invalid_wallet_signature"):
+            store.escrow_execute(
+                intent["intent_id"], advertiser["earn_user_id"],
+                intent["nonce"], wallet_signature=wrong_sig,
+            )
+
     def test_wallet_not_linked_rejected(self, store, advertiser, campaign):
         intent = store.escrow_create_intent(
             advertiser["earn_user_id"],
@@ -431,7 +501,7 @@ class TestEscrowSecurityGates:
         with pytest.raises(EarnError, match="wallet_not_linked"):
             store.escrow_execute(
                 intent["intent_id"], advertiser["earn_user_id"],
-                intent["nonce"], wallet_signature="sig",
+                intent["nonce"], wallet_signature="aa" * 64,
             )
 
     def test_expired_intent_rejected(self, store, advertiser, campaign):
@@ -448,7 +518,7 @@ class TestEscrowSecurityGates:
         with pytest.raises(EarnError, match="invalid_or_expired_intent"):
             store.escrow_execute(
                 intent["intent_id"], advertiser["earn_user_id"],
-                intent["nonce"], wallet_signature="sig",
+                intent["nonce"], wallet_signature="aa" * 64,
             )
 
     def test_wrong_user_cannot_execute(self, store, advertiser, campaign):
@@ -461,7 +531,7 @@ class TestEscrowSecurityGates:
         with pytest.raises(EarnError, match="invalid_or_expired_intent"):
             store.escrow_execute(
                 intent["intent_id"], other["earn_user_id"],
-                intent["nonce"], wallet_signature="sig",
+                intent["nonce"], wallet_signature="aa" * 64,
             )
 
     def test_wallet_address_mismatch_rejected(self, store, advertiser, campaign):
@@ -478,7 +548,7 @@ class TestEscrowSecurityGates:
         with pytest.raises(EarnError, match="wallet_address_mismatch"):
             store.escrow_execute(
                 intent["intent_id"], advertiser["earn_user_id"],
-                intent["nonce"], wallet_signature="sig",
+                intent["nonce"], wallet_signature="aa" * 64,
             )
 
     def test_atomic_rollback_on_insufficient_refund(self, store, advertiser, campaign):
@@ -495,10 +565,11 @@ class TestEscrowSecurityGates:
             store, advertiser["earn_user_id"],
             campaign["campaign_id"], "refund", "8.000000",
         )
+        sig = _sign_intent(_DEFAULT_PRIVKEY, intent)
         with pytest.raises(EarnError, match="insufficient_escrow_balance"):
             store.escrow_execute(
                 intent["intent_id"], advertiser["earn_user_id"],
-                intent["nonce"], wallet_signature="sig",
+                intent["nonce"], wallet_signature=sig,
             )
         bal = store.escrow_balance(campaign["campaign_id"])
         assert Decimal(bal) == Decimal("2.000000")
@@ -874,12 +945,13 @@ class TestMarketplaceAPI:
         )
         assert r.status_code == 200
         data = r.get_json()
+        sig = _sign_intent(_DEFAULT_PRIVKEY, data)
         r2 = client.post(
             "/api/earn/ads/escrow/execute",
             json={
                 "intent_id": data["intent_id"],
                 "nonce": data["nonce"],
-                "wallet_signature": "test_wallet_sig",
+                "wallet_signature": sig,
             },
             headers={"Authorization": f"Bearer {tok}"},
         )

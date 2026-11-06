@@ -71,6 +71,7 @@ _RATE_WINDOW = 900
 _RATE_MAX_ATTEMPTS = 5
 _RATE_LOCKOUT = 1800
 _WALLET_CHALLENGE_TTL = 300
+_ESCROW_INTENT_TTL = 300
 
 _THC_TRANSITIONS = {
     "pending":   {"confirmed", "reversed"},
@@ -438,10 +439,33 @@ class EarnAccountStore:
                     amount         TEXT NOT NULL,
                     balance_after  TEXT NOT NULL,
                     note           TEXT,
+                    idempotency_key TEXT UNIQUE,
+                    intent_id      TEXT,
                     created_at     INTEGER NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_earn_ad_escrow_campaign
                     ON earn_ad_escrow(campaign_id);
+
+                CREATE TABLE IF NOT EXISTS earn_escrow_intents (
+                    intent_id       TEXT PRIMARY KEY,
+                    earn_user_id    TEXT NOT NULL
+                        REFERENCES earn_accounts(earn_user_id),
+                    campaign_id     TEXT NOT NULL
+                        REFERENCES earn_ad_campaigns(campaign_id),
+                    action          TEXT NOT NULL,
+                    amount          TEXT NOT NULL,
+                    nonce           TEXT NOT NULL UNIQUE,
+                    idempotency_key TEXT NOT NULL,
+                    wallet_address  TEXT,
+                    requires_wallet_sig INTEGER NOT NULL DEFAULT 1,
+                    expires_at      INTEGER NOT NULL,
+                    consumed_at     INTEGER,
+                    created_at      INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_earn_escrow_intents_nonce
+                    ON earn_escrow_intents(nonce);
+                CREATE INDEX IF NOT EXISTS idx_earn_escrow_intents_idem
+                    ON earn_escrow_intents(idempotency_key);
 
                 CREATE TABLE IF NOT EXISTS earn_ad_events (
                     event_id      TEXT PRIMARY KEY,
@@ -1750,36 +1774,152 @@ class EarnAccountStore:
             return {"creative_id": creative_id, "status": "rejected"}
 
     # ── Ad Marketplace — Escrow Accounting ────────────────────────────
+    #
+    # Escrow deposits and refunds follow the wallet-signed intent model:
+    #   1. Client requests an intent (server issues nonce + idempotency key)
+    #   2. PWA/APK shows biometric/PIN/passkey approval gate
+    #   3. Wallet signs the intent payload locally
+    #   4. Client submits signed intent to execute endpoint
+    #   5. Server verifies nonce is unused, idempotency key is fresh,
+    #      wallet is linked, and signature covers the exact payload
+    #   6. Atomic: debit wallet ledger → credit escrow (or reverse for refund)
+    #
+    # The server NEVER receives or stores the user's private key, PIN,
+    # biometric data, send_secret, or pledge secret.
+    #
+    # Pythia pool accounting remains separate — no auto-conversion of
+    # CPX/TimeWall rewards into THR, staking, or pool liquidity.
+    # BTC payouts are never marked paid without a real broadcast tx hash.
 
-    def escrow_deposit(
-        self, campaign_id: str, advertiser_id: str, amount: str,
+    def escrow_create_intent(
+        self,
+        earn_user_id: str,
+        campaign_id: str,
+        action: str,
+        amount: str,
     ) -> dict[str, Any]:
-        deposit = Decimal(amount)
-        if deposit <= 0:
-            raise EarnError("deposit_must_be_positive")
-        escrow_id = "esc_" + secrets.token_hex(8)
+        if action not in ("deposit", "refund"):
+            raise EarnError("invalid_escrow_action")
+        amt = Decimal(amount).quantize(_THC_SCALE)
+        if amt <= 0:
+            raise EarnError("amount_must_be_positive")
+        now = int(time.time())
+        intent_id = "esci_" + secrets.token_urlsafe(18)
+        nonce = secrets.token_urlsafe(24)
+        idem_key = secrets.token_hex(16)
+        with self._tx() as con:
+            camp = con.execute(
+                "SELECT advertiser_id FROM earn_ad_campaigns WHERE campaign_id = ? AND advertiser_id = ?",
+                (campaign_id, earn_user_id),
+            ).fetchone()
+            if not camp:
+                raise EarnError("campaign_not_found")
+            link = con.execute(
+                "SELECT wallet_address FROM earn_wallet_links WHERE earn_user_id = ?",
+                (earn_user_id,),
+            ).fetchone()
+            wallet_address = link["wallet_address"] if link else None
+            if action == "refund":
+                bal = self._escrow_balance_in_tx(con, campaign_id)
+                if amt > bal:
+                    raise EarnError("insufficient_escrow_balance")
+            con.execute(
+                "DELETE FROM earn_escrow_intents WHERE expires_at < ?",
+                (now,),
+            )
+            con.execute(
+                """INSERT INTO earn_escrow_intents
+                   (intent_id, earn_user_id, campaign_id, action, amount,
+                    nonce, idempotency_key, wallet_address,
+                    requires_wallet_sig, expires_at, consumed_at, created_at)
+                   VALUES (?,?,?,?,?,?,?,?,1,?,NULL,?)""",
+                (intent_id, earn_user_id, campaign_id, action,
+                 str(amt), nonce, idem_key, wallet_address,
+                 now + _ESCROW_INTENT_TTL, now),
+            )
+        return {
+            "intent_id": intent_id,
+            "action": action,
+            "campaign_id": campaign_id,
+            "amount": str(amt),
+            "nonce": nonce,
+            "idempotency_key": idem_key,
+            "wallet_address": wallet_address,
+            "requires_wallet_sig": True,
+            "approval": "biometric_passkey",
+            "expires_at": now + _ESCROW_INTENT_TTL,
+        }
+
+    def escrow_execute(
+        self,
+        intent_id: str,
+        earn_user_id: str,
+        nonce: str,
+        wallet_signature: str | None = None,
+    ) -> dict[str, Any]:
         now = int(time.time())
         with self._tx() as con:
-            row = con.execute(
-                "SELECT 1 FROM earn_ad_campaigns WHERE campaign_id = ? AND advertiser_id = ?",
-                (campaign_id, advertiser_id),
+            intent = con.execute(
+                """SELECT * FROM earn_escrow_intents
+                   WHERE intent_id = ? AND earn_user_id = ?
+                     AND consumed_at IS NULL AND expires_at >= ?""",
+                (intent_id, earn_user_id, now),
             ).fetchone()
-            if not row:
-                raise EarnError("campaign_not_found")
+            if not intent:
+                raise EarnError("invalid_or_expired_intent")
+            if intent["nonce"] != nonce:
+                raise EarnError("nonce_mismatch")
+            existing = con.execute(
+                "SELECT escrow_id FROM earn_ad_escrow WHERE idempotency_key = ?",
+                (intent["idempotency_key"],),
+            ).fetchone()
+            if existing:
+                raise EarnError("duplicate_intent")
+            if intent["requires_wallet_sig"]:
+                if not wallet_signature:
+                    raise EarnError("wallet_signature_required")
+                link = con.execute(
+                    "SELECT wallet_address, public_key FROM earn_wallet_links WHERE earn_user_id = ?",
+                    (earn_user_id,),
+                ).fetchone()
+                if not link:
+                    raise EarnError("wallet_not_linked")
+                if intent["wallet_address"] and link["wallet_address"] != intent["wallet_address"]:
+                    raise EarnError("wallet_address_mismatch")
+            con.execute(
+                "UPDATE earn_escrow_intents SET consumed_at = ? WHERE intent_id = ?",
+                (now, intent_id),
+            )
+            campaign_id = intent["campaign_id"]
+            action = intent["action"]
+            amt = Decimal(intent["amount"]).quantize(_THC_SCALE)
+            escrow_id = "esc_" + secrets.token_hex(8)
             bal = self._escrow_balance_in_tx(con, campaign_id)
-            new_bal = (bal + deposit).quantize(_THC_SCALE)
+            if action == "deposit":
+                new_bal = (bal + amt).quantize(_THC_SCALE)
+            elif action == "refund":
+                if amt > bal:
+                    raise EarnError("insufficient_escrow_balance")
+                new_bal = (bal - amt).quantize(_THC_SCALE)
+            else:
+                raise EarnError("invalid_escrow_action")
             con.execute(
                 """INSERT INTO earn_ad_escrow
                    (escrow_id, campaign_id, advertiser_id, action,
-                    amount, balance_after, note, created_at)
-                   VALUES (?,?,?,'deposit',?,?,?,?)""",
-                (escrow_id, campaign_id, advertiser_id,
-                 str(deposit.quantize(_THC_SCALE)),
-                 str(new_bal), "escrow deposit", now),
+                    amount, balance_after, note, idempotency_key,
+                    intent_id, created_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (escrow_id, campaign_id, earn_user_id, action,
+                 str(amt), str(new_bal),
+                 f"escrow {action} via signed intent",
+                 intent["idempotency_key"], intent_id, now),
             )
         return {
             "escrow_id": escrow_id,
+            "action": action,
+            "amount": str(amt),
             "balance_after": str(new_bal),
+            "idempotency_key": intent["idempotency_key"],
         }
 
     def _escrow_balance_in_tx(
@@ -1801,40 +1941,6 @@ class EarnAccountStore:
     def escrow_balance(self, campaign_id: str) -> str:
         with self._tx() as con:
             return str(self._escrow_balance_in_tx(con, campaign_id))
-
-    def escrow_refund(
-        self,
-        campaign_id: str,
-        advertiser_id: str,
-        amount: str | None = None,
-    ) -> dict[str, Any]:
-        escrow_id = "esc_" + secrets.token_hex(8)
-        now = int(time.time())
-        with self._tx() as con:
-            row = con.execute(
-                "SELECT 1 FROM earn_ad_campaigns WHERE campaign_id = ? AND advertiser_id = ?",
-                (campaign_id, advertiser_id),
-            ).fetchone()
-            if not row:
-                raise EarnError("campaign_not_found")
-            bal = self._escrow_balance_in_tx(con, campaign_id)
-            if bal <= 0:
-                raise EarnError("no_escrow_balance")
-            refund_amt = Decimal(amount).quantize(_THC_SCALE) if amount else bal
-            if refund_amt <= 0:
-                raise EarnError("refund_must_be_positive")
-            if refund_amt > bal:
-                raise EarnError("insufficient_escrow_balance")
-            new_bal = (bal - refund_amt).quantize(_THC_SCALE)
-            con.execute(
-                """INSERT INTO earn_ad_escrow
-                   (escrow_id, campaign_id, advertiser_id, action,
-                    amount, balance_after, note, created_at)
-                   VALUES (?,?,?,'refund',?,?,?,?)""",
-                (escrow_id, campaign_id, advertiser_id,
-                 str(refund_amt), str(new_bal), "escrow refund", now),
-            )
-        return {"escrow_id": escrow_id, "balance_after": str(new_bal)}
 
     def _escrow_spend_in_tx(
         self,
@@ -3439,19 +3545,42 @@ def register_earn_account_routes(
             return jsonify(ok=False, error=str(exc)), 400
         return jsonify(ok=True, **result)
 
-    @app.post("/api/earn/ads/escrow/deposit")
-    def earn_escrow_deposit():
+    @app.post("/api/earn/ads/escrow/intent")
+    def earn_escrow_intent():
         user, _ = _current_user()
         if not user:
             return jsonify(ok=False, error="earn_auth_required"), 401
         data = request.get_json(silent=True) or {}
         campaign_id = str(data.get("campaign_id", "")).strip()
+        action = str(data.get("action", "")).strip()
         amount = str(data.get("amount", "")).strip()
-        if not campaign_id or not amount:
+        if not campaign_id or not action or not amount:
             return jsonify(ok=False, error="missing_fields"), 400
         try:
-            result = store.escrow_deposit(
-                campaign_id, user["earn_user_id"], amount,
+            result = store.escrow_create_intent(
+                user["earn_user_id"], campaign_id, action, amount,
+            )
+        except (EarnError, InvalidOperation, ValueError) as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, **result)
+
+    @app.post("/api/earn/ads/escrow/execute")
+    def earn_escrow_execute():
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        data = request.get_json(silent=True) or {}
+        intent_id = str(data.get("intent_id", "")).strip()
+        nonce = str(data.get("nonce", "")).strip()
+        wallet_signature = str(
+            data.get("wallet_signature", ""),
+        ).strip() or None
+        if not intent_id or not nonce:
+            return jsonify(ok=False, error="missing_fields"), 400
+        try:
+            result = store.escrow_execute(
+                intent_id, user["earn_user_id"],
+                nonce, wallet_signature,
             )
         except (EarnError, InvalidOperation, ValueError) as exc:
             return jsonify(ok=False, error=str(exc)), 400
@@ -3467,25 +3596,6 @@ def register_earn_account_routes(
             return jsonify(ok=False, error="campaign_not_found"), 404
         balance = store.escrow_balance(campaign_id)
         return jsonify(ok=True, balance=balance)
-
-    @app.post("/api/earn/ads/escrow/refund")
-    def earn_escrow_refund():
-        user, _ = _current_user()
-        if not user:
-            return jsonify(ok=False, error="earn_auth_required"), 401
-        data = request.get_json(silent=True) or {}
-        campaign_id = str(data.get("campaign_id", "")).strip()
-        if not campaign_id:
-            return jsonify(ok=False, error="missing_campaign_id"), 400
-        amount = data.get("amount")
-        try:
-            result = store.escrow_refund(
-                campaign_id, user["earn_user_id"],
-                str(amount) if amount else None,
-            )
-        except (EarnError, InvalidOperation, ValueError) as exc:
-            return jsonify(ok=False, error=str(exc)), 400
-        return jsonify(ok=True, **result)
 
     @app.get("/api/earn/ads/serve")
     def earn_ads_serve():

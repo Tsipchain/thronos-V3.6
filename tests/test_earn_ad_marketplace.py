@@ -661,6 +661,8 @@ class TestAdServing:
         assert len(ads_us) == 1
         ads_gr = store.serve_campaign_ads(country="GR")
         assert len(ads_gr) == 0
+        assert store.serve_campaign_ads(country="") == []
+
 
     def test_serve_respects_total_budget(self, store, advertiser):
         camp = store.create_campaign(
@@ -1226,6 +1228,7 @@ class TestMarketplaceAPI:
             headers={"X-Admin-Key": "test-mgmt-token-mkt"},
         )
         self._escrow_intent_api(c, tok, cid, "deposit", "100.000000")
+        before = store.campaign_report(cid, uid)
         r = c.post(
             "/api/earn/ads/serve/event",
             json={
@@ -1235,8 +1238,12 @@ class TestMarketplaceAPI:
                 "country": "GR",
             },
         )
-        assert r.status_code == 200
-        assert r.get_json()["ok"]
+        assert r.status_code == 503
+        assert r.get_json()["error"] == "verified_ad_event_required"
+        after = store.campaign_report(cid, uid)
+        assert after["spent"] == before["spent"]
+        assert after["escrow_balance"] == before["escrow_balance"]
+        assert after["impressions"] == before["impressions"]
 
     def test_report_api(self, store):
         c, uid, tok = self._auth_client(store)

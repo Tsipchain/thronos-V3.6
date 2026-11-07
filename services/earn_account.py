@@ -1669,28 +1669,47 @@ class EarnAccountStore:
 
     def referral_stats(self, earn_user_id: str) -> dict[str, Any]:
         with self._tx() as con:
-            row = con.execute(
+            first = con.execute(
                 "SELECT COUNT(*) AS cnt FROM earn_referrals WHERE referrer_id = ?",
                 (earn_user_id,),
             ).fetchone()
-            return {"referral_count": row["cnt"] if row else 0}
+            second = con.execute(
+                """SELECT COUNT(*) AS cnt FROM earn_referrals child
+                   JOIN earn_referrals parent
+                     ON parent.referred_id = child.referrer_id
+                  WHERE parent.referrer_id = ?""",
+                (earn_user_id,),
+            ).fetchone()
+            return {
+                "referral_count": first["cnt"],
+                "level2_count": second["cnt"],
+            }
 
     def referral_list(self, earn_user_id: str) -> list[dict[str, Any]]:
         with self._tx() as con:
-            rows = con.execute(
-                """SELECT r.referred_id, r.created_at, a.email
+            direct = con.execute(
+                """SELECT r.created_at, a.email
                    FROM earn_referrals r
                    JOIN earn_accounts a ON a.earn_user_id = r.referred_id
                    WHERE r.referrer_id = ?
                    ORDER BY r.created_at DESC LIMIT 50""",
                 (earn_user_id,),
             ).fetchall()
+            second = con.execute(
+                """SELECT child.created_at, a.email
+                   FROM earn_referrals child
+                   JOIN earn_referrals parent
+                     ON parent.referred_id = child.referrer_id
+                   JOIN earn_accounts a ON a.earn_user_id = child.referred_id
+                  WHERE parent.referrer_id = ?
+                  ORDER BY child.created_at DESC LIMIT 50""",
+                (earn_user_id,),
+            ).fetchall()
             return [
-                {
-                    "created_at": r["created_at"],
-                    "email_hint": r["email"][:2] + "***",
-                }
-                for r in rows
+                {"level": level, "created_at": row["created_at"],
+                 "email_hint": row["email"][:2] + "***"}
+                for level, rows in ((1, direct), (2, second))
+                for row in rows
             ]
 
     # ── Ad Marketplace — Campaigns ────────────────────────────────────

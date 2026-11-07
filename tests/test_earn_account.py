@@ -2343,7 +2343,7 @@ def test_earn_sponsor_visit_uses_native_link_without_blank_popup():
 def test_wallet_pwa_shell_cache_advanced_for_earn_release():
     from pathlib import Path
     sw = (Path(__file__).parent.parent / "public/wallet-pwa/sw.js").read_text()
-    assert "thr-wallet-pwa-v16" in sw
+    assert "thr-wallet-pwa-v17" in sw
     assert "'/wallet-pwa/app.js'" in sw
 
 def test_thr_staking_http_rejects_unsigned_wallet_debit(client, store, user_a):
@@ -2358,3 +2358,24 @@ def test_thr_staking_http_rejects_unsigned_wallet_debit(client, store, user_a):
         )
     assert response.status_code == 409
     assert response.get_json()["error"] == "thr_stake_requires_signed_wallet_intent"
+
+def test_referrals_expose_masked_l1_l2_members_without_fabricated_rewards(store, user_a):
+    root_id = user_a["earn_user_id"]
+    direct = store.register("direct@example.com", "password123", ref_code=root_id)
+    second = store.register("second@example.com", "password123",
+                            ref_code=direct["earn_user_id"])
+    stats = store.referral_stats(root_id)
+    assert stats["referral_count"] == 1
+    assert stats["level2_count"] == 1
+    rows = store.referral_list(root_id)
+    assert {row["level"] for row in rows} == {1, 2}
+    assert all("@" not in row["email_hint"] for row in rows)
+    assert all("reward" not in row for row in rows)
+    assert second["earn_user_id"] not in str(rows)
+
+
+def test_earn_web_referral_membership_panel_uses_server_data():
+    src = (Path(__file__).parent.parent / "templates" / "earn_beta.html").read_text()
+    assert 'id="ref-members"' in src
+    assert "statsData.referrals" in src
+    assert "memberList.appendChild(row)" in src

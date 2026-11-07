@@ -1,5 +1,5 @@
 // Bump when a shell asset changes so installed PWAs fetch the new UI.
-const CACHE = 'thr-wallet-pwa-v16';
+const CACHE = 'thr-wallet-pwa-v17';
 
 const PRECACHE = [
   '/wallet-pwa/',

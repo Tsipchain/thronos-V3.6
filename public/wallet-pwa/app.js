@@ -1562,10 +1562,10 @@ async function loadWalletReferralPanel() {
     panel.innerHTML = `<div style="background:#0d0a1a;border:1px solid #2a2050;border-radius:10px;padding:12px">
       <div style="font-weight:700">Invite friends to Earn</div>
       <div style="display:flex;gap:6px;margin-top:8px"><input id="walletReferralLink" class="input" readonly value="${escHtml(inviteUrl)}" style="flex:1;min-width:0;font-size:.72rem"><button id="walletReferralCopy" class="btn" type="button">Copy link</button></div>
-      <p style="font-size:.76rem;color:var(--muted)">${Number(statsRes.referral_count || 0)} invited members</p>
+      <p style="font-size:.76rem;color:var(--muted)">Level 1: ${Number(statsRes.referral_count || 0)} · Level 2: ${Number(statsRes.level2_count || 0)}</p>
       <div style="font-size:.78rem;font-weight:700;margin:12px 0">Your referrals</div>
-      ${referrals.length ? referrals.map(ref => `<div style="padding:8px 0;border-top:1px solid #2a2050;font-size:.76rem">${escHtml(ref.email_hint || 'Member')} · ${new Date(ref.created_at * 1000).toLocaleDateString()}</div>`).join('') : '<p style="font-size:.76rem;color:var(--muted)">No invited members yet.</p>'}
-      <p style="font-size:.7rem;color:var(--muted)">L1/L2 reward totals will appear once verified referral reward transactions are available.</p>
+      ${referrals.length ? referrals.map(ref => `<div style="padding:8px 0;border-top:1px solid #2a2050;font-size:.76rem">L${Number(ref.level) === 2 ? 2 : 1} · ${escHtml(ref.email_hint || 'Member')} · ${new Date(ref.created_at * 1000).toLocaleDateString()}</div>`).join('') : '<p style="font-size:.76rem;color:var(--muted)">No invited members yet.</p>'}
+      <p style="font-size:.7rem;color:var(--muted)">Earn L1 1%, L2 1%. Eligible active Wallet loyalty L1 3%, L2 1%. Credits require verified cleared rewards and a funded referral ledger. Pool referrals are separate.</p>
     </div>`;
     document.getElementById('walletReferralCopy').addEventListener('click', async () => {
       try { await navigator.clipboard.writeText(inviteUrl); } catch { document.getElementById('walletReferralLink')?.select(); }

@@ -2379,3 +2379,47 @@ def test_earn_web_referral_membership_panel_uses_server_data():
     assert 'id="ref-members"' in src
     assert "statsData.referrals" in src
     assert "memberList.appendChild(row)" in src
+
+def test_basketball_ad_cors_preflight_allows_only_known_origins():
+    import ast
+    from flask_cors import CORS
+
+    source = (Path(__file__).parent.parent / "server.py").read_text()
+    module = ast.parse(source)
+    assignment = next(
+        node for node in module.body
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "_CORS_ORIGINS"
+                for target in node.targets)
+    )
+    origins = ast.literal_eval(assignment.value)
+    cors_app = Flask("basketball-ad-cors")
+    CORS(cors_app, origins=origins, supports_credentials=True)
+
+    @cors_app.post("/api/earn/ads/click")
+    def click():
+        return {"ok": True}
+
+    for origin in ("https://tranfermarktbasket.com",
+                   "https://www.tranfermarktbasket.com"):
+        response = cors_app.test_client().options(
+            "/api/earn/ads/click",
+            headers={"Origin": origin, "Access-Control-Request-Method": "POST",
+                     "Access-Control-Request-Headers": "content-type"},
+        )
+        assert response.headers.get("Access-Control-Allow-Origin") == origin
+        assert "content-type" in response.headers.get(
+            "Access-Control-Allow-Headers", "").lower()
+    response = cors_app.test_client().options(
+        "/api/earn/ads/click",
+        headers={"Origin": "https://untrusted.example",
+                 "Access-Control-Request-Method": "POST"},
+    )
+    assert response.headers.get("Access-Control-Allow-Origin") is None
+
+
+def test_direct_sponsor_link_keeps_origin_referrer():
+    source = (Path(__file__).parent.parent / "templates" / "earn_beta.html").read_text()
+    tag = source.split('id="promo-visit"', 1)[1].split(">", 1)[0]
+    assert 'rel="noopener sponsored"' in tag
+    assert 'referrerpolicy="strict-origin-when-cross-origin"' in tag

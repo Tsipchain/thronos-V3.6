@@ -1970,16 +1970,6 @@ class TestPromoDeduplication:
         promise_idx = fn_block.index("Promise")
         assert guard_idx < promise_idx, "Guard check must come before creating the promise"
 
-    def test_earn_pwa_promo_has_active_guard(self):
-        """showEarnPromo must check and set _earnPromoActive to prevent double overlays."""
-        src = self._read("public/wallet-pwa/app.js")
-        fn_start = src.index("function showEarnPromo(")
-        fn_block = src[fn_start:fn_start + 600]
-        assert "_earnPromoActive" in fn_block, "showEarnPromo must use _earnPromoActive guard"
-        guard_idx = fn_block.index("_earnPromoActive")
-        promise_idx = fn_block.index("new Promise")
-        assert guard_idx < promise_idx, "Guard check must come before creating the promise"
-
     def test_earn_tab_dedup_prevents_duplicate_sessions(self):
         """ThronosEarnTabs.open must return existing promise for open tabs."""
         src = self._read("public/wallet-pwa/earn-provider-tabs.js")
@@ -1996,14 +1986,6 @@ class TestPromoDeduplication:
         done_line = fn_block[done_idx:fn_block.index("\n", done_idx)]
         assert "_promoActive = false" in done_line, "done() must reset _promoActive"
 
-    def test_earn_pwa_promo_resets_guard_on_done(self):
-        """The done() cleanup in showEarnPromo must reset _earnPromoActive."""
-        src = self._read("public/wallet-pwa/app.js")
-        fn_start = src.index("function showEarnPromo(")
-        fn_block = src[fn_start:fn_start + 2500]
-        done_idx = fn_block.index("function done()")
-        done_line = fn_block[done_idx:fn_block.index("\n", done_idx)]
-        assert "_earnPromoActive = false" in done_line, "done() must reset _earnPromoActive"
 
 
 class TestAdPlacementRegression:
@@ -2053,7 +2035,7 @@ class TestAdPlacementRegression:
         after_handler = src[handler_idx:]
         assert "provider === 'cpx'" in after_handler, "Earn PWA must check for CPX"
         assert "ThronosEarnTabs.open(" in after_handler, "Must use tab-first flow"
-        assert "showEarnPromo" in after_handler
+        assert "showEarnPromo" not in after_handler
 
     def test_earn_pwa_timewall_uses_tab_first_flow(self):
         src = self._read("public/wallet-pwa/app.js")
@@ -2061,15 +2043,6 @@ class TestAdPlacementRegression:
         after_handler = src[handler_idx:]
         assert "provider === 'timewall'" in after_handler
         assert "ThronosEarnTabs.open(" in after_handler
-
-    def test_earn_pwa_promo_inside_tab_callback(self):
-        src = self._read("public/wallet-pwa/app.js")
-        handler_idx = src.index("provider === 'timewall' || provider === 'cpx'")
-        block = src[handler_idx:handler_idx + 1200]
-        tab_open_idx = block.index("ThronosEarnTabs.open(")
-        promo_idx = block.index("showEarnPromo(")
-        assert tab_open_idx < promo_idx, \
-            "Tab must open synchronously before promo inside async callback"
 
     def test_earn_pwa_handles_popup_blocked(self):
         src = self._read("public/wallet-pwa/app.js")
@@ -2083,23 +2056,11 @@ class TestAdPlacementRegression:
         src = self._read("public/wallet-pwa/app.js")
         assert "let _currentSurface = 'wallet'" in src
 
-    def test_surface_guard_on_ad_sidebar(self):
-        src = self._read("public/wallet-pwa/app.js")
-        fn_idx = src.index("function loadWalletAdsSidebar(")
-        fn_block = src[fn_idx:fn_idx + 200]
-        assert "_currentSurface !== 'earn'" in fn_block
-
     def test_surface_guard_on_referral_panel(self):
         src = self._read("public/wallet-pwa/app.js")
         fn_idx = src.index("function loadWalletReferralPanel(")
         fn_block = src[fn_idx:fn_idx + 200]
-        assert "_currentSurface !== 'earn'" in fn_block
-
-    def test_surface_guard_on_earn_promo(self):
-        src = self._read("public/wallet-pwa/app.js")
-        fn_idx = src.index("function showEarnPromo(")
-        fn_block = src[fn_idx:fn_idx + 200]
-        assert "_currentSurface !== 'earn'" in fn_block
+        assert "_currentSurface !== 'earn-referrals'" in fn_block
 
     def test_surface_set_to_wallet_on_showWallet(self):
         src = self._read("public/wallet-pwa/app.js")
@@ -2173,20 +2134,19 @@ class TestAdPlacementRegression:
         assert "earnPwaLeaderboard" in after_earn, "Earn section must mount leaderboard"
         assert "ThronosEarnLeaderboard.mount" in after_earn, "Earn must activate leaderboard"
 
-    def test_wallet_earn_section_may_show_ads(self):
+    def test_wallet_earn_section_is_ad_free(self):
         src = self._read("public/wallet-pwa/app.js")
-        earn_fn_idx = src.index("function showEarn(")
-        after_earn = src[earn_fn_idx:earn_fn_idx + 15000]
-        assert "walletAdsSidebar" in after_earn, "Earn section must have ad sidebar"
-        assert "loadWalletAdsSidebar" in after_earn, "Earn must call ad loader"
+        assert "walletAdsSidebar" not in src
+        assert "loadWalletAdsSidebar" not in src
+        assert "showEarnPromo" not in src
+        assert "/api/earn/ads" not in src
 
-    def test_earn_pwa_has_leaderboard_and_ads(self):
+    def test_wallet_earn_has_leaderboard_and_referral_screen(self):
         src = self._read("public/wallet-pwa/app.js")
-        assert "earnPwaLeaderboard" in src, "Earn PWA must have leaderboard element"
-        assert "walletAdsSidebar" in src, "Earn PWA must have ads sidebar"
-        assert "walletReferralPanel" in src, "Earn PWA must have referral panel"
-
-    # -- Extension: no leaderboard or ads --
+        assert "earnPwaLeaderboard" in src
+        assert "earnReferralsBtn" in src
+        assert "showEarnReferrals()" in src
+        assert "walletReferralPanel" in src
 
     def test_extension_has_no_leaderboard(self):
         src = self._read("public/extension/popup.js")
@@ -2231,12 +2191,6 @@ class TestAdPlacementRegression:
         assert "_promoActive = false" in fn_block
         assert "function done()" in fn_block
 
-    def test_earn_pwa_promo_cleanup_on_all_paths(self):
-        src = self._read("public/wallet-pwa/app.js")
-        fn_start = src.index("function showEarnPromo(")
-        fn_block = src[fn_start:fn_start + 2500]
-        assert "_earnPromoActive = false" in fn_block
-        assert "function done()" in fn_block
 
 
 class TestSurfaceIsolation:

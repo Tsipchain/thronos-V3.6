@@ -247,6 +247,7 @@
     <div id="earn-status" class="earn-status" role="status"></div>
     <button id="earn-survey-close" class="earn-survey-close" type="button" data-i18n="backToEarn" data-i18n-label="backToEarn">Back to Earn</button>
     <iframe id="earn-frame" class="earn-frame" title="CPX Research surveys" sandbox="allow-forms allow-scripts allow-same-origin allow-popups"></iframe>
+    <a id="earn-survey-external" href="#" target="_blank" rel="noopener noreferrer" style="display:none;position:fixed;z-index:10001;top:max(12px, env(safe-area-inset-top));left:12px;background:#101827;color:#fff;padding:9px 12px;border-radius:999px;font-size:12px">Open in browser if the provider blocks embedding</a>
     <p class="earn-note" data-i18n="rewardsNote">Rewards are credited only from verified provider receipts. Pending THC is not spendable or payable until clearance.</p>
     <p class="earn-note" style="margin-top:8px"><a href="/terms" data-i18n="terms">Terms of Use</a> · <a href="/privacy" data-i18n="privacy">Privacy Policy</a> · <a href="/contact" data-i18n="contact">Contact</a></p>
   </section>
@@ -513,21 +514,37 @@
     });
   }
 
-  function openProviderWithPromo(provider, endpoint, connected, unavailable) {
+  let activePromoProvider = null;
+  let promoOpening = false;
+  async function openProviderWithPromo(provider, endpoint, connected, unavailable) {
+    if (promoOpening) return;
+    if (activePromoProvider === provider && frame.style.display !== 'none') {
+      frame.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      return;
+    }
+    promoOpening = true;
     setStatus(t('loadingSurveys'));
-    return window.ThronosEarnTabs.open(provider, async () => {
+    try {
+      // Keep the ad and offerwall in this page. No empty browser tab is created.
       await showPromo(10);
       const res = await fetch(endpoint, { headers: earnAuthHeaders() });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ok || !data.url) throw new Error(data.error || unavailable);
-      return data.url;
-    }).then(() => setStatus(connected)).catch(error => {
-      const message = error.message === 'popup_blocked'
-        ? (_lang === 'el' ? 'Επίτρεψε τα αναδυόμενα παράθυρα για αυτή τη σελίδα και πάτησε ξανά.'
-          : 'Allow pop-ups for this site, then tap the provider again.')
-        : (error.message || unavailable).replace(/_/g, ' ');
-      setStatus(message, true);
-    });
+      const url = new URL(data.url);
+      if (url.protocol !== 'https:' || url.username || url.password) throw new Error(unavailable);
+      activePromoProvider = provider;
+      frame.title = provider === 'timewall' ? 'TimeWall' : 'CPX Research';
+      frame.src = url.href;
+      frame.style.display = 'block';
+      frame.classList.add('is-mobile-survey');
+      surveyClose.classList.add('is-visible');
+      const fallback = $('earn-survey-external');
+      fallback.href = url.href;
+      fallback.style.display = 'block';
+      setStatus(connected);
+    } catch (error) {
+      setStatus((error.message || unavailable).replace(/_/g, ' '), true);
+    } finally { promoOpening = false; }
   }
   $('earn-surveys').addEventListener('click', () => {
     openProviderWithPromo('cpx', '/api/earn/cpx/offerwall', t('connectedSurvey'), t('surveysUnavail'));
@@ -544,6 +561,9 @@
 
   function closeSurvey() {
     frame.style.display = 'none';
+    frame.src = 'about:blank';
+    activePromoProvider = null;
+    $('earn-survey-external').style.display = 'none';
     frame.classList.remove('is-mobile-survey');
     surveyClose.classList.remove('is-visible');
     setStatus(t('returnedEarn'));

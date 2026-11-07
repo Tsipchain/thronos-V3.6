@@ -164,6 +164,9 @@ app = Flask(__name__)
 _CORS_ORIGINS = [
     r"https://.*\.thronoschain\.org",
     r"https://thronoschain\.org",
+    # Exact basketball origin for ad inventory and click/impression reports.
+    r"https://tranfermarktbasket\.com",
+    r"https://www\.tranfermarktbasket\.com",
     r"https://thrchain\.up\.railway\.app",
     r"https://node-2\.up\.railway\.app",
     # ThronosBuild — mobile app build service

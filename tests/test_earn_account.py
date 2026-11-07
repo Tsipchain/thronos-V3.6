@@ -1692,17 +1692,13 @@ class TestStakingPool:
 
     def test_pool_total_staked_updates(self, store, user_a):
         uid = user_a["earn_user_id"]
-        addr = "THR" + "D" * 40
+        addr = "THR" + "ab" * 20
         _link_wallet(store, uid, addr)
-        _seed_thr_balance(addr, 100)
-        pools = store.staking_pools()
-        thr_pool = next(p for p in pools if p["token"] == "THR")
-        store.create_stake(uid, thr_pool["pool_id"], "5")
-        store.create_stake(uid, thr_pool["pool_id"], "3")
-        pools_after = store.staking_pools()
-        thr_after = next(p for p in pools_after if p["token"] == "THR")
-        assert Decimal(thr_after["total_staked"]) == Decimal("8")
-        assert thr_after["stakers"] == 2
+        pool = next(p for p in store.staking_pools() if p["token"] == "THR")
+        with patch.object(store, "_debit_wallet_for_stake", side_effect=AssertionError("unexpected debit")):
+            with pytest.raises(EarnError, match="thr_stake_requires_signed_wallet_intent"):
+                store.create_stake(uid, pool["pool_id"], "10")
+        assert not [p for p in store.staking_positions(uid) if p["token"] == "THR"]
 
     def test_staking_api_endpoints(self, client, store, user_a):
         token = _login(client)
@@ -1757,26 +1753,11 @@ class TestStakingPool:
         addr = "THR" + "ab" * 20
         _link_wallet(store, uid, addr)
         _seed_thr_balance(addr, 50)
-        pools = store.staking_pools()
-        thr_pool = next(p for p in pools if p["token"] == "THR")
-        pos = store.create_stake(uid, thr_pool["pool_id"], "10")
-        assert pos["status"] == "active"
-        assert pos["wallet_tx_id"] is not None
-        try:
-            import server as srv
-            ledger = srv.load_json(srv.LEDGER_FILE, {})
-            assert ledger[addr] == 40.0
-        except ImportError:
-            pass
-        result = store.request_unstake(uid, pos["position_id"])
-        assert result["status"] == "unstaked"
-        assert result["unstake_tx_id"] is not None
-        try:
-            import server as srv
-            ledger = srv.load_json(srv.LEDGER_FILE, {})
-            assert ledger[addr] == 50.0
-        except ImportError:
-            pass
+        pool = next(p for p in store.staking_pools() if p["token"] == "THR")
+        with patch.object(store, "_debit_wallet_for_stake", side_effect=AssertionError("unexpected debit")):
+            with pytest.raises(EarnError, match="thr_stake_requires_signed_wallet_intent"):
+                store.create_stake(uid, pool["pool_id"], "10")
+        assert not [p for p in store.staking_positions(uid) if p["token"] == "THR"]
 
     def test_thc_stake_insufficient_balance_rejected(self, store, user_a):
         uid = user_a["earn_user_id"]
@@ -1789,13 +1770,13 @@ class TestStakingPool:
 
     def test_thr_stake_insufficient_balance_rejected(self, store, user_a):
         uid = user_a["earn_user_id"]
-        addr = "THR" + "cd" * 20
+        addr = "THR" + "ab" * 20
         _link_wallet(store, uid, addr)
-        _seed_thr_balance(addr, 0.5)
-        pools = store.staking_pools()
-        thr_pool = next(p for p in pools if p["token"] == "THR")
-        with pytest.raises(EarnError, match="insufficient_thr_balance"):
-            store.create_stake(uid, thr_pool["pool_id"], "5")
+        pool = next(p for p in store.staking_pools() if p["token"] == "THR")
+        with patch.object(store, "_debit_wallet_for_stake", side_effect=AssertionError("unexpected debit")):
+            with pytest.raises(EarnError, match="thr_stake_requires_signed_wallet_intent"):
+                store.create_stake(uid, pool["pool_id"], "10")
+        assert not [p for p in store.staking_positions(uid) if p["token"] == "THR"]
 
     def test_unstake_idempotent_already_unstaked(self, store, user_a):
         uid = user_a["earn_user_id"]
@@ -1814,15 +1795,12 @@ class TestStakingPool:
         uid = user_a["earn_user_id"]
         addr = "THR" + "ab" * 20
         _link_wallet(store, uid, addr)
-        _seed_thr_balance(addr, 100)
-        pools = store.staking_pools()
-        thr_pool = next(p for p in pools if p["token"] == "THR")
-        pos = store.create_stake(uid, thr_pool["pool_id"], "10")
-        assert pos["wallet_tx_id"] is not None
-        assert pos["wallet_tx_id"].startswith("TX-STAKE-")
-        result = store.request_unstake(uid, pos["position_id"])
-        assert result["unstake_tx_id"] is not None
-        assert result["unstake_tx_id"].startswith("TX-UNSTAKE-")
+        pool = next(p for p in store.staking_pools() if p["token"] == "THR")
+        with patch.object(store, "_debit_wallet_for_stake", side_effect=AssertionError("unexpected debit")):
+            with pytest.raises(EarnError, match="thr_stake_requires_signed_wallet_intent"):
+                store.create_stake(uid, pool["pool_id"], "10")
+        assert not [p for p in store.staking_positions(uid) if p["token"] == "THR"]
+
 
 
 class TestLeaderboardFiltering:
@@ -1939,17 +1917,15 @@ class TestPublicPoolRewards:
         assert thc_after["stakers"] == stakers_before + 1
 
     def test_thr_stake_rejected_when_wallet_debit_unavailable(self, store, user_a):
-        """Invariant 1: THR position must not be created if wallet debit returns None."""
         uid = user_a["earn_user_id"]
-        _link_wallet(store, uid, "THR" + "cc" * 20)
-        pools = store.staking_pools()
-        thr_pool = next(p for p in pools if p["token"] == "THR")
-        with patch.object(store, "_debit_wallet_for_stake", return_value=None):
-            with pytest.raises(EarnError, match="wallet_debit_unavailable"):
-                store.create_stake(uid, thr_pool["pool_id"], "10")
-        positions = store.staking_positions(uid)
-        thr_positions = [p for p in positions if p["pool_id"] == thr_pool["pool_id"]]
-        assert len(thr_positions) == 0, "No position should exist after failed debit"
+        addr = "THR" + "ab" * 20
+        _link_wallet(store, uid, addr)
+        pool = next(p for p in store.staking_pools() if p["token"] == "THR")
+        with patch.object(store, "_debit_wallet_for_stake", side_effect=AssertionError("unexpected debit")):
+            with pytest.raises(EarnError, match="thr_stake_requires_signed_wallet_intent"):
+                store.create_stake(uid, pool["pool_id"], "10")
+        assert not [p for p in store.staking_positions(uid) if p["token"] == "THR"]
+
 
 
 class TestPromoDeduplication:
@@ -2369,3 +2345,16 @@ def test_wallet_pwa_shell_cache_advanced_for_earn_release():
     sw = (Path(__file__).parent.parent / "public/wallet-pwa/sw.js").read_text()
     assert "thr-wallet-pwa-v16" in sw
     assert "'/wallet-pwa/app.js'" in sw
+
+def test_thr_staking_http_rejects_unsigned_wallet_debit(client, store, user_a):
+    token = _login(client)
+    _link_wallet(store, user_a["earn_user_id"], "THR" + "ab" * 20)
+    pool = next(p for p in store.staking_pools() if p["token"] == "THR")
+    with patch.object(store, "_debit_wallet_for_stake", side_effect=AssertionError("unexpected debit")):
+        response = client.post(
+            "/api/earn/staking/stake",
+            json={"pool_id": pool["pool_id"], "amount": "10"},
+            headers=_auth(token),
+        )
+    assert response.status_code == 409
+    assert response.get_json()["error"] == "thr_stake_requires_signed_wallet_intent"

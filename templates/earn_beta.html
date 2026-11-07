@@ -269,7 +269,7 @@
     <span class="promo-badge" id="promo-badge"></span>
     <h2 id="promo-title"></h2>
     <p class="promo-text" id="promo-desc"></p>
-    <button id="promo-visit" class="promo-visit" type="button">Visit</button>
+    <a id="promo-visit" class="promo-visit" href="#" target="thronosSponsor" rel="noopener noreferrer">Visit</a>
     <div class="promo-countdown" id="promo-countdown"></div>
     <button class="promo-skip" id="promo-skip" type="button" data-i18n="skip">Skip</button>
   </div>
@@ -346,7 +346,7 @@
       $('promo-title').textContent = ad.title;
       $('promo-desc').textContent = ad.desc;
       const visitBtn = $('promo-visit');
-      visitBtn.dataset.url = ad.url; visitBtn.textContent = ad.cta;
+      visitBtn.href = ad.url; visitBtn.textContent = ad.cta;
       if (ad.ad_id) {
         fetch('/api/earn/ads/impression', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ad_id: ad.ad_id }) }).catch(() => {});
       }
@@ -354,7 +354,7 @@
         if (ad.ad_id) {
           fetch('/api/earn/ads/click', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ad_id: ad.ad_id }) }).catch(() => {});
         }
-        window.open(ad.url, '_blank', 'noopener,noreferrer'); done();
+        done();
       };
       const countdownEl = $('promo-countdown');
       const skipBtn = $('promo-skip');

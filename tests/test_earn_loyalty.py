@@ -85,8 +85,12 @@ def test_membership_tracks_authoritative_link_and_does_not_leak_wallet_in_rankin
     assert alice.get('/api/earn/me').get_json()['loyalty']['vip'] is False
 
 
-def test_pwa_has_direct_leaderboard_vip_access():
+def test_pwa_leaderboard_is_confined_to_earn():
     from pathlib import Path
     pwa = (Path(__file__).parent.parent / 'public/wallet-pwa/app.js').read_text()
-    assert 'id="loyaltyBtn"' in pwa
-    assert "showEarn({ focusLeaderboard: true })" in pwa
+    home = pwa.split('async function showWallet() {', 1)[1].split('async function showEarn(options = {}) {', 1)[0]
+    earn = pwa.split('async function showEarn(options = {}) {', 1)[1]
+    assert 'walletLeaderboardPanel' not in home
+    assert 'loyaltyBtn' not in home
+    assert 'id="earnPwaLeaderboard"' in earn
+    assert "ThronosEarnLeaderboard.mount(document.getElementById('earnPwaLeaderboard')" in earn

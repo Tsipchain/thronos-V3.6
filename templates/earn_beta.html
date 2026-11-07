@@ -201,8 +201,14 @@
           <button id="ref-copy-btn" data-i18n="referralCopy">Copy</button>
         </div>
         <div class="ref-stats">
-          <div data-i18n="referralFriends">Friends joined: <span id="ref-count">0</span></div>
+          <div>Level 1: <span id="ref-count">0</span></div>
+          <div>Level 2: <span id="ref-level2-count">0</span></div>
         </div>
+        <details style="margin-top:12px;border-top:1px solid #2e5874;padding-top:10px">
+          <summary style="cursor:pointer;color:#b8d9ee;font-weight:700;font-size:13px">Invited members &amp; rewards</summary>
+          <div id="ref-members" style="margin-top:10px;font-size:12px;color:#b8d9ee"></div>
+          <p style="font-size:11px;color:#94a3b8">Verified L1/L2 reward amounts will appear after referral reward transactions are recorded. Membership alone does not credit THC.</p>
+        </details>
       </div>
       <div id="t2e-section" class="earn-provider" style="margin-top:14px;display:none">
         <h3 style="margin-bottom:8px" data-i18n="t2eTitle">Train-to-Earn</h3>
@@ -849,6 +855,19 @@
         const statsData = await statsRes.json().catch(() => ({}));
         if (statsRes.ok && statsData.ok) {
           $('ref-count').textContent = String(statsData.referral_count || 0);
+          $('ref-level2-count').textContent = String(statsData.level2_count || 0);
+          const memberList = $('ref-members');
+          memberList.replaceChildren();
+          const members = Array.isArray(statsData.referrals) ? statsData.referrals : [];
+          if (!members.length) memberList.textContent = 'No invited members yet.';
+          members.forEach(ref => {
+            const row = document.createElement('div');
+            row.style.cssText = 'padding:7px 0;border-bottom:1px solid #2e5874';
+            row.textContent = 'L' + (ref.level === 2 ? '2' : '1') + ' · ' +
+              (ref.email_hint || 'Member') + ' · ' +
+              new Date(ref.created_at * 1000).toLocaleDateString();
+            memberList.appendChild(row);
+          });
         }
       }
     } catch (_) {}

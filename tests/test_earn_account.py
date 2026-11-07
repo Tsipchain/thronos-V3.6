@@ -2030,20 +2030,20 @@ class TestAdPlacementRegression:
         assert "openProviderWithPromo('timewall'" in after_tw, \
             "TimeWall click must route through openProviderWithPromo"
 
-    def test_earn_web_promo_tab_flow_opens_tab_before_promo(self):
+    def test_earn_web_promo_uses_single_in_page_frame(self):
         src = self._read("templates/earn_beta.html")
-        fn_idx = src.index("function openProviderWithPromo(")
-        fn_block = src[fn_idx:fn_idx + 600]
-        tab_open_idx = fn_block.index("ThronosEarnTabs.open(")
-        promo_idx = fn_block.index("showPromo(")
-        assert tab_open_idx < promo_idx, \
-            "Tab must open (sync, preserves user activation) before promo countdown"
+        fn_idx = src.index("async function openProviderWithPromo(")
+        fn_block = src[fn_idx:fn_idx + 1500]
+        assert "await showPromo(10)" in fn_block
+        assert "frame.src = url.href" in fn_block
+        assert "ThronosEarnTabs.open(" not in fn_block
+        assert "if (promoOpening) return" in fn_block
 
-    def test_earn_web_promo_tab_flow_handles_popup_blocked(self):
+    def test_earn_web_modal_has_explicit_external_fallback(self):
         src = self._read("templates/earn_beta.html")
-        fn_idx = src.index("function openProviderWithPromo(")
-        fn_block = src[fn_idx:fn_idx + 800]
-        assert "popup_blocked" in fn_block, "Must handle popup_blocked error"
+        assert 'id="earn-survey-external"' in src
+        assert "fallback.target = 'thronosEarn_' + provider" in src
+        assert "url.protocol !== 'https:'" in src
 
     # -- Earn PWA: CPX and TimeWall use ThronosEarnTabs.open --
 

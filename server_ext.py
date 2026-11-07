@@ -2011,15 +2011,8 @@ def wallet_pwa(filename='index.html'):
 
 
 
-# ── Security: block PHP probe / scanner bots ──────────────────────────────────
-import time as _time
-import threading as _threading
-from collections import defaultdict as _defaultdict
+# ── Security: reject probe paths without banning shared proxy IPs ─────────────
 from flask import request as _req, abort as _abort
-
-_probe_counts = _defaultdict(list)  # ip -> [timestamps]
-_blocked_ips: set = set()
-_probe_lock = _threading.Lock()
 
 # Paths that signal automated scanner/webshell probe activity
 _PHP_PROBE_SUFFIXES = (
@@ -2041,33 +2034,9 @@ def _is_probe_path(path: str) -> bool:
 
 @app.before_request
 def _block_scanners():
-    ip = (_req.headers.get('X-Forwarded-For') or _req.remote_addr or '').split(',')[0].strip()
-    path = _req.path
+    # Shared proxies and attacker-controlled forwarded headers must never be
+    # permanently banned in process: that denies unrelated users /earn and /.
+    # The offending request itself is still rejected on every attempt.
+    if _is_probe_path(_req.path):
+        _abort(403)
 
-    with _probe_lock:
-        if ip in _blocked_ips:
-            _abort(403)
-
-        if _is_probe_path(path):
-            now = _time.time()
-            window = [t for t in _probe_counts[ip] if now - t < 60]
-            window.append(now)
-            _probe_counts[ip] = window
-            # Block IP after 8 probe requests in 60 seconds
-            if len(window) >= 8:
-                _blocked_ips.add(ip)
-                app.logger.warning('[Security] Blocked scanner IP %s after %d PHP probes', ip, len(window))
-                _abort(403)
-
-# Prune old probe records every 5 minutes
-def _prune_probe_counts():
-    while True:
-        _time.sleep(300)
-        now = _time.time()
-        with _probe_lock:
-            for ip in list(_probe_counts):
-                _probe_counts[ip] = [t for t in _probe_counts[ip] if now - t < 60]
-                if not _probe_counts[ip]:
-                    del _probe_counts[ip]
-
-_threading.Thread(target=_prune_probe_counts, daemon=True).start()

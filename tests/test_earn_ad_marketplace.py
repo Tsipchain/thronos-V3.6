@@ -1195,9 +1195,47 @@ class TestMarketplaceAPI:
 
     def test_serve_api(self, store):
         c, uid, tok = self._auth_client(store)
-        r = c.get("/api/earn/ads/serve?placement=earn")
-        assert r.status_code == 200
-        assert r.get_json()["ok"]
+        r = c.get("/api/earn/ads/serve?placement=earn&country=US")
+        assert r.status_code == 503
+        assert r.get_json() == {
+            "ok": False, "error": "verified_ad_delivery_required",
+        }
+
+    def test_paid_delivery_closed_even_for_active_campaign(self, store):
+        c, uid, tok = self._auth_client(store)
+        self._link_wallet_api(store, uid)
+        r = c.post(
+            "/api/earn/ads/campaign/create",
+            json={"name": "Closed delivery", "bid_amount": "2.000000"},
+            headers={"Authorization": f"Bearer {tok}"},
+        )
+        cid = r.get_json()["campaign_id"]
+        c.post(
+            "/api/earn/ads/moderate/campaign",
+            json={"campaign_id": cid, "action": "approve"},
+            headers={"X-Admin-Key": "test-mgmt-token-mkt"},
+        )
+        r = c.post(
+            f"/api/earn/ads/campaign/{cid}/creative/add",
+            json={"title": "B", "image_url": "https://i.png",
+                  "target_url": "https://t.com"},
+            headers={"Authorization": f"Bearer {tok}"},
+        )
+        crtv_id = r.get_json()["creative_id"]
+        c.post(
+            "/api/earn/ads/moderate/creative",
+            json={"creative_id": crtv_id, "action": "approve"},
+            headers={"X-Admin-Key": "test-mgmt-token-mkt"},
+        )
+        self._escrow_intent_api(c, tok, cid, "deposit", "100.000000")
+        before = store.campaign_report(cid, uid)
+        r = c.get("/api/earn/ads/serve?placement=earn&country=US")
+        assert r.status_code == 503
+        assert cid not in str(r.get_json())
+        after = store.campaign_report(cid, uid)
+        assert after["spent"] == before["spent"]
+        assert after["escrow_balance"] == before["escrow_balance"]
+        assert after["impressions"] == before["impressions"]
 
     def test_serve_event_api(self, store):
         c, uid, tok = self._auth_client(store)

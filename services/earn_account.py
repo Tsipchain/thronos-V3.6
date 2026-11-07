@@ -489,6 +489,37 @@ class EarnAccountStore:
                     ON earn_ad_events(campaign_id, created_at);
                 CREATE INDEX IF NOT EXISTS idx_earn_ad_events_type
                     ON earn_ad_events(event_type, created_at);
+
+                CREATE TABLE IF NOT EXISTS earn_publishers (
+                    publisher_id     TEXT PRIMARY KEY,
+                    earn_user_id     TEXT NOT NULL
+                        REFERENCES earn_accounts(earn_user_id),
+                    provider         TEXT NOT NULL,
+                    provider_pub_id  TEXT,
+                    label            TEXT NOT NULL DEFAULT '',
+                    postback_url     TEXT,
+                    postback_secret  TEXT,
+                    status           TEXT NOT NULL DEFAULT 'pending_review',
+                    reject_reason    TEXT,
+                    approved_at      INTEGER,
+                    created_at       INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_earn_publishers_user
+                    ON earn_publishers(earn_user_id);
+                CREATE INDEX IF NOT EXISTS idx_earn_publishers_provider
+                    ON earn_publishers(provider, provider_pub_id);
+
+                CREATE TABLE IF NOT EXISTS earn_publisher_placements (
+                    placement_id   TEXT PRIMARY KEY,
+                    publisher_id   TEXT NOT NULL
+                        REFERENCES earn_publishers(publisher_id),
+                    placement_type TEXT NOT NULL DEFAULT 'survey',
+                    site_url       TEXT,
+                    status         TEXT NOT NULL DEFAULT 'active',
+                    created_at     INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_earn_publisher_placements_pub
+                    ON earn_publisher_placements(publisher_id);
             """)
             # Existing production Earn databases predate the provider
             # clearance and separate internal hold fields. SQLite lacks ADD COLUMN IF NOT
@@ -2440,6 +2471,125 @@ class EarnAccountStore:
                 for b, v in sorted(buckets.items())
             ]
 
+    # ── Publisher system (isolated from advertiser and Earn identity) ────
+
+    def publisher_register(self, earn_user_id: str, provider: str, label: str = "",
+                           provider_pub_id: str | None = None) -> dict[str, Any]:
+        publisher_id = "pub_" + secrets.token_urlsafe(18)
+        now = int(time.time())
+        with self._tx() as con:
+            existing = con.execute(
+                "SELECT publisher_id FROM earn_publishers WHERE earn_user_id = ? AND provider = ?",
+                (earn_user_id, provider),
+            ).fetchone()
+            if existing:
+                raise EarnError("publisher_already_registered")
+            con.execute(
+                """INSERT INTO earn_publishers
+                   (publisher_id, earn_user_id, provider, provider_pub_id, label,
+                    status, created_at)
+                   VALUES (?,?,?,?,?,?,?)""",
+                (publisher_id, earn_user_id, provider, provider_pub_id,
+                 label, "pending_review", now),
+            )
+        return {"publisher_id": publisher_id, "status": "pending_review"}
+
+    def publisher_get(self, earn_user_id: str) -> list[dict[str, Any]]:
+        with self._tx() as con:
+            rows = con.execute(
+                "SELECT * FROM earn_publishers WHERE earn_user_id = ? ORDER BY created_at DESC",
+                (earn_user_id,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def publisher_update_postback(self, publisher_id: str, earn_user_id: str,
+                                  postback_url: str, postback_secret: str | None = None) -> dict[str, Any]:
+        with self._tx() as con:
+            pub = con.execute(
+                "SELECT * FROM earn_publishers WHERE publisher_id = ? AND earn_user_id = ?",
+                (publisher_id, earn_user_id),
+            ).fetchone()
+            if not pub:
+                raise EarnError("publisher_not_found")
+            con.execute(
+                "UPDATE earn_publishers SET postback_url = ?, postback_secret = ? WHERE publisher_id = ?",
+                (postback_url, postback_secret, publisher_id),
+            )
+        return {"publisher_id": publisher_id, "postback_url": postback_url}
+
+    def publisher_moderate(self, publisher_id: str, action: str, reason: str | None = None) -> dict[str, Any]:
+        now = int(time.time())
+        if action not in ("approve", "reject"):
+            raise EarnError("invalid_moderation_action")
+        with self._tx() as con:
+            pub = con.execute(
+                "SELECT * FROM earn_publishers WHERE publisher_id = ?",
+                (publisher_id,),
+            ).fetchone()
+            if not pub:
+                raise EarnError("publisher_not_found")
+            if action == "approve":
+                con.execute(
+                    "UPDATE earn_publishers SET status = 'active', approved_at = ?, reject_reason = NULL WHERE publisher_id = ?",
+                    (now, publisher_id),
+                )
+            else:
+                con.execute(
+                    "UPDATE earn_publishers SET status = 'rejected', reject_reason = ? WHERE publisher_id = ?",
+                    (reason or "", publisher_id),
+                )
+        return {"publisher_id": publisher_id, "status": "active" if action == "approve" else "rejected"}
+
+    def publisher_add_placement(self, publisher_id: str, earn_user_id: str,
+                                placement_type: str = "survey", site_url: str | None = None) -> dict[str, Any]:
+        placement_id = "plc_" + secrets.token_urlsafe(18)
+        now = int(time.time())
+        with self._tx() as con:
+            pub = con.execute(
+                "SELECT * FROM earn_publishers WHERE publisher_id = ? AND earn_user_id = ?",
+                (publisher_id, earn_user_id),
+            ).fetchone()
+            if not pub:
+                raise EarnError("publisher_not_found")
+            con.execute(
+                "INSERT INTO earn_publisher_placements (placement_id, publisher_id, placement_type, site_url, created_at) VALUES (?,?,?,?,?)",
+                (placement_id, publisher_id, placement_type, site_url, now),
+            )
+        return {"placement_id": placement_id, "publisher_id": publisher_id}
+
+    def publisher_get_placements(self, publisher_id: str, earn_user_id: str) -> list[dict[str, Any]]:
+        with self._tx() as con:
+            pub = con.execute(
+                "SELECT publisher_id FROM earn_publishers WHERE publisher_id = ? AND earn_user_id = ?",
+                (publisher_id, earn_user_id),
+            ).fetchone()
+            if not pub:
+                raise EarnError("publisher_not_found")
+            rows = con.execute(
+                "SELECT * FROM earn_publisher_placements WHERE publisher_id = ? ORDER BY created_at DESC",
+                (publisher_id,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def publisher_report(self, publisher_id: str, earn_user_id: str) -> dict[str, Any]:
+        with self._tx() as con:
+            pub = con.execute(
+                "SELECT * FROM earn_publishers WHERE publisher_id = ? AND earn_user_id = ?",
+                (publisher_id, earn_user_id),
+            ).fetchone()
+            if not pub:
+                raise EarnError("publisher_not_found")
+            placements = con.execute(
+                "SELECT * FROM earn_publisher_placements WHERE publisher_id = ?",
+                (publisher_id,),
+            ).fetchall()
+        return {
+            "publisher_id": publisher_id,
+            "provider": dict(pub)["provider"],
+            "status": dict(pub)["status"],
+            "placements": [dict(p) for p in placements],
+        }
+
     @staticmethod
     def _ledger_dict(row: sqlite3.Row) -> dict[str, Any]:
         d = dict(row)
@@ -4191,4 +4341,105 @@ def register_earn_account_routes(
             ok=True, access_token=new_token, expires_in=_SESSION_TTL,
         )
         return _set_session_cookie(response, new_token)
+
+    # ── Publisher routes (isolated from advertiser and Earn identity) ────
+
+    @app.post("/api/earn/publisher/register")
+    def earn_publisher_register():
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        data = request.get_json(silent=True) or {}
+        provider = str(data.get("provider", "")).strip()
+        label = str(data.get("label", "")).strip()
+        provider_pub_id = str(data.get("provider_pub_id", "")).strip() or None
+        if not provider:
+            return jsonify(ok=False, error="missing_provider"), 400
+        try:
+            result = store.publisher_register(
+                user["earn_user_id"], provider, label, provider_pub_id,
+            )
+        except EarnError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, **result), 201
+
+    @app.get("/api/earn/publisher/list")
+    def earn_publisher_list():
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        publishers = store.publisher_get(user["earn_user_id"])
+        return jsonify(ok=True, publishers=publishers)
+
+    @app.post("/api/earn/publisher/<publisher_id>/postback")
+    def earn_publisher_postback_config(publisher_id):
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        data = request.get_json(silent=True) or {}
+        postback_url = str(data.get("postback_url", "")).strip()
+        postback_secret = str(data.get("postback_secret", "")).strip() or None
+        if not postback_url:
+            return jsonify(ok=False, error="missing_postback_url"), 400
+        try:
+            result = store.publisher_update_postback(
+                publisher_id, user["earn_user_id"], postback_url, postback_secret,
+            )
+        except EarnError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, **result)
+
+    @app.post("/api/earn/publisher/moderate")
+    def earn_publisher_moderate():
+        data = request.get_json(silent=True) or {}
+        publisher_id = str(data.get("publisher_id", "")).strip()
+        action = str(data.get("action", "")).strip()
+        reason = str(data.get("reason", "")).strip() or None
+        if not publisher_id or not action:
+            return jsonify(ok=False, error="missing_fields"), 400
+        try:
+            result = store.publisher_moderate(publisher_id, action, reason)
+        except EarnError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, **result)
+
+    @app.post("/api/earn/publisher/<publisher_id>/placement/add")
+    def earn_publisher_placement_add(publisher_id):
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        data = request.get_json(silent=True) or {}
+        placement_type = str(data.get("placement_type", "survey")).strip()
+        site_url = str(data.get("site_url", "")).strip() or None
+        try:
+            result = store.publisher_add_placement(
+                publisher_id, user["earn_user_id"], placement_type, site_url,
+            )
+        except EarnError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, **result), 201
+
+    @app.get("/api/earn/publisher/<publisher_id>/placements")
+    def earn_publisher_placements(publisher_id):
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        try:
+            placements = store.publisher_get_placements(
+                publisher_id, user["earn_user_id"],
+            )
+        except EarnError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, placements=placements)
+
+    @app.get("/api/earn/publisher/<publisher_id>/report")
+    def earn_publisher_report(publisher_id):
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        try:
+            report = store.publisher_report(publisher_id, user["earn_user_id"])
+        except EarnError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, **report)
 

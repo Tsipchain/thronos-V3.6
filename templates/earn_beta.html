@@ -513,9 +513,24 @@
     });
   }
 
-  $('earn-surveys').addEventListener('click', async () => {
-    await showPromo(10);
-    openProvider('cpx', '/api/earn/cpx/offerwall', t('connectedSurvey'), t('surveysUnavail'));
+  function openProviderWithPromo(provider, endpoint, connected, unavailable) {
+    setStatus(t('loadingSurveys'));
+    return window.ThronosEarnTabs.open(provider, async () => {
+      await showPromo(10);
+      const res = await fetch(endpoint, { headers: earnAuthHeaders() });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok || !data.url) throw new Error(data.error || unavailable);
+      return data.url;
+    }).then(() => setStatus(connected)).catch(error => {
+      const message = error.message === 'popup_blocked'
+        ? (_lang === 'el' ? 'Επίτρεψε τα αναδυόμενα παράθυρα για αυτή τη σελίδα και πάτησε ξανά.'
+          : 'Allow pop-ups for this site, then tap the provider again.')
+        : (error.message || unavailable).replace(/_/g, ' ');
+      setStatus(message, true);
+    });
+  }
+  $('earn-surveys').addEventListener('click', () => {
+    openProviderWithPromo('cpx', '/api/earn/cpx/offerwall', t('connectedSurvey'), t('surveysUnavail'));
   });
   bitcoButton.addEventListener('click', () => {
     openProvider('bitcotasks', '/api/earn/bitcotasks/offerwall', t('connectedBitco'), t('bitcoUnavail'));
@@ -523,9 +538,8 @@
   pureButton.addEventListener('click', () => {
     openProvider('pure', '/api/earn/pure/offerwall', t('connectedPure'), t('pureUnavail'));
   });
-  timewallButton.addEventListener('click', async () => {
-    await showPromo(10);
-    openProvider('timewall', '/api/earn/timewall/offerwall', 'Connected to TimeWall tasks and surveys.', 'TimeWall is unavailable.');
+  timewallButton.addEventListener('click', () => {
+    openProviderWithPromo('timewall', '/api/earn/timewall/offerwall', 'Connected to TimeWall tasks and surveys.', 'TimeWall is unavailable.');
   });
 
   function closeSurvey() {

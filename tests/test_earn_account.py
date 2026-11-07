@@ -1958,8 +1958,8 @@ class TestPromoDeduplication:
         fn_block = src[fn_start:fn_start + 600]
         assert "_earnPromoActive" in fn_block, "showEarnPromo must use _earnPromoActive guard"
         guard_idx = fn_block.index("_earnPromoActive")
-        promise_idx = fn_block.index("Promise")
-        assert guard_idx < promise_idx, "Guard check must come before creating the promise"
+        new_promise_idx = fn_block.index("new Promise")
+        assert guard_idx < new_promise_idx, "Guard check must come before creating the promise"
 
     def test_earn_tab_dedup_prevents_duplicate_sessions(self):
         """ThronosEarnTabs.open must return existing promise for open tabs."""
@@ -1995,35 +1995,142 @@ class TestAdPlacementRegression:
         root = Path(__file__).parent.parent
         return (root / rel_path).read_text()
 
-    def test_earn_web_cpx_shows_ad_before_open(self):
+    # -- Earn web: CPX and TimeWall use openProviderWithPromo (tab-first popup fix) --
+
+    def test_earn_web_cpx_uses_promo_tab_flow(self):
+        """CPX click handler must use openProviderWithPromo which opens tab first."""
         src = self._read("templates/earn_beta.html")
         cpx_idx = src.index("earn-surveys")
         after_cpx = src[cpx_idx:]
-        promo_call = after_cpx.index("showPromo(")
-        provider_call = after_cpx.index("openProvider('cpx'")
-        assert promo_call < provider_call, "Earn web must show ad before opening CPX surveys"
+        assert "openProviderWithPromo('cpx'" in after_cpx, \
+            "CPX surveys click must route through openProviderWithPromo"
 
-    def test_earn_web_timewall_shows_ad_before_open(self):
+    def test_earn_web_timewall_uses_promo_tab_flow(self):
+        """TimeWall click handler must use openProviderWithPromo."""
         src = self._read("templates/earn_beta.html")
         tw_idx = src.index("timewallButton.addEventListener")
         after_tw = src[tw_idx:]
-        promo_call = after_tw.index("showPromo(")
-        provider_call = after_tw.index("openProvider('timewall'")
-        assert promo_call < provider_call, "Earn web must show ad before opening TimeWall"
+        assert "openProviderWithPromo('timewall'" in after_tw, \
+            "TimeWall click must route through openProviderWithPromo"
 
-    def test_earn_pwa_cpx_shows_ad_before_open(self):
+    def test_earn_web_promo_tab_flow_opens_tab_before_promo(self):
+        """openProviderWithPromo must call ThronosEarnTabs.open which opens tab synchronously,
+        then showPromo runs inside the async loadUrl callback."""
+        src = self._read("templates/earn_beta.html")
+        fn_idx = src.index("function openProviderWithPromo(")
+        fn_block = src[fn_idx:fn_idx + 600]
+        tab_open_idx = fn_block.index("ThronosEarnTabs.open(")
+        promo_idx = fn_block.index("showPromo(")
+        assert tab_open_idx < promo_idx, \
+            "Tab must open (sync, preserves user activation) before promo countdown starts"
+
+    def test_earn_web_promo_tab_flow_handles_popup_blocked(self):
+        """openProviderWithPromo must catch popup_blocked and display message."""
+        src = self._read("templates/earn_beta.html")
+        fn_idx = src.index("function openProviderWithPromo(")
+        fn_block = src[fn_idx:fn_idx + 800]
+        assert "popup_blocked" in fn_block, \
+            "openProviderWithPromo must handle popup_blocked error"
+        assert "pop-ups" in fn_block.lower() or "pop-up" in fn_block.lower(), \
+            "Must show user-friendly popup blocked message"
+
+    # -- Earn PWA: CPX and TimeWall use ThronosEarnTabs.open (tab-first popup fix) --
+
+    def test_earn_pwa_cpx_uses_tab_first_flow(self):
+        """PWA CPX handler must use ThronosEarnTabs.open with showEarnPromo inside callback."""
         src = self._read("public/wallet-pwa/app.js")
         handler_idx = src.index("data-earn-provider]")
         after_handler = src[handler_idx:]
-        assert "provider === 'cpx'" in after_handler, "Earn PWA must trigger ad for CPX"
-        assert "showEarnPromo" in after_handler
+        assert "provider === 'cpx'" in after_handler, "Earn PWA must check for CPX"
+        assert "ThronosEarnTabs.open(" in after_handler, "Must use tab-first flow"
+        assert "showEarnPromo" in after_handler, "Must show promo inside tab callback"
 
-    def test_earn_pwa_timewall_shows_ad_before_open(self):
+    def test_earn_pwa_timewall_uses_tab_first_flow(self):
+        """PWA TimeWall handler must use ThronosEarnTabs.open with showEarnPromo inside callback."""
         src = self._read("public/wallet-pwa/app.js")
         handler_idx = src.index("data-earn-provider]")
         after_handler = src[handler_idx:]
-        assert "provider === 'timewall'" in after_handler, "Earn PWA must trigger ad for TimeWall"
-        assert "showEarnPromo" in after_handler
+        assert "provider === 'timewall'" in after_handler, "Earn PWA must check for TimeWall"
+        assert "ThronosEarnTabs.open(" in after_handler
+
+    def test_earn_pwa_promo_inside_tab_callback(self):
+        """showEarnPromo must appear inside the ThronosEarnTabs.open callback, not before it."""
+        src = self._read("public/wallet-pwa/app.js")
+        handler_idx = src.index("provider === 'timewall' || provider === 'cpx'")
+        block = src[handler_idx:handler_idx + 1200]
+        tab_open_idx = block.index("ThronosEarnTabs.open(")
+        promo_idx = block.index("showEarnPromo(")
+        assert tab_open_idx < promo_idx, \
+            "Tab must open synchronously before promo countdown starts inside async callback"
+
+    def test_earn_pwa_handles_popup_blocked(self):
+        """PWA provider handler must catch popup_blocked and display message."""
+        src = self._read("public/wallet-pwa/app.js")
+        handler_idx = src.index("provider === 'timewall' || provider === 'cpx'")
+        block = src[handler_idx:handler_idx + 1200]
+        assert "popup_blocked" in block, "Must handle popup_blocked error"
+        assert "pop-ups" in block.lower() or "pop-up" in block.lower(), \
+            "Must show user-friendly popup blocked message"
+
+    # -- Surface guard: _currentSurface blocks ads outside Earn --
+
+    def test_surface_guard_variable_exists(self):
+        """_currentSurface must be declared and default to 'wallet'."""
+        src = self._read("public/wallet-pwa/app.js")
+        assert "let _currentSurface = 'wallet'" in src
+
+    def test_surface_guard_on_ad_sidebar(self):
+        """loadWalletAdsSidebar must bail if _currentSurface !== 'earn'."""
+        src = self._read("public/wallet-pwa/app.js")
+        fn_idx = src.index("function loadWalletAdsSidebar(")
+        fn_block = src[fn_idx:fn_idx + 200]
+        assert "_currentSurface !== 'earn'" in fn_block, \
+            "Ad sidebar must check surface guard"
+
+    def test_surface_guard_on_referral_panel(self):
+        """loadWalletReferralPanel must bail if _currentSurface !== 'earn'."""
+        src = self._read("public/wallet-pwa/app.js")
+        fn_idx = src.index("function loadWalletReferralPanel(")
+        fn_block = src[fn_idx:fn_idx + 200]
+        assert "_currentSurface !== 'earn'" in fn_block, \
+            "Referral panel must check surface guard"
+
+    def test_surface_guard_on_earn_promo(self):
+        """showEarnPromo must bail if _currentSurface !== 'earn'."""
+        src = self._read("public/wallet-pwa/app.js")
+        fn_idx = src.index("function showEarnPromo(")
+        fn_block = src[fn_idx:fn_idx + 200]
+        assert "_currentSurface !== 'earn'" in fn_block, \
+            "Earn promo must check surface guard"
+
+    def test_surface_set_to_wallet_on_showWallet(self):
+        """showWallet must set _currentSurface = 'wallet'."""
+        src = self._read("public/wallet-pwa/app.js")
+        fn_idx = src.index("function showWallet(")
+        fn_block = src[fn_idx:fn_idx + 500]
+        assert "_currentSurface = 'wallet'" in fn_block
+
+    def test_surface_set_to_earn_on_showEarn(self):
+        """showEarn must set _currentSurface = 'earn'."""
+        src = self._read("public/wallet-pwa/app.js")
+        fn_idx = src.index("function showEarn(")
+        fn_block = src[fn_idx:fn_idx + 500]
+        assert "_currentSurface = 'earn'" in fn_block
+
+    def test_surface_set_on_send_receive_history(self):
+        """showSend, showReceive, showHistory must set _currentSurface away from 'earn'."""
+        src = self._read("public/wallet-pwa/app.js")
+        for fn_name, surface in [
+            ("function showSend(", "send"),
+            ("function showReceive(", "receive"),
+            ("function showHistory(", "history"),
+        ]:
+            fn_idx = src.index(fn_name)
+            fn_block = src[fn_idx:fn_idx + 500]
+            assert f"_currentSurface = '{surface}'" in fn_block, \
+                f"{fn_name} must set _currentSurface = '{surface}'"
+
+    # -- Wallet screens: zero ad mounts --
 
     def test_wallet_home_has_no_ads(self):
         src = self._read("public/wallet-pwa/app.js")
@@ -2043,3 +2150,129 @@ class TestAdPlacementRegression:
             assert "showEarnPromo" not in fn_block, f"{fn_name} must not contain ad calls"
             assert "showPromo" not in fn_block, f"{fn_name} must not contain ad calls"
             assert "earn/ads" not in fn_block, f"{fn_name} must not reference ad API"
+
+    def test_wallet_history_has_no_ads(self):
+        src = self._read("public/wallet-pwa/app.js")
+        fn_idx = src.index("function showHistory(")
+        fn_block = src[fn_idx:fn_idx + 3000]
+        assert "showEarnPromo" not in fn_block, "History must not contain ad calls"
+        assert "showPromo" not in fn_block
+        assert "walletAdsSidebar" not in fn_block
+        assert "earn/ads" not in fn_block
+
+    # -- Tab dedup: ThronosEarnTabs prevents duplicate provider windows --
+
+    def test_earn_tab_dedup_checks_closed(self):
+        """ThronosEarnTabs.open must check entry.tab.closed before opening a duplicate."""
+        src = self._read("public/wallet-pwa/earn-provider-tabs.js")
+        assert "entry.tab.closed" in src, "Must check if existing tab is still open"
+
+    def test_earn_tab_dedup_focuses_existing(self):
+        """ThronosEarnTabs.open must focus existing tab instead of opening new one."""
+        src = self._read("public/wallet-pwa/earn-provider-tabs.js")
+        assert "entry.tab.focus" in src, "Must focus existing tab for dedup"
+
+    def test_earn_tab_dedup_returns_existing_promise(self):
+        """ThronosEarnTabs.open must return existing promise for dedup."""
+        src = self._read("public/wallet-pwa/earn-provider-tabs.js")
+        assert "return entry.promise" in src
+
+    def test_earn_tab_popup_blocked_detection(self):
+        """ThronosEarnTabs.open must detect and reject when popup is blocked."""
+        src = self._read("public/wallet-pwa/earn-provider-tabs.js")
+        assert "popup_blocked" in src, "Must reject with popup_blocked when window.open fails"
+
+    # -- No stuck overlay: promo cleanup paths --
+
+    def test_earn_web_promo_cleanup_on_all_paths(self):
+        """showPromo done() must reset _promoActive on success, skip, and error."""
+        src = self._read("templates/earn_beta.html")
+        fn_start = src.index("function showPromo(")
+        fn_block = src[fn_start:fn_start + 1600]
+        assert "_promoActive = false" in fn_block, "Must reset _promoActive in cleanup"
+        assert "function done()" in fn_block, "Must have a done() cleanup function"
+
+    def test_earn_pwa_promo_cleanup_on_all_paths(self):
+        """showEarnPromo done() must reset _earnPromoActive on success, skip, and error."""
+        src = self._read("public/wallet-pwa/app.js")
+        fn_start = src.index("function showEarnPromo(")
+        fn_block = src[fn_start:fn_start + 2500]
+        assert "_earnPromoActive = false" in fn_block, "Must reset _earnPromoActive in cleanup"
+        assert "function done()" in fn_block, "Must have a done() cleanup function"
+
+
+BASKETBALL_ROOT = Path(__file__).parent.parent.parent / "thronos-basketball-market" / "web"
+
+
+class TestBasketballPromoNavigation:
+    """Verify basketball market promo navigation: one click → one promo → one navigation."""
+
+    @staticmethod
+    def _read(rel_path):
+        return (BASKETBALL_ROOT / rel_path).read_text()
+
+    def test_promo_nav_link_exists(self):
+        src = self._read("components/PromoNavLink.tsx")
+        assert "export function PromoNavLink" in src
+
+    def test_promo_nav_link_uses_session_storage_dedup(self):
+        """Once promo is shown per session, subsequent clicks navigate directly."""
+        src = self._read("components/PromoNavLink.tsx")
+        assert "sessionStorage.getItem(" in src, "Must check sessionStorage for dedup"
+        assert "sessionStorage.setItem(" in src, "Must mark promo as shown"
+
+    def test_promo_nav_link_one_promo_per_session(self):
+        """If promo already shown, click must not preventDefault (lets browser navigate)."""
+        src = self._read("components/PromoNavLink.tsx")
+        get_idx = src.index("sessionStorage.getItem(")
+        block_after = src[get_idx:get_idx + 100]
+        assert "return" in block_after, "Must return early (no promo) if already shown"
+
+    def test_promo_nav_link_navigates_after_promo(self):
+        """After promo completes, must navigate to the pending href via router.push."""
+        src = self._read("components/PromoNavLink.tsx")
+        assert "router.push(" in src, "Must use router.push for SPA navigation after promo"
+        assert "pendingHref" in src, "Must store pending href during promo"
+
+    def test_promo_nav_link_cleans_up_overlay(self):
+        """handlePromoComplete must hide the overlay."""
+        src = self._read("components/PromoNavLink.tsx")
+        assert "setShowPromo(false)" in src, "Must hide overlay after promo completes"
+
+    def test_promo_nav_routes_clubs_and_news(self):
+        """PromoNav must route /clubs and /news through PromoNavLink."""
+        src = self._read("components/PromoNav.tsx")
+        assert '"/clubs"' in src, "Must include /clubs as promo path"
+        assert '"/news"' in src, "Must include /news as promo path"
+        assert "PromoNavLink" in src, "Must use PromoNavLink for promo paths"
+
+    def test_promo_nav_uses_standard_link_for_others(self):
+        """PromoNav must use standard Link for non-promo paths."""
+        src = self._read("components/PromoNav.tsx")
+        assert "import Link from" in src, "Must import Next.js Link"
+        assert "PROMO_PATHS.has(href)" in src, "Must check PROMO_PATHS set"
+
+    def test_header_uses_promo_nav(self):
+        """Header must use PromoNav component for primary navigation."""
+        src = self._read("components/Header.tsx")
+        assert "import { PromoNav }" in src, "Header must import PromoNav"
+        assert "<PromoNav" in src, "Header must render PromoNav"
+
+    def test_promo_overlay_renders_with_duration(self):
+        """PromoNavLink must pass durationSec to EarnPromoOverlay."""
+        src = self._read("components/PromoNavLink.tsx")
+        assert "EarnPromoOverlay" in src, "Must render EarnPromoOverlay"
+        assert "durationSec=" in src, "Must pass countdown duration"
+        assert "onComplete=" in src, "Must pass completion callback"
+
+    def test_no_repeated_interstitials_during_internal_nav(self):
+        """Once SESSION_KEY is set, PromoNavLink must let navigation proceed without promo."""
+        src = self._read("components/PromoNavLink.tsx")
+        assert "SESSION_KEY" in src
+        fn_idx = src.index("handleClick")
+        fn_block = src[fn_idx:fn_idx + 300]
+        get_idx = fn_block.index("sessionStorage.getItem(")
+        return_idx = fn_block.index("return", get_idx)
+        prevent_idx = fn_block.index("preventDefault", return_idx + 1) if "preventDefault" in fn_block[return_idx:] else 999
+        assert return_idx < prevent_idx, \
+            "Must return before preventDefault when session key exists"

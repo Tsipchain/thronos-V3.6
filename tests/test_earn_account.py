@@ -2367,5 +2367,5 @@ def test_earn_sponsor_visit_uses_native_link_without_blank_popup():
 def test_wallet_pwa_shell_cache_advanced_for_earn_release():
     from pathlib import Path
     sw = (Path(__file__).parent.parent / "public/wallet-pwa/sw.js").read_text()
-    assert "thr-wallet-pwa-v15" in sw
+    assert "thr-wallet-pwa-v16" in sw
     assert "'/wallet-pwa/app.js'" in sw

@@ -1627,10 +1627,10 @@ class TestStakingPool:
             assert Decimal(pool["total_staked"]) == 0
             assert pool["stakers"] == 0
 
-    def test_stake_requires_wallet_link(self, store, user_a):
-        pools = store.staking_pools()
+    def test_thr_stake_requires_wallet_link(self, store, user_a):
+        pool = next(p for p in store.staking_pools() if p["token"] == "THR")
         with pytest.raises(EarnError, match="wallet_not_linked"):
-            store.create_stake(user_a["earn_user_id"], pools[0]["pool_id"], "10")
+            store.create_stake(user_a["earn_user_id"], pool["pool_id"], "10")
 
     def test_stake_and_unstake_flow(self, store, user_a):
         uid = user_a["earn_user_id"]

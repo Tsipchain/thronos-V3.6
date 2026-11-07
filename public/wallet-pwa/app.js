@@ -1546,63 +1546,38 @@ function _renderHomeAssetRow(icon, label, sym, val, color, addr, evmMeta) {
   </div>`;
 }
 
-async function loadWalletAdsSidebar() {
-  if (_currentSurface !== 'earn') return;
-  const panel = document.getElementById('walletAdsSidebar');
-  if (!panel) return;
-  try {
-    const placements = ['general', 'earn', 'basketball'];
-    const responses = await Promise.all(placements.map(p =>
-      fetch(`${API_WRITE}/api/earn/ads?placement=${encodeURIComponent(p)}`, { credentials: 'include', cache: 'no-store' })
-        .then(r => r.ok ? r.json() : null).catch(() => null)
-    ));
-    const seen = new Set();
-    const ads = responses.flatMap(r => Array.isArray(r?.ads) ? r.ads : [])
-      .filter(ad => ad?.ad_id && !seen.has(ad.ad_id) && seen.add(ad.ad_id));
-    const fallbackAds = [
-      { ad_id: '', title: 'Thronos Earn', target_url: '/earn' },
-      { ad_id: '', title: 'TransferMarktBasket', target_url: 'https://transfermarktbasket.com' },
-      { ad_id: '', title: 'LitBits Faucet', target_url: 'https://t.me/litebits_faucet_bot/app' },
-      { ad_id: '', title: 'BitcoTasks', target_url: 'https://bitcotasks.com/promote/81663' },
-    ];
-    const visibleAds = ads.length ? ads : fallbackAds;
-    panel.style.display = 'block';
-    panel.innerHTML = `<div style="font-size:.68rem;color:var(--muted);letter-spacing:.08em;margin:0 0 7px">SPONSORED</div>${visibleAds.map(ad => `
-      <div style="background:#0d0a1a;border:1px solid #2a2050;border-radius:10px;padding:10px;margin-bottom:7px">
-        <div style="font-size:.84rem;font-weight:700;color:#fff">${escHtml(ad.title || 'Sponsored offer')}</div>
-        <a href="${escHtml(ad.target_url || '#')}" target="_blank" rel="noopener noreferrer sponsored" data-wallet-ad-click="${escHtml(ad.ad_id)}" style="display:inline-block;margin-top:7px;color:var(--accent);font-size:.72rem">Learn more →</a>
-      </div>`).join('')}`;
-    ads.forEach(ad => fetch(`${API_WRITE}/api/earn/ads/impression`, { method: 'POST', credentials: 'include', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ ad_id: ad.ad_id }) }).catch(() => {}));
-    panel.querySelectorAll('[data-wallet-ad-click]').forEach(link => link.addEventListener('click', () => {
-      fetch(`${API_WRITE}/api/earn/ads/click`, { method: 'POST', credentials: 'include', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ ad_id: link.dataset.walletAdClick }) }).catch(() => {});
-    }));
-  } catch (_) { /* Ads are best-effort and never block the wallet. */ }
-}
-
 async function loadWalletReferralPanel() {
-  if (_currentSurface !== 'earn') return;
+  if (_currentSurface !== 'earn-referrals') return;
   const panel = document.getElementById('walletReferralPanel');
   if (!panel) return;
   try {
-    const headers = { 'Accept': 'application/json' };
     const [codeRes, statsRes] = await Promise.all([
-      fetch(`${API_WRITE}/api/earn/referral/code`, { credentials: 'include', headers }).then(r => r.ok ? r.json() : null).catch(() => null),
-      fetch(`${API_WRITE}/api/earn/referral/stats`, { credentials: 'include', headers }).then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch(API_WRITE + '/api/earn/referral/code', { credentials: 'include' }).then(r => r.ok ? r.json() : null),
+      fetch(API_WRITE + '/api/earn/referral/stats', { credentials: 'include' }).then(r => r.ok ? r.json() : null),
     ]);
-    const code = codeRes?.ref_code || codeRes?.code;
-    if (!code) return;
-    const count = Number(statsRes?.referral_count || statsRes?.count || 0);
-    panel.innerHTML = `<div style="background:#0d0a1a;border:1px solid #2a2050;border-radius:10px;padding:11px 12px">
-      <div style="font-size:.68rem;color:var(--muted);letter-spacing:.08em">REFERRALS</div>
-      <div style="font-size:.84rem;font-weight:700;margin-top:5px">Invite friends to Earn</div>
-      <div style="display:flex;gap:6px;margin-top:8px"><input id="walletReferralCode" class="input" readonly value="${escHtml(code)}" style="margin:0;flex:1;font-size:.75rem"><button id="walletReferralCopy" class="btn" type="button" style="font-size:.72rem">Copy</button></div>
-      <div style="font-size:.7rem;color:var(--muted);margin-top:6px">${count} referral${count === 1 ? '' : 's'} connected</div>
+    const code = codeRes?.ref_code;
+    if (!code || !statsRes?.ok) throw new Error('referrals_unavailable');
+    const inviteUrl = new URL('/earn?ref=' + encodeURIComponent(code), window.location.origin).href;
+    const referrals = Array.isArray(statsRes.referrals) ? statsRes.referrals : [];
+    panel.innerHTML = `<div style="background:#0d0a1a;border:1px solid #2a2050;border-radius:10px;padding:12px">
+      <div style="font-weight:700">Invite friends to Earn</div>
+      <div style="display:flex;gap:6px;margin-top:8px"><input id="walletReferralLink" class="input" readonly value="${escHtml(inviteUrl)}" style="flex:1;min-width:0;font-size:.72rem"><button id="walletReferralCopy" class="btn" type="button">Copy link</button></div>
+      <p style="font-size:.76rem;color:var(--muted)">${Number(statsRes.referral_count || 0)} invited members</p>
+      <div style="font-size:.78rem;font-weight:700;margin:12px 0">Your referrals</div>
+      ${referrals.length ? referrals.map(ref => `<div style="padding:8px 0;border-top:1px solid #2a2050;font-size:.76rem">${escHtml(ref.email_hint || 'Member')} · ${new Date(ref.created_at * 1000).toLocaleDateString()}</div>`).join('') : '<p style="font-size:.76rem;color:var(--muted)">No invited members yet.</p>'}
+      <p style="font-size:.7rem;color:var(--muted)">L1/L2 reward totals will appear once verified referral reward transactions are available.</p>
     </div>`;
-    document.getElementById('walletReferralCopy')?.addEventListener('click', async () => {
-      try { await navigator.clipboard.writeText(code); } catch {}
-      const b = document.getElementById('walletReferralCopy'); if (b) { b.textContent = 'Copied'; setTimeout(() => { b.textContent = 'Copy'; }, 1200); }
+    document.getElementById('walletReferralCopy').addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(inviteUrl); } catch { document.getElementById('walletReferralLink')?.select(); }
     });
-  } catch (_) { /* Referral is optional and never blocks wallet startup. */ }
+  } catch (_) { panel.textContent = 'Referral details are temporarily unavailable.'; }
+}
+
+function showEarnReferrals() {
+  _currentSurface = 'earn-referrals';
+  render(`<div class="screen"><div class="header"><button class="btn--icon" id="earnReferralBack" aria-label="Back to Earn">←</button><span class="logo--sm">Invite friends</span></div><section id="walletReferralPanel" aria-label="Earn referrals" style="margin-top:12px">Loading referrals…</section></div>`);
+  document.getElementById('earnReferralBack').addEventListener('click', () => showEarn());
+  loadWalletReferralPanel();
 }
 
 async function showWallet() {
@@ -2131,82 +2106,7 @@ function _formatEarnClearance(entry) {
   return `Estimated clearance: ${_formatEarnReceiptDate(eta)} (${remaining} day${remaining === 1 ? '' : 's'} remaining)`;
 }
 
-// ─── Earn ad interstitial (Earn section only — never on wallet main) ─────────
-const _EARN_HOUSE_ADS = [
-  { title: 'Earn THC Rewards', desc: 'Complete tasks and surveys to earn THC on Thronos Earn.', url: '/earn', badge: 'Thronos Earn', cta: 'Start Earning' },
-  { title: 'LitBits Faucet', desc: 'Earn free Bitcoin daily with the LitBits Faucet on Telegram.', url: 'https://t.me/litebits_faucet_bot/app?startapp=BPS0MGLI', badge: 'Thronos Recommends', cta: 'Open Faucet' },
-];
-let _earnPromoCache = null;
-let _earnPromoIndex = Math.floor(Math.random() * 100);
-
-async function _fetchEarnAds() {
-  if (_earnPromoCache) return _earnPromoCache;
-  try {
-    const res = await fetch(`${API_WRITE}/api/earn/ads?placement=earn`, { credentials: 'include', cache: 'no-store' });
-    const data = await res.json().catch(() => null);
-    if (res.ok && data?.ok && Array.isArray(data.ads) && data.ads.length) {
-      _earnPromoCache = data.ads.map(a => ({
-        title: a.title || 'Sponsored',
-        desc: '',
-        url: a.target_url || '#',
-        badge: 'Sponsored',
-        cta: 'Learn More',
-        ad_id: a.ad_id,
-      }));
-      return _earnPromoCache;
-    }
-  } catch (_) {}
-  return null;
-}
-
 let _currentSurface = 'wallet';
-let _earnPromoActive = false;
-function showEarnPromo(durationSec) {
-  if (_currentSurface !== 'earn') return Promise.resolve();
-  if (_earnPromoActive) return Promise.resolve();
-  _earnPromoActive = true;
-  durationSec = durationSec || 10;
-  return new Promise(resolve => {
-    _fetchEarnAds().then(dynamicAds => {
-      const pool = dynamicAds || _EARN_HOUSE_ADS;
-      const ad = pool[_earnPromoIndex++ % pool.length];
-      const overlay = document.createElement('div');
-      overlay.style.cssText = 'position:fixed;inset:0;z-index:10000;background:#070612ee;display:flex;align-items:center;justify-content:center;padding:20px';
-      overlay.innerHTML = `
-        <div style="max-width:380px;width:100%;background:#17152f;border:1px solid #453b78;border-radius:16px;padding:22px;text-align:center">
-          <div style="font-size:.66rem;letter-spacing:.1em;color:#f2c14e;margin-bottom:8px">${escHtml(ad.badge || 'Thronos')}</div>
-          <div style="font-size:1.1rem;font-weight:700;margin-bottom:6px">${escHtml(ad.title)}</div>
-          ${ad.desc ? `<p style="font-size:.82rem;color:var(--muted);line-height:1.5;margin:0 0 14px">${escHtml(ad.desc)}</p>` : ''}
-          <a id="earnPromoVisit" href="${escHtml(ad.url)}" target="_blank" rel="noopener noreferrer sponsored" class="btn btn--primary" style="display:inline-block;padding:10px 24px;text-decoration:none;margin-bottom:10px">${escHtml(ad.cta || 'Visit')}</a>
-          <div id="earnPromoCountdown" style="font-size:.76rem;color:var(--muted);margin-bottom:6px"></div>
-          <button id="earnPromoSkip" type="button" style="display:none;background:none;border:1px solid #453b78;border-radius:8px;color:var(--muted);padding:7px 16px;font-size:.76rem;cursor:pointer">Skip</button>
-        </div>`;
-      document.body.appendChild(overlay);
-      if (ad.ad_id) {
-        fetch(`${API_WRITE}/api/earn/ads/impression`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ad_id: ad.ad_id }) }).catch(() => {});
-      }
-      const visitBtn = overlay.querySelector('#earnPromoVisit');
-      const countdownEl = overlay.querySelector('#earnPromoCountdown');
-      const skipBtn = overlay.querySelector('#earnPromoSkip');
-      let seconds = durationSec;
-      countdownEl.textContent = `Continuing in ${seconds}s…`;
-      function done() { clearInterval(timer); overlay.remove(); _earnPromoActive = false; resolve(); }
-      visitBtn.addEventListener('click', () => {
-        if (ad.ad_id) {
-          fetch(`${API_WRITE}/api/earn/ads/click`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ad_id: ad.ad_id }) }).catch(() => {});
-        }
-        done();
-      });
-      skipBtn.addEventListener('click', done);
-      const timer = setInterval(() => {
-        seconds--;
-        if (seconds <= 5) skipBtn.style.display = '';
-        if (seconds > 0) { countdownEl.textContent = `Continuing in ${seconds}s…`; return; }
-        done();
-      }, 1000);
-    });
-  });
-}
 
 async function showEarn(options = {}) {
   _currentSurface = 'earn';
@@ -2305,9 +2205,8 @@ async function showEarn(options = {}) {
       ${me.wallet_address ? `<p style="font-size:.72rem;color:#55d6a7;line-height:1.45;margin:10px 0 0">✓ Linked wallet: ${escHtml(me.wallet_address.slice(0, 10))}…</p>` : `<button class="btn" id="linkEarnWalletBtn" style="width:100%;padding:10px;margin-top:8px">Link active Thronos wallet</button>`}
       <p id="earnPwaMessage" style="font-size:.72rem;color:var(--muted);line-height:1.45;margin:12px 0 4px">Verified provider receipts stay pending during the seven-day Earn hold. Select a receipt to see its own countdown and status.</p>
       <div style="margin-top:12px"><div style="font-size:.7rem;color:var(--muted);letter-spacing:.08em">RECENT REWARDS</div>${rows}</div>
-      <section id="earnPwaLeaderboard" aria-label="30-day Earn leaderboard"></section>
-      <aside id="walletAdsSidebar" aria-label="Sponsored offers" style="display:none;margin-top:12px"></aside>
-      <section id="walletReferralPanel" aria-label="Earn referrals" style="margin-top:12px"></section>
+      <button class="btn" id="earnReferralsBtn" type="button" style="width:100%;padding:10px;margin-top:12px">Invite friends &amp; referrals →</button>
+       <section id="earnPwaLeaderboard" aria-label="30-day Earn leaderboard"></section>
       ${balance.staked && balance.staked !== '0.000000' ? `
       <div style="margin-top:16px;border-top:1px solid #ffffff14;padding-top:14px">
         <div style="font-size:.7rem;color:var(--muted);letter-spacing:.08em;margin-bottom:8px">EARN REWARDS SUMMARY</div>
@@ -2332,8 +2231,7 @@ async function showEarn(options = {}) {
     window.ThronosEarnLeaderboard.mount(document.getElementById('earnPwaLeaderboard'), { base: earnBase }).then(() => {
       if (options.focusLeaderboard) document.getElementById('earnPwaLeaderboard')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
-    loadWalletAdsSidebar();
-    loadWalletReferralPanel();
+    document.getElementById('earnReferralsBtn').addEventListener('click', showEarnReferrals);
     const openReceiptDetails = (event) => {
       const button = event.target.closest('[data-earn-receipt]');
       if (button) window.ThronosEarnReceipts.open(button.dataset.earnReceipt, { base: earnBase });
@@ -2440,7 +2338,6 @@ async function showEarn(options = {}) {
           const message = document.getElementById('earnPwaMessage');
           message.textContent = 'Opening ' + definition.label + '…';
           window.ThronosEarnTabs.open(provider, async () => {
-            await showEarnPromo(10);
             const response = await fetch(earnBase + definition.endpoint, { credentials: 'include' });
             const offerwall = await response.json().catch(() => null);
             if (!response.ok || !offerwall?.ok || !offerwall.url) {
@@ -2499,14 +2396,14 @@ async function showEarn(options = {}) {
               <div style="background:#070612;border-radius:6px;padding:6px"><div style="color:var(--muted);font-size:.62rem">STAKED</div><div>${escHtml(pool.total_staked)} ${escHtml(pool.token)}</div></div>
               <div style="background:#070612;border-radius:6px;padding:6px"><div style="color:var(--muted);font-size:.62rem">STAKERS</div><div>${pool.stakers}</div></div>
             </div>
-            ${(me.wallet_address || pool.token === 'THC') ? `
+            ${pool.token === 'THC' ? `
               <div style="display:flex;gap:6px">
                 <input type="number" step="any" min="${escHtml(pool.min_stake)}" class="pwa-stake-input" data-pool="${escHtml(pool.pool_id)}" placeholder="Amount (${escHtml(pool.token)})" style="flex:1;background:#070612;border:1px solid #453b78;border-radius:6px;color:#fff;padding:7px;font-size:.76rem">
                 <button class="btn btn--primary pwa-stake-btn" data-pool="${escHtml(pool.pool_id)}" style="padding:7px 12px;font-size:.72rem;white-space:nowrap">Stake</button>
               </div>
               <div style="font-size:.62rem;color:var(--muted);margin-top:3px">Min: ${escHtml(pool.min_stake)} ${escHtml(pool.token)}</div>
               <div class="pwa-stake-msg" data-pool="${escHtml(pool.pool_id)}" style="font-size:.66rem;min-height:14px;margin-top:2px"></div>
-            ` : '<div style="font-size:.68rem;color:#e8bf5a;margin-top:4px">🔒 Link a THR Wallet to stake THR</div>'}
+            ` : '<div style="font-size:.68rem;color:#e8bf5a;margin-top:4px">THR staking is paused until wallet-signed authorization is available. Existing positions remain visible and can be unstaked.</div>'}
           </div>
         `).join('');
         poolsEl.querySelectorAll('.pwa-stake-btn').forEach(btn => {

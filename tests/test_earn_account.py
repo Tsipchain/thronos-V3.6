@@ -1692,17 +1692,13 @@ class TestStakingPool:
 
     def test_pool_total_staked_updates(self, store, user_a):
         uid = user_a["earn_user_id"]
-        addr = "THR" + "D" * 40
+        addr = "THR" + "ab" * 20
         _link_wallet(store, uid, addr)
-        _seed_thr_balance(addr, 100)
-        pools = store.staking_pools()
-        thr_pool = next(p for p in pools if p["token"] == "THR")
-        store.create_stake(uid, thr_pool["pool_id"], "5")
-        store.create_stake(uid, thr_pool["pool_id"], "3")
-        pools_after = store.staking_pools()
-        thr_after = next(p for p in pools_after if p["token"] == "THR")
-        assert Decimal(thr_after["total_staked"]) == Decimal("8")
-        assert thr_after["stakers"] == 2
+        pool = next(p for p in store.staking_pools() if p["token"] == "THR")
+        with patch.object(store, "_debit_wallet_for_stake", side_effect=AssertionError("unexpected debit")):
+            with pytest.raises(EarnError, match="thr_stake_requires_signed_wallet_intent"):
+                store.create_stake(uid, pool["pool_id"], "10")
+        assert not [p for p in store.staking_positions(uid) if p["token"] == "THR"]
 
     def test_staking_api_endpoints(self, client, store, user_a):
         token = _login(client)
@@ -1757,26 +1753,11 @@ class TestStakingPool:
         addr = "THR" + "ab" * 20
         _link_wallet(store, uid, addr)
         _seed_thr_balance(addr, 50)
-        pools = store.staking_pools()
-        thr_pool = next(p for p in pools if p["token"] == "THR")
-        pos = store.create_stake(uid, thr_pool["pool_id"], "10")
-        assert pos["status"] == "active"
-        assert pos["wallet_tx_id"] is not None
-        try:
-            import server as srv
-            ledger = srv.load_json(srv.LEDGER_FILE, {})
-            assert ledger[addr] == 40.0
-        except ImportError:
-            pass
-        result = store.request_unstake(uid, pos["position_id"])
-        assert result["status"] == "unstaked"
-        assert result["unstake_tx_id"] is not None
-        try:
-            import server as srv
-            ledger = srv.load_json(srv.LEDGER_FILE, {})
-            assert ledger[addr] == 50.0
-        except ImportError:
-            pass
+        pool = next(p for p in store.staking_pools() if p["token"] == "THR")
+        with patch.object(store, "_debit_wallet_for_stake", side_effect=AssertionError("unexpected debit")):
+            with pytest.raises(EarnError, match="thr_stake_requires_signed_wallet_intent"):
+                store.create_stake(uid, pool["pool_id"], "10")
+        assert not [p for p in store.staking_positions(uid) if p["token"] == "THR"]
 
     def test_thc_stake_insufficient_balance_rejected(self, store, user_a):
         uid = user_a["earn_user_id"]
@@ -1789,13 +1770,13 @@ class TestStakingPool:
 
     def test_thr_stake_insufficient_balance_rejected(self, store, user_a):
         uid = user_a["earn_user_id"]
-        addr = "THR" + "cd" * 20
+        addr = "THR" + "ab" * 20
         _link_wallet(store, uid, addr)
-        _seed_thr_balance(addr, 0.5)
-        pools = store.staking_pools()
-        thr_pool = next(p for p in pools if p["token"] == "THR")
-        with pytest.raises(EarnError, match="insufficient_thr_balance"):
-            store.create_stake(uid, thr_pool["pool_id"], "5")
+        pool = next(p for p in store.staking_pools() if p["token"] == "THR")
+        with patch.object(store, "_debit_wallet_for_stake", side_effect=AssertionError("unexpected debit")):
+            with pytest.raises(EarnError, match="thr_stake_requires_signed_wallet_intent"):
+                store.create_stake(uid, pool["pool_id"], "10")
+        assert not [p for p in store.staking_positions(uid) if p["token"] == "THR"]
 
     def test_unstake_idempotent_already_unstaked(self, store, user_a):
         uid = user_a["earn_user_id"]
@@ -1814,15 +1795,12 @@ class TestStakingPool:
         uid = user_a["earn_user_id"]
         addr = "THR" + "ab" * 20
         _link_wallet(store, uid, addr)
-        _seed_thr_balance(addr, 100)
-        pools = store.staking_pools()
-        thr_pool = next(p for p in pools if p["token"] == "THR")
-        pos = store.create_stake(uid, thr_pool["pool_id"], "10")
-        assert pos["wallet_tx_id"] is not None
-        assert pos["wallet_tx_id"].startswith("TX-STAKE-")
-        result = store.request_unstake(uid, pos["position_id"])
-        assert result["unstake_tx_id"] is not None
-        assert result["unstake_tx_id"].startswith("TX-UNSTAKE-")
+        pool = next(p for p in store.staking_pools() if p["token"] == "THR")
+        with patch.object(store, "_debit_wallet_for_stake", side_effect=AssertionError("unexpected debit")):
+            with pytest.raises(EarnError, match="thr_stake_requires_signed_wallet_intent"):
+                store.create_stake(uid, pool["pool_id"], "10")
+        assert not [p for p in store.staking_positions(uid) if p["token"] == "THR"]
+
 
 
 class TestLeaderboardFiltering:
@@ -1939,17 +1917,15 @@ class TestPublicPoolRewards:
         assert thc_after["stakers"] == stakers_before + 1
 
     def test_thr_stake_rejected_when_wallet_debit_unavailable(self, store, user_a):
-        """Invariant 1: THR position must not be created if wallet debit returns None."""
         uid = user_a["earn_user_id"]
-        _link_wallet(store, uid, "THR" + "cc" * 20)
-        pools = store.staking_pools()
-        thr_pool = next(p for p in pools if p["token"] == "THR")
-        with patch.object(store, "_debit_wallet_for_stake", return_value=None):
-            with pytest.raises(EarnError, match="wallet_debit_unavailable"):
-                store.create_stake(uid, thr_pool["pool_id"], "10")
-        positions = store.staking_positions(uid)
-        thr_positions = [p for p in positions if p["pool_id"] == thr_pool["pool_id"]]
-        assert len(thr_positions) == 0, "No position should exist after failed debit"
+        addr = "THR" + "ab" * 20
+        _link_wallet(store, uid, addr)
+        pool = next(p for p in store.staking_pools() if p["token"] == "THR")
+        with patch.object(store, "_debit_wallet_for_stake", side_effect=AssertionError("unexpected debit")):
+            with pytest.raises(EarnError, match="thr_stake_requires_signed_wallet_intent"):
+                store.create_stake(uid, pool["pool_id"], "10")
+        assert not [p for p in store.staking_positions(uid) if p["token"] == "THR"]
+
 
 
 class TestPromoDeduplication:
@@ -1970,16 +1946,6 @@ class TestPromoDeduplication:
         promise_idx = fn_block.index("Promise")
         assert guard_idx < promise_idx, "Guard check must come before creating the promise"
 
-    def test_earn_pwa_promo_has_active_guard(self):
-        """showEarnPromo must check and set _earnPromoActive to prevent double overlays."""
-        src = self._read("public/wallet-pwa/app.js")
-        fn_start = src.index("function showEarnPromo(")
-        fn_block = src[fn_start:fn_start + 600]
-        assert "_earnPromoActive" in fn_block, "showEarnPromo must use _earnPromoActive guard"
-        guard_idx = fn_block.index("_earnPromoActive")
-        promise_idx = fn_block.index("new Promise")
-        assert guard_idx < promise_idx, "Guard check must come before creating the promise"
-
     def test_earn_tab_dedup_prevents_duplicate_sessions(self):
         """ThronosEarnTabs.open must return existing promise for open tabs."""
         src = self._read("public/wallet-pwa/earn-provider-tabs.js")
@@ -1996,14 +1962,6 @@ class TestPromoDeduplication:
         done_line = fn_block[done_idx:fn_block.index("\n", done_idx)]
         assert "_promoActive = false" in done_line, "done() must reset _promoActive"
 
-    def test_earn_pwa_promo_resets_guard_on_done(self):
-        """The done() cleanup in showEarnPromo must reset _earnPromoActive."""
-        src = self._read("public/wallet-pwa/app.js")
-        fn_start = src.index("function showEarnPromo(")
-        fn_block = src[fn_start:fn_start + 2500]
-        done_idx = fn_block.index("function done()")
-        done_line = fn_block[done_idx:fn_block.index("\n", done_idx)]
-        assert "_earnPromoActive = false" in done_line, "done() must reset _earnPromoActive"
 
 
 class TestAdPlacementRegression:
@@ -2053,7 +2011,7 @@ class TestAdPlacementRegression:
         after_handler = src[handler_idx:]
         assert "provider === 'cpx'" in after_handler, "Earn PWA must check for CPX"
         assert "ThronosEarnTabs.open(" in after_handler, "Must use tab-first flow"
-        assert "showEarnPromo" in after_handler
+        assert "showEarnPromo" not in after_handler
 
     def test_earn_pwa_timewall_uses_tab_first_flow(self):
         src = self._read("public/wallet-pwa/app.js")
@@ -2061,15 +2019,6 @@ class TestAdPlacementRegression:
         after_handler = src[handler_idx:]
         assert "provider === 'timewall'" in after_handler
         assert "ThronosEarnTabs.open(" in after_handler
-
-    def test_earn_pwa_promo_inside_tab_callback(self):
-        src = self._read("public/wallet-pwa/app.js")
-        handler_idx = src.index("provider === 'timewall' || provider === 'cpx'")
-        block = src[handler_idx:handler_idx + 1200]
-        tab_open_idx = block.index("ThronosEarnTabs.open(")
-        promo_idx = block.index("showEarnPromo(")
-        assert tab_open_idx < promo_idx, \
-            "Tab must open synchronously before promo inside async callback"
 
     def test_earn_pwa_handles_popup_blocked(self):
         src = self._read("public/wallet-pwa/app.js")
@@ -2083,23 +2032,11 @@ class TestAdPlacementRegression:
         src = self._read("public/wallet-pwa/app.js")
         assert "let _currentSurface = 'wallet'" in src
 
-    def test_surface_guard_on_ad_sidebar(self):
-        src = self._read("public/wallet-pwa/app.js")
-        fn_idx = src.index("function loadWalletAdsSidebar(")
-        fn_block = src[fn_idx:fn_idx + 200]
-        assert "_currentSurface !== 'earn'" in fn_block
-
     def test_surface_guard_on_referral_panel(self):
         src = self._read("public/wallet-pwa/app.js")
         fn_idx = src.index("function loadWalletReferralPanel(")
         fn_block = src[fn_idx:fn_idx + 200]
-        assert "_currentSurface !== 'earn'" in fn_block
-
-    def test_surface_guard_on_earn_promo(self):
-        src = self._read("public/wallet-pwa/app.js")
-        fn_idx = src.index("function showEarnPromo(")
-        fn_block = src[fn_idx:fn_idx + 200]
-        assert "_currentSurface !== 'earn'" in fn_block
+        assert "_currentSurface !== 'earn-referrals'" in fn_block
 
     def test_surface_set_to_wallet_on_showWallet(self):
         src = self._read("public/wallet-pwa/app.js")
@@ -2173,20 +2110,19 @@ class TestAdPlacementRegression:
         assert "earnPwaLeaderboard" in after_earn, "Earn section must mount leaderboard"
         assert "ThronosEarnLeaderboard.mount" in after_earn, "Earn must activate leaderboard"
 
-    def test_wallet_earn_section_may_show_ads(self):
+    def test_wallet_earn_section_is_ad_free(self):
         src = self._read("public/wallet-pwa/app.js")
-        earn_fn_idx = src.index("function showEarn(")
-        after_earn = src[earn_fn_idx:earn_fn_idx + 15000]
-        assert "walletAdsSidebar" in after_earn, "Earn section must have ad sidebar"
-        assert "loadWalletAdsSidebar" in after_earn, "Earn must call ad loader"
+        assert "walletAdsSidebar" not in src
+        assert "loadWalletAdsSidebar" not in src
+        assert "showEarnPromo" not in src
+        assert "/api/earn/ads" not in src
 
-    def test_earn_pwa_has_leaderboard_and_ads(self):
+    def test_wallet_earn_has_leaderboard_and_referral_screen(self):
         src = self._read("public/wallet-pwa/app.js")
-        assert "earnPwaLeaderboard" in src, "Earn PWA must have leaderboard element"
-        assert "walletAdsSidebar" in src, "Earn PWA must have ads sidebar"
-        assert "walletReferralPanel" in src, "Earn PWA must have referral panel"
-
-    # -- Extension: no leaderboard or ads --
+        assert "earnPwaLeaderboard" in src
+        assert "earnReferralsBtn" in src
+        assert "showEarnReferrals()" in src
+        assert "walletReferralPanel" in src
 
     def test_extension_has_no_leaderboard(self):
         src = self._read("public/extension/popup.js")
@@ -2231,12 +2167,6 @@ class TestAdPlacementRegression:
         assert "_promoActive = false" in fn_block
         assert "function done()" in fn_block
 
-    def test_earn_pwa_promo_cleanup_on_all_paths(self):
-        src = self._read("public/wallet-pwa/app.js")
-        fn_start = src.index("function showEarnPromo(")
-        fn_block = src[fn_start:fn_start + 2500]
-        assert "_earnPromoActive = false" in fn_block
-        assert "function done()" in fn_block
 
 
 class TestSurfaceIsolation:
@@ -2413,5 +2343,18 @@ def test_earn_sponsor_visit_uses_native_link_without_blank_popup():
 def test_wallet_pwa_shell_cache_advanced_for_earn_release():
     from pathlib import Path
     sw = (Path(__file__).parent.parent / "public/wallet-pwa/sw.js").read_text()
-    assert "thr-wallet-pwa-v15" in sw
+    assert "thr-wallet-pwa-v16" in sw
     assert "'/wallet-pwa/app.js'" in sw
+
+def test_thr_staking_http_rejects_unsigned_wallet_debit(client, store, user_a):
+    token = _login(client)
+    _link_wallet(store, user_a["earn_user_id"], "THR" + "ab" * 20)
+    pool = next(p for p in store.staking_pools() if p["token"] == "THR")
+    with patch.object(store, "_debit_wallet_for_stake", side_effect=AssertionError("unexpected debit")):
+        response = client.post(
+            "/api/earn/staking/stake",
+            json={"pool_id": pool["pool_id"], "amount": "10"},
+            headers=_auth(token),
+        )
+    assert response.status_code == 409
+    assert response.get_json()["error"] == "thr_stake_requires_signed_wallet_intent"

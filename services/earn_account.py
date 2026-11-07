@@ -1531,9 +1531,9 @@ class EarnAccountStore:
             wallet_address = link["wallet_address"] if link else ""
             wallet_tx_id = None
             if token == "THR":
-                wallet_tx_id = self._debit_wallet_for_stake(wallet_address, amt)
-                if wallet_tx_id is None:
-                    raise EarnError("wallet_debit_unavailable")
+                # An Earn cookie alone cannot authorize a linked wallet debit.
+                # This invariant also protects callers bypassing the HTTP route.
+                raise EarnError("thr_stake_requires_signed_wallet_intent")
             elif token == "THC":
                 available = self._available_thc_for_staking(con, earn_user_id)
                 if available < amt:
@@ -3699,6 +3699,13 @@ def register_earn_account_routes(
         if not user:
             return jsonify(ok=False, error="earn_auth_required"), 401
         data = request.get_json(silent=True) or {}
+        # Earn session authentication does not prove wallet authorization for a
+        # specific THR debit. Pause new THR stakes until a signed, expiring
+        # wallet intent is verified by the server. Existing unstake remains open.
+        requested_pool = str(data.get("pool_id", ""))
+        if any(p["pool_id"] == requested_pool and p["token"] == "THR"
+               for p in store.staking_pools()):
+            return jsonify(ok=False, error="thr_stake_requires_signed_wallet_intent"), 409
         try:
             position = store.create_stake(
                 user["earn_user_id"],

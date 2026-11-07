@@ -2499,14 +2499,14 @@ async function showEarn(options = {}) {
               <div style="background:#070612;border-radius:6px;padding:6px"><div style="color:var(--muted);font-size:.62rem">STAKED</div><div>${escHtml(pool.total_staked)} ${escHtml(pool.token)}</div></div>
               <div style="background:#070612;border-radius:6px;padding:6px"><div style="color:var(--muted);font-size:.62rem">STAKERS</div><div>${pool.stakers}</div></div>
             </div>
-            ${me.wallet_address ? `
+            ${(me.wallet_address || pool.token === 'THC') ? `
               <div style="display:flex;gap:6px">
                 <input type="number" step="any" min="${escHtml(pool.min_stake)}" class="pwa-stake-input" data-pool="${escHtml(pool.pool_id)}" placeholder="Amount (${escHtml(pool.token)})" style="flex:1;background:#070612;border:1px solid #453b78;border-radius:6px;color:#fff;padding:7px;font-size:.76rem">
                 <button class="btn btn--primary pwa-stake-btn" data-pool="${escHtml(pool.pool_id)}" style="padding:7px 12px;font-size:.72rem;white-space:nowrap">Stake</button>
               </div>
               <div style="font-size:.62rem;color:var(--muted);margin-top:3px">Min: ${escHtml(pool.min_stake)} ${escHtml(pool.token)}</div>
               <div class="pwa-stake-msg" data-pool="${escHtml(pool.pool_id)}" style="font-size:.66rem;min-height:14px;margin-top:2px"></div>
-            ` : '<div style="font-size:.68rem;color:#e8bf5a;margin-top:4px">🔒 Link a THR Wallet to stake</div>'}
+            ` : '<div style="font-size:.68rem;color:#e8bf5a;margin-top:4px">🔒 Link a THR Wallet to stake THR</div>'}
           </div>
         `).join('');
         poolsEl.querySelectorAll('.pwa-stake-btn').forEach(btn => {

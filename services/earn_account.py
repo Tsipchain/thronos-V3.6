@@ -1525,12 +1525,13 @@ class EarnAccountStore:
                 "SELECT wallet_address FROM earn_wallet_links WHERE earn_user_id = ?",
                 (earn_user_id,),
             ).fetchone()
-            if not link:
-                raise EarnError("wallet_not_linked")
             token = pool["token"]
+            if token == "THR" and not link:
+                raise EarnError("wallet_not_linked")
+            wallet_address = link["wallet_address"] if link else ""
             wallet_tx_id = None
             if token == "THR":
-                wallet_tx_id = self._debit_wallet_for_stake(link["wallet_address"], amt)
+                wallet_tx_id = self._debit_wallet_for_stake(wallet_address, amt)
                 if wallet_tx_id is None:
                     raise EarnError("wallet_debit_unavailable")
             elif token == "THC":
@@ -1546,7 +1547,7 @@ class EarnAccountStore:
                    VALUES (?,?,?,?,?,'active',?,?,?)""",
                 (
                     position_id, pool_id, earn_user_id,
-                    link["wallet_address"], str(amt), now, wallet_tx_id,
+                    wallet_address, str(amt), now, wallet_tx_id,
                     idempotency_key or None,
                 ),
             )
@@ -1557,7 +1558,7 @@ class EarnAccountStore:
                 "amount": str(amt),
                 "status": "active",
                 "staked_at": now,
-                "wallet_address": link["wallet_address"],
+                "wallet_address": wallet_address,
                 "wallet_tx_id": wallet_tx_id,
             }
 

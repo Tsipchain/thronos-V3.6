@@ -1627,10 +1627,10 @@ class TestStakingPool:
             assert Decimal(pool["total_staked"]) == 0
             assert pool["stakers"] == 0
 
-    def test_stake_requires_wallet_link(self, store, user_a):
-        pools = store.staking_pools()
+    def test_thr_stake_requires_wallet_link(self, store, user_a):
+        pool = next(p for p in store.staking_pools() if p["token"] == "THR")
         with pytest.raises(EarnError, match="wallet_not_linked"):
-            store.create_stake(user_a["earn_user_id"], pools[0]["pool_id"], "10")
+            store.create_stake(user_a["earn_user_id"], pool["pool_id"], "10")
 
     def test_stake_and_unstake_flow(self, store, user_a):
         uid = user_a["earn_user_id"]
@@ -1663,6 +1663,25 @@ class TestStakingPool:
         thc_pool = next(p for p in pools if p["token"] == "THC")
         with pytest.raises(EarnError, match="below_minimum_stake"):
             store.create_stake(uid, thc_pool["pool_id"], "0.01")
+
+    def test_thc_stake_without_wallet_locks_and_releases_earn_balance(self, store, user_a):
+        uid = user_a["earn_user_id"]
+        _seed_thc_confirmed(store, uid, "50")
+        pool = next(p for p in store.staking_pools() if p["token"] == "THC")
+        position = store.create_stake(uid, pool["pool_id"], "20")
+        assert position["wallet_address"] == ""
+        assert position["wallet_tx_id"] is None
+        with store._tx() as con:
+            assert store._available_thc_for_staking(con, uid) == Decimal("30")
+        assert store.request_unstake(uid, position["position_id"])["status"] == "unstaked"
+        with store._tx() as con:
+            assert store._available_thc_for_staking(con, uid) == Decimal("50")
+
+    def test_thr_stake_without_wallet_is_rejected(self, store, user_a):
+        uid = user_a["earn_user_id"]
+        pool = next(p for p in store.staking_pools() if p["token"] == "THR")
+        with pytest.raises(EarnError, match="wallet_not_linked"):
+            store.create_stake(uid, pool["pool_id"], "1")
 
     def test_stake_invalid_amount_rejected(self, store, user_a):
         uid = user_a["earn_user_id"]

@@ -4031,13 +4031,10 @@ def register_earn_account_routes(
 
     @app.get("/api/earn/ads/serve")
     def earn_ads_serve():
-        placement = request.args.get("placement", "earn")
-        country = request.args.get("country", "")
-        limit = min(int(request.args.get("limit", "3")), 10)
-        ads = store.serve_campaign_ads(
-            placement=placement, country=country, limit=limit,
-        )
-        return jsonify(ok=True, ads=ads)
+        # Paid campaigns cannot be delivered while their public event path is
+        # disabled: that would serve advertiser inventory with no verifiable
+        # view/click accounting. Legacy house banners use /api/earn/ads.
+        return jsonify(ok=False, error="verified_ad_delivery_required"), 503
 
     @app.post("/api/earn/ads/serve/event")
     def earn_ads_serve_event():

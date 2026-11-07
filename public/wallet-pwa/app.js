@@ -2158,7 +2158,10 @@ async function _fetchEarnAds() {
   return null;
 }
 
+let _earnPromoActive = false;
 function showEarnPromo(durationSec) {
+  if (_earnPromoActive) return Promise.resolve();
+  _earnPromoActive = true;
   durationSec = durationSec || 10;
   return new Promise(resolve => {
     _fetchEarnAds().then(dynamicAds => {
@@ -2184,7 +2187,7 @@ function showEarnPromo(durationSec) {
       const skipBtn = overlay.querySelector('#earnPromoSkip');
       let seconds = durationSec;
       countdownEl.textContent = `Continuing in ${seconds}s…`;
-      function done() { clearInterval(timer); overlay.remove(); resolve(); }
+      function done() { clearInterval(timer); overlay.remove(); _earnPromoActive = false; resolve(); }
       visitBtn.addEventListener('click', () => {
         if (ad.ad_id) {
           fetch(`${API_WRITE}/api/earn/ads/click`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ad_id: ad.ad_id }) }).catch(() => {});

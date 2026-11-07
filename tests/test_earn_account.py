@@ -1900,6 +1900,90 @@ class TestPublicPoolRewards:
             assert "stakers" in pool
             assert "token" in pool
 
+    def test_public_pool_total_staked_reflects_real_stakes(self, store, user_a, client):
+        """Invariant 1: public pool response must change when a real stake is created."""
+        uid = user_a["earn_user_id"]
+        _link_wallet(store, uid, "THR" + "bb" * 20)
+        _seed_thc_confirmed(store, uid, "200")
+        resp_before = client.get("/api/earn/pools/public")
+        pools_before = {p["pool_id"]: p for p in resp_before.get_json()["pools"]}
+        thc_pool = next(p for p in pools_before.values() if p["token"] == "THC")
+        staked_before = Decimal(thc_pool["total_staked"])
+        stakers_before = thc_pool["stakers"]
+        store.create_stake(uid, thc_pool["pool_id"], "50")
+        resp_after = client.get("/api/earn/pools/public")
+        pools_after = {p["pool_id"]: p for p in resp_after.get_json()["pools"]}
+        thc_after = pools_after[thc_pool["pool_id"]]
+        assert Decimal(thc_after["total_staked"]) == staked_before + Decimal("50")
+        assert thc_after["stakers"] == stakers_before + 1
+
+    def test_thr_stake_rejected_when_wallet_debit_unavailable(self, store, user_a):
+        """Invariant 1: THR position must not be created if wallet debit returns None."""
+        uid = user_a["earn_user_id"]
+        _link_wallet(store, uid, "THR" + "cc" * 20)
+        pools = store.staking_pools()
+        thr_pool = next(p for p in pools if p["token"] == "THR")
+        with patch.object(store, "_debit_wallet_for_stake", return_value=None):
+            with pytest.raises(EarnError, match="wallet_debit_unavailable"):
+                store.create_stake(uid, thr_pool["pool_id"], "10")
+        positions = store.staking_positions(uid)
+        thr_positions = [p for p in positions if p["pool_id"] == thr_pool["pool_id"]]
+        assert len(thr_positions) == 0, "No position should exist after failed debit"
+
+
+class TestPromoDeduplication:
+    """Invariant 2: one click → one promo → one survey session."""
+
+    @staticmethod
+    def _read(rel_path):
+        root = Path(__file__).parent.parent
+        return (root / rel_path).read_text()
+
+    def test_earn_web_promo_has_active_guard(self):
+        """showPromo must check and set _promoActive to prevent double overlays."""
+        src = self._read("templates/earn_beta.html")
+        fn_start = src.index("function showPromo(")
+        fn_block = src[fn_start:fn_start + 600]
+        assert "_promoActive" in fn_block, "showPromo must use _promoActive guard"
+        guard_idx = fn_block.index("_promoActive")
+        promise_idx = fn_block.index("Promise")
+        assert guard_idx < promise_idx, "Guard check must come before creating the promise"
+
+    def test_earn_pwa_promo_has_active_guard(self):
+        """showEarnPromo must check and set _earnPromoActive to prevent double overlays."""
+        src = self._read("public/wallet-pwa/app.js")
+        fn_start = src.index("function showEarnPromo(")
+        fn_block = src[fn_start:fn_start + 600]
+        assert "_earnPromoActive" in fn_block, "showEarnPromo must use _earnPromoActive guard"
+        guard_idx = fn_block.index("_earnPromoActive")
+        promise_idx = fn_block.index("Promise")
+        assert guard_idx < promise_idx, "Guard check must come before creating the promise"
+
+    def test_earn_tab_dedup_prevents_duplicate_sessions(self):
+        """ThronosEarnTabs.open must return existing promise for open tabs."""
+        src = self._read("public/wallet-pwa/earn-provider-tabs.js")
+        assert "entry.tab.closed" in src, "Must check if existing tab is still open"
+        assert "entry.tab.focus" in src, "Must focus existing tab instead of opening new one"
+        assert "return entry.promise" in src, "Must return existing promise for dedup"
+
+    def test_earn_web_promo_resets_guard_on_done(self):
+        """The done() cleanup in showPromo must reset _promoActive."""
+        src = self._read("templates/earn_beta.html")
+        fn_start = src.index("function showPromo(")
+        fn_block = src[fn_start:fn_start + 1600]
+        done_idx = fn_block.index("function done()")
+        done_line = fn_block[done_idx:fn_block.index("\n", done_idx)]
+        assert "_promoActive = false" in done_line, "done() must reset _promoActive"
+
+    def test_earn_pwa_promo_resets_guard_on_done(self):
+        """The done() cleanup in showEarnPromo must reset _earnPromoActive."""
+        src = self._read("public/wallet-pwa/app.js")
+        fn_start = src.index("function showEarnPromo(")
+        fn_block = src[fn_start:fn_start + 2500]
+        done_idx = fn_block.index("function done()")
+        done_line = fn_block[done_idx:fn_block.index("\n", done_idx)]
+        assert "_earnPromoActive = false" in done_line, "done() must reset _earnPromoActive"
+
 
 class TestAdPlacementRegression:
     """Verify ad interstitials appear on Earn surfaces but NOT on wallet screens."""

@@ -1500,6 +1500,8 @@ class EarnAccountStore:
             wallet_tx_id = None
             if token == "THR":
                 wallet_tx_id = self._debit_wallet_for_stake(link["wallet_address"], amt)
+                if wallet_tx_id is None:
+                    raise EarnError("wallet_debit_unavailable")
             elif token == "THC":
                 available = self._available_thc_for_staking(con, earn_user_id)
                 if available < amt:

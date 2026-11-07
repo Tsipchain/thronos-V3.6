@@ -332,8 +332,11 @@
     { title: 'BitcoTasks', desc: 'Complete simple tasks and offers to earn crypto rewards instantly.', url: 'https://bitcotasks.com/promote/81663', badge: 'Sponsor', cta: 'Visit BitcoTasks' },
   ];
   let promoIndex = Math.floor(Math.random() * promoAds.length);
+  let _promoActive = false;
 
   function showPromo(durationSec) {
+    if (_promoActive) return Promise.resolve();
+    _promoActive = true;
     durationSec = durationSec || 15;
     return new Promise(resolve => {
       const ad = promoAds[promoIndex++ % promoAds.length];
@@ -358,7 +361,7 @@
       countdownEl.textContent = t('countdown').replace('{s}', seconds);
       skipBtn.style.display = 'none';
       overlay.style.display = 'flex';
-      function done() { clearInterval(timer); overlay.style.display = 'none'; skipBtn.removeEventListener('click', done); resolve(); }
+      function done() { clearInterval(timer); overlay.style.display = 'none'; skipBtn.removeEventListener('click', done); _promoActive = false; resolve(); }
       const timer = setInterval(() => {
         seconds--;
         if (seconds <= 5) skipBtn.style.display = '';

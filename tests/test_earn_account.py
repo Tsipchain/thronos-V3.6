@@ -1595,11 +1595,13 @@ def _link_wallet(store, earn_user_id, wallet_address, public_key="02" + "ab" * 3
 def _seed_thr_balance(address, amount):
     """Seed THR wallet balance for testing."""
     try:
+        import os, tempfile
+        os.environ.setdefault("EDU_DB_PATH", os.path.join(tempfile.gettempdir(), "test_l2e_edu.db"))
         import server as srv
         ledger = srv.load_json(srv.LEDGER_FILE, {})
         ledger[address] = round(float(amount), 6)
         srv.save_json(srv.LEDGER_FILE, ledger)
-    except ImportError:
+    except (ImportError, PermissionError, OSError):
         pass
 
 

@@ -2288,11 +2288,11 @@ class EarnAccountStore:
                 if len(results) >= limit:
                     break
                 targets = str(r["country_targets"] or "").strip()
-                if targets and country:
+                if targets:
                     allowed = {
                         c.strip().upper() for c in targets.split(",") if c.strip()
                     }
-                    if country.upper() not in allowed:
+                    if not country or country.upper() not in allowed:
                         continue
                 tb = Decimal(r["total_budget"])
                 if tb > 0 and Decimal(r["spent"]) >= tb:
@@ -4041,22 +4041,11 @@ def register_earn_account_routes(
 
     @app.post("/api/earn/ads/serve/event")
     def earn_ads_serve_event():
-        data = request.get_json(silent=True) or {}
-        campaign_id = str(data.get("campaign_id", "")).strip()
-        creative_id = str(data.get("creative_id", "")).strip()
-        event_type = str(data.get("event_type", "")).strip()
-        if not campaign_id or not creative_id or not event_type:
-            return jsonify(ok=False, error="missing_fields"), 400
-        country = str(data.get("country", "")).strip()
-        viewer_id = str(data.get("viewer_id", "")).strip() or None
-        try:
-            result = store.record_campaign_event(
-                campaign_id, creative_id, event_type,
-                country=country, viewer_id=viewer_id,
-            )
-        except EarnError as exc:
-            return jsonify(ok=False, error=str(exc)), 400
-        return jsonify(ok=True, **result)
+        # This endpoint previously accepted arbitrary client-supplied IDs and
+        # could debit a funded THC escrow without a verified view or click.
+        # Keep paid delivery closed until a server-issued, single-use proof
+        # binds creative, placement, trusted geo and a unique viewer.
+        return jsonify(ok=False, error="verified_ad_event_required"), 503
 
     @app.get("/api/earn/ads/campaign/<campaign_id>/report")
     def earn_campaign_report(campaign_id):

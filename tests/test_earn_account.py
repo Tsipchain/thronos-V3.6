@@ -16,6 +16,7 @@ Covers:
 """
 import hashlib
 import os
+import secrets
 import sys
 import threading
 import time
@@ -1591,6 +1592,29 @@ def _link_wallet(store, earn_user_id, wallet_address, public_key="02" + "ab" * 3
         )
 
 
+def _seed_thr_balance(address, amount):
+    """Seed THR wallet balance for testing."""
+    try:
+        import os, tempfile
+        os.environ.setdefault("EDU_DB_PATH", os.path.join(tempfile.gettempdir(), "test_l2e_edu.db"))
+        import server as srv
+        ledger = srv.load_json(srv.LEDGER_FILE, {})
+        ledger[address] = round(float(amount), 6)
+        srv.save_json(srv.LEDGER_FILE, ledger)
+    except (ImportError, PermissionError, OSError):
+        pass
+
+
+def _seed_thc_confirmed(store, earn_user_id, amount):
+    """Seed confirmed THC balance for testing."""
+    store.record_thc_credit(earn_user_id, "test_seed", f"seed-{secrets.token_hex(4)}", str(amount))
+    with store._tx() as con:
+        con.execute(
+            "UPDATE thc_ledger SET state='confirmed' WHERE earn_user_id=? AND state='pending'",
+            (earn_user_id,),
+        )
+
+
 class TestStakingPool:
     def test_list_pools_returns_default_pools(self, store, user_a):
         pools = store.staking_pools()
@@ -1611,19 +1635,26 @@ class TestStakingPool:
     def test_stake_and_unstake_flow(self, store, user_a):
         uid = user_a["earn_user_id"]
         _link_wallet(store, uid, "THR" + "A" * 40)
+        _seed_thc_confirmed(store, uid, "100")
         pools = store.staking_pools()
         thc_pool = next(p for p in pools if p["token"] == "THC")
         pos = store.create_stake(uid, thc_pool["pool_id"], "50")
         assert pos["status"] == "active"
         assert Decimal(pos["amount"]) == Decimal("50")
+        balance = store.thc_balance(uid)
+        assert Decimal(balance["available"]) == Decimal("50.000000")
+        assert Decimal(balance["staked"]) == Decimal("50.000000")
         positions = store.staking_positions(uid)
         assert len(positions) == 1
         assert positions[0]["position_id"] == pos["position_id"]
         assert Decimal(positions[0]["projected_rewards"]) >= 0
         result = store.request_unstake(uid, pos["position_id"])
-        assert result["status"] == "unstaking"
+        assert result["status"] == "unstaked"
+        balance_after = store.thc_balance(uid)
+        assert Decimal(balance_after["available"]) == Decimal("100.000000")
+        assert Decimal(balance_after["staked"]) == Decimal("0.000000")
         positions = store.staking_positions(uid)
-        assert positions[0]["status"] == "unstaking"
+        assert positions[0]["status"] == "unstaked"
 
     def test_stake_below_minimum_rejected(self, store, user_a):
         uid = user_a["earn_user_id"]
@@ -1642,7 +1673,9 @@ class TestStakingPool:
 
     def test_pool_total_staked_updates(self, store, user_a):
         uid = user_a["earn_user_id"]
-        _link_wallet(store, uid, "THR" + "D" * 40)
+        addr = "THR" + "D" * 40
+        _link_wallet(store, uid, addr)
+        _seed_thr_balance(addr, 100)
         pools = store.staking_pools()
         thr_pool = next(p for p in pools if p["token"] == "THR")
         store.create_stake(uid, thr_pool["pool_id"], "5")
@@ -1656,6 +1689,7 @@ class TestStakingPool:
         token = _login(client)
         uid = user_a["earn_user_id"]
         _link_wallet(store, uid, "THR" + "E" * 40)
+        _seed_thc_confirmed(store, uid, "100")
         resp = client.get("/api/earn/staking/pools", headers=_auth(token))
         assert resp.status_code == 200
         data = resp.get_json()
@@ -1683,15 +1717,329 @@ class TestStakingPool:
         uid_a = user_a["earn_user_id"]
         uid_b = user_b["earn_user_id"]
         _link_wallet(store, uid_a, "THR" + "F" * 40)
+        _seed_thc_confirmed(store, uid_a, "50")
         pools = store.staking_pools()
-        pos = store.create_stake(uid_a, pools[0]["pool_id"], "10")
+        thc_pool = next(p for p in pools if p["token"] == "THC")
+        pos = store.create_stake(uid_a, thc_pool["pool_id"], "10")
         with pytest.raises(EarnError, match="position_not_found"):
             store.request_unstake(uid_b, pos["position_id"])
 
     def test_staking_uses_decimal_precision(self, store, user_a):
         uid = user_a["earn_user_id"]
         _link_wallet(store, uid, "THR" + "1" * 40)
+        _seed_thc_confirmed(store, uid, "50")
         pools = store.staking_pools()
         thc_pool = next(p for p in pools if p["token"] == "THC")
         pos = store.create_stake(uid, thc_pool["pool_id"], "10.123456789")
         assert pos["amount"] == "10.123456"
+
+    def test_thr_stake_debits_wallet(self, store, user_a):
+        uid = user_a["earn_user_id"]
+        addr = "THR" + "ab" * 20
+        _link_wallet(store, uid, addr)
+        _seed_thr_balance(addr, 50)
+        pools = store.staking_pools()
+        thr_pool = next(p for p in pools if p["token"] == "THR")
+        pos = store.create_stake(uid, thr_pool["pool_id"], "10")
+        assert pos["status"] == "active"
+        assert pos["wallet_tx_id"] is not None
+        try:
+            import server as srv
+            ledger = srv.load_json(srv.LEDGER_FILE, {})
+            assert ledger[addr] == 40.0
+        except ImportError:
+            pass
+        result = store.request_unstake(uid, pos["position_id"])
+        assert result["status"] == "unstaked"
+        assert result["unstake_tx_id"] is not None
+        try:
+            import server as srv
+            ledger = srv.load_json(srv.LEDGER_FILE, {})
+            assert ledger[addr] == 50.0
+        except ImportError:
+            pass
+
+    def test_thc_stake_insufficient_balance_rejected(self, store, user_a):
+        uid = user_a["earn_user_id"]
+        _link_wallet(store, uid, "THR" + "Z" * 40)
+        _seed_thc_confirmed(store, uid, "5")
+        pools = store.staking_pools()
+        thc_pool = next(p for p in pools if p["token"] == "THC")
+        with pytest.raises(EarnError, match="insufficient_thc_balance"):
+            store.create_stake(uid, thc_pool["pool_id"], "10")
+
+    def test_thr_stake_insufficient_balance_rejected(self, store, user_a):
+        uid = user_a["earn_user_id"]
+        addr = "THR" + "cd" * 20
+        _link_wallet(store, uid, addr)
+        _seed_thr_balance(addr, 0.5)
+        pools = store.staking_pools()
+        thr_pool = next(p for p in pools if p["token"] == "THR")
+        with pytest.raises(EarnError, match="insufficient_thr_balance"):
+            store.create_stake(uid, thr_pool["pool_id"], "5")
+
+    def test_unstake_idempotent_already_unstaked(self, store, user_a):
+        uid = user_a["earn_user_id"]
+        _link_wallet(store, uid, "THR" + "ee" * 20)
+        _seed_thc_confirmed(store, uid, "50")
+        pools = store.staking_pools()
+        thc_pool = next(p for p in pools if p["token"] == "THC")
+        pos = store.create_stake(uid, thc_pool["pool_id"], "10")
+        result1 = store.request_unstake(uid, pos["position_id"])
+        assert result1["status"] == "unstaked"
+        result2 = store.request_unstake(uid, pos["position_id"])
+        assert result2["status"] == "unstaked"
+        assert result2["position_id"] == pos["position_id"]
+
+    def test_stake_unstake_records_chain_history(self, store, user_a):
+        uid = user_a["earn_user_id"]
+        addr = "THR" + "ab" * 20
+        _link_wallet(store, uid, addr)
+        _seed_thr_balance(addr, 100)
+        pools = store.staking_pools()
+        thr_pool = next(p for p in pools if p["token"] == "THR")
+        pos = store.create_stake(uid, thr_pool["pool_id"], "10")
+        assert pos["wallet_tx_id"] is not None
+        assert pos["wallet_tx_id"].startswith("TX-STAKE-")
+        result = store.request_unstake(uid, pos["position_id"])
+        assert result["unstake_tx_id"] is not None
+        assert result["unstake_tx_id"].startswith("TX-UNSTAKE-")
+
+
+class TestLeaderboardFiltering:
+    def test_leaderboard_period_monthly_default(self, store, user_a):
+        data = store.leaderboard(caller_user_id=user_a["earn_user_id"])
+        assert "campaign_id" in data
+        assert "entries" in data
+        assert "last_updated" in data
+        assert data["last_updated"] > 0
+        assert data["your_score"] is not None
+
+    def test_leaderboard_period_weekly(self, store, user_a):
+        data = store.leaderboard(
+            caller_user_id=user_a["earn_user_id"], period="weekly",
+        )
+        assert data["period"] == "weekly"
+        assert "entries" in data
+        assert "last_updated" in data
+
+    def test_leaderboard_period_all_time(self, store, user_a):
+        data = store.leaderboard(
+            caller_user_id=user_a["earn_user_id"], period="all_time",
+        )
+        assert data["period"] == "all_time"
+        assert "entries" in data
+
+    def test_leaderboard_no_private_addresses_in_entries(self, store, user_a, user_b):
+        uid_a = user_a["earn_user_id"]
+        addr = "THR" + "11" * 20
+        _link_wallet(store, uid_a, addr)
+        _seed_thc_confirmed(store, uid_a, "100")
+        data = store.leaderboard()
+        for entry in data.get("entries", []):
+            assert "THR" not in entry.get("display_name", "")
+            assert "wallet_address" not in entry
+            assert "earn_user_id" not in entry
+            assert "email" not in entry
+
+    def test_leaderboard_excludes_unverified_rewards(self, store, user_a):
+        uid = user_a["earn_user_id"]
+        store.record_thc_credit(uid, "manual_test", f"manual-{secrets.token_hex(4)}", "50")
+        data = store.leaderboard(caller_user_id=uid)
+        assert data["total_active"] == 0
+
+    def test_leaderboard_route_no_auth_returns_data(self, store, user_a, client):
+        resp = client.get("/api/earn/leaderboard")
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["ok"] is True
+        assert "entries" in body
+        assert body.get("your_rank") is None
+
+    def test_leaderboard_route_period_param(self, store, user_a, client):
+        token = _login(client)
+        resp = client.get("/api/earn/leaderboard?period=weekly", headers=_auth(token))
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["ok"] is True
+        assert body.get("period") == "weekly"
+
+
+class TestPublicPoolRewards:
+    def test_public_pools_no_auth_required(self, store, user_a, client):
+        resp = client.get("/api/earn/pools/public")
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["ok"] is True
+        assert len(body["pools"]) >= 2
+        assert "last_updated" in body
+
+    def test_public_pools_no_user_positions_exposed(self, store, user_a, client):
+        uid = user_a["earn_user_id"]
+        _link_wallet(store, uid, "THR" + "aa" * 20)
+        _seed_thc_confirmed(store, uid, "100")
+        pools = store.staking_pools()
+        thc_pool = next(p for p in pools if p["token"] == "THC")
+        store.create_stake(uid, thc_pool["pool_id"], "20")
+        resp = client.get("/api/earn/pools/public")
+        body = resp.get_json()
+        for pool in body["pools"]:
+            assert "wallet_address" not in pool
+            assert "earn_user_id" not in pool
+            assert "positions" not in pool
+
+    def test_pool_positions_require_auth(self, store, client):
+        resp = client.get("/api/earn/staking/positions")
+        assert resp.status_code == 401
+
+    def test_pool_rewards_real_data(self, store, user_a, client):
+        resp = client.get("/api/earn/pools/public")
+        body = resp.get_json()
+        assert body["ok"] is True
+        for pool in body["pools"]:
+            assert "base_apy" in pool
+            assert "total_staked" in pool
+            assert "stakers" in pool
+            assert "token" in pool
+
+    def test_public_pool_total_staked_reflects_real_stakes(self, store, user_a, client):
+        """Invariant 1: public pool response must change when a real stake is created."""
+        uid = user_a["earn_user_id"]
+        _link_wallet(store, uid, "THR" + "bb" * 20)
+        _seed_thc_confirmed(store, uid, "200")
+        resp_before = client.get("/api/earn/pools/public")
+        pools_before = {p["pool_id"]: p for p in resp_before.get_json()["pools"]}
+        thc_pool = next(p for p in pools_before.values() if p["token"] == "THC")
+        staked_before = Decimal(thc_pool["total_staked"])
+        stakers_before = thc_pool["stakers"]
+        store.create_stake(uid, thc_pool["pool_id"], "50")
+        resp_after = client.get("/api/earn/pools/public")
+        pools_after = {p["pool_id"]: p for p in resp_after.get_json()["pools"]}
+        thc_after = pools_after[thc_pool["pool_id"]]
+        assert Decimal(thc_after["total_staked"]) == staked_before + Decimal("50")
+        assert thc_after["stakers"] == stakers_before + 1
+
+    def test_thr_stake_rejected_when_wallet_debit_unavailable(self, store, user_a):
+        """Invariant 1: THR position must not be created if wallet debit returns None."""
+        uid = user_a["earn_user_id"]
+        _link_wallet(store, uid, "THR" + "cc" * 20)
+        pools = store.staking_pools()
+        thr_pool = next(p for p in pools if p["token"] == "THR")
+        with patch.object(store, "_debit_wallet_for_stake", return_value=None):
+            with pytest.raises(EarnError, match="wallet_debit_unavailable"):
+                store.create_stake(uid, thr_pool["pool_id"], "10")
+        positions = store.staking_positions(uid)
+        thr_positions = [p for p in positions if p["pool_id"] == thr_pool["pool_id"]]
+        assert len(thr_positions) == 0, "No position should exist after failed debit"
+
+
+class TestPromoDeduplication:
+    """Invariant 2: one click → one promo → one survey session."""
+
+    @staticmethod
+    def _read(rel_path):
+        root = Path(__file__).parent.parent
+        return (root / rel_path).read_text()
+
+    def test_earn_web_promo_has_active_guard(self):
+        """showPromo must check and set _promoActive to prevent double overlays."""
+        src = self._read("templates/earn_beta.html")
+        fn_start = src.index("function showPromo(")
+        fn_block = src[fn_start:fn_start + 600]
+        assert "_promoActive" in fn_block, "showPromo must use _promoActive guard"
+        guard_idx = fn_block.index("_promoActive")
+        promise_idx = fn_block.index("Promise")
+        assert guard_idx < promise_idx, "Guard check must come before creating the promise"
+
+    def test_earn_pwa_promo_has_active_guard(self):
+        """showEarnPromo must check and set _earnPromoActive to prevent double overlays."""
+        src = self._read("public/wallet-pwa/app.js")
+        fn_start = src.index("function showEarnPromo(")
+        fn_block = src[fn_start:fn_start + 600]
+        assert "_earnPromoActive" in fn_block, "showEarnPromo must use _earnPromoActive guard"
+        guard_idx = fn_block.index("_earnPromoActive")
+        promise_idx = fn_block.index("Promise")
+        assert guard_idx < promise_idx, "Guard check must come before creating the promise"
+
+    def test_earn_tab_dedup_prevents_duplicate_sessions(self):
+        """ThronosEarnTabs.open must return existing promise for open tabs."""
+        src = self._read("public/wallet-pwa/earn-provider-tabs.js")
+        assert "entry.tab.closed" in src, "Must check if existing tab is still open"
+        assert "entry.tab.focus" in src, "Must focus existing tab instead of opening new one"
+        assert "return entry.promise" in src, "Must return existing promise for dedup"
+
+    def test_earn_web_promo_resets_guard_on_done(self):
+        """The done() cleanup in showPromo must reset _promoActive."""
+        src = self._read("templates/earn_beta.html")
+        fn_start = src.index("function showPromo(")
+        fn_block = src[fn_start:fn_start + 1600]
+        done_idx = fn_block.index("function done()")
+        done_line = fn_block[done_idx:fn_block.index("\n", done_idx)]
+        assert "_promoActive = false" in done_line, "done() must reset _promoActive"
+
+    def test_earn_pwa_promo_resets_guard_on_done(self):
+        """The done() cleanup in showEarnPromo must reset _earnPromoActive."""
+        src = self._read("public/wallet-pwa/app.js")
+        fn_start = src.index("function showEarnPromo(")
+        fn_block = src[fn_start:fn_start + 2500]
+        done_idx = fn_block.index("function done()")
+        done_line = fn_block[done_idx:fn_block.index("\n", done_idx)]
+        assert "_earnPromoActive = false" in done_line, "done() must reset _earnPromoActive"
+
+
+class TestAdPlacementRegression:
+    """Verify ad interstitials appear on Earn surfaces but NOT on wallet screens."""
+
+    @staticmethod
+    def _read(rel_path):
+        root = Path(__file__).parent.parent
+        return (root / rel_path).read_text()
+
+    def test_earn_web_cpx_shows_ad_before_open(self):
+        src = self._read("templates/earn_beta.html")
+        cpx_idx = src.index("earn-surveys")
+        after_cpx = src[cpx_idx:]
+        promo_call = after_cpx.index("showPromo(")
+        provider_call = after_cpx.index("openProvider('cpx'")
+        assert promo_call < provider_call, "Earn web must show ad before opening CPX surveys"
+
+    def test_earn_web_timewall_shows_ad_before_open(self):
+        src = self._read("templates/earn_beta.html")
+        tw_idx = src.index("timewallButton.addEventListener")
+        after_tw = src[tw_idx:]
+        promo_call = after_tw.index("showPromo(")
+        provider_call = after_tw.index("openProvider('timewall'")
+        assert promo_call < provider_call, "Earn web must show ad before opening TimeWall"
+
+    def test_earn_pwa_cpx_shows_ad_before_open(self):
+        src = self._read("public/wallet-pwa/app.js")
+        handler_idx = src.index("data-earn-provider]")
+        after_handler = src[handler_idx:]
+        assert "provider === 'cpx'" in after_handler, "Earn PWA must trigger ad for CPX"
+        assert "showEarnPromo" in after_handler
+
+    def test_earn_pwa_timewall_shows_ad_before_open(self):
+        src = self._read("public/wallet-pwa/app.js")
+        handler_idx = src.index("data-earn-provider]")
+        after_handler = src[handler_idx:]
+        assert "provider === 'timewall'" in after_handler, "Earn PWA must trigger ad for TimeWall"
+        assert "showEarnPromo" in after_handler
+
+    def test_wallet_home_has_no_ads(self):
+        src = self._read("public/wallet-pwa/app.js")
+        home_start = src.index("<!-- Quick actions")
+        home_end = src.index("</div>\n  `);", home_start)
+        home_html = src[home_start:home_end]
+        assert "showEarnPromo" not in home_html
+        assert "showPromo" not in home_html
+        assert "walletAdsSidebar" not in home_html
+        assert "earn/ads" not in home_html
+
+    def test_wallet_send_receive_has_no_ads(self):
+        src = self._read("public/wallet-pwa/app.js")
+        for fn_name in ("function showSend(", "function showReceive("):
+            fn_idx = src.index(fn_name)
+            fn_block = src[fn_idx:fn_idx + 3000]
+            assert "showEarnPromo" not in fn_block, f"{fn_name} must not contain ad calls"
+            assert "showPromo" not in fn_block, f"{fn_name} must not contain ad calls"
+            assert "earn/ads" not in fn_block, f"{fn_name} must not reference ad API"

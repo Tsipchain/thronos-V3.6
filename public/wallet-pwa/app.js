@@ -2130,6 +2130,81 @@ function _formatEarnClearance(entry) {
   return `Estimated clearance: ${_formatEarnReceiptDate(eta)} (${remaining} day${remaining === 1 ? '' : 's'} remaining)`;
 }
 
+// ─── Earn ad interstitial (Earn section only — never on wallet main) ─────────
+const _EARN_HOUSE_ADS = [
+  { title: 'Earn THC Rewards', desc: 'Complete tasks and surveys to earn THC on Thronos Earn.', url: '/earn', badge: 'Thronos Earn', cta: 'Start Earning' },
+  { title: 'LitBits Faucet', desc: 'Earn free Bitcoin daily with the LitBits Faucet on Telegram.', url: 'https://t.me/litebits_faucet_bot/app?startapp=BPS0MGLI', badge: 'Thronos Recommends', cta: 'Open Faucet' },
+];
+let _earnPromoCache = null;
+let _earnPromoIndex = Math.floor(Math.random() * 100);
+
+async function _fetchEarnAds() {
+  if (_earnPromoCache) return _earnPromoCache;
+  try {
+    const res = await fetch(`${API_WRITE}/api/earn/ads?placement=earn`, { credentials: 'include', cache: 'no-store' });
+    const data = await res.json().catch(() => null);
+    if (res.ok && data?.ok && Array.isArray(data.ads) && data.ads.length) {
+      _earnPromoCache = data.ads.map(a => ({
+        title: a.title || 'Sponsored',
+        desc: '',
+        url: a.target_url || '#',
+        badge: 'Sponsored',
+        cta: 'Learn More',
+        ad_id: a.ad_id,
+      }));
+      return _earnPromoCache;
+    }
+  } catch (_) {}
+  return null;
+}
+
+let _earnPromoActive = false;
+function showEarnPromo(durationSec) {
+  if (_earnPromoActive) return Promise.resolve();
+  _earnPromoActive = true;
+  durationSec = durationSec || 10;
+  return new Promise(resolve => {
+    _fetchEarnAds().then(dynamicAds => {
+      const pool = dynamicAds || _EARN_HOUSE_ADS;
+      const ad = pool[_earnPromoIndex++ % pool.length];
+      const overlay = document.createElement('div');
+      overlay.style.cssText = 'position:fixed;inset:0;z-index:10000;background:#070612ee;display:flex;align-items:center;justify-content:center;padding:20px';
+      overlay.innerHTML = `
+        <div style="max-width:380px;width:100%;background:#17152f;border:1px solid #453b78;border-radius:16px;padding:22px;text-align:center">
+          <div style="font-size:.66rem;letter-spacing:.1em;color:#f2c14e;margin-bottom:8px">${escHtml(ad.badge || 'Thronos')}</div>
+          <div style="font-size:1.1rem;font-weight:700;margin-bottom:6px">${escHtml(ad.title)}</div>
+          ${ad.desc ? `<p style="font-size:.82rem;color:var(--muted);line-height:1.5;margin:0 0 14px">${escHtml(ad.desc)}</p>` : ''}
+          <a id="earnPromoVisit" href="${escHtml(ad.url)}" target="_blank" rel="noopener noreferrer sponsored" class="btn btn--primary" style="display:inline-block;padding:10px 24px;text-decoration:none;margin-bottom:10px">${escHtml(ad.cta || 'Visit')}</a>
+          <div id="earnPromoCountdown" style="font-size:.76rem;color:var(--muted);margin-bottom:6px"></div>
+          <button id="earnPromoSkip" type="button" style="display:none;background:none;border:1px solid #453b78;border-radius:8px;color:var(--muted);padding:7px 16px;font-size:.76rem;cursor:pointer">Skip</button>
+        </div>`;
+      document.body.appendChild(overlay);
+      if (ad.ad_id) {
+        fetch(`${API_WRITE}/api/earn/ads/impression`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ad_id: ad.ad_id }) }).catch(() => {});
+      }
+      const visitBtn = overlay.querySelector('#earnPromoVisit');
+      const countdownEl = overlay.querySelector('#earnPromoCountdown');
+      const skipBtn = overlay.querySelector('#earnPromoSkip');
+      let seconds = durationSec;
+      countdownEl.textContent = `Continuing in ${seconds}s…`;
+      function done() { clearInterval(timer); overlay.remove(); _earnPromoActive = false; resolve(); }
+      visitBtn.addEventListener('click', () => {
+        if (ad.ad_id) {
+          fetch(`${API_WRITE}/api/earn/ads/click`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ad_id: ad.ad_id }) }).catch(() => {});
+        }
+        done();
+      });
+      skipBtn.addEventListener('click', done);
+      const timer = setInterval(() => {
+        seconds--;
+        if (seconds <= 5) skipBtn.style.display = '';
+        if (seconds > 0) { countdownEl.textContent = `Continuing in ${seconds}s…`; return; }
+        done();
+      }, 1000);
+    });
+  });
+}
+
 async function showEarn(options = {}) {
   render(`
     <div class="screen">
@@ -2229,12 +2304,24 @@ async function showEarn(options = {}) {
       <section id="earnPwaLeaderboard" aria-label="30-day Earn leaderboard"></section>
       <aside id="walletAdsSidebar" aria-label="Sponsored offers" style="display:none;margin-top:12px"></aside>
       <section id="walletReferralPanel" aria-label="Earn referrals" style="margin-top:12px"></section>
+      ${balance.staked && balance.staked !== '0.000000' ? `
+      <div style="margin-top:16px;border-top:1px solid #ffffff14;padding-top:14px">
+        <div style="font-size:.7rem;color:var(--muted);letter-spacing:.08em;margin-bottom:8px">EARN REWARDS SUMMARY</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <div style="background:#0d0a1a;border-radius:8px;padding:10px"><div style="font-size:.62rem;color:var(--muted)">STAKED THC</div><div style="font-size:.92rem;color:#f2c14e;font-weight:700">${escHtml(balance.staked)} THC</div></div>
+          <div style="background:#0d0a1a;border-radius:8px;padding:10px"><div style="font-size:.62rem;color:var(--muted)">TOTAL EARNED</div><div style="font-size:.92rem;color:#55d6a7;font-weight:700">${escHtml(balance.total_earned || '0.000000')} THC</div></div>
+        </div>
+      </div>` : ''}
       <div id="earnStakingSection" style="margin-top:16px;border-top:1px solid #ffffff14;padding-top:14px">
         <div style="font-size:.7rem;color:var(--muted);letter-spacing:.08em;margin-bottom:10px">STAKING POOLS</div>
         <div id="earnStakingPools"></div>
         <div id="earnStakingPositions" style="display:none;margin-top:10px">
           <div style="font-size:.7rem;color:var(--muted);letter-spacing:.08em;margin-bottom:6px">YOUR POSITIONS</div>
           <div id="earnStakingPosList"></div>
+        </div>
+        <div id="earnStakingRewards" style="display:none;margin-top:10px">
+          <div style="font-size:.7rem;color:var(--muted);letter-spacing:.08em;margin-bottom:6px">ACCUMULATED POOL REWARDS</div>
+          <div id="earnStakingRewardsList"></div>
         </div>
       </div>
     `;
@@ -2341,10 +2428,12 @@ async function showEarn(options = {}) {
       }
     };
     document.querySelectorAll('[data-earn-provider]').forEach(button => {
-      button.addEventListener('click', () => {
+      button.addEventListener('click', async () => {
         const provider = button.dataset.earnProvider;
         const definition = providerDefinitions[provider];
-        if (definition) openEarnProvider(provider, definition);
+        if (!definition) return;
+        if (provider === 'timewall' || provider === 'cpx') await showEarnPromo(10);
+        openEarnProvider(provider, definition);
       });
     });
     try {
@@ -2457,6 +2546,31 @@ async function showEarn(options = {}) {
             } catch {} finally { btn.disabled = false; }
           });
         });
+        const activePositions = posData.positions.filter(p => p.status === 'active');
+        if (activePositions.length) {
+          const byToken = {};
+          for (const pos of activePositions) {
+            const t = pos.token || '?';
+            if (!byToken[t]) byToken[t] = { staked: 0, rewards: 0 };
+            byToken[t].staked += parseFloat(pos.amount) || 0;
+            byToken[t].rewards += parseFloat(pos.projected_rewards) || 0;
+          }
+          const rewardsEl = document.getElementById('earnStakingRewards');
+          const rewardsList = document.getElementById('earnStakingRewardsList');
+          rewardsEl.style.display = '';
+          rewardsList.innerHTML = Object.entries(byToken).map(([token, data]) => `
+            <div style="background:#0d0a1a;border-radius:8px;padding:10px;margin-bottom:5px;display:flex;justify-content:space-between;align-items:center">
+              <div>
+                <div style="font-size:.76rem;color:var(--muted)">${escHtml(token)} staked</div>
+                <div style="font-size:.92rem;font-weight:700;color:#f2c14e">${data.staked.toFixed(6)} ${escHtml(token)}</div>
+              </div>
+              <div style="text-align:right">
+                <div style="font-size:.76rem;color:var(--muted)">Projected rewards</div>
+                <div style="font-size:.92rem;font-weight:700;color:#34d399">+${data.rewards.toFixed(6)} ${escHtml(token)}</div>
+              </div>
+            </div>
+          `).join('');
+        }
       }
     } catch {}
   } catch {

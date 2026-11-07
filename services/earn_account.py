@@ -71,6 +71,7 @@ _RATE_WINDOW = 900
 _RATE_MAX_ATTEMPTS = 5
 _RATE_LOCKOUT = 1800
 _WALLET_CHALLENGE_TTL = 300
+_ESCROW_INTENT_TTL = 300
 
 _THC_TRANSITIONS = {
     "pending":   {"confirmed", "reversed"},
@@ -128,11 +129,12 @@ def _validate_password(password: str) -> str:
 class EarnAccountStore:
     """SQLite-backed account-first Earn store."""
 
-    def __init__(self, db_path: str, identity_key: str):
+    def __init__(self, db_path: str, identity_key: str, settlement_adapter=None):
         if not identity_key or identity_key == "CHANGE_ME":
             raise EarnError("earn_identity_key_not_configured")
         self.db_path = db_path
         self._identity_key = identity_key.encode("utf-8")
+        self._settlement_adapter = settlement_adapter
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
@@ -360,7 +362,9 @@ class EarnAccountStore:
                     amount               TEXT NOT NULL,
                     status               TEXT NOT NULL DEFAULT 'active',
                     staked_at            INTEGER NOT NULL,
-                    unstake_requested_at INTEGER
+                    unstake_requested_at INTEGER,
+                    wallet_tx_id         TEXT,
+                    idempotency_key      TEXT
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_earn_staking_positions_user
@@ -389,6 +393,102 @@ class EarnAccountStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_earn_referrals_referrer
                     ON earn_referrals(referrer_id);
+
+                CREATE TABLE IF NOT EXISTS earn_ad_campaigns (
+                    campaign_id    TEXT PRIMARY KEY,
+                    advertiser_id  TEXT NOT NULL,
+                    name           TEXT NOT NULL,
+                    campaign_type  TEXT NOT NULL DEFAULT 'cpm',
+                    bid_amount     TEXT NOT NULL DEFAULT '1.000000',
+                    daily_budget   TEXT NOT NULL DEFAULT '0',
+                    total_budget   TEXT NOT NULL DEFAULT '0',
+                    country_targets TEXT DEFAULT '',
+                    placement      TEXT NOT NULL DEFAULT 'earn',
+                    status         TEXT NOT NULL DEFAULT 'pending_review',
+                    reject_reason  TEXT,
+                    impressions    INTEGER NOT NULL DEFAULT 0,
+                    clicks         INTEGER NOT NULL DEFAULT 0,
+                    spent          TEXT NOT NULL DEFAULT '0.000000',
+                    created_at     INTEGER NOT NULL,
+                    updated_at     INTEGER NOT NULL,
+                    starts_at      INTEGER,
+                    ends_at        INTEGER
+                );
+                CREATE INDEX IF NOT EXISTS idx_earn_ad_campaigns_advertiser
+                    ON earn_ad_campaigns(advertiser_id);
+                CREATE INDEX IF NOT EXISTS idx_earn_ad_campaigns_status
+                    ON earn_ad_campaigns(status);
+
+                CREATE TABLE IF NOT EXISTS earn_ad_creatives (
+                    creative_id  TEXT PRIMARY KEY,
+                    campaign_id  TEXT NOT NULL
+                        REFERENCES earn_ad_campaigns(campaign_id),
+                    title        TEXT NOT NULL,
+                    image_url    TEXT NOT NULL,
+                    target_url   TEXT NOT NULL,
+                    status       TEXT NOT NULL DEFAULT 'pending_review',
+                    reject_reason TEXT,
+                    created_at   INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_earn_ad_creatives_campaign
+                    ON earn_ad_creatives(campaign_id);
+
+                CREATE TABLE IF NOT EXISTS earn_ad_escrow (
+                    escrow_id      TEXT PRIMARY KEY,
+                    campaign_id    TEXT NOT NULL
+                        REFERENCES earn_ad_campaigns(campaign_id),
+                    advertiser_id  TEXT NOT NULL,
+                    action         TEXT NOT NULL,
+                    amount         TEXT NOT NULL,
+                    balance_after  TEXT NOT NULL,
+                    note           TEXT,
+                    idempotency_key TEXT UNIQUE,
+                    intent_id      TEXT,
+                    wallet_tx_id       TEXT,
+                    pool_receipt_id    TEXT,
+                    pool_position_id   TEXT,
+                    payload_hash       TEXT,
+                    settlement_status  TEXT NOT NULL DEFAULT 'pending',
+                    created_at     INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_earn_ad_escrow_campaign
+                    ON earn_ad_escrow(campaign_id);
+
+                CREATE TABLE IF NOT EXISTS earn_escrow_intents (
+                    intent_id       TEXT PRIMARY KEY,
+                    earn_user_id    TEXT NOT NULL
+                        REFERENCES earn_accounts(earn_user_id),
+                    campaign_id     TEXT NOT NULL
+                        REFERENCES earn_ad_campaigns(campaign_id),
+                    action          TEXT NOT NULL,
+                    amount          TEXT NOT NULL,
+                    nonce           TEXT NOT NULL UNIQUE,
+                    idempotency_key TEXT NOT NULL,
+                    wallet_address  TEXT,
+                    requires_wallet_sig INTEGER NOT NULL DEFAULT 1,
+                    expires_at      INTEGER NOT NULL,
+                    consumed_at     INTEGER,
+                    created_at      INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_earn_escrow_intents_nonce
+                    ON earn_escrow_intents(nonce);
+                CREATE INDEX IF NOT EXISTS idx_earn_escrow_intents_idem
+                    ON earn_escrow_intents(idempotency_key);
+
+                CREATE TABLE IF NOT EXISTS earn_ad_events (
+                    event_id      TEXT PRIMARY KEY,
+                    campaign_id   TEXT NOT NULL,
+                    creative_id   TEXT NOT NULL,
+                    event_type    TEXT NOT NULL,
+                    country       TEXT DEFAULT '',
+                    earn_user_id  TEXT,
+                    cost          TEXT NOT NULL DEFAULT '0.000000',
+                    created_at    INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_earn_ad_events_campaign
+                    ON earn_ad_events(campaign_id, created_at);
+                CREATE INDEX IF NOT EXISTS idx_earn_ad_events_type
+                    ON earn_ad_events(event_type, created_at);
             """)
             # Existing production Earn databases predate the provider
             # clearance and separate internal hold fields. SQLite lacks ADD COLUMN IF NOT
@@ -422,6 +522,16 @@ class EarnAccountStore:
             for row in rows:
                 self._attach_earn_hold_in_tx(con, row["entry_id"], row["first_received"])
             con.commit()
+            # Migration: add wallet_tx_id to staking positions for existing DBs
+            pos_cols = {
+                row[1] for row in con.execute("PRAGMA table_info(earn_staking_positions)")
+            }
+            if "wallet_tx_id" not in pos_cols:
+                con.execute("ALTER TABLE earn_staking_positions ADD COLUMN wallet_tx_id TEXT")
+                con.commit()
+            if "idempotency_key" not in pos_cols:
+                con.execute("ALTER TABLE earn_staking_positions ADD COLUMN idempotency_key TEXT")
+                con.commit()
         finally:
             con.close()
 
@@ -989,6 +1099,13 @@ class EarnAccountStore:
                 " FROM thc_ledger WHERE earn_user_id = ?",
                 (earn_user_id,),
             ).fetchall()
+            staked_rows = con.execute(
+                """SELECT sp.amount FROM earn_staking_positions sp
+                   JOIN earn_staking_pools p ON p.pool_id = sp.pool_id
+                   WHERE sp.earn_user_id = ? AND sp.status = 'active' AND p.token = 'THC'""",
+                (earn_user_id,),
+            ).fetchall()
+        staked_thc = sum((Decimal(r["amount"]) for r in staked_rows), Decimal(0))
         by_state: dict[str, Decimal] = {}
         earliest_clears: int | None = None
         earliest_hold: int | None = None
@@ -999,7 +1116,6 @@ class EarnAccountStore:
                 hold = int(r["earn_hold_until"] or 0)
                 if hold and (earliest_hold is None or hold < earliest_hold):
                     earliest_hold = hold
-                # Provider ETA stays distinct from the authorized internal hold.
                 eta = int(r["estimated_clearance_at"] or 0)
                 if eta and (earliest_clears is None or eta < earliest_clears):
                     earliest_clears = eta
@@ -1007,11 +1123,13 @@ class EarnAccountStore:
         payable = by_state.get("payable", Decimal("0"))
         paid = by_state.get("paid", Decimal("0"))
         pending = by_state.get("pending", Decimal("0"))
+        available = max(Decimal(0), confirmed + payable - staked_thc)
         result: dict[str, Any] = {
-            "available": str((confirmed + payable).quantize(_THC_SCALE)),
+            "available": str(available.quantize(_THC_SCALE)),
             "pending": str(pending.quantize(_THC_SCALE)),
             "total_earned": str((confirmed + payable + paid).quantize(_THC_SCALE)),
             "paid_out": str(paid.quantize(_THC_SCALE)),
+            "staked": str(staked_thc.quantize(_THC_SCALE)),
             "clearance_status": "provider_eta_pending",
             "clearance_message": "Clearance date not yet received from provider.",
         }
@@ -1078,18 +1196,35 @@ class EarnAccountStore:
             if not row:
                 raise EarnError("unknown_provider_user")
 
+    _VALID_LEADERBOARD_PERIODS = ("weekly", "monthly", "all_time")
+
     def leaderboard(
         self, *, limit: int = 50, caller_user_id: str | None = None,
-        at_time: int | None = None,
+        at_time: int | None = None, period: str = "monthly",
     ) -> dict[str, Any]:
-        """One 30-day cycle of verified receipts; pending score is provisional.
+        """Verified receipts leaderboard with period filtering.
 
         Only durable provider receipts may contribute. This read never clears
         rewards, releases funds or awards competition prizes. Boundaries use
         receipt time, so later clearance does not move a reward to another cycle.
+
+        period: 'weekly' (7 days), 'monthly' (30-day cycle, default), 'all_time'.
         """
+        if period not in self._VALID_LEADERBOARD_PERIODS:
+            period = "monthly"
         now = int(time.time()) if at_time is None else int(at_time)
         limit = min(max(limit, 1), 50)
+
+        if period == "weekly":
+            period_start = max(_LEADERBOARD_START, now - 7 * 86400)
+            period_end = _LEADERBOARD_END
+        elif period == "all_time":
+            period_start = 0
+            period_end = now + 1
+        else:
+            period_start = _LEADERBOARD_START
+            period_end = _LEADERBOARD_END
+
         with self._tx() as con:
             rows = con.execute(
                 f"""SELECT l.earn_user_id, l.amount, l.state
@@ -1099,7 +1234,7 @@ class EarnAccountStore:
                      AND COALESCE(l.received_at, l.created_at) < ?
                      AND COALESCE(l.received_at, l.created_at) <= ?
                      AND {_VERIFIED_PROVIDER_RECEIPT_SQL}""",
-                (_LEADERBOARD_START, _LEADERBOARD_END, now),
+                (period_start, period_end, now),
             ).fetchall()
 
         totals: dict[str, dict[str, Any]] = {}
@@ -1131,28 +1266,33 @@ class EarnAccountStore:
             entry = {
                 "rank": rank, "display_name": alias(uid),
                 "total_earned": str(score.quantize(_THC_SCALE)),
-                "pending_earned": str(total["pending"].quantize(_THC_SCALE)),
-                "cleared_earned": str(total["cleared"].quantize(_THC_SCALE)),
                 "completions": total["completions"],
                 "is_caller": uid == caller_user_id,
             }
             if uid == caller_user_id:
                 your_rank = rank
-                your_score = {key: entry[key] for key in your_score}
+                your_score = {
+                    "total_earned": str(score.quantize(_THC_SCALE)),
+                    "pending_earned": str(total["pending"].quantize(_THC_SCALE)),
+                    "cleared_earned": str(total["cleared"].quantize(_THC_SCALE)),
+                    "completions": total["completions"],
+                }
             if position <= limit:
                 entries.append(entry)
 
         return {
             "campaign_id": _LEADERBOARD_CAMPAIGN,
-            "starts_at": _LEADERBOARD_START, "ends_at": _LEADERBOARD_END,
-            "server_now": now, "seconds_remaining": max(0, _LEADERBOARD_END - now),
-            "phase": "upcoming" if now < _LEADERBOARD_START else "running" if now < _LEADERBOARD_END else "ended",
+            "period": period,
+            "starts_at": period_start, "ends_at": period_end,
+            "server_now": now, "seconds_remaining": max(0, period_end - now),
+            "phase": "upcoming" if now < period_start else "running" if now < period_end else "ended",
             "score_policy": "verified_provider_receipts_pending_and_cleared",
             "provisional": any(t["pending"] > 0 for t in totals.values()),
             "prizes_enabled": False,
             "total_active": len(ranked), "your_rank": your_rank,
             "your_score": your_score, "entries": entries,
             "loyalty": self.loyalty_status(caller_user_id),
+            "last_updated": now,
         }
 
     # ── Staking Pool ────────────────────────────────────────────────────
@@ -1267,8 +1407,54 @@ class EarnAccountStore:
                 })
             return result
 
+    def _debit_wallet_for_stake(
+        self, wallet_address: str, amount: Decimal,
+    ) -> str | None:
+        """Debit THR from wallet to staking pool vault (no fee). Returns tx_id or None if ledger unavailable."""
+        try:
+            from services.thr_ledger import stake_thr
+        except (ImportError, Exception):
+            return None
+        try:
+            tx = stake_thr(wallet_address, amount)
+        except ValueError as exc:
+            raise EarnError(str(exc))
+        return tx["tx_id"]
+
+    def _credit_wallet_for_unstake(
+        self, wallet_address: str, amount: Decimal, original_tx_id: str | None,
+    ) -> str | None:
+        """Credit THR back from staking pool vault to wallet (no fee). Returns tx_id or None if ledger unavailable."""
+        try:
+            from services.thr_ledger import unstake_thr
+        except (ImportError, Exception):
+            return None
+        try:
+            tx = unstake_thr(wallet_address, amount, original_tx_id or "")
+        except ValueError as exc:
+            raise EarnError(str(exc))
+        return tx["tx_id"]
+
+    def _available_thc_for_staking(self, con: sqlite3.Connection, earn_user_id: str) -> Decimal:
+        """Available THC minus active THC staking locks."""
+        rows = con.execute(
+            "SELECT state, amount FROM thc_ledger WHERE earn_user_id = ?",
+            (earn_user_id,),
+        ).fetchall()
+        confirmed = sum((Decimal(r["amount"]) for r in rows if r["state"] == "confirmed"), Decimal(0))
+        payable = sum((Decimal(r["amount"]) for r in rows if r["state"] == "payable"), Decimal(0))
+        staked_rows = con.execute(
+            """SELECT sp.amount FROM earn_staking_positions sp
+               JOIN earn_staking_pools p ON p.pool_id = sp.pool_id
+               WHERE sp.earn_user_id = ? AND sp.status = 'active' AND p.token = 'THC'""",
+            (earn_user_id,),
+        ).fetchall()
+        staked = sum((Decimal(r["amount"]) for r in staked_rows), Decimal(0))
+        return confirmed + payable - staked
+
     def create_stake(
         self, earn_user_id: str, pool_id: str, amount: str,
+        idempotency_key: str = "",
     ) -> dict[str, Any]:
         try:
             amt = Decimal(str(amount)).quantize(_THC_SCALE, rounding=ROUND_DOWN)
@@ -1278,6 +1464,24 @@ class EarnAccountStore:
             raise EarnError("invalid_stake_amount")
         with self._tx() as con:
             self._ensure_staking_pools(con)
+            if idempotency_key:
+                existing = con.execute(
+                    """SELECT sp.*, p.token FROM earn_staking_positions sp
+                       JOIN earn_staking_pools p ON p.pool_id = sp.pool_id
+                       WHERE sp.idempotency_key = ? AND sp.earn_user_id = ?""",
+                    (idempotency_key, earn_user_id),
+                ).fetchone()
+                if existing:
+                    return {
+                        "position_id": existing["position_id"],
+                        "pool_id": existing["pool_id"],
+                        "token": existing["token"],
+                        "amount": existing["amount"],
+                        "status": existing["status"],
+                        "staked_at": existing["staked_at"],
+                        "wallet_address": existing["wallet_address"],
+                        "wallet_tx_id": existing["wallet_tx_id"],
+                    }
             pool = con.execute(
                 "SELECT * FROM earn_staking_pools WHERE pool_id = ? AND status = 'active'",
                 (pool_id,),
@@ -1292,26 +1496,38 @@ class EarnAccountStore:
             ).fetchone()
             if not link:
                 raise EarnError("wallet_not_linked")
+            token = pool["token"]
+            wallet_tx_id = None
+            if token == "THR":
+                wallet_tx_id = self._debit_wallet_for_stake(link["wallet_address"], amt)
+                if wallet_tx_id is None:
+                    raise EarnError("wallet_debit_unavailable")
+            elif token == "THC":
+                available = self._available_thc_for_staking(con, earn_user_id)
+                if available < amt:
+                    raise EarnError("insufficient_thc_balance")
             now = int(time.time())
             position_id = "pos_" + secrets.token_urlsafe(18)
             con.execute(
                 """INSERT INTO earn_staking_positions
                    (position_id, pool_id, earn_user_id, wallet_address,
-                    amount, status, staked_at)
-                   VALUES (?,?,?,?,?,'active',?)""",
+                    amount, status, staked_at, wallet_tx_id, idempotency_key)
+                   VALUES (?,?,?,?,?,'active',?,?,?)""",
                 (
                     position_id, pool_id, earn_user_id,
-                    link["wallet_address"], str(amt), now,
+                    link["wallet_address"], str(amt), now, wallet_tx_id,
+                    idempotency_key or None,
                 ),
             )
             return {
                 "position_id": position_id,
                 "pool_id": pool_id,
-                "token": pool["token"],
+                "token": token,
                 "amount": str(amt),
                 "status": "active",
                 "staked_at": now,
                 "wallet_address": link["wallet_address"],
+                "wallet_tx_id": wallet_tx_id,
             }
 
     def request_unstake(
@@ -1319,23 +1535,40 @@ class EarnAccountStore:
     ) -> dict[str, Any]:
         with self._tx() as con:
             row = con.execute(
-                """SELECT * FROM earn_staking_positions
-                   WHERE position_id = ? AND earn_user_id = ? AND status = 'active'""",
+                """SELECT sp.*, p.token FROM earn_staking_positions sp
+                   JOIN earn_staking_pools p ON p.pool_id = sp.pool_id
+                   WHERE sp.position_id = ? AND sp.earn_user_id = ?""",
                 (position_id, earn_user_id),
             ).fetchone()
             if not row:
                 raise EarnError("position_not_found")
+            if row["status"] == "unstaked":
+                return {
+                    "position_id": position_id,
+                    "status": "unstaked",
+                    "unstake_requested_at": row["unstake_requested_at"],
+                    "unstake_tx_id": None,
+                }
+            if row["status"] != "active":
+                raise EarnError("position_not_found")
             now = int(time.time())
+            amt = Decimal(row["amount"])
+            unstake_tx_id = None
+            if row["token"] == "THR":
+                unstake_tx_id = self._credit_wallet_for_unstake(
+                    row["wallet_address"], amt, row["wallet_tx_id"],
+                )
             con.execute(
                 """UPDATE earn_staking_positions
-                   SET status = 'unstaking', unstake_requested_at = ?
+                   SET status = 'unstaked', unstake_requested_at = ?
                    WHERE position_id = ?""",
                 (now, position_id),
             )
             return {
                 "position_id": position_id,
-                "status": "unstaking",
+                "status": "unstaked",
                 "unstake_requested_at": now,
+                "unstake_tx_id": unstake_tx_id,
             }
 
     def list_ads(self, placement: str = "earn") -> list[dict[str, Any]]:
@@ -1426,6 +1659,785 @@ class EarnAccountStore:
                     "email_hint": r["email"][:2] + "***",
                 }
                 for r in rows
+            ]
+
+    # ── Ad Marketplace — Campaigns ────────────────────────────────────
+
+    def create_campaign(
+        self,
+        advertiser_id: str,
+        name: str,
+        campaign_type: str = "cpm",
+        bid_amount: str = "1.000000",
+        daily_budget: str = "0",
+        total_budget: str = "0",
+        country_targets: str = "",
+        placement: str = "earn",
+        starts_at: int | None = None,
+        ends_at: int | None = None,
+    ) -> dict[str, Any]:
+        if campaign_type not in ("cpm", "cpc"):
+            raise EarnError("invalid_campaign_type")
+        bid = Decimal(bid_amount)
+        if bid <= 0:
+            raise EarnError("bid_must_be_positive")
+        campaign_id = "camp_" + secrets.token_hex(8)
+        now = int(time.time())
+        with self._tx() as con:
+            user = con.execute(
+                "SELECT 1 FROM earn_accounts WHERE earn_user_id = ?",
+                (advertiser_id,),
+            ).fetchone()
+            if not user:
+                raise EarnError("advertiser_not_found")
+            con.execute(
+                """INSERT INTO earn_ad_campaigns
+                   (campaign_id, advertiser_id, name, campaign_type,
+                    bid_amount, daily_budget, total_budget,
+                    country_targets, placement, status,
+                    impressions, clicks, spent,
+                    created_at, updated_at, starts_at, ends_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,'pending_review',
+                           0,0,'0.000000',?,?,?,?)""",
+                (campaign_id, advertiser_id, name, campaign_type,
+                 str(bid.quantize(_THC_SCALE)),
+                 str(Decimal(daily_budget).quantize(_THC_SCALE)),
+                 str(Decimal(total_budget).quantize(_THC_SCALE)),
+                 country_targets, placement,
+                 now, now, starts_at, ends_at),
+            )
+        return {
+            "campaign_id": campaign_id,
+            "name": name,
+            "status": "pending_review",
+        }
+
+    def get_campaign(self, campaign_id: str) -> dict[str, Any] | None:
+        with self._tx() as con:
+            row = con.execute(
+                "SELECT * FROM earn_ad_campaigns WHERE campaign_id = ?",
+                (campaign_id,),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def list_advertiser_campaigns(
+        self, advertiser_id: str,
+    ) -> list[dict[str, Any]]:
+        with self._tx() as con:
+            rows = con.execute(
+                """SELECT * FROM earn_ad_campaigns
+                   WHERE advertiser_id = ?
+                   ORDER BY created_at DESC""",
+                (advertiser_id,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    _CAMPAIGN_UPDATABLE = frozenset((
+        "name", "bid_amount", "daily_budget", "total_budget",
+        "country_targets", "starts_at", "ends_at",
+    ))
+    _CAMPAIGN_EDITABLE_STATES = frozenset((
+        "pending_review", "approved", "paused",
+    ))
+
+    def update_campaign(
+        self, campaign_id: str, advertiser_id: str, **kwargs: Any,
+    ) -> dict[str, Any]:
+        fields = {
+            k: v for k, v in kwargs.items()
+            if k in self._CAMPAIGN_UPDATABLE and v is not None
+        }
+        if not fields:
+            raise EarnError("nothing_to_update")
+        for money_col in ("bid_amount", "daily_budget", "total_budget"):
+            if money_col in fields:
+                fields[money_col] = str(
+                    Decimal(fields[money_col]).quantize(_THC_SCALE),
+                )
+        if "bid_amount" in fields and Decimal(fields["bid_amount"]) <= 0:
+            raise EarnError("bid_must_be_positive")
+        now = int(time.time())
+        fields["updated_at"] = now
+        set_clause = ", ".join(f"{k} = ?" for k in fields)
+        vals = list(fields.values())
+        with self._tx() as con:
+            row = con.execute(
+                "SELECT status FROM earn_ad_campaigns WHERE campaign_id = ? AND advertiser_id = ?",
+                (campaign_id, advertiser_id),
+            ).fetchone()
+            if not row:
+                raise EarnError("campaign_not_found")
+            if row["status"] not in self._CAMPAIGN_EDITABLE_STATES:
+                raise EarnError("campaign_not_editable")
+            con.execute(
+                f"UPDATE earn_ad_campaigns SET {set_clause} WHERE campaign_id = ?",
+                vals + [campaign_id],
+            )
+        return {"campaign_id": campaign_id, "updated": True}
+
+    def pause_campaign(
+        self, campaign_id: str, advertiser_id: str,
+    ) -> dict[str, Any]:
+        now = int(time.time())
+        with self._tx() as con:
+            row = con.execute(
+                "SELECT status FROM earn_ad_campaigns WHERE campaign_id = ? AND advertiser_id = ?",
+                (campaign_id, advertiser_id),
+            ).fetchone()
+            if not row:
+                raise EarnError("campaign_not_found")
+            if row["status"] != "active":
+                raise EarnError("only_active_campaigns_can_pause")
+            con.execute(
+                "UPDATE earn_ad_campaigns SET status = 'paused', updated_at = ? WHERE campaign_id = ?",
+                (now, campaign_id),
+            )
+        return {"campaign_id": campaign_id, "status": "paused"}
+
+    def resume_campaign(
+        self, campaign_id: str, advertiser_id: str,
+    ) -> dict[str, Any]:
+        now = int(time.time())
+        with self._tx() as con:
+            row = con.execute(
+                "SELECT status FROM earn_ad_campaigns WHERE campaign_id = ? AND advertiser_id = ?",
+                (campaign_id, advertiser_id),
+            ).fetchone()
+            if not row:
+                raise EarnError("campaign_not_found")
+            if row["status"] != "paused":
+                raise EarnError("only_paused_campaigns_can_resume")
+            con.execute(
+                "UPDATE earn_ad_campaigns SET status = 'active', updated_at = ? WHERE campaign_id = ?",
+                (now, campaign_id),
+            )
+        return {"campaign_id": campaign_id, "status": "active"}
+
+    # ── Ad Marketplace — Creatives ────────────────────────────────────
+
+    def add_creative(
+        self,
+        campaign_id: str,
+        advertiser_id: str,
+        title: str,
+        image_url: str,
+        target_url: str,
+    ) -> dict[str, Any]:
+        creative_id = "crtv_" + secrets.token_hex(8)
+        now = int(time.time())
+        with self._tx() as con:
+            row = con.execute(
+                "SELECT 1 FROM earn_ad_campaigns WHERE campaign_id = ? AND advertiser_id = ?",
+                (campaign_id, advertiser_id),
+            ).fetchone()
+            if not row:
+                raise EarnError("campaign_not_found")
+            con.execute(
+                """INSERT INTO earn_ad_creatives
+                   (creative_id, campaign_id, title, image_url,
+                    target_url, status, created_at)
+                   VALUES (?,?,?,?,?,'pending_review',?)""",
+                (creative_id, campaign_id, title, image_url,
+                 target_url, now),
+            )
+        return {
+            "creative_id": creative_id,
+            "campaign_id": campaign_id,
+            "status": "pending_review",
+        }
+
+    def list_creatives(
+        self, campaign_id: str, advertiser_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        with self._tx() as con:
+            if advertiser_id:
+                owner = con.execute(
+                    "SELECT 1 FROM earn_ad_campaigns WHERE campaign_id = ? AND advertiser_id = ?",
+                    (campaign_id, advertiser_id),
+                ).fetchone()
+                if not owner:
+                    raise EarnError("campaign_not_found")
+            rows = con.execute(
+                "SELECT * FROM earn_ad_creatives WHERE campaign_id = ? ORDER BY created_at DESC",
+                (campaign_id,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    # ── Ad Marketplace — Moderation ───────────────────────────────────
+
+    def moderate_campaign(
+        self, campaign_id: str, action: str, reason: str = "",
+    ) -> dict[str, Any]:
+        if action not in ("approve", "reject"):
+            raise EarnError("invalid_moderation_action")
+        now = int(time.time())
+        with self._tx() as con:
+            row = con.execute(
+                "SELECT status FROM earn_ad_campaigns WHERE campaign_id = ?",
+                (campaign_id,),
+            ).fetchone()
+            if not row:
+                raise EarnError("campaign_not_found")
+            if action == "approve":
+                con.execute(
+                    "UPDATE earn_ad_campaigns SET status = 'approved', updated_at = ? WHERE campaign_id = ?",
+                    (now, campaign_id),
+                )
+                return {"campaign_id": campaign_id, "status": "approved"}
+            con.execute(
+                "UPDATE earn_ad_campaigns SET status = 'rejected', reject_reason = ?, updated_at = ? WHERE campaign_id = ?",
+                (reason, now, campaign_id),
+            )
+            return {"campaign_id": campaign_id, "status": "rejected"}
+
+    def moderate_creative(
+        self, creative_id: str, action: str, reason: str = "",
+    ) -> dict[str, Any]:
+        if action not in ("approve", "reject"):
+            raise EarnError("invalid_moderation_action")
+        with self._tx() as con:
+            row = con.execute(
+                "SELECT status FROM earn_ad_creatives WHERE creative_id = ?",
+                (creative_id,),
+            ).fetchone()
+            if not row:
+                raise EarnError("creative_not_found")
+            if action == "approve":
+                con.execute(
+                    "UPDATE earn_ad_creatives SET status = 'approved' WHERE creative_id = ?",
+                    (creative_id,),
+                )
+                return {"creative_id": creative_id, "status": "approved"}
+            con.execute(
+                "UPDATE earn_ad_creatives SET status = 'rejected', reject_reason = ? WHERE creative_id = ?",
+                (reason, creative_id),
+            )
+            return {"creative_id": creative_id, "status": "rejected"}
+
+    # ── Ad Marketplace — Escrow Accounting ────────────────────────────
+    #
+    # Escrow deposits and refunds follow the wallet-signed intent model:
+    #   1. Client requests an intent (server issues nonce + idempotency key)
+    #   2. PWA/APK shows biometric/PIN/passkey approval gate
+    #   3. Wallet signs the intent payload locally
+    #   4. Client submits signed intent to execute endpoint
+    #   5. Server verifies nonce is unused, idempotency key is fresh,
+    #      wallet is linked, and signature covers the exact payload
+    #   6. Atomic: debit wallet ledger → credit escrow (or reverse for refund)
+    #
+    # The server NEVER receives or stores the user's private key, PIN,
+    # biometric data, send_secret, or pledge secret.
+    #
+    # Pythia pool accounting remains separate — no auto-conversion of
+    # CPX/TimeWall rewards into THR, staking, or pool liquidity.
+    # BTC payouts are never marked paid without a real broadcast tx hash.
+
+    def escrow_create_intent(
+        self,
+        earn_user_id: str,
+        campaign_id: str,
+        action: str,
+        amount: str,
+    ) -> dict[str, Any]:
+        if action not in ("deposit", "refund"):
+            raise EarnError("invalid_escrow_action")
+        amt = Decimal(amount).quantize(_THC_SCALE)
+        if amt <= 0:
+            raise EarnError("amount_must_be_positive")
+        now = int(time.time())
+        intent_id = "esci_" + secrets.token_urlsafe(18)
+        nonce = secrets.token_urlsafe(24)
+        idem_key = secrets.token_hex(16)
+        with self._tx() as con:
+            camp = con.execute(
+                "SELECT advertiser_id FROM earn_ad_campaigns WHERE campaign_id = ? AND advertiser_id = ?",
+                (campaign_id, earn_user_id),
+            ).fetchone()
+            if not camp:
+                raise EarnError("campaign_not_found")
+            link = con.execute(
+                "SELECT wallet_address FROM earn_wallet_links WHERE earn_user_id = ?",
+                (earn_user_id,),
+            ).fetchone()
+            wallet_address = link["wallet_address"] if link else None
+            if action == "refund":
+                bal = self._escrow_balance_in_tx(con, campaign_id)
+                if amt > bal:
+                    raise EarnError("insufficient_escrow_balance")
+            con.execute(
+                "DELETE FROM earn_escrow_intents WHERE expires_at < ?",
+                (now,),
+            )
+            con.execute(
+                """INSERT INTO earn_escrow_intents
+                   (intent_id, earn_user_id, campaign_id, action, amount,
+                    nonce, idempotency_key, wallet_address,
+                    requires_wallet_sig, expires_at, consumed_at, created_at)
+                   VALUES (?,?,?,?,?,?,?,?,1,?,NULL,?)""",
+                (intent_id, earn_user_id, campaign_id, action,
+                 str(amt), nonce, idem_key, wallet_address,
+                 now + _ESCROW_INTENT_TTL, now),
+            )
+        return {
+            "intent_id": intent_id,
+            "action": action,
+            "campaign_id": campaign_id,
+            "amount": str(amt),
+            "nonce": nonce,
+            "idempotency_key": idem_key,
+            "wallet_address": wallet_address,
+            "requires_wallet_sig": True,
+            "approval": "biometric_passkey",
+            "expires_at": now + _ESCROW_INTENT_TTL,
+        }
+
+    @staticmethod
+    def _verify_escrow_signature(
+        intent: dict, wallet_signature: str, public_key: str,
+    ) -> bool:
+        try:
+            from cryptography.hazmat.primitives import hashes
+            from cryptography.hazmat.primitives.asymmetric import ec, utils
+            public_key = str(public_key or "").strip().lower()
+            wallet_signature = str(wallet_signature or "").strip().lower()
+            if len(public_key) < 4 or len(wallet_signature) < 4:
+                return False
+            signed = {
+                "action": str(intent["action"]),
+                "amount": str(intent["amount"]),
+                "campaign_id": str(intent["campaign_id"]),
+                "intent_id": str(intent["intent_id"]),
+                "nonce": str(intent["nonce"]),
+            }
+            if intent.get("wallet_address"):
+                signed["wallet_address"] = str(intent["wallet_address"])
+            message = json.dumps(signed, sort_keys=True, separators=(",", ":")).encode()
+            digest = hashlib.sha256(message).digest()
+            pub_bytes = bytes.fromhex(public_key)
+            if pub_bytes[0] not in (2, 3, 4):
+                return False
+            verifier = ec.EllipticCurvePublicKey.from_encoded_point(
+                ec.SECP256K1(), pub_bytes,
+            )
+            sig_bytes = bytes.fromhex(wallet_signature)
+            der_signature = utils.encode_dss_signature(
+                int.from_bytes(sig_bytes[:32], "big"),
+                int.from_bytes(sig_bytes[32:], "big"),
+            )
+            verifier.verify(
+                der_signature, digest,
+                ec.ECDSA(utils.Prehashed(hashes.SHA256())),
+            )
+            return True
+        except Exception:
+            return False
+
+    def escrow_execute(
+        self,
+        intent_id: str,
+        earn_user_id: str,
+        nonce: str,
+        wallet_signature: str | None = None,
+    ) -> dict[str, Any]:
+        now = int(time.time())
+        with self._tx() as con:
+            intent = con.execute(
+                """SELECT * FROM earn_escrow_intents
+                   WHERE intent_id = ? AND earn_user_id = ?
+                     AND consumed_at IS NULL AND expires_at >= ?""",
+                (intent_id, earn_user_id, now),
+            ).fetchone()
+            if not intent:
+                raise EarnError("invalid_or_expired_intent")
+            if intent["nonce"] != nonce:
+                raise EarnError("nonce_mismatch")
+            existing = con.execute(
+                "SELECT escrow_id FROM earn_ad_escrow WHERE idempotency_key = ?",
+                (intent["idempotency_key"],),
+            ).fetchone()
+            if existing:
+                raise EarnError("duplicate_intent")
+            if intent["requires_wallet_sig"]:
+                if not wallet_signature:
+                    raise EarnError("wallet_signature_required")
+                link = con.execute(
+                    "SELECT wallet_address, public_key FROM earn_wallet_links WHERE earn_user_id = ?",
+                    (earn_user_id,),
+                ).fetchone()
+                if not link:
+                    raise EarnError("wallet_not_linked")
+                if intent["wallet_address"] and link["wallet_address"] != intent["wallet_address"]:
+                    raise EarnError("wallet_address_mismatch")
+                if not self._verify_escrow_signature(
+                    dict(intent), wallet_signature, link["public_key"],
+                ):
+                    raise EarnError("invalid_wallet_signature")
+            con.execute(
+                "UPDATE earn_escrow_intents SET consumed_at = ? WHERE intent_id = ?",
+                (now, intent_id),
+            )
+            campaign_id = intent["campaign_id"]
+            action = intent["action"]
+            amt = Decimal(intent["amount"]).quantize(_THC_SCALE)
+            escrow_id = "esc_" + secrets.token_hex(8)
+            bal = self._escrow_balance_in_tx(con, campaign_id)
+            if action == "deposit":
+                new_bal = (bal + amt).quantize(_THC_SCALE)
+            elif action == "refund":
+                if amt > bal:
+                    raise EarnError("insufficient_escrow_balance")
+                new_bal = (bal - amt).quantize(_THC_SCALE)
+            else:
+                raise EarnError("invalid_escrow_action")
+            signed_fields = {
+                "action": str(intent["action"]),
+                "amount": str(intent["amount"]),
+                "campaign_id": str(intent["campaign_id"]),
+                "intent_id": str(intent["intent_id"]),
+                "nonce": str(intent["nonce"]),
+            }
+            if intent["wallet_address"]:
+                signed_fields["wallet_address"] = str(intent["wallet_address"])
+            payload_hash = hashlib.sha256(
+                json.dumps(signed_fields, sort_keys=True, separators=(",", ":")).encode(),
+            ).hexdigest()
+
+            wallet_tx_id = None
+            pool_receipt_id = None
+            pool_position_id = None
+            settlement_status = "pending"
+
+            if self._settlement_adapter and action == "deposit":
+                wallet_address = (
+                    intent["wallet_address"]
+                    or (link["wallet_address"] if intent["requires_wallet_sig"] and link else None)
+                )
+                if wallet_address:
+                    from services.wallet_settlement_adapter import (
+                        WalletInsufficientBalance, PoolCreditFailed,
+                    )
+                    try:
+                        wallet_tx, pool_receipt = self._settlement_adapter.settle(
+                            dict(intent), wallet_address, amt,
+                        )
+                        wallet_tx_id = wallet_tx.tx_id
+                        pool_receipt_id = pool_receipt.pool_event_id
+                        pool_position_id = pool_receipt.position_id
+                        settlement_status = "settled"
+                    except WalletInsufficientBalance:
+                        raise EarnError("insufficient_thr_balance")
+                    except PoolCreditFailed:
+                        raise EarnError("pool_credit_failed")
+
+            con.execute(
+                """INSERT INTO earn_ad_escrow
+                   (escrow_id, campaign_id, advertiser_id, action,
+                    amount, balance_after, note, idempotency_key,
+                    intent_id, wallet_tx_id, pool_receipt_id,
+                    pool_position_id, payload_hash,
+                    settlement_status, created_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (escrow_id, campaign_id, earn_user_id, action,
+                 str(amt), str(new_bal),
+                 f"escrow {action} via signed intent",
+                 intent["idempotency_key"], intent_id,
+                 wallet_tx_id, pool_receipt_id, pool_position_id,
+                 payload_hash, settlement_status, now),
+            )
+        return {
+            "escrow_id": escrow_id,
+            "action": action,
+            "amount": str(amt),
+            "balance_after": str(new_bal),
+            "idempotency_key": intent["idempotency_key"],
+            "payload_hash": payload_hash,
+            "settlement_status": settlement_status,
+            "wallet_tx_id": wallet_tx_id,
+            "pool_receipt_id": pool_receipt_id,
+            "pool_position_id": pool_position_id,
+        }
+
+    def _escrow_balance_in_tx(
+        self, con: sqlite3.Connection, campaign_id: str,
+    ) -> Decimal:
+        rows = con.execute(
+            "SELECT action, amount FROM earn_ad_escrow WHERE campaign_id = ?",
+            (campaign_id,),
+        ).fetchall()
+        bal = Decimal("0")
+        for r in rows:
+            amt = Decimal(r["amount"]).quantize(_THC_SCALE)
+            if r["action"] == "deposit":
+                bal += amt
+            else:
+                bal -= amt
+        return bal.quantize(_THC_SCALE)
+
+    def escrow_balance(self, campaign_id: str) -> str:
+        with self._tx() as con:
+            return str(self._escrow_balance_in_tx(con, campaign_id))
+
+    def _escrow_spend_in_tx(
+        self,
+        con: sqlite3.Connection,
+        campaign_id: str,
+        advertiser_id: str,
+        amount: Decimal,
+    ) -> None:
+        bal = self._escrow_balance_in_tx(con, campaign_id)
+        new_bal = (bal - amount).quantize(_THC_SCALE)
+        if new_bal < 0:
+            new_bal = Decimal("0").quantize(_THC_SCALE)
+        escrow_id = "esc_" + secrets.token_hex(8)
+        now = int(time.time())
+        con.execute(
+            """INSERT INTO earn_ad_escrow
+               (escrow_id, campaign_id, advertiser_id, action,
+                amount, balance_after, note, created_at)
+               VALUES (?,?,?,'spend',?,?,?,?)""",
+            (escrow_id, campaign_id, advertiser_id,
+             str(amount.quantize(_THC_SCALE)),
+             str(new_bal), "ad spend", now),
+        )
+
+    # ── Ad Marketplace — Serving ──────────────────────────────────────
+
+    def serve_campaign_ads(
+        self,
+        placement: str = "earn",
+        country: str = "",
+        viewer_id: str | None = None,
+        limit: int = 3,
+    ) -> list[dict[str, Any]]:
+        now = int(time.time())
+        with self._tx() as con:
+            rows = con.execute(
+                """SELECT c.campaign_id, c.advertiser_id, c.campaign_type,
+                          c.bid_amount, c.total_budget, c.spent,
+                          c.daily_budget, c.country_targets,
+                          cr.creative_id, cr.title, cr.image_url,
+                          cr.target_url
+                     FROM earn_ad_campaigns c
+                     JOIN earn_ad_creatives cr ON cr.campaign_id = c.campaign_id
+                    WHERE c.status = 'active'
+                      AND c.placement = ?
+                      AND cr.status = 'approved'
+                      AND (c.starts_at IS NULL OR c.starts_at <= ?)
+                      AND (c.ends_at IS NULL OR c.ends_at > ?)
+                 ORDER BY c.bid_amount DESC
+                    LIMIT ?""",
+                (placement, now, now, limit * 5),
+            ).fetchall()
+            sorted_rows = sorted(
+                rows, key=lambda r: Decimal(r["bid_amount"]), reverse=True,
+            )
+            results: list[dict[str, Any]] = []
+            day_start = now - (now % 86400)
+            for r in sorted_rows:
+                if len(results) >= limit:
+                    break
+                targets = str(r["country_targets"] or "").strip()
+                if targets and country:
+                    allowed = {
+                        c.strip().upper() for c in targets.split(",") if c.strip()
+                    }
+                    if country.upper() not in allowed:
+                        continue
+                tb = Decimal(r["total_budget"])
+                if tb > 0 and Decimal(r["spent"]) >= tb:
+                    continue
+                db = Decimal(r["daily_budget"])
+                if db > 0:
+                    cost_rows = con.execute(
+                        """SELECT cost FROM earn_ad_events
+                           WHERE campaign_id = ? AND created_at >= ?""",
+                        (r["campaign_id"], day_start),
+                    ).fetchall()
+                    day_spent = sum(
+                        (Decimal(cr["cost"]) for cr in cost_rows), Decimal("0"),
+                    )
+                    if day_spent >= db:
+                        continue
+                results.append({
+                    "campaign_id": r["campaign_id"],
+                    "creative_id": r["creative_id"],
+                    "title": r["title"],
+                    "image_url": r["image_url"],
+                    "target_url": r["target_url"],
+                    "campaign_type": r["campaign_type"],
+                })
+            return results
+
+    def record_campaign_event(
+        self,
+        campaign_id: str,
+        creative_id: str,
+        event_type: str,
+        country: str = "",
+        viewer_id: str | None = None,
+    ) -> dict[str, Any]:
+        if event_type not in ("impression", "click"):
+            raise EarnError("invalid_event_type")
+        event_id = "evt_" + secrets.token_hex(8)
+        now = int(time.time())
+        with self._tx() as con:
+            camp = con.execute(
+                "SELECT campaign_type, bid_amount, advertiser_id, total_budget, spent FROM earn_ad_campaigns WHERE campaign_id = ?",
+                (campaign_id,),
+            ).fetchone()
+            if not camp:
+                raise EarnError("campaign_not_found")
+            bid = Decimal(camp["bid_amount"])
+            if camp["campaign_type"] == "cpm" and event_type == "impression":
+                cost = (bid / 1000).quantize(_THC_SCALE)
+            elif camp["campaign_type"] == "cpc" and event_type == "click":
+                cost = bid.quantize(_THC_SCALE)
+            else:
+                cost = Decimal("0").quantize(_THC_SCALE)
+            con.execute(
+                """INSERT INTO earn_ad_events
+                   (event_id, campaign_id, creative_id, event_type,
+                    country, earn_user_id, cost, created_at)
+                   VALUES (?,?,?,?,?,?,?,?)""",
+                (event_id, campaign_id, creative_id, event_type,
+                 country, viewer_id,
+                 str(cost), now),
+            )
+            cur_spent = Decimal(camp["spent"])
+            new_spent_str = str((cur_spent + cost).quantize(_THC_SCALE))
+            if event_type == "impression":
+                con.execute(
+                    "UPDATE earn_ad_campaigns SET impressions = impressions + 1, spent = ? WHERE campaign_id = ?",
+                    (new_spent_str, campaign_id),
+                )
+            else:
+                con.execute(
+                    "UPDATE earn_ad_campaigns SET clicks = clicks + 1, spent = ? WHERE campaign_id = ?",
+                    (new_spent_str, campaign_id),
+                )
+            if cost > 0:
+                self._escrow_spend_in_tx(
+                    con, campaign_id, camp["advertiser_id"], cost,
+                )
+            tb = Decimal(camp["total_budget"])
+            if tb > 0 and Decimal(new_spent_str) >= tb:
+                con.execute(
+                    "UPDATE earn_ad_campaigns SET status = 'completed' WHERE campaign_id = ?",
+                    (campaign_id,),
+                )
+        return {"event_id": event_id, "cost": str(cost)}
+
+    # ── Ad Marketplace — Reporting ────────────────────────────────────
+
+    def campaign_report(
+        self, campaign_id: str, advertiser_id: str,
+    ) -> dict[str, Any]:
+        with self._tx() as con:
+            camp = con.execute(
+                "SELECT * FROM earn_ad_campaigns WHERE campaign_id = ? AND advertiser_id = ?",
+                (campaign_id, advertiser_id),
+            ).fetchone()
+            if not camp:
+                raise EarnError("campaign_not_found")
+            camp_d = dict(camp)
+            imps = camp_d["impressions"]
+            clicks = camp_d["clicks"]
+            ctr = round(clicks / imps * 100, 2) if imps > 0 else 0.0
+            bal = str(self._escrow_balance_in_tx(con, campaign_id))
+            cutoff = int(time.time()) - 30 * 86400
+            daily_rows = con.execute(
+                """SELECT (created_at / 86400) AS day_bucket,
+                          event_type, cost
+                     FROM earn_ad_events
+                    WHERE campaign_id = ? AND created_at >= ?
+                 ORDER BY day_bucket""",
+                (campaign_id, cutoff),
+            ).fetchall()
+            day_buckets: dict[int, dict[str, Any]] = {}
+            for r in daily_rows:
+                b = r["day_bucket"]
+                if b not in day_buckets:
+                    day_buckets[b] = {"imps": 0, "clks": 0, "cost": Decimal("0")}
+                if r["event_type"] == "impression":
+                    day_buckets[b]["imps"] += 1
+                else:
+                    day_buckets[b]["clks"] += 1
+                day_buckets[b]["cost"] += Decimal(r["cost"])
+            events_by_day = [
+                {
+                    "date": time.strftime(
+                        "%Y-%m-%d", time.gmtime(b * 86400),
+                    ),
+                    "impressions": v["imps"],
+                    "clicks": v["clks"],
+                    "cost": str(v["cost"].quantize(_THC_SCALE)),
+                }
+                for b, v in sorted(day_buckets.items())
+            ]
+            country_rows = con.execute(
+                """SELECT COALESCE(NULLIF(country,''), 'unknown') AS cc,
+                          COUNT(*) AS cnt
+                     FROM earn_ad_events
+                    WHERE campaign_id = ?
+                 GROUP BY cc ORDER BY cnt DESC""",
+                (campaign_id,),
+            ).fetchall()
+            events_by_country = [
+                {"country": r["cc"], "events": r["cnt"]}
+                for r in country_rows
+            ]
+        return {
+            "campaign_id": campaign_id,
+            "name": camp_d["name"],
+            "status": camp_d["status"],
+            "impressions": imps,
+            "clicks": clicks,
+            "ctr": ctr,
+            "spent": camp_d["spent"],
+            "escrow_balance": bal,
+            "events_by_day": events_by_day,
+            "events_by_country": events_by_country,
+        }
+
+    def campaign_report_daily(
+        self, campaign_id: str, advertiser_id: str, days: int = 30,
+    ) -> list[dict[str, Any]]:
+        with self._tx() as con:
+            row = con.execute(
+                "SELECT 1 FROM earn_ad_campaigns WHERE campaign_id = ? AND advertiser_id = ?",
+                (campaign_id, advertiser_id),
+            ).fetchone()
+            if not row:
+                raise EarnError("campaign_not_found")
+            cutoff = int(time.time()) - days * 86400
+            rows = con.execute(
+                """SELECT (created_at / 86400) AS day_bucket,
+                          event_type, cost
+                     FROM earn_ad_events
+                    WHERE campaign_id = ? AND created_at >= ?
+                 ORDER BY day_bucket""",
+                (campaign_id, cutoff),
+            ).fetchall()
+            buckets: dict[int, dict[str, Any]] = {}
+            for r in rows:
+                b = r["day_bucket"]
+                if b not in buckets:
+                    buckets[b] = {"imps": 0, "clks": 0, "cost": Decimal("0")}
+                if r["event_type"] == "impression":
+                    buckets[b]["imps"] += 1
+                else:
+                    buckets[b]["clks"] += 1
+                buckets[b]["cost"] += Decimal(r["cost"])
+            return [
+                {
+                    "date": time.strftime(
+                        "%Y-%m-%d", time.gmtime(b * 86400),
+                    ),
+                    "impressions": v["imps"],
+                    "clicks": v["clks"],
+                    "cost": str(v["cost"].quantize(_THC_SCALE)),
+                }
+                for b, v in sorted(buckets.items())
             ]
 
     @staticmethod
@@ -2505,9 +3517,11 @@ def register_earn_account_routes(
     @app.get("/api/earn/leaderboard")
     def earn_leaderboard():
         user, _ = _current_user()
-        if not user:
-            return jsonify(ok=False, error="earn_auth_required"), 401
-        data = store.leaderboard(caller_user_id=user["earn_user_id"])
+        period = request.args.get("period", "monthly")
+        data = store.leaderboard(
+            caller_user_id=user["earn_user_id"] if user else None,
+            period=period,
+        )
         response = jsonify(ok=True, **data)
         response.headers["Cache-Control"] = "no-store"
         return response
@@ -2539,6 +3553,7 @@ def register_earn_account_routes(
                 user["earn_user_id"],
                 str(data.get("pool_id", "")),
                 str(data.get("amount", "")),
+                idempotency_key=str(data.get("idempotency_key", "")),
             )
         except EarnError as exc:
             return jsonify(ok=False, error=str(exc)), 400
@@ -2558,6 +3573,23 @@ def register_earn_account_routes(
         except EarnError as exc:
             return jsonify(ok=False, error=str(exc)), 400
         return jsonify(ok=True, **result)
+
+    @app.get("/api/earn/pools/public")
+    def earn_pools_public():
+        pools = store.staking_pools()
+        public_pools = []
+        for p in pools:
+            public_pools.append({
+                "pool_id": p["pool_id"],
+                "token": p["token"],
+                "label": p["label"],
+                "base_apy": p["base_apy"],
+                "boosted_apy": p["boosted_apy"],
+                "min_stake": p["min_stake"],
+                "total_staked": p["total_staked"],
+                "stakers": p["stakers"],
+            })
+        return jsonify(ok=True, pools=public_pools, last_updated=int(time.time()))
 
     @app.get("/api/earn/ads")
     def earn_ads():
@@ -2618,6 +3650,263 @@ def register_earn_account_routes(
             return jsonify(ok=False, error="missing_ad_id"), 400
         deleted = store.delete_ad(ad_id)
         return jsonify(ok=True, deleted=deleted)
+
+    # ── Ad Marketplace API Routes ─────────────────────────────────────
+
+    @app.post("/api/earn/ads/campaign/create")
+    def earn_campaign_create():
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        data = request.get_json(silent=True) or {}
+        name = str(data.get("name", "")).strip()
+        if not name:
+            return jsonify(ok=False, error="missing_name"), 400
+        try:
+            result = store.create_campaign(
+                advertiser_id=user["earn_user_id"],
+                name=name,
+                campaign_type=str(data.get("campaign_type", "cpm")).strip(),
+                bid_amount=str(data.get("bid_amount", "1.000000")).strip(),
+                daily_budget=str(data.get("daily_budget", "0")).strip(),
+                total_budget=str(data.get("total_budget", "0")).strip(),
+                country_targets=str(data.get("country_targets", "")).strip(),
+                placement=str(data.get("placement", "earn")).strip(),
+                starts_at=int(data["starts_at"]) if data.get("starts_at") else None,
+                ends_at=int(data["ends_at"]) if data.get("ends_at") else None,
+            )
+        except (EarnError, InvalidOperation, ValueError) as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, **result)
+
+    @app.get("/api/earn/ads/campaign/list")
+    def earn_campaign_list():
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        campaigns = store.list_advertiser_campaigns(user["earn_user_id"])
+        return jsonify(ok=True, campaigns=campaigns)
+
+    @app.get("/api/earn/ads/campaign/<campaign_id>")
+    def earn_campaign_get(campaign_id):
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        camp = store.get_campaign(campaign_id)
+        if not camp or camp["advertiser_id"] != user["earn_user_id"]:
+            return jsonify(ok=False, error="campaign_not_found"), 404
+        return jsonify(ok=True, campaign=camp)
+
+    @app.post("/api/earn/ads/campaign/<campaign_id>/update")
+    def earn_campaign_update(campaign_id):
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        data = request.get_json(silent=True) or {}
+        try:
+            result = store.update_campaign(
+                campaign_id, user["earn_user_id"], **data,
+            )
+        except (EarnError, InvalidOperation, ValueError) as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, **result)
+
+    @app.post("/api/earn/ads/campaign/<campaign_id>/pause")
+    def earn_campaign_pause(campaign_id):
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        try:
+            result = store.pause_campaign(campaign_id, user["earn_user_id"])
+        except EarnError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, **result)
+
+    @app.post("/api/earn/ads/campaign/<campaign_id>/resume")
+    def earn_campaign_resume(campaign_id):
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        try:
+            result = store.resume_campaign(campaign_id, user["earn_user_id"])
+        except EarnError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, **result)
+
+    @app.post("/api/earn/ads/campaign/<campaign_id>/creative/add")
+    def earn_creative_add(campaign_id):
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        data = request.get_json(silent=True) or {}
+        title = str(data.get("title", "")).strip()
+        image_url = str(data.get("image_url", "")).strip()
+        target_url = str(data.get("target_url", "")).strip()
+        if not title or not image_url or not target_url:
+            return jsonify(ok=False, error="missing_fields"), 400
+        try:
+            result = store.add_creative(
+                campaign_id, user["earn_user_id"],
+                title, image_url, target_url,
+            )
+        except EarnError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, **result)
+
+    @app.get("/api/earn/ads/campaign/<campaign_id>/creative/list")
+    def earn_creative_list(campaign_id):
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        try:
+            creatives = store.list_creatives(
+                campaign_id, user["earn_user_id"],
+            )
+        except EarnError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, creatives=creatives)
+
+    @app.post("/api/earn/ads/moderate/campaign")
+    def earn_moderate_campaign():
+        mgmt_token = request.headers.get("X-Admin-Key", "").strip()
+        if not mgmt_token or mgmt_token != os.getenv("EARN_MGMT_TOKEN", "").strip():
+            return jsonify(ok=False, error="unauthorized"), 403
+        data = request.get_json(silent=True) or {}
+        campaign_id = str(data.get("campaign_id", "")).strip()
+        action = str(data.get("action", "")).strip()
+        reason = str(data.get("reason", "")).strip()
+        if not campaign_id or not action:
+            return jsonify(ok=False, error="missing_fields"), 400
+        try:
+            result = store.moderate_campaign(campaign_id, action, reason)
+        except EarnError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, **result)
+
+    @app.post("/api/earn/ads/moderate/creative")
+    def earn_moderate_creative():
+        mgmt_token = request.headers.get("X-Admin-Key", "").strip()
+        if not mgmt_token or mgmt_token != os.getenv("EARN_MGMT_TOKEN", "").strip():
+            return jsonify(ok=False, error="unauthorized"), 403
+        data = request.get_json(silent=True) or {}
+        creative_id = str(data.get("creative_id", "")).strip()
+        action = str(data.get("action", "")).strip()
+        reason = str(data.get("reason", "")).strip()
+        if not creative_id or not action:
+            return jsonify(ok=False, error="missing_fields"), 400
+        try:
+            result = store.moderate_creative(creative_id, action, reason)
+        except EarnError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, **result)
+
+    @app.post("/api/earn/ads/escrow/intent")
+    def earn_escrow_intent():
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        data = request.get_json(silent=True) or {}
+        campaign_id = str(data.get("campaign_id", "")).strip()
+        action = str(data.get("action", "")).strip()
+        amount = str(data.get("amount", "")).strip()
+        if not campaign_id or not action or not amount:
+            return jsonify(ok=False, error="missing_fields"), 400
+        try:
+            result = store.escrow_create_intent(
+                user["earn_user_id"], campaign_id, action, amount,
+            )
+        except (EarnError, InvalidOperation, ValueError) as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, **result)
+
+    @app.post("/api/earn/ads/escrow/execute")
+    def earn_escrow_execute():
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        data = request.get_json(silent=True) or {}
+        intent_id = str(data.get("intent_id", "")).strip()
+        nonce = str(data.get("nonce", "")).strip()
+        wallet_signature = str(
+            data.get("wallet_signature", ""),
+        ).strip() or None
+        if not intent_id or not nonce:
+            return jsonify(ok=False, error="missing_fields"), 400
+        try:
+            result = store.escrow_execute(
+                intent_id, user["earn_user_id"],
+                nonce, wallet_signature,
+            )
+        except (EarnError, InvalidOperation, ValueError) as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, **result)
+
+    @app.get("/api/earn/ads/escrow/balance/<campaign_id>")
+    def earn_escrow_balance(campaign_id):
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        camp = store.get_campaign(campaign_id)
+        if not camp or camp["advertiser_id"] != user["earn_user_id"]:
+            return jsonify(ok=False, error="campaign_not_found"), 404
+        balance = store.escrow_balance(campaign_id)
+        return jsonify(ok=True, balance=balance)
+
+    @app.get("/api/earn/ads/serve")
+    def earn_ads_serve():
+        placement = request.args.get("placement", "earn")
+        country = request.args.get("country", "")
+        limit = min(int(request.args.get("limit", "3")), 10)
+        ads = store.serve_campaign_ads(
+            placement=placement, country=country, limit=limit,
+        )
+        return jsonify(ok=True, ads=ads)
+
+    @app.post("/api/earn/ads/serve/event")
+    def earn_ads_serve_event():
+        data = request.get_json(silent=True) or {}
+        campaign_id = str(data.get("campaign_id", "")).strip()
+        creative_id = str(data.get("creative_id", "")).strip()
+        event_type = str(data.get("event_type", "")).strip()
+        if not campaign_id or not creative_id or not event_type:
+            return jsonify(ok=False, error="missing_fields"), 400
+        country = str(data.get("country", "")).strip()
+        viewer_id = str(data.get("viewer_id", "")).strip() or None
+        try:
+            result = store.record_campaign_event(
+                campaign_id, creative_id, event_type,
+                country=country, viewer_id=viewer_id,
+            )
+        except EarnError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, **result)
+
+    @app.get("/api/earn/ads/campaign/<campaign_id>/report")
+    def earn_campaign_report(campaign_id):
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        try:
+            report = store.campaign_report(
+                campaign_id, user["earn_user_id"],
+            )
+        except EarnError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, **report)
+
+    @app.get("/api/earn/ads/campaign/<campaign_id>/report/daily")
+    def earn_campaign_report_daily(campaign_id):
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        days = min(int(request.args.get("days", "30")), 90)
+        try:
+            daily = store.campaign_report_daily(
+                campaign_id, user["earn_user_id"], days=days,
+            )
+        except EarnError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, daily=daily)
 
     @app.get("/api/earn/referral/code")
     def earn_referral_code():

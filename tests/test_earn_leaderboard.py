@@ -148,7 +148,10 @@ def test_api_is_authenticated_personalized_and_does_not_leak_identity(store):
     app = Flask(__name__)
     register_earn_account_routes(app, store)
     client = app.test_client()
-    assert client.get('/api/earn/leaderboard').status_code == 401
+    anon_resp = client.get('/api/earn/leaderboard')
+    assert anon_resp.status_code == 200
+    anon_data = anon_resp.get_json()
+    assert anon_data['entries'][0]['is_caller'] is False
     response = client.get('/api/earn/leaderboard?month_start=0&at_time=0', headers={'Authorization': 'Bearer ' + token})
     data = response.get_json()
     assert response.headers['Cache-Control'] == 'no-store'

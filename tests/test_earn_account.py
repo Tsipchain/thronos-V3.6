@@ -1958,7 +1958,7 @@ class TestPromoDeduplication:
         fn_block = src[fn_start:fn_start + 600]
         assert "_earnPromoActive" in fn_block, "showEarnPromo must use _earnPromoActive guard"
         guard_idx = fn_block.index("_earnPromoActive")
-        promise_idx = fn_block.index("Promise")
+        promise_idx = fn_block.index("new Promise")
         assert guard_idx < promise_idx, "Guard check must come before creating the promise"
 
     def test_earn_tab_dedup_prevents_duplicate_sessions(self):
@@ -1995,35 +1995,128 @@ class TestAdPlacementRegression:
         root = Path(__file__).parent.parent
         return (root / rel_path).read_text()
 
-    def test_earn_web_cpx_shows_ad_before_open(self):
+    # -- Earn web: CPX and TimeWall use openProviderWithPromo (tab-first popup fix) --
+
+    def test_earn_web_cpx_uses_promo_tab_flow(self):
         src = self._read("templates/earn_beta.html")
         cpx_idx = src.index("earn-surveys")
         after_cpx = src[cpx_idx:]
-        promo_call = after_cpx.index("showPromo(")
-        provider_call = after_cpx.index("openProvider('cpx'")
-        assert promo_call < provider_call, "Earn web must show ad before opening CPX surveys"
+        assert "openProviderWithPromo('cpx'" in after_cpx, \
+            "CPX surveys click must route through openProviderWithPromo"
 
-    def test_earn_web_timewall_shows_ad_before_open(self):
+    def test_earn_web_timewall_uses_promo_tab_flow(self):
         src = self._read("templates/earn_beta.html")
         tw_idx = src.index("timewallButton.addEventListener")
         after_tw = src[tw_idx:]
-        promo_call = after_tw.index("showPromo(")
-        provider_call = after_tw.index("openProvider('timewall'")
-        assert promo_call < provider_call, "Earn web must show ad before opening TimeWall"
+        assert "openProviderWithPromo('timewall'" in after_tw, \
+            "TimeWall click must route through openProviderWithPromo"
 
-    def test_earn_pwa_cpx_shows_ad_before_open(self):
+    def test_earn_web_promo_tab_flow_opens_tab_before_promo(self):
+        src = self._read("templates/earn_beta.html")
+        fn_idx = src.index("function openProviderWithPromo(")
+        fn_block = src[fn_idx:fn_idx + 600]
+        tab_open_idx = fn_block.index("ThronosEarnTabs.open(")
+        promo_idx = fn_block.index("showPromo(")
+        assert tab_open_idx < promo_idx, \
+            "Tab must open (sync, preserves user activation) before promo countdown"
+
+    def test_earn_web_promo_tab_flow_handles_popup_blocked(self):
+        src = self._read("templates/earn_beta.html")
+        fn_idx = src.index("function openProviderWithPromo(")
+        fn_block = src[fn_idx:fn_idx + 800]
+        assert "popup_blocked" in fn_block, "Must handle popup_blocked error"
+
+    # -- Earn PWA: CPX and TimeWall use ThronosEarnTabs.open --
+
+    def test_earn_pwa_cpx_uses_tab_first_flow(self):
         src = self._read("public/wallet-pwa/app.js")
         handler_idx = src.index("data-earn-provider]")
         after_handler = src[handler_idx:]
-        assert "provider === 'cpx'" in after_handler, "Earn PWA must trigger ad for CPX"
+        assert "provider === 'cpx'" in after_handler, "Earn PWA must check for CPX"
+        assert "ThronosEarnTabs.open(" in after_handler, "Must use tab-first flow"
         assert "showEarnPromo" in after_handler
 
-    def test_earn_pwa_timewall_shows_ad_before_open(self):
+    def test_earn_pwa_timewall_uses_tab_first_flow(self):
         src = self._read("public/wallet-pwa/app.js")
         handler_idx = src.index("data-earn-provider]")
         after_handler = src[handler_idx:]
-        assert "provider === 'timewall'" in after_handler, "Earn PWA must trigger ad for TimeWall"
-        assert "showEarnPromo" in after_handler
+        assert "provider === 'timewall'" in after_handler
+        assert "ThronosEarnTabs.open(" in after_handler
+
+    def test_earn_pwa_promo_inside_tab_callback(self):
+        src = self._read("public/wallet-pwa/app.js")
+        handler_idx = src.index("provider === 'timewall' || provider === 'cpx'")
+        block = src[handler_idx:handler_idx + 1200]
+        tab_open_idx = block.index("ThronosEarnTabs.open(")
+        promo_idx = block.index("showEarnPromo(")
+        assert tab_open_idx < promo_idx, \
+            "Tab must open synchronously before promo inside async callback"
+
+    def test_earn_pwa_handles_popup_blocked(self):
+        src = self._read("public/wallet-pwa/app.js")
+        handler_idx = src.index("provider === 'timewall' || provider === 'cpx'")
+        block = src[handler_idx:handler_idx + 1200]
+        assert "popup_blocked" in block
+
+    # -- Surface guard: _currentSurface blocks ads outside Earn --
+
+    def test_surface_guard_variable_exists(self):
+        src = self._read("public/wallet-pwa/app.js")
+        assert "let _currentSurface = 'wallet'" in src
+
+    def test_surface_guard_on_ad_sidebar(self):
+        src = self._read("public/wallet-pwa/app.js")
+        fn_idx = src.index("function loadWalletAdsSidebar(")
+        fn_block = src[fn_idx:fn_idx + 200]
+        assert "_currentSurface !== 'earn'" in fn_block
+
+    def test_surface_guard_on_referral_panel(self):
+        src = self._read("public/wallet-pwa/app.js")
+        fn_idx = src.index("function loadWalletReferralPanel(")
+        fn_block = src[fn_idx:fn_idx + 200]
+        assert "_currentSurface !== 'earn'" in fn_block
+
+    def test_surface_guard_on_earn_promo(self):
+        src = self._read("public/wallet-pwa/app.js")
+        fn_idx = src.index("function showEarnPromo(")
+        fn_block = src[fn_idx:fn_idx + 200]
+        assert "_currentSurface !== 'earn'" in fn_block
+
+    def test_surface_set_to_wallet_on_showWallet(self):
+        src = self._read("public/wallet-pwa/app.js")
+        fn_idx = src.index("function showWallet(")
+        fn_block = src[fn_idx:fn_idx + 500]
+        assert "_currentSurface = 'wallet'" in fn_block
+
+    def test_surface_set_to_earn_on_showEarn(self):
+        src = self._read("public/wallet-pwa/app.js")
+        fn_idx = src.index("function showEarn(")
+        fn_block = src[fn_idx:fn_idx + 500]
+        assert "_currentSurface = 'earn'" in fn_block
+
+    def test_surface_set_on_send_receive_history(self):
+        src = self._read("public/wallet-pwa/app.js")
+        for fn_name, surface in [
+            ("function showSend(", "send"),
+            ("function showReceive(", "receive"),
+            ("function showHistory(", "history"),
+        ]:
+            fn_idx = src.index(fn_name)
+            fn_block = src[fn_idx:fn_idx + 500]
+            assert f"_currentSurface = '{surface}'" in fn_block, \
+                f"{fn_name} must set _currentSurface = '{surface}'"
+
+    # -- Wallet screens: zero ad and leaderboard mounts --
+
+    def test_wallet_home_has_no_leaderboard(self):
+        src = self._read("public/wallet-pwa/app.js")
+        home_start = src.index("<!-- Quick actions")
+        home_end = src.index("</div>\n  `);", home_start)
+        home_html = src[home_start:home_end]
+        assert "leaderboard" not in home_html.lower(), \
+            "Wallet home must not mount a leaderboard"
+        assert "Leaderboard" not in home_html, \
+            "Wallet home must not contain a leaderboard button"
 
     def test_wallet_home_has_no_ads(self):
         src = self._read("public/wallet-pwa/app.js")
@@ -2043,3 +2136,308 @@ class TestAdPlacementRegression:
             assert "showEarnPromo" not in fn_block, f"{fn_name} must not contain ad calls"
             assert "showPromo" not in fn_block, f"{fn_name} must not contain ad calls"
             assert "earn/ads" not in fn_block, f"{fn_name} must not reference ad API"
+
+    def test_wallet_history_has_no_ads(self):
+        src = self._read("public/wallet-pwa/app.js")
+        fn_idx = src.index("function showHistory(")
+        fn_block = src[fn_idx:fn_idx + 3000]
+        assert "showEarnPromo" not in fn_block
+        assert "walletAdsSidebar" not in fn_block
+        assert "earn/ads" not in fn_block
+
+    # -- Earn section HAS leaderboard and ads --
+
+    def test_wallet_earn_section_has_leaderboard(self):
+        src = self._read("public/wallet-pwa/app.js")
+        earn_fn_idx = src.index("function showEarn(")
+        after_earn = src[earn_fn_idx:]
+        assert "earnPwaLeaderboard" in after_earn, "Earn section must mount leaderboard"
+        assert "ThronosEarnLeaderboard.mount" in after_earn, "Earn must activate leaderboard"
+
+    def test_wallet_earn_section_may_show_ads(self):
+        src = self._read("public/wallet-pwa/app.js")
+        earn_fn_idx = src.index("function showEarn(")
+        after_earn = src[earn_fn_idx:earn_fn_idx + 15000]
+        assert "walletAdsSidebar" in after_earn, "Earn section must have ad sidebar"
+        assert "loadWalletAdsSidebar" in after_earn, "Earn must call ad loader"
+
+    def test_earn_pwa_has_leaderboard_and_ads(self):
+        src = self._read("public/wallet-pwa/app.js")
+        assert "earnPwaLeaderboard" in src, "Earn PWA must have leaderboard element"
+        assert "walletAdsSidebar" in src, "Earn PWA must have ads sidebar"
+        assert "walletReferralPanel" in src, "Earn PWA must have referral panel"
+
+    # -- Extension: no leaderboard or ads --
+
+    def test_extension_has_no_leaderboard(self):
+        src = self._read("public/extension/popup.js")
+        assert "leaderboard" not in src.lower(), "Extension must not contain leaderboard"
+
+    def test_extension_has_no_ads(self):
+        src = self._read("public/extension/popup.js")
+        assert "earn/ads" not in src, "Extension must not reference ad API"
+        assert "SPONSORED" not in src, "Extension must not contain sponsor content"
+        assert "showPromo" not in src, "Extension must not have promo functions"
+        assert "showEarnPromo" not in src
+
+    def test_extension_has_no_earn_surface(self):
+        src = self._read("public/extension/popup.html")
+        assert "leaderboard" not in src.lower()
+        assert "earn" not in src.lower() or "earn" not in src[src.find("<body"):].lower()
+
+    # -- Tab dedup --
+
+    def test_earn_tab_dedup_checks_closed(self):
+        src = self._read("public/wallet-pwa/earn-provider-tabs.js")
+        assert "entry.tab.closed" in src
+
+    def test_earn_tab_dedup_focuses_existing(self):
+        src = self._read("public/wallet-pwa/earn-provider-tabs.js")
+        assert "entry.tab.focus" in src
+
+    def test_earn_tab_dedup_returns_existing_promise(self):
+        src = self._read("public/wallet-pwa/earn-provider-tabs.js")
+        assert "return entry.promise" in src
+
+    def test_earn_tab_popup_blocked_detection(self):
+        src = self._read("public/wallet-pwa/earn-provider-tabs.js")
+        assert "popup_blocked" in src
+
+    # -- Promo cleanup --
+
+    def test_earn_web_promo_cleanup_on_all_paths(self):
+        src = self._read("templates/earn_beta.html")
+        fn_start = src.index("function showPromo(")
+        fn_block = src[fn_start:fn_start + 1600]
+        assert "_promoActive = false" in fn_block
+        assert "function done()" in fn_block
+
+    def test_earn_pwa_promo_cleanup_on_all_paths(self):
+        src = self._read("public/wallet-pwa/app.js")
+        fn_start = src.index("function showEarnPromo(")
+        fn_block = src[fn_start:fn_start + 2500]
+        assert "_earnPromoActive = false" in fn_block
+        assert "function done()" in fn_block
+
+
+class TestSurfaceIsolation:
+    """Verify advertiser escrow never creates staking positions, and vice versa."""
+
+    @pytest.fixture(autouse=True)
+    def _store(self, tmp_path):
+        os.environ.setdefault("EDU_DB_PATH", str(tmp_path / "test_l2e_edu.db"))
+        try:
+            from services.earn_account import EarnAccountStore
+        except Exception:
+            pytest.skip("EarnAccountStore not importable")
+        self.store = EarnAccountStore(str(tmp_path / "earn.db"), "test_cpx_hash")
+        self.app = Flask(__name__)
+        with self.app.app_context():
+            from services.earn_account import register_earn_account_routes
+            register_earn_account_routes(self.app, self.store)
+        self.user = self.store.register("advertiser@test.com", "StrongPass1!")
+
+    def test_advertiser_funding_never_creates_stake_position(self):
+        """Creating an escrow intent must not insert into earn_staking_positions."""
+        uid = self.user["earn_user_id"]
+        camp = self.store.create_campaign(uid, "Test Campaign", "cpm", "1.000000")
+        with self.store._tx() as con:
+            before = con.execute(
+                "SELECT COUNT(*) FROM earn_staking_positions WHERE earn_user_id = ?",
+                (uid,),
+            ).fetchone()[0]
+        try:
+            self.store.escrow_create_intent(uid, camp["campaign_id"], "deposit", "10.000000")
+        except Exception:
+            pass
+        with self.store._tx() as con:
+            after = con.execute(
+                "SELECT COUNT(*) FROM earn_staking_positions WHERE earn_user_id = ?",
+                (uid,),
+            ).fetchone()[0]
+        assert after == before, "Escrow intent must not create staking position"
+
+    def test_staking_never_creates_advertising_escrow(self):
+        """Staking must not insert into earn_ad_escrow."""
+        uid = self.user["earn_user_id"]
+        with self.store._tx() as con:
+            before = con.execute(
+                "SELECT COUNT(*) FROM earn_ad_escrow",
+            ).fetchone()[0]
+        try:
+            self.store.create_stake(uid, "thc_base", "10.000000")
+        except Exception:
+            pass
+        with self.store._tx() as con:
+            after = con.execute(
+                "SELECT COUNT(*) FROM earn_ad_escrow",
+            ).fetchone()[0]
+        assert after == before, "Staking must not create advertising escrow record"
+
+    def test_escrow_tables_separate_from_staking_tables(self):
+        """DB schema must have separate tables for escrow and staking."""
+        with self.store._tx() as con:
+            tables = [row[0] for row in con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()]
+        assert "earn_staking_positions" in tables
+        assert "earn_ad_escrow" in tables
+        assert "earn_ad_campaigns" in tables
+        escrow_cols = set()
+        with self.store._tx() as con:
+            for row in con.execute("PRAGMA table_info(earn_ad_escrow)"):
+                escrow_cols.add(row[1])
+        assert "campaign_id" in escrow_cols, "Escrow references campaigns, not pools"
+        staking_cols = set()
+        with self.store._tx() as con:
+            for row in con.execute("PRAGMA table_info(earn_staking_positions)"):
+                staking_cols.add(row[1])
+        assert "pool_id" in staking_cols, "Staking references pools, not campaigns"
+        assert "campaign_id" not in staking_cols, "Staking must not reference campaigns"
+
+
+class TestPublisherIsolation:
+    """Verify publisher identity is isolated from advertiser and Earn accounts."""
+
+    @pytest.fixture(autouse=True)
+    def _store(self, tmp_path):
+        os.environ.setdefault("EDU_DB_PATH", str(tmp_path / "test_l2e_edu.db"))
+        try:
+            from services.earn_account import EarnAccountStore
+        except Exception:
+            pytest.skip("EarnAccountStore not importable")
+        self.store = EarnAccountStore(str(tmp_path / "earn.db"), "test_cpx_hash")
+
+    def test_publisher_table_exists(self):
+        with self.store._tx() as con:
+            tables = [row[0] for row in con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()]
+        assert "earn_publishers" in tables, "Publisher table must exist"
+        assert "earn_publisher_placements" in tables, "Publisher placements table must exist"
+
+    def test_publisher_table_separate_from_advertiser(self):
+        with self.store._tx() as con:
+            pub_cols = set(
+                row[1] for row in con.execute("PRAGMA table_info(earn_publishers)")
+            )
+            camp_cols = set(
+                row[1] for row in con.execute("PRAGMA table_info(earn_ad_campaigns)")
+            )
+        assert "publisher_id" in pub_cols
+        assert "provider" in pub_cols, "Publisher must store provider identity"
+        assert "provider_pub_id" in pub_cols, "Publisher must store provider-specific ID"
+        assert "publisher_id" not in camp_cols, "Campaign table must not reference publisher"
+
+    def test_cpx_publisher_identity_isolated_from_earn_account(self):
+        user = self.store.register("publisher@test.com", "StrongPass1!")
+        uid = user["earn_user_id"]
+        result = self.store.publisher_register(uid, "cpx", "My CPX Site", "cpx_pub_123")
+        assert result["publisher_id"].startswith("pub_")
+        assert result["status"] == "pending_review"
+        publishers = self.store.publisher_get(uid)
+        assert len(publishers) == 1
+        assert publishers[0]["provider"] == "cpx"
+        assert publishers[0]["provider_pub_id"] == "cpx_pub_123"
+        assert publishers[0]["earn_user_id"] == uid
+
+    def test_publisher_registration_does_not_create_wallet(self):
+        user = self.store.register("pubonly@test.com", "StrongPass1!")
+        uid = user["earn_user_id"]
+        self.store.publisher_register(uid, "timewall", "My TimeWall Site")
+        with self.store._tx() as con:
+            link = con.execute(
+                "SELECT * FROM earn_wallet_links WHERE earn_user_id = ?",
+                (uid,),
+            ).fetchone()
+        assert link is None, "Publisher registration must not create a wallet link"
+
+    def test_publisher_duplicate_provider_rejected(self):
+        user = self.store.register("dup@test.com", "StrongPass1!")
+        uid = user["earn_user_id"]
+        self.store.publisher_register(uid, "cpx", "Site 1")
+        with pytest.raises(EarnError, match="publisher_already_registered"):
+            self.store.publisher_register(uid, "cpx", "Site 2")
+
+    def test_publisher_postback_configuration(self):
+        user = self.store.register("postback@test.com", "StrongPass1!")
+        uid = user["earn_user_id"]
+        pub = self.store.publisher_register(uid, "cpx", "Test")
+        result = self.store.publisher_update_postback(
+            pub["publisher_id"], uid,
+            "https://example.com/postback", "secret123",
+        )
+        assert result["postback_url"] == "https://example.com/postback"
+
+    def test_publisher_placement_management(self):
+        user = self.store.register("placements@test.com", "StrongPass1!")
+        uid = user["earn_user_id"]
+        pub = self.store.publisher_register(uid, "cpx", "Test")
+        plc = self.store.publisher_add_placement(
+            pub["publisher_id"], uid, "survey", "https://example.com",
+        )
+        assert plc["placement_id"].startswith("plc_")
+        placements = self.store.publisher_get_placements(pub["publisher_id"], uid)
+        assert len(placements) == 1
+        assert placements[0]["placement_type"] == "survey"
+
+
+BASKETBALL_ROOT = Path(__file__).parent.parent.parent / "thronos-basketball-market" / "web"
+
+
+class TestBasketballPromoNavigation:
+    """Verify basketball market promo navigation: one click -> one promo -> one navigation."""
+
+    @staticmethod
+    def _read(rel_path):
+        return (BASKETBALL_ROOT / rel_path).read_text()
+
+    def test_promo_nav_link_exists(self):
+        src = self._read("components/PromoNavLink.tsx")
+        assert "export function PromoNavLink" in src
+
+    def test_promo_nav_link_uses_session_storage_dedup(self):
+        src = self._read("components/PromoNavLink.tsx")
+        assert "sessionStorage.getItem(" in src
+        assert "sessionStorage.setItem(" in src
+
+    def test_promo_nav_link_one_promo_per_session(self):
+        src = self._read("components/PromoNavLink.tsx")
+        get_idx = src.index("sessionStorage.getItem(")
+        block_after = src[get_idx:get_idx + 100]
+        assert "return" in block_after
+
+    def test_promo_nav_link_navigates_after_promo(self):
+        src = self._read("components/PromoNavLink.tsx")
+        assert "router.push(" in src
+        assert "pendingHref" in src
+
+    def test_promo_nav_link_cleans_up_overlay(self):
+        src = self._read("components/PromoNavLink.tsx")
+        assert "setShowPromo(false)" in src
+
+    def test_promo_nav_routes_clubs_and_news(self):
+        src = self._read("components/PromoNav.tsx")
+        assert '"/clubs"' in src
+        assert '"/news"' in src
+        assert "PromoNavLink" in src
+
+    def test_promo_nav_uses_standard_link_for_others(self):
+        src = self._read("components/PromoNav.tsx")
+        assert "import Link from" in src
+        assert "PROMO_PATHS.has(href)" in src
+
+    def test_header_uses_promo_nav(self):
+        src = self._read("components/Header.tsx")
+        assert "import { PromoNav }" in src
+        assert "<PromoNav" in src
+
+    def test_no_repeated_interstitials_during_internal_nav(self):
+        src = self._read("components/PromoNavLink.tsx")
+        assert "SESSION_KEY" in src
+        fn_idx = src.index("handleClick")
+        fn_block = src[fn_idx:fn_idx + 300]
+        get_idx = fn_block.index("sessionStorage.getItem(")
+        return_idx = fn_block.index("return", get_idx)
+        prevent_idx = fn_block.index("preventDefault", return_idx + 1) if "preventDefault" in fn_block[return_idx:] else 999
+        assert return_idx < prevent_idx

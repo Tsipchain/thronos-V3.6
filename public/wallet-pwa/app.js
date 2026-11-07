@@ -1547,6 +1547,7 @@ function _renderHomeAssetRow(icon, label, sym, val, color, addr, evmMeta) {
 }
 
 async function loadWalletAdsSidebar() {
+  if (_currentSurface !== 'earn') return;
   const panel = document.getElementById('walletAdsSidebar');
   if (!panel) return;
   try {
@@ -1579,6 +1580,7 @@ async function loadWalletAdsSidebar() {
 }
 
 async function loadWalletReferralPanel() {
+  if (_currentSurface !== 'earn') return;
   const panel = document.getElementById('walletReferralPanel');
   if (!panel) return;
   try {
@@ -1604,6 +1606,7 @@ async function loadWalletReferralPanel() {
 }
 
 async function showWallet() {
+  _currentSurface = 'wallet';
   const address = getActiveAddr();
   if (!address || !unlocked.has(address)) { showUnlock(); return; }
 
@@ -1671,7 +1674,6 @@ async function showWallet() {
         <button class="action-btn" id="connectBtn"><span class="action-btn__icon">⬡</span>Connect</button>
         <button class="action-btn" id="musicBtn"><span class="action-btn__icon">🎵</span>Music</button>
         <button class="action-btn" id="earnBtn"><span class="action-btn__icon">✨</span>Earn</button>
-        <button class="action-btn" id="loyaltyBtn" style="grid-column:span 2"><span class="action-btn__icon">🏆</span>Leaderboard / VIP</button>
         <button class="action-btn" id="historyBtn"><span class="action-btn__icon">📋</span>History</button>
         <button class="action-btn" id="createTokenBtn"><span class="action-btn__icon">🪙</span>Create Token</button>
         <button class="action-btn" id="nftBtn"><span class="action-btn__icon">🖼️</span>NFTs</button>
@@ -1733,7 +1735,6 @@ async function showWallet() {
   document.getElementById('connectBtn').addEventListener('click', showWalletConnect);
   document.getElementById('musicBtn').addEventListener('click', showMusic);
   document.getElementById('earnBtn').addEventListener('click', showEarn);
-  document.getElementById('loyaltyBtn').addEventListener('click', () => showEarn({ focusLeaderboard: true }));
   document.getElementById('createTokenBtn').addEventListener('click', showCreateToken);
   document.getElementById('nftBtn').addEventListener('click', showNFTs);
   document.getElementById('epochBtn').addEventListener('click', showEpoch);
@@ -2158,8 +2159,10 @@ async function _fetchEarnAds() {
   return null;
 }
 
+let _currentSurface = 'wallet';
 let _earnPromoActive = false;
 function showEarnPromo(durationSec) {
+  if (_currentSurface !== 'earn') return Promise.resolve();
   if (_earnPromoActive) return Promise.resolve();
   _earnPromoActive = true;
   durationSec = durationSec || 10;
@@ -2206,6 +2209,7 @@ function showEarnPromo(durationSec) {
 }
 
 async function showEarn(options = {}) {
+  _currentSurface = 'earn';
   render(`
     <div class="screen">
       <div class="header">
@@ -2428,12 +2432,31 @@ async function showEarn(options = {}) {
       }
     };
     document.querySelectorAll('[data-earn-provider]').forEach(button => {
-      button.addEventListener('click', async () => {
+      button.addEventListener('click', () => {
         const provider = button.dataset.earnProvider;
         const definition = providerDefinitions[provider];
         if (!definition) return;
-        if (provider === 'timewall' || provider === 'cpx') await showEarnPromo(10);
-        openEarnProvider(provider, definition);
+        if (provider === 'timewall' || provider === 'cpx') {
+          const message = document.getElementById('earnPwaMessage');
+          message.textContent = 'Opening ' + definition.label + '…';
+          window.ThronosEarnTabs.open(provider, async () => {
+            await showEarnPromo(10);
+            const response = await fetch(earnBase + definition.endpoint, { credentials: 'include' });
+            const offerwall = await response.json().catch(() => null);
+            if (!response.ok || !offerwall?.ok || !offerwall.url) {
+              throw new Error(offerwall?.error || 'provider_unavailable');
+            }
+            return offerwall.url;
+          }, me.earn_user_id).then(() => {
+            message.textContent = definition.label + ' opened in a browser tab. Tap again to return to it.';
+          }).catch(error => {
+            message.textContent = error.message === 'popup_blocked'
+              ? 'Allow pop-ups for this site, then tap ' + definition.label + ' again.'
+              : definition.label + ' is temporarily unavailable. Your Earn balance remains unchanged.';
+          });
+        } else {
+          openEarnProvider(provider, definition);
+        }
       });
     });
     try {
@@ -4112,6 +4135,7 @@ async function _pwaConfirmSend(address, to, amount, token) {
 
 
 function showSend(preselectedToken = null, prefillAddr = null) {
+  _currentSurface = 'send';
   const address = getActiveAddr();
 
   const NETWORKS_DEF = [
@@ -4344,6 +4368,7 @@ function showSend(preselectedToken = null, prefillAddr = null) {
 // ─── Receive screen ───────────────────────────────────────────────────────────
 
 function showReceive() {
+  _currentSurface = 'receive';
   const address = getActiveAddr();
   const qr = `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(address)}&size=180x180&color=ffffff&bgcolor=0a0a0f&margin=8`;
 
@@ -4807,6 +4832,7 @@ function _renderHistoryRow(tx) {
 }
 
 async function showHistory(address) {
+  _currentSurface = 'history';
   address = address || getActiveAddr();
   if (!address || !unlocked.has(address)) { showUnlock(); return; }
 

@@ -341,17 +341,29 @@
   let promoIndex = Math.floor(Math.random() * promoAds.length);
   let _promoActive = false;
 
-  function showPromo(durationSec) {
+  function showPromo(durationSec, promoTab) {
     if (_promoActive) return Promise.resolve();
     _promoActive = true;
     durationSec = durationSec || 15;
     return new Promise(resolve => {
       const ad = promoAds[promoIndex++ % promoAds.length];
-      const overlay = $('promo-overlay');
-      $('promo-badge').textContent = ad.badge;
-      $('promo-title').textContent = ad.title;
-      $('promo-desc').textContent = ad.desc;
-      const visitBtn = $('promo-visit');
+      // The browser focuses the reserved provider tab immediately. Render the
+      // interstitial there so the visitor never waits on an empty about:blank.
+      let promoDocument = document;
+      if (promoTab) {
+        try {
+          promoDocument = promoTab.document;
+          promoDocument.title = 'Thronos Earn · Sponsor';
+          promoDocument.documentElement.lang = _lang;
+          promoDocument.body.innerHTML = `<div id="promo-overlay" style="position:fixed;inset:0;background:#0b1020;color:#f7f9ff;display:flex;align-items:center;justify-content:center;font-family:system-ui,sans-serif;padding:20px;box-sizing:border-box"><div style="max-width:420px;width:100%;background:#18223b;border:1px solid #455578;border-radius:16px;padding:26px;text-align:center"><small id="promo-badge"></small><h2 id="promo-title"></h2><p id="promo-desc"></p><a id="promo-visit" target="thronosSponsor" rel="noopener sponsored" style="display:inline-block;background:#ff8c27;color:#111;padding:10px 20px;border-radius:9px;text-decoration:none"></a><p id="promo-countdown" role="status"></p><button id="promo-skip" type="button" style="display:none;padding:8px 18px">${t('skip')}</button></div></div>`;
+        } catch (_) { promoDocument = document; }
+      }
+      const element = id => promoDocument.getElementById(id);
+      const overlay = element('promo-overlay');
+      element('promo-badge').textContent = ad.badge;
+      element('promo-title').textContent = ad.title;
+      element('promo-desc').textContent = ad.desc;
+      const visitBtn = element('promo-visit');
       visitBtn.href = ad.url; visitBtn.textContent = ad.cta;
       if (ad.ad_id) {
         fetch('/api/earn/ads/impression', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ad_id: ad.ad_id }) }).catch(() => {});
@@ -362,8 +374,8 @@
         }
         done();
       };
-      const countdownEl = $('promo-countdown');
-      const skipBtn = $('promo-skip');
+      const countdownEl = element('promo-countdown');
+      const skipBtn = element('promo-skip');
       let seconds = durationSec;
       countdownEl.textContent = t('countdown').replace('{s}', seconds);
       skipBtn.style.display = 'none';
@@ -523,8 +535,8 @@
   let activePromoProvider = null;
   function openProviderWithPromo(provider, endpoint, connected, unavailable) {
     setStatus(t('loadingSurveys'));
-    return window.ThronosEarnTabs.open(provider, async () => {
-      await showPromo(10);
+    return window.ThronosEarnTabs.open(provider, async tab => {
+      await showPromo(10, tab);
       const res = await fetch(endpoint, { headers: earnAuthHeaders() });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ok || !data.url) throw new Error(data.error || unavailable);

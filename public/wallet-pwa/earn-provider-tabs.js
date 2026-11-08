@@ -39,7 +39,7 @@
     try { tab.opener = null; } catch (_) {}
     entry = { tab, promise: null };
     tabs.set(provider, entry);
-    entry.promise = Promise.resolve().then(() => loadUrl(tab)).then(rawUrl => {
+    entry.promise = Promise.resolve().then(loadUrl).then(rawUrl => {
       if (tabs.get(provider) !== entry || tab.closed) throw new Error('provider_cancelled');
       const url = new URL(rawUrl);
       if (url.protocol !== 'https:' || url.username || url.password) {

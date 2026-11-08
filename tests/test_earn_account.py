@@ -1988,34 +1988,21 @@ class TestAdPlacementRegression:
         assert "openProviderWithPromo('timewall'" in after_tw, \
             "TimeWall click must route through openProviderWithPromo"
 
-    def test_earn_web_promo_opens_tab_before_promo(self):
-        """openProviderWithPromo must open tab synchronously via ThronosEarnTabs,
-        then show promo inside the loadUrl callback to preserve user activation."""
+    def test_earn_web_provider_promo_is_visible_in_reserved_tab(self):
         src = self._read("templates/earn_beta.html")
         fn_idx = src.index("function openProviderWithPromo(")
-        fn_block = src[fn_idx:fn_idx + 600]
-        assert "ThronosEarnTabs.open(" in fn_block, \
-            "Must route through ThronosEarnTabs.open for synchronous tab opening"
-        tab_idx = fn_block.index("ThronosEarnTabs.open(")
-        promo_idx = fn_block.index("showPromo(")
-        assert tab_idx < promo_idx, \
-            "Tab must open (sync, preserves user activation) before promo countdown"
+        fn_block = src[fn_idx:fn_idx + 650]
+        assert "ThronosEarnTabs.open(provider, async tab =>" in fn_block
+        assert "await showPromo(10, tab)" in fn_block
+        assert "fetch(endpoint" in fn_block
+        assert "promoTab.document" in src
 
-    def test_earn_web_promo_handles_popup_blocked(self):
+    def test_earn_web_promo_tab_does_not_embed_provider(self):
         src = self._read("templates/earn_beta.html")
         fn_idx = src.index("function openProviderWithPromo(")
-        fn_block = src[fn_idx:fn_idx + 800]
-        assert "popup_blocked" in fn_block, \
-            "Must handle popup_blocked error from ThronosEarnTabs"
-
-    def test_earn_web_promo_cleans_up_blank_tab_on_error(self):
-        """ThronosEarnTabs closes the blank tab on loadUrl error.
-        openProviderWithPromo must let errors propagate to that cleanup."""
-        src = self._read("public/wallet-pwa/earn-provider-tabs.js")
-        catch_idx = src.index(".catch(error =>")
-        catch_block = src[catch_idx:catch_idx + 200]
-        assert "close(tab)" in catch_block, "earn-provider-tabs must close tab on error"
-        assert "tabs.delete(provider)" in catch_block, "Must clean up entry on error"
+        fn_block = src[fn_idx:fn_idx + 750]
+        assert "frame.src" not in fn_block
+        assert "popup_blocked" in fn_block
 
     # -- Earn PWA: CPX and TimeWall use ThronosEarnTabs.open --
 
@@ -2025,15 +2012,7 @@ class TestAdPlacementRegression:
         after_handler = src[handler_idx:]
         assert "provider === 'cpx'" in after_handler, "Earn PWA must check for CPX"
         assert "ThronosEarnTabs.open(" in after_handler, "Must use tab-first flow"
-
-    def test_earn_pwa_cpx_shows_promo_inside_tab_callback(self):
-        src = self._read("public/wallet-pwa/app.js")
-        handler_idx = src.index("provider === 'timewall' || provider === 'cpx'")
-        block = src[handler_idx:handler_idx + 1200]
-        tab_idx = block.index("ThronosEarnTabs.open(")
-        promo_idx = block.index("showEarnPromo(")
-        assert tab_idx < promo_idx, \
-            "Tab must open synchronously before promo inside async callback"
+        assert "showEarnPromo" not in after_handler
 
     def test_earn_pwa_timewall_uses_tab_first_flow(self):
         src = self._read("public/wallet-pwa/app.js")
@@ -2132,15 +2111,12 @@ class TestAdPlacementRegression:
         assert "earnPwaLeaderboard" in after_earn, "Earn section must mount leaderboard"
         assert "ThronosEarnLeaderboard.mount" in after_earn, "Earn must activate leaderboard"
 
-    def test_wallet_earn_section_promo_only_in_earn(self):
-        """showEarnPromo exists but is guarded by _currentSurface === 'earn'."""
+    def test_wallet_earn_section_is_ad_free(self):
         src = self._read("public/wallet-pwa/app.js")
-        fn_idx = src.index("function showEarnPromo(")
-        fn_block = src[fn_idx:fn_idx + 200]
-        assert "_currentSurface !== 'earn'" in fn_block, \
-            "showEarnPromo must bail when not on the Earn screen"
-        assert "_earnPromoActive" in fn_block, \
-            "showEarnPromo must have a dedup guard"
+        assert "walletAdsSidebar" not in src
+        assert "loadWalletAdsSidebar" not in src
+        assert "showEarnPromo" not in src
+        assert "/api/earn/ads" not in src
 
     def test_wallet_earn_has_leaderboard_and_referral_screen(self):
         src = self._read("public/wallet-pwa/app.js")
@@ -2188,174 +2164,10 @@ class TestAdPlacementRegression:
     def test_earn_web_promo_cleanup_on_all_paths(self):
         src = self._read("templates/earn_beta.html")
         fn_start = src.index("function showPromo(")
-        fn_block = src[fn_start:fn_start + 1600]
+        fn_block = src[fn_start:fn_start + 3200]
         assert "_promoActive = false" in fn_block
         assert "function done()" in fn_block
 
-    def test_earn_pwa_promo_cleanup_on_all_paths(self):
-        src = self._read("public/wallet-pwa/app.js")
-        fn_start = src.index("function showEarnPromo(")
-        fn_block = src[fn_start:fn_start + 2500]
-        assert "_earnPromoActive = false" in fn_block
-        assert "function done()" in fn_block
-
-
-class TestProviderTabFlow:
-    """Regression tests for CPX/TimeWall provider tab flow:
-    success, provider error, popup blocked, double click, promo close."""
-
-    @staticmethod
-    def _read(rel_path):
-        root = Path(__file__).parent.parent
-        return (root / rel_path).read_text()
-
-    # -- Success path: tab opens sync, promo runs, URL loads in same tab --
-
-    def test_earn_web_success_path_tab_then_promo_then_url(self):
-        """The full success flow: ThronosEarnTabs.open -> showPromo -> fetch URL."""
-        src = self._read("templates/earn_beta.html")
-        fn_idx = src.index("function openProviderWithPromo(")
-        fn_block = src[fn_idx:fn_idx + 600]
-        tab_idx = fn_block.index("ThronosEarnTabs.open(")
-        promo_idx = fn_block.index("showPromo(")
-        fetch_idx = fn_block.index("fetch(endpoint")
-        assert tab_idx < promo_idx < fetch_idx, \
-            "Correct order: open tab sync -> promo -> fetch URL"
-
-    def test_earn_pwa_success_path_tab_then_promo_then_url(self):
-        src = self._read("public/wallet-pwa/app.js")
-        idx = src.index("provider === 'timewall' || provider === 'cpx'")
-        block = src[idx:idx + 1200]
-        tab_idx = block.index("ThronosEarnTabs.open(")
-        promo_idx = block.index("showEarnPromo(")
-        fetch_idx = block.index("fetch(earnBase")
-        assert tab_idx < promo_idx < fetch_idx
-
-    def test_earn_web_tab_navigates_to_url_via_library(self):
-        """earn-provider-tabs.js navigates the tab with location.replace,
-        so the URL loads in the already-open tab (no about:blank left behind)."""
-        src = self._read("public/wallet-pwa/earn-provider-tabs.js")
-        assert "tab.location.replace(url.href)" in src
-
-    # -- Provider error: blank tab cleaned up, status message shown --
-
-    def test_earn_web_provider_error_shows_message(self):
-        src = self._read("templates/earn_beta.html")
-        fn_idx = src.index("function openProviderWithPromo(")
-        fn_block = src[fn_idx:fn_idx + 800]
-        assert ".catch(error =>" in fn_block or ".catch(error=>" in fn_block
-        assert "setStatus(" in fn_block
-
-    def test_earn_pwa_provider_error_shows_message(self):
-        src = self._read("public/wallet-pwa/app.js")
-        idx = src.index("provider === 'timewall' || provider === 'cpx'")
-        block = src[idx:idx + 1200]
-        assert ".catch(error =>" in block or ".catch(error=>" in block
-        assert "unavailable" in block.lower()
-
-    def test_library_closes_blank_tab_on_url_error(self):
-        """When loadUrl throws, the library must close the blank tab and delete the entry."""
-        src = self._read("public/wallet-pwa/earn-provider-tabs.js")
-        catch_idx = src.index(".catch(error =>")
-        catch_block = src[catch_idx:catch_idx + 200]
-        assert "close(tab)" in catch_block, "Must close blank tab on error"
-        assert "tabs.delete(provider)" in catch_block, "Must remove entry on error"
-
-    def test_library_validates_url_protocol(self):
-        src = self._read("public/wallet-pwa/earn-provider-tabs.js")
-        assert "url.protocol !== 'https:'" in src, "Must reject non-HTTPS URLs"
-        assert "url.username" in src, "Must reject URLs with embedded credentials"
-
-    # -- Popup blocked: clear message, no blank tab left --
-
-    def test_earn_web_popup_blocked_message(self):
-        src = self._read("templates/earn_beta.html")
-        fn_idx = src.index("function openProviderWithPromo(")
-        fn_block = src[fn_idx:fn_idx + 800]
-        assert "popup_blocked" in fn_block, "Must handle popup_blocked"
-        assert "pop-ups" in fn_block.lower() or "αναδυόμενα" in fn_block.lower()
-
-    def test_earn_pwa_popup_blocked_message(self):
-        src = self._read("public/wallet-pwa/app.js")
-        idx = src.index("provider === 'timewall' || provider === 'cpx'")
-        block = src[idx:idx + 1200]
-        assert "popup_blocked" in block
-        assert "pop-ups" in block.lower()
-
-    def test_library_rejects_null_tab_as_popup_blocked(self):
-        src = self._read("public/wallet-pwa/earn-provider-tabs.js")
-        open_idx = src.index("function open(")
-        fn_block = src[open_idx:open_idx + 1200]
-        assert "!tab" in fn_block
-        assert "popup_blocked" in fn_block
-
-    # -- Double click / rapid clicks: dedup via ThronosEarnTabs --
-
-    def test_library_dedup_returns_existing_promise(self):
-        src = self._read("public/wallet-pwa/earn-provider-tabs.js")
-        open_idx = src.index("function open(")
-        fn_block = src[open_idx:open_idx + 1200]
-        assert "return entry.promise" in fn_block, "Second click must return existing promise"
-        assert "entry.tab.focus" in fn_block, "Must focus existing tab on second click"
-
-    def test_library_dedup_checks_tab_closed(self):
-        src = self._read("public/wallet-pwa/earn-provider-tabs.js")
-        open_idx = src.index("function open(")
-        fn_block = src[open_idx:open_idx + 1200]
-        assert "entry.tab.closed" in fn_block, "Must check if tab was closed by user"
-
-    def test_earn_web_no_promoOpening_guard(self):
-        """Old iframe approach used promoOpening flag. New flow uses ThronosEarnTabs
-        dedup instead, so promoOpening must not exist."""
-        src = self._read("templates/earn_beta.html")
-        fn_idx = src.index("function openProviderWithPromo(")
-        fn_block = src[fn_idx:fn_idx + 600]
-        assert "promoOpening" not in fn_block, \
-            "Must use ThronosEarnTabs dedup, not custom promoOpening flag"
-
-    def test_earn_pwa_promo_dedup_guard(self):
-        """showEarnPromo must prevent double overlays with _earnPromoActive."""
-        src = self._read("public/wallet-pwa/app.js")
-        fn_idx = src.index("function showEarnPromo(")
-        fn_block = src[fn_idx:fn_idx + 400]
-        assert "_earnPromoActive" in fn_block
-        guard_idx = fn_block.index("_earnPromoActive")
-        promise_idx = fn_block.index("new Promise")
-        assert guard_idx < promise_idx, "Guard must prevent double overlays"
-
-    # -- Promo close: overlay removed, state cleaned up --
-
-    def test_earn_web_promo_skip_button(self):
-        src = self._read("templates/earn_beta.html")
-        fn_idx = src.index("function showPromo(")
-        fn_block = src[fn_idx:fn_idx + 2200]
-        assert "skipBtn.addEventListener('click', done)" in fn_block
-        assert "skipBtn.style.display = ''" in fn_block
-
-    def test_earn_pwa_promo_skip_button(self):
-        src = self._read("public/wallet-pwa/app.js")
-        fn_idx = src.index("function showEarnPromo(")
-        fn_block = src[fn_idx:fn_idx + 2500]
-        assert "skipBtn.addEventListener('click', done)" in fn_block
-        assert "overlay.remove()" in fn_block
-
-    def test_earn_pwa_promo_countdown(self):
-        src = self._read("public/wallet-pwa/app.js")
-        fn_idx = src.index("function showEarnPromo(")
-        fn_block = src[fn_idx:fn_idx + 2500]
-        assert "setInterval(" in fn_block
-        assert "clearInterval(timer)" in fn_block
-
-    # -- No iframe left for CPX/TimeWall --
-
-    def test_earn_web_no_iframe_for_promo_providers(self):
-        """openProviderWithPromo must NOT load providers into the iframe.
-        Providers block iframe embedding (X-Frame-Options), causing about:blank."""
-        src = self._read("templates/earn_beta.html")
-        fn_idx = src.index("function openProviderWithPromo(")
-        fn_block = src[fn_idx:fn_idx + 600]
-        assert "frame.src" not in fn_block, "Must not load into iframe"
-        assert "is-mobile-survey" not in fn_block, "Must not use iframe survey mode"
 
 
 class TestSurfaceIsolation:
@@ -2571,8 +2383,7 @@ def test_earn_web_referral_membership_panel_uses_server_data():
 
 def test_basketball_ad_cors_preflight_allows_only_known_origins():
     import ast
-    flask_cors = pytest.importorskip("flask_cors")
-    CORS = flask_cors.CORS
+    from flask_cors import CORS
 
     source = (Path(__file__).parent.parent / "server.py").read_text()
     module = ast.parse(source)

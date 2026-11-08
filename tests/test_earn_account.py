@@ -1957,7 +1957,7 @@ class TestPromoDeduplication:
         """The done() cleanup in showPromo must reset _promoActive."""
         src = self._read("templates/earn_beta.html")
         fn_start = src.index("function showPromo(")
-        fn_block = src[fn_start:fn_start + 1600]
+        fn_block = src[fn_start:fn_start + 3200]
         done_idx = fn_block.index("function done()")
         done_line = fn_block[done_idx:fn_block.index("\n", done_idx)]
         assert "_promoActive = false" in done_line, "done() must reset _promoActive"
@@ -1972,7 +1972,7 @@ class TestAdPlacementRegression:
         root = Path(__file__).parent.parent
         return (root / rel_path).read_text()
 
-    # -- Earn web: CPX and TimeWall use openProviderWithPromo (tab-first popup fix) --
+    # -- Earn web: CPX and TimeWall return via browser Back --
 
     def test_earn_web_cpx_uses_promo_tab_flow(self):
         src = self._read("templates/earn_beta.html")
@@ -1988,20 +1988,21 @@ class TestAdPlacementRegression:
         assert "openProviderWithPromo('timewall'" in after_tw, \
             "TimeWall click must route through openProviderWithPromo"
 
-    def test_earn_web_promo_uses_single_in_page_frame(self):
+    def test_earn_web_provider_promo_precedes_same_tab_navigation(self):
         src = self._read("templates/earn_beta.html")
         fn_idx = src.index("async function openProviderWithPromo(")
-        fn_block = src[fn_idx:fn_idx + 1500]
-        assert "await showPromo(10)" in fn_block
-        assert "frame.src = url.href" in fn_block
-        assert "ThronosEarnTabs.open(" not in fn_block
+        fn_block = src[fn_idx:fn_idx + 950]
+        assert fn_block.index("await showPromo(10)") < fn_block.index("fetch(endpoint")
+        assert fn_block.index("fetch(endpoint") < fn_block.index("window.location.assign(url.href)")
         assert "if (promoOpening) return" in fn_block
 
-    def test_earn_web_modal_has_explicit_external_fallback(self):
+    def test_earn_web_provider_has_no_blank_tab_or_iframe(self):
         src = self._read("templates/earn_beta.html")
-        assert 'id="earn-survey-external"' in src
-        assert "fallback.target = 'thronosEarn_' + provider" in src
-        assert "url.protocol !== 'https:'" in src
+        fn_idx = src.index("function openProviderWithPromo(")
+        fn_block = src[fn_idx:fn_idx + 1000]
+        assert "frame.src" not in fn_block
+        assert "ThronosEarnTabs.open(" not in fn_block
+        assert "popup_blocked" not in fn_block
 
     # -- Earn PWA: CPX and TimeWall use ThronosEarnTabs.open --
 
@@ -2163,7 +2164,7 @@ class TestAdPlacementRegression:
     def test_earn_web_promo_cleanup_on_all_paths(self):
         src = self._read("templates/earn_beta.html")
         fn_start = src.index("function showPromo(")
-        fn_block = src[fn_start:fn_start + 1600]
+        fn_block = src[fn_start:fn_start + 3200]
         assert "_promoActive = false" in fn_block
         assert "function done()" in fn_block
 

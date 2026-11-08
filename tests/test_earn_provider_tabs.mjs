@@ -4,6 +4,49 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
 const source = readFileSync(new URL('../public/wallet-pwa/earn-provider-tabs.js', import.meta.url), 'utf8');
+const earnPage = readFileSync(new URL('../templates/earn_beta.html', import.meta.url), 'utf8');
+
+function webProviderFlow(context) {
+  const start = earnPage.indexOf('  let promoOpening = false;');
+  const end = earnPage.indexOf("  $('earn-surveys').addEventListener", start);
+  assert.ok(start >= 0 && end > start);
+  return vm.runInNewContext(`(() => { ${earnPage.slice(start, end)}; return openProviderWithPromo; })()`, context);
+}
+
+test('web promo opens the provider in the same tab and returns through browser Back', async () => {
+  const events = [];
+  let finishPromo;
+  const flow = webProviderFlow({
+    setStatus() {}, t: key => key,
+    showPromo: () => { events.push('promo'); return new Promise(resolve => { finishPromo = resolve; }); },
+    fetch: async () => { events.push('fetch'); return { ok: true, json: async () => ({ ok: true, url: 'https://provider.example/surveys' }) }; },
+    earnAuthHeaders: () => ({}), URL,
+    window: { location: { assign(url) { events.push('assign:' + url); } } },
+  });
+  const first = flow('cpx', '/api/earn/cpx/offerwall', 'Unavailable');
+  const second = flow('cpx', '/api/earn/cpx/offerwall', 'Unavailable');
+  assert.equal(await second, undefined);
+  assert.deepEqual(events, ['promo']);
+  finishPromo();
+  await first;
+  assert.deepEqual(events, ['promo', 'fetch', 'assign:https://provider.example/surveys']);
+});
+
+test('web provider error keeps Earn open for a retry', async () => {
+  const statuses = [];
+  let calls = 0;
+  const flow = webProviderFlow({
+    setStatus: (...args) => statuses.push(args), t: key => key,
+    showPromo: async () => {},
+    fetch: async () => { calls++; return { ok: false, json: async () => ({ error: 'provider_unavailable' }) }; },
+    earnAuthHeaders: () => ({}), URL,
+    window: { location: { assign() { assert.fail('must not navigate'); } } },
+  });
+  await flow('timewall', '/api/earn/timewall/offerwall', 'Unavailable');
+  await flow('timewall', '/api/earn/timewall/offerwall', 'Unavailable');
+  assert.equal(calls, 2);
+  assert.deepEqual(statuses.at(-1), ['provider unavailable', true]);
+});
 
 function setup(blocked = false) {
   const opened = [];

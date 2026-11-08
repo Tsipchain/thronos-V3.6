@@ -2108,46 +2108,6 @@ function _formatEarnClearance(entry) {
 
 let _currentSurface = 'wallet';
 
-const _EARN_PROMO_ADS = [
-  { title: 'LitBits Faucet', desc: 'Earn free Bitcoin daily with the LitBits Faucet on Telegram.', url: 'https://t.me/litebits_faucet_bot/app', badge: 'Thronos Recommends', cta: 'Open Faucet' },
-  { title: 'BitcoTasks', desc: 'Complete simple tasks and offers to earn crypto rewards.', url: 'https://bitcotasks.com/promote/81663', badge: 'Sponsor', cta: 'Visit BitcoTasks' },
-];
-let _earnPromoIndex = 0;
-let _earnPromoActive = false;
-function showEarnPromo(durationSec) {
-  if (_currentSurface !== 'earn') return Promise.resolve();
-  if (_earnPromoActive) return Promise.resolve();
-  _earnPromoActive = true;
-  durationSec = durationSec || 10;
-  return new Promise(resolve => {
-    const ad = _EARN_PROMO_ADS[_earnPromoIndex++ % _EARN_PROMO_ADS.length];
-    const overlay = document.createElement('div');
-    overlay.style.cssText = 'position:fixed;inset:0;z-index:10000;background:#070612ee;display:flex;align-items:center;justify-content:center;padding:20px';
-    overlay.innerHTML = `
-      <div style="max-width:380px;width:100%;background:#17152f;border:1px solid #453b78;border-radius:16px;padding:22px;text-align:center">
-        <div style="font-size:.66rem;letter-spacing:.1em;color:#f2c14e;margin-bottom:8px">${escHtml(ad.badge)}</div>
-        <div style="font-size:1.1rem;font-weight:700;margin-bottom:6px">${escHtml(ad.title)}</div>
-        <p style="font-size:.82rem;color:var(--muted);line-height:1.5;margin:0 0 14px">${escHtml(ad.desc)}</p>
-        <a href="${escHtml(ad.url)}" target="_blank" rel="noopener noreferrer sponsored" class="btn btn--primary" style="display:inline-block;padding:10px 24px;text-decoration:none;margin-bottom:10px">${escHtml(ad.cta)}</a>
-        <div id="earnPromoCountdown" style="font-size:.76rem;color:var(--muted);margin-bottom:6px"></div>
-        <button id="earnPromoSkip" type="button" style="display:none;background:none;border:1px solid #453b78;border-radius:8px;color:var(--muted);padding:7px 16px;font-size:.76rem;cursor:pointer">Skip</button>
-      </div>`;
-    document.body.appendChild(overlay);
-    const countdownEl = document.getElementById('earnPromoCountdown');
-    const skipBtn = document.getElementById('earnPromoSkip');
-    let seconds = durationSec;
-    countdownEl.textContent = seconds + 's';
-    function done() { clearInterval(timer); overlay.remove(); _earnPromoActive = false; resolve(); }
-    const timer = setInterval(() => {
-      seconds--;
-      if (seconds <= 5) skipBtn.style.display = '';
-      if (seconds > 0) { countdownEl.textContent = seconds + 's'; return; }
-      done();
-    }, 1000);
-    skipBtn.addEventListener('click', done);
-  });
-}
-
 async function showEarn(options = {}) {
   _currentSurface = 'earn';
   render(`
@@ -2378,7 +2338,6 @@ async function showEarn(options = {}) {
           const message = document.getElementById('earnPwaMessage');
           message.textContent = 'Opening ' + definition.label + '…';
           window.ThronosEarnTabs.open(provider, async () => {
-            await showEarnPromo(10);
             const response = await fetch(earnBase + definition.endpoint, { credentials: 'include' });
             const offerwall = await response.json().catch(() => null);
             if (!response.ok || !offerwall?.ok || !offerwall.url) {

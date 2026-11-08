@@ -1957,7 +1957,7 @@ class TestPromoDeduplication:
         """The done() cleanup in showPromo must reset _promoActive."""
         src = self._read("templates/earn_beta.html")
         fn_start = src.index("function showPromo(")
-        fn_block = src[fn_start:fn_start + 1600]
+        fn_block = src[fn_start:fn_start + 3200]
         done_idx = fn_block.index("function done()")
         done_line = fn_block[done_idx:fn_block.index("\n", done_idx)]
         assert "_promoActive = false" in done_line, "done() must reset _promoActive"

@@ -1972,7 +1972,7 @@ class TestAdPlacementRegression:
         root = Path(__file__).parent.parent
         return (root / rel_path).read_text()
 
-    # -- Earn web: CPX and TimeWall use openProviderWithPromo (tab-first popup fix) --
+    # -- Earn web: CPX and TimeWall return via browser Back --
 
     def test_earn_web_cpx_uses_promo_tab_flow(self):
         src = self._read("templates/earn_beta.html")
@@ -1988,21 +1988,21 @@ class TestAdPlacementRegression:
         assert "openProviderWithPromo('timewall'" in after_tw, \
             "TimeWall click must route through openProviderWithPromo"
 
-    def test_earn_web_provider_promo_is_visible_in_reserved_tab(self):
+    def test_earn_web_provider_promo_precedes_same_tab_navigation(self):
         src = self._read("templates/earn_beta.html")
-        fn_idx = src.index("function openProviderWithPromo(")
-        fn_block = src[fn_idx:fn_idx + 650]
-        assert "ThronosEarnTabs.open(provider, async tab =>" in fn_block
-        assert "await showPromo(10, tab)" in fn_block
-        assert "fetch(endpoint" in fn_block
-        assert "promoTab.document" in src
+        fn_idx = src.index("async function openProviderWithPromo(")
+        fn_block = src[fn_idx:fn_idx + 950]
+        assert fn_block.index("await showPromo(10)") < fn_block.index("fetch(endpoint")
+        assert fn_block.index("fetch(endpoint") < fn_block.index("window.location.assign(url.href)")
+        assert "if (promoOpening) return" in fn_block
 
-    def test_earn_web_promo_tab_does_not_embed_provider(self):
+    def test_earn_web_provider_has_no_blank_tab_or_iframe(self):
         src = self._read("templates/earn_beta.html")
         fn_idx = src.index("function openProviderWithPromo(")
-        fn_block = src[fn_idx:fn_idx + 750]
+        fn_block = src[fn_idx:fn_idx + 1000]
         assert "frame.src" not in fn_block
-        assert "popup_blocked" in fn_block
+        assert "ThronosEarnTabs.open(" not in fn_block
+        assert "popup_blocked" not in fn_block
 
     # -- Earn PWA: CPX and TimeWall use ThronosEarnTabs.open --
 

@@ -37,6 +37,21 @@ test('reserves a tab synchronously before requesting an authenticated URL', asyn
   assert.deepEqual(opened[0].tab.navigations, ['https://example.com/survey']);
 });
 
+test('provider callback receives the reserved tab to show its promo before navigation', async () => {
+  const { tabs, opened } = setup();
+  let promoVisible = false;
+  const result = tabs.open('timewall', async tab => {
+    assert.equal(tab, opened[0].tab);
+    promoVisible = true;
+    assert.equal(tab.navigations.length, 0);
+    return 'https://example.com/timewall';
+  });
+  assert.equal(opened.length, 1);
+  assert.equal(await result, true);
+  assert.equal(promoVisible, true);
+  assert.deepEqual(opened[0].tab.navigations, ['https://example.com/timewall']);
+});
+
 test('rapid taps share one pending request and one tab', async () => {
   const { tabs, opened } = setup();
   let resolveUrl;

@@ -316,6 +316,20 @@ class EarnAccountStore:
                 CREATE INDEX IF NOT EXISTS idx_timewall_receipts_user
                     ON timewall_receipts(earn_user_id);
 
+                -- Revenue attribution is a snapshot only: the referral cap
+                -- is not a wallet credit, a funded reserve, or a payout.
+                CREATE TABLE IF NOT EXISTS earn_timewall_revenue_allocations (
+                    event_id TEXT PRIMARY KEY REFERENCES timewall_receipts(event_id),
+                    provider_revenue_usd TEXT NOT NULL,
+                    player_share_usd TEXT NOT NULL,
+                    referral_cap_usd TEXT NOT NULL,
+                    platform_before_referrals_usd TEXT NOT NULL,
+                    platform_after_full_referrals_usd TEXT NOT NULL,
+                    credited_player_thc TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending_reconciliation',
+                    created_at INTEGER NOT NULL
+                );
+
                 -- A wallet link is a cryptographic identity binding, never a
                 -- user-supplied address claim.  One wallet and one Earn
                 -- account are intentionally a 1:1 relation for this beta.
@@ -3006,6 +3020,8 @@ class EarnAccountStore:
         if not provider_user_id or len(provider_user_id) > 32:
             raise EarnError("invalid_timewall_user")
         ledger_amount = timewall_reward_amount(revenue_raw)
+        from services.earn_revenue_allocation import allocate_timewall_revenue
+        allocation = allocate_timewall_revenue(revenue_raw)
         now = int(time.time())
         payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         with self._tx() as con:
@@ -3045,6 +3061,18 @@ class EarnAccountStore:
                     str(offer_name)[:500], str(offer_detail)[:1000],
                     entry_id, now, payload_json,
                 ),
+            )
+            con.execute(
+                """INSERT INTO earn_timewall_revenue_allocations
+                   (event_id, provider_revenue_usd, player_share_usd,
+                    referral_cap_usd, platform_before_referrals_usd,
+                    platform_after_full_referrals_usd, credited_player_thc,
+                    created_at) VALUES (?,?,?,?,?,?,?,?)""",
+                (event_id, allocation["provider_revenue_usd"],
+                 allocation["player_share_usd"], allocation["referral_cap_usd"],
+                 allocation["platform_before_referrals_usd"],
+                 allocation["platform_after_full_referrals_usd"],
+                 str(ledger_amount), now),
             )
             self._append_ledger_audit_in_tx(
                 con, entry_id=entry_id,

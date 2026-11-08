@@ -521,37 +521,21 @@
   }
 
   let activePromoProvider = null;
-  let promoOpening = false;
-  async function openProviderWithPromo(provider, endpoint, connected, unavailable) {
-    if (promoOpening) return;
-    if (activePromoProvider === provider && frame.style.display !== 'none') {
-      frame.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      return;
-    }
-    promoOpening = true;
+  function openProviderWithPromo(provider, endpoint, connected, unavailable) {
     setStatus(t('loadingSurveys'));
-    try {
-      // Keep the ad and offerwall in this page. No empty browser tab is created.
+    return window.ThronosEarnTabs.open(provider, async () => {
       await showPromo(10);
       const res = await fetch(endpoint, { headers: earnAuthHeaders() });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ok || !data.url) throw new Error(data.error || unavailable);
-      const url = new URL(data.url);
-      if (url.protocol !== 'https:' || url.username || url.password) throw new Error(unavailable);
-      activePromoProvider = provider;
-      frame.title = provider === 'timewall' ? 'TimeWall' : 'CPX Research';
-      frame.src = url.href;
-      frame.style.display = 'block';
-      frame.classList.add('is-mobile-survey');
-      surveyClose.classList.add('is-visible');
-      const fallback = $('earn-survey-external');
-      fallback.href = url.href;
-      fallback.target = 'thronosEarn_' + provider;
-      fallback.style.display = 'block';
-      setStatus(connected);
-    } catch (error) {
-      setStatus((error.message || unavailable).replace(/_/g, ' '), true);
-    } finally { promoOpening = false; }
+      return data.url;
+    }).then(() => setStatus(connected)).catch(error => {
+      const message = error.message === 'popup_blocked'
+        ? (_lang === 'el' ? 'Επίτρεψε τα αναδυόμενα παράθυρα για αυτή τη σελίδα και πάτησε ξανά.'
+          : 'Allow pop-ups for this site, then tap the provider again.')
+        : (error.message || unavailable).replace(/_/g, ' ');
+      setStatus(message, true);
+    });
   }
   $('earn-surveys').addEventListener('click', () => {
     openProviderWithPromo('cpx', '/api/earn/cpx/offerwall', t('connectedSurvey'), t('surveysUnavail'));

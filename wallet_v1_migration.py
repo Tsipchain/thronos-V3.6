@@ -773,16 +773,28 @@ def _compute_assets_migrated(old_address, ecosystem_bindings_repaired=False):
 
 def _remaining_old_operational_binding_count(old_address):
     c = 0
-    if get_mining_whitelist_entry(old_address):
-        c += 1
-    if get_mining_payout_state(old_address):
-        c += 1
+    wl_entry = get_mining_whitelist_entry(old_address)
+    if wl_entry:
+        if isinstance(wl_entry, dict) and not wl_entry.get('active', True):
+            pass  # deactivated entry doesn't count
+        else:
+            c += 1
+    payout_state = get_mining_payout_state(old_address)
+    if payout_state:
+        if payout_state.get('forwarded_to'):
+            pass  # forward exists — payout is resolved, not active
+        else:
+            c += 1
     if get_pool_rewards_state(old_address):
         c += 1
     s = _server()
     ag = getattr(s, 'get_agent_wallet_binding_state', None)
-    if callable(ag) and ag(old_address):
-        c += 1
+    if callable(ag):
+        agent_state = ag(old_address)
+        if agent_state and agent_state.get('mutable', True):
+            c += 1
+            # non-mutable (env-configured) bindings don't count — they
+            # require a manual env var change, not a migration step
     return c
 
 
@@ -973,13 +985,22 @@ def repair_migration(old_address, new_v1_address):
     assets_old = _collect_assets(old_address)
     moved_thr = 0.0
     moved_tokens = 0
+
+    s = _server()
+    agent_state_fn = getattr(s, 'get_agent_wallet_binding_state', None)
+    agent_move_fn = getattr(s, 'move_agent_wallet_binding_state', None)
+    agent_blocked = False
+    if callable(agent_state_fn):
+        agent_state = agent_state_fn(old_address)
+        if agent_state and not agent_state.get('mutable', True):
+            agent_blocked = True
+
     snap = _snapshot_state(old_address, new_v1_address)
     marker_snap = _snapshot_migrated_marker(old_address)
     mutation_started = False
 
     try:
         old_thr = float(assets_old.get('thr_balance') or 0.0)
-        # If THR already moved, do not move again; only move remaining tokens/admission.
         if old_thr > 0:
             transfer_balance_atomic(old_address, new_v1_address, old_thr)
             moved_thr = old_thr

@@ -91,7 +91,12 @@ class TestMoveMiningWhitelistEntry:
         from server import move_mining_whitelist_entry
         assert move_mining_whitelist_entry(OLD_ADDR, NEW_ADDR) is True
         data = _read(data_dir["whitelist"])
-        assert data.count(NEW_ADDR) == 1
+        # NEW_ADDR stays as string; OLD_ADDR converted to dict with active=False
+        new_count = sum(1 for e in data if (isinstance(e, str) and e == NEW_ADDR) or
+                        (isinstance(e, dict) and e.get("address") == NEW_ADDR))
+        assert new_count == 1
+        old_entry = next(e for e in data if isinstance(e, dict) and e.get("address") == OLD_ADDR)
+        assert old_entry["active"] is False
 
     def test_no_entry_returns_false(self, data_dir):
         _write(data_dir["whitelist"], [OTHER_ADDR])
@@ -415,6 +420,263 @@ class TestRepairMigrationHookCallability:
         for fn_name in ["move_mining_whitelist_entry", "move_mining_payout_state",
                         "move_pool_rewards_state", "move_agent_wallet_binding_state"]:
             assert fn_name in src, f"wallet_v1_migration.py must reference {fn_name}"
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# 7. Payout-resolution path (resolve_mining_payout_recipient)
+# ───────────────────────────────────────────────────────────────────────────
+
+class TestResolveMiningPayoutRecipient:
+    """Live payout-resolution path: distributor reads forwards at settlement."""
+
+    def test_no_forward_returns_original(self, data_dir):
+        from server import resolve_mining_payout_recipient
+        assert resolve_mining_payout_recipient(OLD_ADDR) == OLD_ADDR
+
+    def test_forward_returns_new_address(self, data_dir):
+        _write(data_dir["forwards"], {
+            OLD_ADDR: {"forward_to": NEW_ADDR, "migrated_at": "2026-01-01T00:00:00Z",
+                       "pending_at_migration": 1}
+        })
+        from server import resolve_mining_payout_recipient
+        assert resolve_mining_payout_recipient(OLD_ADDR) == NEW_ADDR
+
+    def test_unrelated_address_not_forwarded(self, data_dir):
+        _write(data_dir["forwards"], {
+            OLD_ADDR: {"forward_to": NEW_ADDR, "migrated_at": "2026-01-01T00:00:00Z",
+                       "pending_at_migration": 0}
+        })
+        from server import resolve_mining_payout_recipient
+        assert resolve_mining_payout_recipient(OTHER_ADDR) == OTHER_ADDR
+
+    def test_empty_address_returns_as_is(self, data_dir):
+        from server import resolve_mining_payout_recipient
+        assert resolve_mining_payout_recipient("") == ""
+        assert resolve_mining_payout_recipient(None) is None
+
+    def test_resolution_consistent_with_move(self, data_dir):
+        """After move_mining_payout_state, resolve must return the new address."""
+        _write(data_dir["chain"], [{"to": OLD_ADDR, "type": "mining_reward"}])
+        from server import move_mining_payout_state, resolve_mining_payout_recipient
+        move_mining_payout_state(OLD_ADDR, NEW_ADDR)
+        assert resolve_mining_payout_recipient(OLD_ADDR) == NEW_ADDR
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# 8. Finite migration state (forwarded payouts don't block repair)
+# ───────────────────────────────────────────────────────────────────────────
+
+class TestFiniteMigrationState:
+    """Once payouts are forwarded and whitelist migrated, repair must succeed."""
+
+    def test_forwarded_payout_not_counted_as_active(self, data_dir):
+        """A forwarded mining payout should NOT keep _remaining_old_operational_binding_count > 0."""
+        _write(data_dir["forwards"], {
+            OLD_ADDR: {"forward_to": NEW_ADDR, "migrated_at": "2026-01-01T00:00:00Z",
+                       "pending_at_migration": 2}
+        })
+        from wallet_v1_migration import _remaining_old_operational_binding_count
+        count = _remaining_old_operational_binding_count(OLD_ADDR)
+        assert count == 0, f"Forwarded payout should not count, but got {count}"
+
+    def test_pending_without_forward_counted(self, data_dir):
+        """Pending rewards without a forward ARE active bindings."""
+        _write(data_dir["chain"], [{"to": OLD_ADDR, "type": "mining_reward"}])
+        from wallet_v1_migration import _remaining_old_operational_binding_count
+        count = _remaining_old_operational_binding_count(OLD_ADDR)
+        assert count >= 1, "Pending rewards without forward should count"
+
+    def test_deactivated_whitelist_not_counted(self, data_dir):
+        """A deactivated whitelist entry should not count as active."""
+        _write(data_dir["whitelist"], [
+            {"address": OLD_ADDR, "active": False, "migrated_to": NEW_ADDR}
+        ])
+        from wallet_v1_migration import _remaining_old_operational_binding_count
+        count = _remaining_old_operational_binding_count(OLD_ADDR)
+        assert count == 0
+
+    def test_env_configured_agent_not_counted(self, data_dir):
+        """Non-mutable agent binding (env-configured) should not block repair."""
+        import server
+        pythia_addr = getattr(server, 'PYTHIA_SYSTEM_THR_ADDRESS', '')
+        if not pythia_addr:
+            pytest.skip("PYTHIA_SYSTEM_THR_ADDRESS not set")
+        from wallet_v1_migration import _remaining_old_operational_binding_count
+        count = _remaining_old_operational_binding_count(pythia_addr)
+        assert count == 0, "Env-configured agent binding should not count as remaining"
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# 9. Whitelist: new_already deactivates old admission
+# ───────────────────────────────────────────────────────────────────────────
+
+class TestWhitelistOldDeactivation:
+    """When new address already in whitelist, old must be deactivated."""
+
+    def test_old_string_entry_deactivated(self, data_dir):
+        _write(data_dir["whitelist"], [OLD_ADDR, NEW_ADDR])
+        from server import move_mining_whitelist_entry
+        assert move_mining_whitelist_entry(OLD_ADDR, NEW_ADDR) is True
+        data = _read(data_dir["whitelist"])
+        old_entry = next(e for e in data if isinstance(e, dict) and e.get("address") == OLD_ADDR)
+        assert old_entry["active"] is False
+        assert old_entry["migrated_to"] == NEW_ADDR
+
+    def test_old_dict_entry_deactivated(self, data_dir):
+        _write(data_dir["whitelist"], [
+            {"address": OLD_ADDR, "active": True, "pledge_ok": True},
+            {"address": NEW_ADDR, "active": True},
+        ])
+        from server import move_mining_whitelist_entry
+        assert move_mining_whitelist_entry(OLD_ADDR, NEW_ADDR) is True
+        data = _read(data_dir["whitelist"])
+        old_entry = next(e for e in data if isinstance(e, dict) and e.get("address") == OLD_ADDR)
+        assert old_entry["active"] is False
+        assert old_entry["migrated_to"] == NEW_ADDR
+
+    def test_new_entry_unchanged_when_old_deactivated(self, data_dir):
+        _write(data_dir["whitelist"], [OLD_ADDR, {"address": NEW_ADDR, "active": True, "role": "miner"}])
+        from server import move_mining_whitelist_entry
+        move_mining_whitelist_entry(OLD_ADDR, NEW_ADDR)
+        data = _read(data_dir["whitelist"])
+        new_entry = next(e for e in data if isinstance(e, dict) and e.get("address") == NEW_ADDR)
+        assert new_entry["active"] is True
+        assert new_entry["role"] == "miner"
+
+    def test_journal_records_old_deactivated(self, data_dir):
+        _write(data_dir["whitelist"], [OLD_ADDR, NEW_ADDR])
+        from server import move_mining_whitelist_entry
+        move_mining_whitelist_entry(OLD_ADDR, NEW_ADDR)
+        journal = _read(data_dir["journal"])
+        wl_entries = [e for e in journal["entries"] if e["step"] == "whitelist"]
+        assert len(wl_entries) == 1
+        assert wl_entries[0]["detail"]["old_deactivated"] is True
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# 10. Preflight: agent binding check before mutation
+# ───────────────────────────────────────────────────────────────────────────
+
+class TestPreflightAgentBinding:
+    """Preflight detects non-movable agent binding before any file mutation."""
+
+    def test_preflight_detects_blocked_agent(self, data_dir):
+        """get_agent_wallet_binding_state for Pythia returns mutable=False."""
+        import server
+        pythia_addr = getattr(server, 'PYTHIA_SYSTEM_THR_ADDRESS', '')
+        if not pythia_addr:
+            pytest.skip("PYTHIA_SYSTEM_THR_ADDRESS not set")
+        from server import get_agent_wallet_binding_state
+        state = get_agent_wallet_binding_state(pythia_addr)
+        assert state is not None
+        assert state["mutable"] is False
+
+    def test_normal_user_passes_preflight(self, data_dir):
+        from server import get_agent_wallet_binding_state
+        state = get_agent_wallet_binding_state(OLD_ADDR)
+        assert state is None
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# 11. Fault-injection: partial write crash scenarios
+# ───────────────────────────────────────────────────────────────────────────
+
+class TestFaultInjection:
+    """Test behavior when a step crashes after earlier steps completed."""
+
+    def test_whitelist_moved_but_payout_save_fails(self, data_dir, monkeypatch):
+        """If payout forward write fails after whitelist move, whitelist change persists."""
+        _write(data_dir["whitelist"], [OLD_ADDR])
+        _write(data_dir["chain"], [{"to": OLD_ADDR, "type": "mining_reward"}])
+        from server import move_mining_whitelist_entry, move_mining_payout_state
+        move_mining_whitelist_entry(OLD_ADDR, NEW_ADDR)
+        wl_after = _read(data_dir["whitelist"])
+        assert NEW_ADDR in wl_after, "Whitelist should have moved before crash"
+
+        import server
+        original_save = server.save_json
+        def crash_on_forwards(path, data):
+            if "mining_payout_forwards" in str(path):
+                raise IOError("simulated disk crash")
+            return original_save(path, data)
+        monkeypatch.setattr(server, "save_json", crash_on_forwards)
+        with pytest.raises(IOError, match="simulated disk crash"):
+            move_mining_payout_state(OLD_ADDR, NEW_ADDR)
+
+        wl_still = _read(data_dir["whitelist"])
+        assert NEW_ADDR in wl_still, "Whitelist change persists after payout crash"
+        forwards = _read(data_dir["forwards"])
+        assert OLD_ADDR not in forwards, "Forward should not be written on crash"
+
+    def test_pool_save_fails_after_whitelist_and_payout(self, data_dir, monkeypatch):
+        """If pool save fails, whitelist and payout changes persist in journal."""
+        _write(data_dir["whitelist"], [OLD_ADDR])
+        _write(data_dir["chain"], [])
+        _write(data_dir["pool_positions"], {OLD_ADDR: {"thr_btc": FULL_POSITION.copy()}})
+        from server import (move_mining_whitelist_entry, move_mining_payout_state)
+        move_mining_whitelist_entry(OLD_ADDR, NEW_ADDR)
+        move_mining_payout_state(OLD_ADDR, NEW_ADDR)
+
+        import server
+        original_save = server.save_json
+        def crash_on_pool(path, data):
+            if "pool_positions" in str(path):
+                raise IOError("simulated pool crash")
+            return original_save(path, data)
+        monkeypatch.setattr(server, "save_json", crash_on_pool)
+        from server import move_pool_rewards_state
+        with pytest.raises(IOError, match="simulated pool crash"):
+            move_pool_rewards_state(OLD_ADDR, NEW_ADDR)
+
+        journal = _read(data_dir["journal"])
+        steps = [e["step"] for e in journal["entries"]]
+        assert "whitelist" in steps, "Whitelist journal persists"
+        assert "mining_payout" in steps, "Payout journal persists"
+
+    def test_journal_records_crash_context(self, data_dir):
+        """After partial failure, journal shows exactly which steps completed."""
+        _write(data_dir["whitelist"], [OLD_ADDR])
+        _write(data_dir["chain"], [{"to": OLD_ADDR, "type": "coinbase"}])
+        from server import move_mining_whitelist_entry, move_mining_payout_state
+        move_mining_whitelist_entry(OLD_ADDR, NEW_ADDR)
+        move_mining_payout_state(OLD_ADDR, NEW_ADDR)
+        journal = _read(data_dir["journal"])
+        completed_steps = {e["step"]: e["status"] for e in journal["entries"]}
+        assert completed_steps.get("whitelist") == "completed"
+        assert completed_steps.get("mining_payout") == "forwarded"
+
+    def test_idempotent_retry_after_partial_crash(self, data_dir):
+        """After crash, retrying the same moves is safe (idempotent)."""
+        _write(data_dir["whitelist"], [OLD_ADDR])
+        _write(data_dir["chain"], [{"to": OLD_ADDR, "type": "mining_reward"}])
+        _write(data_dir["pool_positions"], {OLD_ADDR: {"thr_btc": FULL_POSITION.copy()}})
+
+        from server import (move_mining_whitelist_entry, move_mining_payout_state,
+                            move_pool_rewards_state)
+        move_mining_whitelist_entry(OLD_ADDR, NEW_ADDR)
+        move_mining_payout_state(OLD_ADDR, NEW_ADDR)
+        move_pool_rewards_state(OLD_ADDR, NEW_ADDR)
+
+        # Retry all — should be idempotent
+        assert move_mining_whitelist_entry(OLD_ADDR, NEW_ADDR) is True
+        move_mining_payout_state(OLD_ADDR, NEW_ADDR)
+        assert move_pool_rewards_state(OLD_ADDR, NEW_ADDR) == 0
+
+        data = _read(data_dir["pool_positions"])
+        new_pos = data.get(NEW_ADDR, {}).get("thr_btc", {})
+        assert new_pos["lp_position_balance"] == 100.0
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# 12. resolve_mining_payout_recipient is importable
+# ───────────────────────────────────────────────────────────────────────────
+
+class TestResolvePayoutHookCallability:
+
+    def test_resolve_importable(self):
+        import server as s
+        fn = getattr(s, "resolve_mining_payout_recipient", None)
+        assert callable(fn), "server.resolve_mining_payout_recipient must be callable"
 
 
 if __name__ == "__main__":

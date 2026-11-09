@@ -2909,8 +2909,26 @@ def move_mining_whitelist_entry(old_address: str, new_v1_address: str) -> bool:
         for e in entries
     )
     if new_already:
+        old_deactivated = False
+        for i, entry in enumerate(entries):
+            if isinstance(entry, str) and entry == old_address:
+                entries[i] = {"address": old_address, "active": False,
+                              "migrated_to": new_v1_address}
+                old_deactivated = True
+                break
+            if isinstance(entry, dict):
+                addr = entry.get("address") or entry.get("thr_address")
+                if addr == old_address:
+                    entry["active"] = False
+                    entry["migrated_to"] = new_v1_address
+                    old_deactivated = True
+                    break
+        if old_deactivated:
+            save_json(WHITELIST_WALLETS_FILE, entries)
         _append_journal_entry(old_address, new_v1_address, "whitelist",
-                              "skipped_idempotent", {"reason": "new_address_already_present"})
+                              "skipped_idempotent",
+                              {"reason": "new_address_already_present",
+                               "old_deactivated": old_deactivated})
         return True
     changed = False
     for i, entry in enumerate(entries):
@@ -2983,6 +3001,20 @@ def move_mining_payout_state(old_address: str, new_v1_address: str) -> int:
     _append_journal_entry(old_address, new_v1_address, "mining_payout",
                           "forwarded", {"pending_count": pending_count})
     return pending_count
+
+
+def resolve_mining_payout_recipient(thr_address: str) -> str:
+    """Resolve the actual recipient for mining payouts to thr_address.
+    If a forward exists in mining_payout_forwards.json, returns the
+    forwarded-to address. Otherwise returns the original address.
+    This is the function the payout distributor calls at settlement time."""
+    if not thr_address:
+        return thr_address
+    forwards = load_json(MINING_PAYOUT_FORWARDS_FILE, {})
+    fwd = forwards.get(thr_address)
+    if fwd and fwd.get("forward_to"):
+        return fwd["forward_to"]
+    return thr_address
 
 
 def get_pool_rewards_state(thr_address: str) -> dict | None:

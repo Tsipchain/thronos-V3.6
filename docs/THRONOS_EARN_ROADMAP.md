@@ -1,10 +1,20 @@
 # Thronos Earn — Pilot-to-Release Roadmap
 
 **Status:** controlled beta  
-**Last reviewed:** 2026-10-30  
+**Last reviewed:** 2026-11-09
 **Scope:** Thronos Earn accounts, provider receipts, PWA/APK/web presentation and optional wallet identity linking.
 
 This document is the release source of truth for Earn. It does **not** change THR mining, fees, pledge rules, pool economics, tokenomics or wallet settlement.
+
+## November 2026 implementation checkpoint
+
+The October pilot table below describes the original release gates. Code has
+since added TimeWall receipts, a monthly leaderboard, optional walletless THC
+staking, THR wallet staking, referral invite views and ad marketplace scaffolding.
+These are distinct from funded yield, referral payouts, cash-out and provider
+settlement. See [the Earn and Wallet execution plan](EARN_WALLET_EXECUTION_PLAN_2026-11-09.md)
+for current delivery order and acceptance checks. Draft PR #865 records a
+TimeWall 65/35 allocation and a 5-point referral cap; it does not release funds.
 
 ## Product boundaries
 
@@ -25,10 +35,12 @@ This document is the release source of truth for Earn. It does **not** change TH
 | Activity and history | Pilot-ready | Per-account only; no cross-account visibility |
 | PWA Earn activity view | Released | Shows balance, activity and wallet-link state in-app |
 | Existing wallet link | Released | User signs a server-issued challenge once |
-| BitcoTasks / further providers | Disabled | No production enablement until provider validation |
+| TimeWall | Beta postbacks | Pending THC receipt; reconcile provider approval and payout separately |
+| BitcoTasks / further providers | Provider-dependent | Verify provider status and reversal before treating rewards as settled |
 | Clearing, payout and cash-out | Disabled | Require verified receipts, durable settlement state and real confirmations |
 | Wallet unlock using THC | Disabled | Requires separate pledge and settlement specification |
-| THC stake / APY / revenue share | Not designed for release | Requires reserve, legal, accounting and risk approval |
+| THC and THR stake principal | Beta path | THC can lock from cleared Earn balance without wallet; THR requires wallet; validate wallet transaction and device flows |
+| Staking yield / revenue share | Not ready for funded payout | Projected APY is not a payable reward; reserve, quote, fees, lock terms and risk review are outstanding |
 
 ## Mandatory pilot acceptance matrix
 
@@ -80,7 +92,11 @@ The same gates apply to any later YouTube-task provider. There is no client-side
 
 ### Leaderboards and competitions
 
-These are deferred until there is sufficient organic activity and verified anti-fraud controls. They must use a separate competition ledger, explicit terms, eligibility rules, one prize source of truth and a reversal/disqualification path. They do not clear provider rewards early.
+A monthly leaderboard is visible in Earn. Prize distribution remains deferred
+until there is sufficient verified activity, funded rewards and anti-fraud
+controls. Competitions need a separate ledger, explicit terms, eligibility,
+one prize source of truth and a reversal/disqualification path. They do not
+clear provider rewards early.
 
 ### Wallet-holder product benefits
 
@@ -88,7 +104,8 @@ A linked wallet can later receive product-level conveniences, such as faster ide
 
 ### THC staking or soft yield
 
-No staking, APY, revenue share or liquidity promise is active. A future proposal must first define:
+Beta staking can lock principal; displayed APY is projected and is not a
+funded, payable reward. Activation of yield or revenue sharing must first define:
 
 - independent cleared-reward ledger;
 - funded and reconciled reserve;

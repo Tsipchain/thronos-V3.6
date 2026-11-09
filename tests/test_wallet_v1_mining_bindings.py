@@ -1,6 +1,7 @@
 """
 Tests for mining/pool/agent wallet binding continuity during V1 migration.
-Verifies the server.py hooks that wallet_v1_migration.repair_*() calls.
+Exercises the server.py hooks that wallet_v1_migration.repair_*() calls
+against real store-shaped JSON data with tmp_path isolation.
 
 Addresses issue #507.
 """
@@ -9,101 +10,131 @@ import json
 import os
 import pytest
 from pathlib import Path
-from unittest.mock import patch
 
-
-WHITELIST_FILE = "data/whitelist_wallets.json"
-CHAIN_FILE = "data/chain.json"
-POOL_POSITIONS_FILE = "data/pool_positions.json"
 
 OLD_ADDR = "THROLD0000000000000000000000000000000000000"
 NEW_ADDR = "THRNEW0000000000000000000000000000000000000"
+OTHER_ADDR = "THROTHER000000000000000000000000000000000000"
 
 
-def _load_json(path):
-    if not os.path.exists(path):
-        return []
-    with open(path) as f:
-        return json.load(f)
+@pytest.fixture
+def data_dir(tmp_path, monkeypatch):
+    """Point all data files at tmp_path so tests never touch real data."""
+    wl = tmp_path / "whitelist_wallets.json"
+    wl.write_text("[]")
+    chain = tmp_path / "phantom_tx_chain.json"
+    chain.write_text("[]")
+    pool_pos = tmp_path / "pool_positions.json"
+    pool_pos.write_text("{}")
+    forwards = tmp_path / "mining_payout_forwards.json"
+    forwards.write_text("{}")
+    journal = tmp_path / "binding_migration_journal.json"
+    journal.write_text('{"entries":[]}')
 
+    monkeypatch.setattr("server.WHITELIST_WALLETS_FILE", str(wl))
+    monkeypatch.setattr("server.CHAIN_FILE", str(chain))
+    monkeypatch.setattr("server.POOL_POSITIONS_FILE", str(pool_pos))
+    monkeypatch.setattr("server.MINING_PAYOUT_FORWARDS_FILE", str(forwards))
+    monkeypatch.setattr("server.BINDING_MIGRATION_JOURNAL_FILE", str(journal))
+
+    return {
+        "whitelist": wl,
+        "chain": chain,
+        "pool_positions": pool_pos,
+        "forwards": forwards,
+        "journal": journal,
+    }
+
+
+def _write(path, data):
+    path.write_text(json.dumps(data))
+
+
+def _read(path):
+    return json.loads(path.read_text())
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# 1. Whitelist entry rebinding
+# ───────────────────────────────────────────────────────────────────────────
 
 class TestMoveMiningWhitelistEntry:
-    """move_mining_whitelist_entry must rebind address idempotently."""
 
-    def test_move_string_entry(self, tmp_path, monkeypatch):
-        wl = tmp_path / "whitelist_wallets.json"
-        wl.write_text(json.dumps([OLD_ADDR, "OTHER_ADDR"]))
-        monkeypatch.setattr("server.WHITELIST_WALLETS_FILE", str(wl))
+    def test_move_string_entry(self, data_dir):
+        _write(data_dir["whitelist"], [OLD_ADDR, OTHER_ADDR])
         from server import move_mining_whitelist_entry
-        result = move_mining_whitelist_entry(OLD_ADDR, NEW_ADDR)
-        assert result is True
-        data = json.loads(wl.read_text())
+        assert move_mining_whitelist_entry(OLD_ADDR, NEW_ADDR) is True
+        data = _read(data_dir["whitelist"])
         assert NEW_ADDR in data
         assert OLD_ADDR not in data
-        assert "OTHER_ADDR" in data
+        assert OTHER_ADDR in data
 
-    def test_move_dict_entry(self, tmp_path, monkeypatch):
-        wl = tmp_path / "whitelist_wallets.json"
-        entry = {"address": OLD_ADDR, "active": True, "pledge_ok": True, "role": "miner"}
-        wl.write_text(json.dumps([entry]))
-        monkeypatch.setattr("server.WHITELIST_WALLETS_FILE", str(wl))
+    def test_move_dict_entry_preserves_all_fields(self, data_dir):
+        entry = {"address": OLD_ADDR, "thr_address": OLD_ADDR,
+                 "active": True, "pledge_ok": True, "role": "miner",
+                 "whitelist_legacy": True}
+        _write(data_dir["whitelist"], [entry])
         from server import move_mining_whitelist_entry
-        result = move_mining_whitelist_entry(OLD_ADDR, NEW_ADDR)
-        assert result is True
-        data = json.loads(wl.read_text())
+        assert move_mining_whitelist_entry(OLD_ADDR, NEW_ADDR) is True
+        data = _read(data_dir["whitelist"])
         moved = data[0]
         assert moved["address"] == NEW_ADDR
+        assert moved["thr_address"] == NEW_ADDR
         assert moved["active"] is True
+        assert moved["pledge_ok"] is True
+        assert moved["role"] == "miner"
+        assert moved["whitelist_legacy"] is True
         assert moved["migrated_from"] == OLD_ADDR
 
-    def test_idempotent_when_new_already_exists(self, tmp_path, monkeypatch):
-        wl = tmp_path / "whitelist_wallets.json"
-        wl.write_text(json.dumps([OLD_ADDR, NEW_ADDR]))
-        monkeypatch.setattr("server.WHITELIST_WALLETS_FILE", str(wl))
+    def test_idempotent_when_new_already_exists(self, data_dir):
+        _write(data_dir["whitelist"], [OLD_ADDR, NEW_ADDR])
         from server import move_mining_whitelist_entry
-        result = move_mining_whitelist_entry(OLD_ADDR, NEW_ADDR)
-        assert result is True
-        data = json.loads(wl.read_text())
+        assert move_mining_whitelist_entry(OLD_ADDR, NEW_ADDR) is True
+        data = _read(data_dir["whitelist"])
         assert data.count(NEW_ADDR) == 1
 
-    def test_no_entry_returns_false(self, tmp_path, monkeypatch):
-        wl = tmp_path / "whitelist_wallets.json"
-        wl.write_text(json.dumps(["OTHER_ADDR"]))
-        monkeypatch.setattr("server.WHITELIST_WALLETS_FILE", str(wl))
+    def test_no_entry_returns_false(self, data_dir):
+        _write(data_dir["whitelist"], [OTHER_ADDR])
         from server import move_mining_whitelist_entry
-        result = move_mining_whitelist_entry(OLD_ADDR, NEW_ADDR)
-        assert result is False
+        assert move_mining_whitelist_entry(OLD_ADDR, NEW_ADDR) is False
 
-    def test_repeat_move_does_not_duplicate(self, tmp_path, monkeypatch):
-        wl = tmp_path / "whitelist_wallets.json"
-        wl.write_text(json.dumps([OLD_ADDR]))
-        monkeypatch.setattr("server.WHITELIST_WALLETS_FILE", str(wl))
+    def test_repeat_move_does_not_duplicate(self, data_dir):
+        _write(data_dir["whitelist"], [OLD_ADDR])
         from server import move_mining_whitelist_entry
         move_mining_whitelist_entry(OLD_ADDR, NEW_ADDR)
         move_mining_whitelist_entry(OLD_ADDR, NEW_ADDR)
-        data = json.loads(wl.read_text())
+        data = _read(data_dir["whitelist"])
         assert data.count(NEW_ADDR) == 1
 
+    def test_journal_entry_written(self, data_dir):
+        _write(data_dir["whitelist"], [OLD_ADDR])
+        from server import move_mining_whitelist_entry
+        move_mining_whitelist_entry(OLD_ADDR, NEW_ADDR)
+        journal = _read(data_dir["journal"])
+        wl_entries = [e for e in journal["entries"] if e["step"] == "whitelist"]
+        assert len(wl_entries) == 1
+        assert wl_entries[0]["status"] == "completed"
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# 2. Mining payout forwarding (NOT chain mutation)
+# ───────────────────────────────────────────────────────────────────────────
 
 class TestGetMiningPayoutState:
-    """get_mining_payout_state returns pending mining rewards or None."""
 
-    def test_no_pending_returns_none(self, tmp_path, monkeypatch):
-        cf = tmp_path / "chain.json"
-        cf.write_text(json.dumps([
-            {"to": OLD_ADDR, "type": "mining_reward", "confirmed": True}
-        ]))
-        monkeypatch.setattr("server.CHAIN_FILE", str(cf))
+    def test_no_pending_returns_none(self, data_dir):
+        _write(data_dir["chain"], [
+            {"to": OLD_ADDR, "type": "mining_reward", "confirmed": True},
+        ])
         from server import get_mining_payout_state
         assert get_mining_payout_state(OLD_ADDR) is None
 
-    def test_pending_detected(self, tmp_path, monkeypatch):
-        cf = tmp_path / "chain.json"
-        cf.write_text(json.dumps([
+    def test_pending_detected(self, data_dir):
+        _write(data_dir["chain"], [
             {"to": OLD_ADDR, "type": "mining_reward"},
             {"to": OLD_ADDR, "type": "coinbase"},
-        ]))
-        monkeypatch.setattr("server.CHAIN_FILE", str(cf))
+            {"to": OLD_ADDR, "type": "mining_reward", "confirmed": True},
+        ])
         from server import get_mining_payout_state
         state = get_mining_payout_state(OLD_ADDR)
         assert state is not None
@@ -111,95 +142,183 @@ class TestGetMiningPayoutState:
 
 
 class TestMoveMiningPayoutState:
-    """move_mining_payout_state redirects pending rewards."""
 
-    def test_move_pending_rewards(self, tmp_path, monkeypatch):
-        cf = tmp_path / "chain.json"
-        cf.write_text(json.dumps([
+    def test_creates_forward_not_chain_mutation(self, data_dir):
+        """Core invariant: chain.json must NOT be modified."""
+        chain_data = [
+            {"to": OLD_ADDR, "type": "mining_reward", "amount": 10.0},
+            {"to": OLD_ADDR, "type": "coinbase", "amount": 5.0},
+            {"to": OLD_ADDR, "type": "mining_reward", "confirmed": True, "amount": 50.0},
+        ]
+        _write(data_dir["chain"], chain_data)
+        from server import move_mining_payout_state
+        count = move_mining_payout_state(OLD_ADDR, NEW_ADDR)
+        assert count == 2
+        chain_after = _read(data_dir["chain"])
+        assert chain_after == chain_data, "chain.json must not be modified"
+        forwards = _read(data_dir["forwards"])
+        assert OLD_ADDR in forwards
+        fwd = forwards[OLD_ADDR]
+        assert fwd["forward_to"] == NEW_ADDR
+        assert fwd["pending_at_migration"] == 2
+
+    def test_idempotent_overwrites_forward(self, data_dir):
+        _write(data_dir["chain"], [
             {"to": OLD_ADDR, "type": "mining_reward"},
-            {"to": OLD_ADDR, "type": "mining_reward", "confirmed": True},
-            {"to": OLD_ADDR, "type": "transfer"},
-        ]))
-        monkeypatch.setattr("server.CHAIN_FILE", str(cf))
+        ])
         from server import move_mining_payout_state
-        moved = move_mining_payout_state(OLD_ADDR, NEW_ADDR)
-        assert moved == 1
-        data = json.loads(cf.read_text())
-        pending = [tx for tx in data if tx.get("to") == NEW_ADDR]
-        assert len(pending) == 1
-        assert pending[0]["migrated_from"] == OLD_ADDR
+        move_mining_payout_state(OLD_ADDR, NEW_ADDR)
+        move_mining_payout_state(OLD_ADDR, NEW_ADDR)
+        forwards = _read(data_dir["forwards"])
+        assert forwards[OLD_ADDR]["forward_to"] == NEW_ADDR
 
-    def test_idempotent_no_pending(self, tmp_path, monkeypatch):
-        cf = tmp_path / "chain.json"
-        cf.write_text(json.dumps([]))
-        monkeypatch.setattr("server.CHAIN_FILE", str(cf))
+    def test_zero_pending_still_creates_forward(self, data_dir):
+        _write(data_dir["chain"], [])
         from server import move_mining_payout_state
-        assert move_mining_payout_state(OLD_ADDR, NEW_ADDR) == 0
+        count = move_mining_payout_state(OLD_ADDR, NEW_ADDR)
+        assert count == 0
+        forwards = _read(data_dir["forwards"])
+        assert forwards[OLD_ADDR]["forward_to"] == NEW_ADDR
+        assert forwards[OLD_ADDR]["pending_at_migration"] == 0
+
+    def test_journal_entry_written(self, data_dir):
+        _write(data_dir["chain"], [{"to": OLD_ADDR, "type": "coinbase"}])
+        from server import move_mining_payout_state
+        move_mining_payout_state(OLD_ADDR, NEW_ADDR)
+        journal = _read(data_dir["journal"])
+        payout_entries = [e for e in journal["entries"] if e["step"] == "mining_payout"]
+        assert len(payout_entries) == 1
+        assert payout_entries[0]["status"] == "forwarded"
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# 3. Pool position transfer (complete balance ownership)
+# ───────────────────────────────────────────────────────────────────────────
+
+FULL_POSITION = {
+    "address": OLD_ADDR,
+    "pool_id": "thr_btc",
+    "lp_position_balance": 100.0,
+    "external_side_balance": 25.5,
+    "thr_side_balance": 74.5,
+    "last_updated": "2026-01-01T00:00:00Z",
+}
 
 
 class TestGetPoolRewardsState:
-    """get_pool_rewards_state detects active LP positions."""
 
-    def test_no_position_returns_none(self, tmp_path, monkeypatch):
-        pf = tmp_path / "pool_positions.json"
-        pf.write_text(json.dumps({}))
-        monkeypatch.setattr("server.POOL_POSITIONS_FILE", str(pf))
+    def test_no_position_returns_none(self, data_dir):
+        _write(data_dir["pool_positions"], {})
         from server import get_pool_rewards_state
         assert get_pool_rewards_state(OLD_ADDR) is None
 
-    def test_active_position_detected(self, tmp_path, monkeypatch):
-        pf = tmp_path / "pool_positions.json"
-        pf.write_text(json.dumps({
-            OLD_ADDR: {"thr_btc": {"lp_position_balance": 100.0}}
-        }))
-        monkeypatch.setattr("server.POOL_POSITIONS_FILE", str(pf))
+    def test_detects_position_with_any_nonzero_balance(self, data_dir):
+        """A position with external_side_balance > 0 but lp == 0 is still active."""
+        _write(data_dir["pool_positions"], {
+            OLD_ADDR: {"thr_btc": {
+                "lp_position_balance": 0,
+                "external_side_balance": 10.0,
+                "thr_side_balance": 0,
+            }}
+        })
         from server import get_pool_rewards_state
         state = get_pool_rewards_state(OLD_ADDR)
         assert state is not None
         assert "thr_btc" in state["active_pools"]
 
+    def test_all_zero_returns_none(self, data_dir):
+        _write(data_dir["pool_positions"], {
+            OLD_ADDR: {"thr_btc": {
+                "lp_position_balance": 0,
+                "external_side_balance": 0,
+                "thr_side_balance": 0,
+            }}
+        })
+        from server import get_pool_rewards_state
+        assert get_pool_rewards_state(OLD_ADDR) is None
+
 
 class TestMovePoolRewardsState:
-    """move_pool_rewards_state moves LP positions idempotently."""
 
-    def test_move_position(self, tmp_path, monkeypatch):
-        pf = tmp_path / "pool_positions.json"
-        pf.write_text(json.dumps({
-            OLD_ADDR: {"thr_btc": {"lp_position_balance": 100.0}}
-        }))
-        monkeypatch.setattr("server.POOL_POSITIONS_FILE", str(pf))
+    def test_transfers_all_balance_fields(self, data_dir):
+        """Core invariant: ALL balance fields must move; old must be zeroed."""
+        _write(data_dir["pool_positions"], {OLD_ADDR: {"thr_btc": FULL_POSITION.copy()}})
         from server import move_pool_rewards_state
         moved = move_pool_rewards_state(OLD_ADDR, NEW_ADDR)
         assert moved == 1
-        data = json.loads(pf.read_text())
-        assert data[NEW_ADDR]["thr_btc"]["lp_position_balance"] == 100.0
-        assert data[OLD_ADDR]["thr_btc"]["lp_position_balance"] == 0
+        data = _read(data_dir["pool_positions"])
+        new_p = data[NEW_ADDR]["thr_btc"]
+        assert new_p["lp_position_balance"] == 100.0
+        assert new_p["external_side_balance"] == 25.5
+        assert new_p["thr_side_balance"] == 74.5
+        assert new_p["address"] == NEW_ADDR
+        assert new_p["migrated_from"] == OLD_ADDR
+        old_p = data[OLD_ADDR]["thr_btc"]
+        assert old_p["lp_position_balance"] == 0
+        assert old_p["external_side_balance"] == 0
+        assert old_p["thr_side_balance"] == 0
+        assert old_p["migrated_to"] == NEW_ADDR
 
-    def test_idempotent_already_moved(self, tmp_path, monkeypatch):
-        pf = tmp_path / "pool_positions.json"
-        pf.write_text(json.dumps({
-            OLD_ADDR: {"thr_btc": {"lp_position_balance": 0}},
-            NEW_ADDR: {"thr_btc": {"lp_position_balance": 100.0}}
-        }))
-        monkeypatch.setattr("server.POOL_POSITIONS_FILE", str(pf))
+    def test_old_address_cannot_withdraw_after_move(self, data_dir):
+        """Withdrawal gate: external_side_balance on old must be 0."""
+        _write(data_dir["pool_positions"], {OLD_ADDR: {"thr_btc": FULL_POSITION.copy()}})
+        from server import move_pool_rewards_state
+        move_pool_rewards_state(OLD_ADDR, NEW_ADDR)
+        data = _read(data_dir["pool_positions"])
+        old_ext = float(data[OLD_ADDR]["thr_btc"].get("external_side_balance", 0))
+        assert old_ext == 0, "old address must not have withdrawable balance"
+
+    def test_idempotent_when_new_has_balance(self, data_dir):
+        _write(data_dir["pool_positions"], {
+            OLD_ADDR: {"thr_btc": FULL_POSITION.copy()},
+            NEW_ADDR: {"thr_btc": {
+                "lp_position_balance": 200.0,
+                "external_side_balance": 50.0,
+                "thr_side_balance": 150.0,
+            }},
+        })
         from server import move_pool_rewards_state
         assert move_pool_rewards_state(OLD_ADDR, NEW_ADDR) == 0
 
-    def test_no_duplicate_on_repeat(self, tmp_path, monkeypatch):
-        pf = tmp_path / "pool_positions.json"
-        pf.write_text(json.dumps({
-            OLD_ADDR: {"thr_btc": {"lp_position_balance": 50.0}}
-        }))
-        monkeypatch.setattr("server.POOL_POSITIONS_FILE", str(pf))
+    def test_multiple_pools_moved(self, data_dir):
+        pos_a = {**FULL_POSITION, "pool_id": "thr_btc"}
+        pos_b = {**FULL_POSITION, "pool_id": "thr_usdt",
+                 "lp_position_balance": 50.0, "external_side_balance": 30.0,
+                 "thr_side_balance": 20.0}
+        _write(data_dir["pool_positions"], {
+            OLD_ADDR: {"thr_btc": pos_a, "thr_usdt": pos_b}
+        })
+        from server import move_pool_rewards_state
+        assert move_pool_rewards_state(OLD_ADDR, NEW_ADDR) == 2
+        data = _read(data_dir["pool_positions"])
+        assert data[NEW_ADDR]["thr_btc"]["lp_position_balance"] == 100.0
+        assert data[NEW_ADDR]["thr_usdt"]["lp_position_balance"] == 50.0
+        assert data[OLD_ADDR]["thr_btc"]["external_side_balance"] == 0
+        assert data[OLD_ADDR]["thr_usdt"]["external_side_balance"] == 0
+
+    def test_repeat_move_does_not_double_balance(self, data_dir):
+        _write(data_dir["pool_positions"], {OLD_ADDR: {"thr_btc": FULL_POSITION.copy()}})
         from server import move_pool_rewards_state
         move_pool_rewards_state(OLD_ADDR, NEW_ADDR)
         move_pool_rewards_state(OLD_ADDR, NEW_ADDR)
-        data = json.loads(pf.read_text())
-        assert data[NEW_ADDR]["thr_btc"]["lp_position_balance"] == 50.0
+        data = _read(data_dir["pool_positions"])
+        assert data[NEW_ADDR]["thr_btc"]["lp_position_balance"] == 100.0
 
+    def test_journal_entry_written(self, data_dir):
+        _write(data_dir["pool_positions"], {OLD_ADDR: {"thr_btc": FULL_POSITION.copy()}})
+        from server import move_pool_rewards_state
+        move_pool_rewards_state(OLD_ADDR, NEW_ADDR)
+        journal = _read(data_dir["journal"])
+        pool_entries = [e for e in journal["entries"] if e["step"] == "pool_positions"]
+        assert len(pool_entries) == 1
+        assert pool_entries[0]["detail"]["pools_moved"] == 1
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# 4. Agent wallet bindings (env-configured, read-only)
+# ───────────────────────────────────────────────────────────────────────────
 
 class TestAgentWalletBindings:
-    """Agent wallet bindings are env-configured; state check is read-only."""
 
     def test_pythia_wallet_detected(self):
         from server import get_agent_wallet_binding_state, PYTHIA_SYSTEM_THR_ADDRESS
@@ -207,54 +326,78 @@ class TestAgentWalletBindings:
             state = get_agent_wallet_binding_state(PYTHIA_SYSTEM_THR_ADDRESS)
             assert state is not None
             assert state["role"] == "pythia_system"
+            assert state["mutable"] is False
 
     def test_normal_user_has_no_binding(self):
         from server import get_agent_wallet_binding_state
         assert get_agent_wallet_binding_state(OLD_ADDR) is None
 
-    def test_move_returns_zero(self):
+    def test_move_returns_negative_when_binding_exists(self):
+        from server import move_agent_wallet_binding_state, PYTHIA_SYSTEM_THR_ADDRESS
+        if PYTHIA_SYSTEM_THR_ADDRESS:
+            result = move_agent_wallet_binding_state(PYTHIA_SYSTEM_THR_ADDRESS, NEW_ADDR)
+            assert result == -1, "must signal that binding exists but cannot be moved"
+
+    def test_move_returns_zero_when_no_binding(self, data_dir):
         from server import move_agent_wallet_binding_state
         assert move_agent_wallet_binding_state(OLD_ADDR, NEW_ADDR) == 0
 
-
-class TestRepairMigrationIntegration:
-    """Verify repair_migration computes ecosystem_bindings_repaired correctly."""
-
-    def test_repair_result_has_binding_fields(self):
-        src = Path("wallet_v1_migration.py").read_text()
-        idx = src.index("def repair_migration(")
-        block = src[idx:idx + 3000]
-        assert "mining_bindings_repaired" in block or "mining_ok" in block
-        assert "pool_rewards_repaired" in block or "pool_ok" in block
-        assert "agent_bindings_repaired" in block or "agent_ok" in block
-        assert "ecosystem_bindings_repaired" in block or "ecosystem_ok" in block
-
-    def test_ecosystem_ok_requires_all_bindings(self):
-        src = Path("wallet_v1_migration.py").read_text()
-        idx = src.index("ecosystem_ok")
-        line = src[idx:src.index("\n", idx)]
-        assert "mining_ok" in line
-        assert "pool_ok" in line
-        assert "agent_ok" in line
-        assert "music_ok" in line
-
-    def test_remaining_operational_count_function_exists(self):
-        src = Path("wallet_v1_migration.py").read_text()
-        assert "_remaining_old_operational_binding_count" in src
-        idx = src.index("def _remaining_old_operational_binding_count")
-        block = src[idx:idx + 500]
-        assert "get_mining_whitelist_entry" in block
-        assert "get_mining_payout_state" in block
-        assert "get_pool_rewards_state" in block
+    def test_journal_records_blocked_when_binding_exists(self, data_dir):
+        from server import move_agent_wallet_binding_state, PYTHIA_SYSTEM_THR_ADDRESS
+        if PYTHIA_SYSTEM_THR_ADDRESS:
+            move_agent_wallet_binding_state(PYTHIA_SYSTEM_THR_ADDRESS, NEW_ADDR)
+            journal = _read(data_dir["journal"])
+            agent_entries = [e for e in journal["entries"] if e["step"] == "agent_binding"]
+            assert len(agent_entries) == 1
+            assert agent_entries[0]["status"] == "blocked_env_configured"
 
 
-class TestServerHooksRegistered:
-    """Verify all required hooks exist in server.py."""
+# ───────────────────────────────────────────────────────────────────────────
+# 5. Migration journal reconciliation
+# ───────────────────────────────────────────────────────────────────────────
 
-    def test_all_hooks_are_callable(self):
-        import server
+class TestMigrationJournal:
+
+    def test_full_migration_sequence_journal(self, data_dir):
+        """Run all three binding movers; journal must record each step."""
+        _write(data_dir["whitelist"], [OLD_ADDR])
+        _write(data_dir["chain"], [{"to": OLD_ADDR, "type": "mining_reward"}])
+        _write(data_dir["pool_positions"], {OLD_ADDR: {"thr_btc": FULL_POSITION.copy()}})
+        from server import (move_mining_whitelist_entry, move_mining_payout_state,
+                            move_pool_rewards_state)
+        move_mining_whitelist_entry(OLD_ADDR, NEW_ADDR)
+        move_mining_payout_state(OLD_ADDR, NEW_ADDR)
+        move_pool_rewards_state(OLD_ADDR, NEW_ADDR)
+        journal = _read(data_dir["journal"])
+        steps = [e["step"] for e in journal["entries"]]
+        assert "whitelist" in steps
+        assert "mining_payout" in steps
+        assert "pool_positions" in steps
+        for entry in journal["entries"]:
+            assert "at" in entry
+            assert "old_address" in entry
+            assert "new_v1_address" in entry
+
+    def test_journal_survives_multiple_migrations(self, data_dir):
+        """Journal accumulates entries across multiple address pairs."""
+        _write(data_dir["whitelist"], [OLD_ADDR, OTHER_ADDR])
+        from server import move_mining_whitelist_entry
+        move_mining_whitelist_entry(OLD_ADDR, NEW_ADDR)
+        move_mining_whitelist_entry(OTHER_ADDR, NEW_ADDR)
+        journal = _read(data_dir["journal"])
+        assert len(journal["entries"]) >= 2
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# 6. Integration: repair_migration hook callability
+# ───────────────────────────────────────────────────────────────────────────
+
+class TestRepairMigrationHookCallability:
+    """Verify wallet_v1_migration.py can call all hooks via getattr."""
+
+    def test_all_hooks_importable(self):
+        import server as s
         hooks = [
-            "get_mining_whitelist_entry",
             "move_mining_whitelist_entry",
             "get_mining_payout_state",
             "move_mining_payout_state",
@@ -264,5 +407,15 @@ class TestServerHooksRegistered:
             "move_agent_wallet_binding_state",
         ]
         for name in hooks:
-            fn = getattr(server, name, None)
+            fn = getattr(s, name, None)
             assert callable(fn), f"server.{name} must be callable"
+
+    def test_repair_functions_use_getattr_pattern(self):
+        src = Path("wallet_v1_migration.py").read_text()
+        for fn_name in ["move_mining_whitelist_entry", "move_mining_payout_state",
+                        "move_pool_rewards_state", "move_agent_wallet_binding_state"]:
+            assert fn_name in src, f"wallet_v1_migration.py must reference {fn_name}"
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

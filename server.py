@@ -2865,6 +2865,138 @@ def get_mining_whitelist_entry(thr_address: str) -> dict | None:
     return None
 
 
+def move_mining_whitelist_entry(old_address: str, new_v1_address: str) -> bool:
+    """Rebind a mining whitelist entry from old_address to new_v1_address.
+    Idempotent: if new_v1_address already has an entry, skip."""
+    if not old_address or not new_v1_address:
+        return False
+    entries = load_json(WHITELIST_WALLETS_FILE, [])
+    if not isinstance(entries, list):
+        return False
+    new_already = any(
+        (isinstance(e, str) and e == new_v1_address) or
+        (isinstance(e, dict) and (e.get("address") or e.get("thr_address")) == new_v1_address)
+        for e in entries
+    )
+    if new_already:
+        return True
+    changed = False
+    for i, entry in enumerate(entries):
+        if isinstance(entry, str) and entry == old_address:
+            entries[i] = new_v1_address
+            changed = True
+            break
+        if isinstance(entry, dict):
+            addr = entry.get("address") or entry.get("thr_address")
+            if addr == old_address:
+                if "address" in entry:
+                    entry["address"] = new_v1_address
+                if "thr_address" in entry:
+                    entry["thr_address"] = new_v1_address
+                entry["migrated_from"] = old_address
+                changed = True
+                break
+    if changed:
+        save_json(WHITELIST_WALLETS_FILE, entries)
+    return changed
+
+
+def get_mining_payout_state(thr_address: str) -> dict | None:
+    """Check if address has pending mining rewards in the chain."""
+    if not thr_address:
+        return None
+    chain = load_json(CHAIN_FILE, [])
+    pending = [
+        tx for tx in chain
+        if tx.get("to") == thr_address
+        and tx.get("type") in ("coinbase", "mining_reward")
+        and not tx.get("confirmed")
+    ]
+    if not pending:
+        return None
+    return {"address": thr_address, "pending_count": len(pending)}
+
+
+def move_mining_payout_state(old_address: str, new_v1_address: str) -> int:
+    """Redirect pending mining rewards from old to new address.
+    Already-confirmed rewards stay on old address (historical)."""
+    if not old_address or not new_v1_address:
+        return 0
+    chain = load_json(CHAIN_FILE, [])
+    moved = 0
+    for tx in chain:
+        if (tx.get("to") == old_address
+                and tx.get("type") in ("coinbase", "mining_reward")
+                and not tx.get("confirmed")):
+            tx["to"] = new_v1_address
+            tx["migrated_from"] = old_address
+            moved += 1
+    if moved:
+        save_json(CHAIN_FILE, chain)
+    return moved
+
+
+def get_pool_rewards_state(thr_address: str) -> dict | None:
+    """Check if address has active pool positions."""
+    if not thr_address:
+        return None
+    positions = _load_pool_positions()
+    user_positions = positions.get(thr_address)
+    if not user_positions:
+        return None
+    active = {pid: pos for pid, pos in user_positions.items()
+              if float(pos.get("lp_position_balance", 0)) > 0}
+    if not active:
+        return None
+    return {"address": thr_address, "active_pools": list(active.keys()),
+            "position_count": len(active)}
+
+
+def move_pool_rewards_state(old_address: str, new_v1_address: str) -> int:
+    """Move pool positions from old to new address. Idempotent."""
+    if not old_address or not new_v1_address:
+        return 0
+    positions = _load_pool_positions()
+    old_pos = positions.get(old_address)
+    if not old_pos:
+        return 0
+    new_pos = positions.get(new_v1_address, {})
+    moved = 0
+    pools_to_zero = []
+    for pool_id, pos in old_pos.items():
+        bal = float(pos.get("lp_position_balance", 0))
+        if bal <= 0:
+            continue
+        if pool_id in new_pos and float(new_pos[pool_id].get("lp_position_balance", 0)) > 0:
+            continue
+        new_pos[pool_id] = {**pos, "migrated_from": old_address}
+        pools_to_zero.append(pool_id)
+        moved += 1
+    if moved:
+        positions[new_v1_address] = new_pos
+        for pool_id in pools_to_zero:
+            old_pos[pool_id] = {**old_pos[pool_id], "lp_position_balance": 0}
+        _save_pool_positions(positions)
+    return moved
+
+
+def get_agent_wallet_binding_state(thr_address: str) -> dict | None:
+    """Check if address is used as an agent/Pythia wallet binding."""
+    if not thr_address:
+        return None
+    if thr_address == PYTHIA_SYSTEM_THR_ADDRESS:
+        return {"address": thr_address, "role": "pythia_system"}
+    if thr_address == AI_WALLET_ADDRESS:
+        return {"address": thr_address, "role": "ai_wallet"}
+    return None
+
+
+def move_agent_wallet_binding_state(old_address: str, new_v1_address: str) -> int:
+    """Agent wallet bindings are env-configured, not file-mutable.
+    Returns 0 — rebinding requires env var change, not runtime mutation."""
+    return 0
+
+
 def _whitelist_allows_no_pledge(entry: dict | None) -> bool:
     if not entry:
         return False

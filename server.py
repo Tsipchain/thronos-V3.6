@@ -30502,8 +30502,23 @@ def api_swap_execute():
     """Execute swap with comprehensive error handling. All user input errors return 400, never 500."""
     try:
         data = request.get_json() or {}
+        # Guard against double-serialized JSON (string instead of dict)
+        if isinstance(data, str):
+            try:
+                data = json.loads(data)
+            except (json.JSONDecodeError, ValueError):
+                pass
+        if not isinstance(data, dict):
+            return jsonify(status="error", error="invalid_request_body", message="Request body must be a JSON object"), 400
         # Support walletV1BuildSignedRequest format where swap params are nested under "payload"
         inner = data.get("payload") or {}
+        if isinstance(inner, str):
+            try:
+                inner = json.loads(inner)
+            except (json.JSONDecodeError, ValueError):
+                inner = {}
+        if not isinstance(inner, dict):
+            inner = {}
 
         # Safe extraction: check top-level first, fall back to nested payload
         token_in = (data.get("token_in") or inner.get("token_in") or "").upper().strip()

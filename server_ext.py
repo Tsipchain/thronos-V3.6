@@ -1331,6 +1331,16 @@ def wallet_v1_swap():
     import time as _time_mod
 
     data = _request.get_json() or {}
+    # Guard against double-serialized JSON (string instead of dict)
+    if isinstance(data, str):
+        try:
+            import json as _json_swap
+            data = _json_swap.loads(data)
+        except (ValueError, TypeError):
+            pass
+    if not isinstance(data, dict):
+        return _jsonify(ok=False, error='invalid_request_body',
+                        detail='Request body must be a JSON object'), 400
     intent_raw = data.get('intent')
     signature  = (data.get('signature')  or '').strip()
     public_key = (data.get('public_key') or '').strip()
@@ -1344,6 +1354,14 @@ def wallet_v1_swap():
     if not ok:
         return _jsonify(ok=False, error=err_code, detail=err_detail), 400
     payload = data.get('payload') or {}
+    if isinstance(payload, str):
+        try:
+            import json as _json_pl
+            payload = _json_pl.loads(payload)
+        except (ValueError, TypeError):
+            payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
     if not _verify_action_payload_hash(intent.get('payload_hash', ''), payload):
         return _jsonify(ok=False, error='payload_hash_mismatch',
                         detail='payload does not match signed intent'), 400

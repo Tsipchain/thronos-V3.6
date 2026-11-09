@@ -13,11 +13,34 @@ _HARDCODED_SYSTEM_WALLETS = frozenset({
     'THR5DF27A86C477F381594E896F0E55357DEC5942BA',
 })
 
+_ENV_SYSTEM_WALLET_KEYS = (
+    'WALLET_SYSTEM_ADDRESSES',
+    'THR_AI_AGENT_WALLET',
+    'PYTHIA_SYSTEM_THR_ADDRESS',
+    'AI_WALLET_ADDRESS',
+    'TREASURY_WBTC_ADDRESS',
+)
+
 
 def _get_system_wallet_set():
-    env_raw = os.getenv('WALLET_SYSTEM_ADDRESSES', '')
-    env_addrs = frozenset(a.strip().upper() for a in env_raw.split(',') if a.strip())
-    return _HARDCODED_SYSTEM_WALLETS | env_addrs
+    addrs = set()
+    for key in _ENV_SYSTEM_WALLET_KEYS:
+        raw = os.getenv(key, '')
+        for part in raw.split(','):
+            part = part.strip().upper()
+            if part and part.startswith('THR'):
+                addrs.add(part)
+    try:
+        import server as _srv
+        for attr in ('AI_WALLET_ADDRESS', 'PYTHIA_SYSTEM_THR_ADDRESS'):
+            val = getattr(_srv, attr, '')
+            if val and isinstance(val, str):
+                val = val.strip().upper()
+                if val.startswith('THR'):
+                    addrs.add(val)
+    except ImportError:
+        pass
+    return _HARDCODED_SYSTEM_WALLETS | frozenset(addrs)
 
 
 def is_system_wallet(address):

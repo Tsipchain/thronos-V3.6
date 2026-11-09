@@ -30033,6 +30033,10 @@ def api_wallet_v1_restore_migration():
         migration_status = migration.get("migration_status", "confirmed")
         has_signing_material = migration.get("has_signing_material", False)
 
+        from wallet_v1_migration import is_system_wallet
+        if is_system_wallet(legacy_address) or is_system_wallet(canonical_v1_address):
+            return jsonify(ok=False, error="system_wallet_not_user_migratable"), 403
+
         return jsonify(
             ok=True,
             canonical_v1_address=canonical_v1_address,
@@ -30095,10 +30099,16 @@ def api_wallet_v1_resolve_address():
         if not migration:
             return jsonify(ok=False, error="address_not_found"), 404
 
+        from wallet_v1_migration import is_system_wallet
+        canonical = migration.get("canonical_v1_address")
+        legacy = migration.get("legacy_address")
+        if is_system_wallet(address) or is_system_wallet(canonical) or is_system_wallet(legacy):
+            return jsonify(ok=False, error="system_wallet_not_user_resolvable"), 403
+
         return jsonify(
             ok=True,
-            canonical_v1_address=migration.get("canonical_v1_address"),
-            legacy_address=migration.get("legacy_address"),
+            canonical_v1_address=canonical,
+            legacy_address=legacy,
             migration_status=migration.get("migration_status", "confirmed"),
             has_signing_material=migration.get("has_signing_material", False)
         ), 200

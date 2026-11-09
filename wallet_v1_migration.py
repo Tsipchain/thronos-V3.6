@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 from datetime import datetime, UTC
 from pathlib import Path
 
@@ -7,6 +8,22 @@ from wallet_v1_address_derivation import derive_thronos_address
 
 MIGRATION_FILE = Path('data/wallet_v1_migrations.json')
 MIGRATION_RECORD_VERSION = 3
+
+_HARDCODED_SYSTEM_WALLETS = frozenset({
+    'THR5DF27A86C477F381594E896F0E55357DEC5942BA',
+})
+
+
+def _get_system_wallet_set():
+    env_raw = os.getenv('WALLET_SYSTEM_ADDRESSES', '')
+    env_addrs = frozenset(a.strip().upper() for a in env_raw.split(',') if a.strip())
+    return _HARDCODED_SYSTEM_WALLETS | env_addrs
+
+
+def is_system_wallet(address):
+    if not address:
+        return False
+    return address.strip().upper() in _get_system_wallet_set()
 
 
 class MigrationError(RuntimeError):
@@ -889,7 +906,11 @@ def _restore_migrated_marker(old_address, marker_snapshot):
 def migrate_legacy_address(old_address, legacy_secret, new_compressed_public_key):
     if not old_address or not legacy_secret or not new_compressed_public_key:
         raise ValueError('missing_migration_fields')
+    if is_system_wallet(old_address):
+        raise ValueError('system_wallet_migration_rejected')
     new_v1_address = derive_thronos_address(new_compressed_public_key)
+    if is_system_wallet(new_v1_address):
+        raise ValueError('system_wallet_migration_rejected')
 
     mmap = _load_map()
     if mmap.get(old_address, {}).get('status') in ('completed', 'repaired'):
@@ -963,6 +984,8 @@ def migrate_legacy_address(old_address, legacy_secret, new_compressed_public_key
 
 
 def repair_migration(old_address, new_v1_address):
+    if is_system_wallet(old_address) or is_system_wallet(new_v1_address):
+        raise ValueError('system_wallet_repair_rejected')
     mmap = _load_map()
     rec = mmap.get(old_address)
     if not rec:

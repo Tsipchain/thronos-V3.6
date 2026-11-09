@@ -263,5 +263,62 @@ class TestWalletIdentityDiagnostics:
         assert "ai_game_wallet" in src
 
 
+# ───────────────────────────────────────────────────────────────────────────
+# 8. Import-cycle / startup safety for _get_system_wallet_set
+# ───────────────────────────────────────────────────────────────────────────
+
+class TestImportCycleSafety:
+    """_get_system_wallet_set() does `import server` at runtime.
+    Since server.py lazily imports wallet_v1_migration in function bodies,
+    no circular import should occur. These tests verify that."""
+
+    def test_import_server_then_migration_no_cycle(self):
+        """Importing server first, then calling _get_system_wallet_set, must not raise."""
+        import importlib
+        import sys
+        mod_names = [k for k in sys.modules if k.startswith('wallet_v1_migration')]
+        srv = importlib.import_module('server')
+        assert hasattr(srv, 'app')
+        from wallet_v1_migration import _get_system_wallet_set
+        result = _get_system_wallet_set()
+        assert isinstance(result, frozenset)
+
+    def test_import_migration_then_server_no_cycle(self):
+        """Importing wallet_v1_migration first, then server, must not raise."""
+        from wallet_v1_migration import _get_system_wallet_set
+        result = _get_system_wallet_set()
+        assert isinstance(result, frozenset)
+        import server
+        assert hasattr(server, 'app')
+
+    def test_is_system_wallet_callable_after_server_import(self):
+        """is_system_wallet must work after server.py has been fully imported."""
+        import server  # noqa: F401
+        from wallet_v1_migration import is_system_wallet
+        assert is_system_wallet("THR5DF27A86C477F381594E896F0E55357DEC5942BA") is True
+        assert is_system_wallet("THRNOT_A_SYSTEM_WALLET_00000000000000000") is False
+
+    def test_get_system_wallet_set_graceful_if_server_unavailable(self):
+        """If server import fails, _get_system_wallet_set still returns hardcoded set."""
+        import sys
+        from wallet_v1_migration import _get_system_wallet_set, _HARDCODED_SYSTEM_WALLETS
+        saved = sys.modules.get('server')
+        try:
+            sys.modules['server'] = None  # force ImportError on `import server`
+            from importlib import reload
+            import wallet_v1_migration
+            reload(wallet_v1_migration)
+            result = wallet_v1_migration._get_system_wallet_set()
+            assert _HARDCODED_SYSTEM_WALLETS.issubset(result)
+        finally:
+            if saved is not None:
+                sys.modules['server'] = saved
+            else:
+                sys.modules.pop('server', None)
+            import wallet_v1_migration as _m
+            from importlib import reload as _r
+            _r(_m)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

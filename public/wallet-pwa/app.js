@@ -2117,6 +2117,15 @@ async function showEarn(options = {}) {
         <span class="logo--sm">✨ Thronos Earn</span>
         <span style="margin-left:auto;font-size:.62rem;color:var(--muted);text-align:right">Powered by<br>ThronosLabs · ENCOM</span>
       </div>
+      <section id="earnChristmasBanner" aria-label="Goblins Wood Christmas challenge" style="position:relative;overflow:hidden;margin-top:12px;padding:18px;border:1px solid #e5b856;border-radius:14px;background:#09252c url('/wallet-pwa/goblins-wood-christmas.webp') center 42% / cover no-repeat;color:#fff">
+        <div style="position:absolute;inset:0;background:#071829d9" aria-hidden="true"></div>
+        <div style="position:relative">
+          <div style="font-size:.66rem;font-weight:800;letter-spacing:.08em;color:#ffd679">THRONOS EARN · CHRISTMAS 2026</div>
+          <h2 style="font-size:1.25rem;line-height:1.2;margin:7px 0">Goblins Wood Challenge</h2>
+          <p style="font-size:.76rem;line-height:1.45;margin:0 0 12px">Στόχος: Level 130 · Η πρόκληση ετοιμάζεται.<br>Reach Level 130 · Coming soon.</p>
+          <button class="btn" id="earnChristmasTimewall" type="button" style="background:#f2c14e;color:#111827;font-weight:800">Δες το TimeWall</button>
+        </div>
+      </section>
       <div class="card" id="earnPwaBody" style="padding:16px;margin-top:10px">
         <p style="color:var(--muted);margin:0">Loading your Earn Account…</p>
       </div>
@@ -2124,6 +2133,15 @@ async function showEarn(options = {}) {
   `);
 
   document.getElementById('earnBackBtn').addEventListener('click', showWallet);
+  document.getElementById('earnChristmasTimewall').addEventListener('click', () => {
+    const timewall = document.querySelector('#earnPwaBody [data-earn-provider="timewall"]');
+    if (timewall) {
+      timewall.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      timewall.focus({ preventScroll: true });
+    } else {
+      window.location.assign(`${API_WRITE}/earn`);
+    }
+  });
   const body = document.getElementById('earnPwaBody');
   const earnBase = API_WRITE;
   try {

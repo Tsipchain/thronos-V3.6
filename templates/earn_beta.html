@@ -46,6 +46,15 @@
   .earn-provider .earn-action { width:100%; margin:0; }
   .earn-provider.is-unavailable { opacity:.7; }
   .earn-provider-status { color:#fbbf24; font-size:11px; font-weight:700; }
+  .earn-christmas-banner { position:relative; isolation:isolate; overflow:hidden; margin:16px 0 18px; padding:22px; min-height:178px; border:1px solid #e5b856; border-radius:16px; background:#062c31 url('/wallet-pwa/goblins-wood-christmas.webp') center 42% / cover no-repeat; display:flex; align-items:center; box-shadow:0 10px 30px #0005; }
+  .earn-christmas-banner::before { content:''; position:absolute; z-index:-1; inset:0; background:linear-gradient(90deg,#071829f5 0%,#071829e8 48%,#07182950 100%); }
+  .earn-christmas-banner .challenge-copy { max-width:590px; }
+  .earn-christmas-banner .challenge-kicker { color:#ffd679; font-size:11px; font-weight:800; letter-spacing:.1em; text-transform:uppercase; }
+  .earn-christmas-banner h2 { margin:7px 0 6px; color:#fff; font-size:clamp(19px,3vw,28px); line-height:1.15; }
+  .earn-christmas-banner p { margin:0 0 12px; color:#e2f7ed; font-size:13px; line-height:1.5; }
+  .earn-christmas-banner button { background:#f2c14e; color:#111827; border:0; border-radius:9px; padding:9px 14px; font-weight:800; cursor:pointer; }
+  .earn-christmas-banner button:focus-visible { outline:3px solid #fff; outline-offset:3px; }
+  @media (max-width:520px) { .earn-christmas-banner { padding:16px; min-height:180px; }.earn-christmas-banner::before { background:#071829d9; } }
   .earn-activity-launch { display:inline-flex; align-items:center; gap:7px; margin:12px 0 2px; color:#06120e; background:#f2c14e; border:1px solid #f8d66c; border-radius:999px; padding:10px 14px; font-size:13px; font-weight:800; text-decoration:none; box-shadow:0 3px 12px #0004; cursor:pointer; }
   .earn-activity-launch:focus-visible { outline:3px solid #7fb8d8; outline-offset:2px; }
   .earn-leaderboard { background:#0b1220; border:1px solid #2e5874; border-radius:12px; padding:18px; margin-top:14px; }
@@ -151,6 +160,14 @@
     <h1 data-i18n="title">Thronos Earn Project</h1>
     <p style="margin:0;color:#7fb8d8;font-size:12px" data-i18n="powered">Powered by ThronosLabs and ENCOM</p>
     <p id="earn-subtitle" data-i18n="subtitle">Create an Earn Account or sign in. No wallet required.</p>
+    <section class="earn-christmas-banner" aria-labelledby="earn-christmas-title">
+      <div class="challenge-copy">
+        <span class="challenge-kicker">Thronos Earn · Christmas 2026</span>
+        <h2 id="earn-christmas-title">Goblins Wood Challenge</h2>
+        <p>Στόχος: Level 130 · Η χριστουγεννιάτικη πρόκληση ετοιμάζεται.<br>Reach Level 130 · Christmas challenge coming soon.</p>
+        <button id="earn-christmas-timewall" type="button">Δες το TimeWall / Explore tasks</button>
+      </div>
+    </section>
     <button id="earn-activity-launch" class="earn-activity-launch" type="button" aria-haspopup="dialog" data-i18n="balanceBtn">&#x23F1; Balance &amp; activity</button>
 
     <!-- Auth form -->
@@ -331,6 +348,14 @@
   const bitcoButton = $('earn-bitcotasks'), bitcoProvider = $('provider-bitcotasks');
   const pureButton = $('earn-pure'), pureProvider = $('provider-pure');
   const timewallButton = $('earn-timewall'), timewallProvider = $('provider-timewall');
+  $('earn-christmas-timewall').addEventListener('click', () => {
+    if (mainSection.style.display === 'none') {
+      emailInput.focus();
+    } else {
+      timewallButton.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      timewallButton.focus({ preventScroll: true });
+    }
+  });
   let isRegister = false, token = null, _walletAddress = null;
   applyI18n();
 

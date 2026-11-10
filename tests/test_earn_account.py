@@ -2344,8 +2344,26 @@ def test_earn_sponsor_visit_uses_native_link_without_blank_popup():
 def test_wallet_pwa_shell_cache_advanced_for_earn_release():
     from pathlib import Path
     sw = (Path(__file__).parent.parent / "public/wallet-pwa/sw.js").read_text()
-    assert "thr-wallet-pwa-v17" in sw
+    assert "thr-wallet-pwa-v18" in sw
     assert "'/wallet-pwa/app.js'" in sw
+    assert "'/wallet-pwa/goblins-wood-christmas.webp'" in sw
+
+
+def test_christmas_banner_only_in_earn_surfaces_without_live_prize_claim():
+    from pathlib import Path
+    root = Path(__file__).parent.parent
+    web = (root / "templates/earn_beta.html").read_text()
+    wallet = (root / "public/wallet-pwa/app.js").read_text()
+    wallet_home = wallet[wallet.index("async function showWallet("):wallet.index("async function showEarn(")]
+    earn = wallet[wallet.index("async function showEarn("):wallet.index("async function showEarn(") + 6000]
+    assert 'id="earn-christmas-title"' in web
+    assert 'id="earn-christmas-timewall"' in web
+    assert 'id="earnChristmasBanner"' in earn
+    assert 'id="earnChristmasTimewall"' in earn
+    assert "earnChristmasBanner" not in wallet_home
+    assert "goblins-wood-christmas.webp" in earn
+    assert (root / "public/wallet-pwa/goblins-wood-christmas.webp").is_file()
+    assert "100 €" not in web[web.index('id="earn-christmas-title"'):web.index('id="earn-auth"')]
 
 def test_thr_staking_http_rejects_unsigned_wallet_debit(client, store, user_a):
     token = _login(client)

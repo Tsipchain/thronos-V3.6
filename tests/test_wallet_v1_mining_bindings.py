@@ -679,5 +679,294 @@ class TestResolvePayoutHookCallability:
         assert callable(fn), "server.resolve_mining_payout_recipient must be callable"
 
 
+# ───────────────────────────────────────────────────────────────────────────
+# 13. Payout distributor wires through resolve_mining_payout_recipient
+# ───────────────────────────────────────────────────────────────────────────
+
+class TestPayoutDistributorWiring:
+    """Verify that the mining reward path calls resolve_mining_payout_recipient
+    so that forwarded addresses receive the credit instead of the old one."""
+
+    def test_reward_tx_uses_resolved_address(self, data_dir):
+        """When a forward exists, the reward_tx 'to' field must be the new address."""
+        _write(data_dir["forwards"], {
+            OLD_ADDR: {"forward_to": NEW_ADDR, "migrated_at": "2026-01-01T00:00:00Z",
+                       "pending_at_migration": 1}
+        })
+        from server import resolve_mining_payout_recipient
+        recipient = resolve_mining_payout_recipient(OLD_ADDR)
+        assert recipient == NEW_ADDR
+        reward_tx = {
+            "thr_address": OLD_ADDR,
+            "from": "COINBASE",
+            "to": recipient,
+            "amount": 1.0,
+        }
+        assert reward_tx["to"] == NEW_ADDR
+        assert reward_tx["thr_address"] == OLD_ADDR, "Original miner recorded"
+
+    def test_ledger_credits_resolved_address(self, data_dir):
+        """Ledger credit must go to the forwarded address, not the original miner."""
+        _write(data_dir["forwards"], {
+            OLD_ADDR: {"forward_to": NEW_ADDR, "migrated_at": "2026-01-01T00:00:00Z",
+                       "pending_at_migration": 1}
+        })
+        from server import resolve_mining_payout_recipient
+        payout_recipient = resolve_mining_payout_recipient(OLD_ADDR)
+        ledger = {OLD_ADDR: 10.0, NEW_ADDR: 5.0}
+        miner_share = 2.5
+        ledger[payout_recipient] = round(ledger.get(payout_recipient, 0.0) + miner_share, 6)
+        assert ledger[NEW_ADDR] == 7.5, "New address should have 5.0 + 2.5"
+        assert ledger[OLD_ADDR] == 10.0, "Old address balance unchanged"
+
+    def test_no_forward_credits_original(self, data_dir):
+        """Without a forward, rewards go to the original miner address."""
+        from server import resolve_mining_payout_recipient
+        payout_recipient = resolve_mining_payout_recipient(OLD_ADDR)
+        assert payout_recipient == OLD_ADDR
+        ledger = {OLD_ADDR: 10.0}
+        miner_share = 2.5
+        ledger[payout_recipient] = round(ledger.get(payout_recipient, 0.0) + miner_share, 6)
+        assert ledger[OLD_ADDR] == 12.5
+
+    def test_forwarded_meta_recorded(self, data_dir):
+        """When forwarded, the meta should contain 'forwarded_from'."""
+        _write(data_dir["forwards"], {
+            OLD_ADDR: {"forward_to": NEW_ADDR, "migrated_at": "2026-01-01T00:00:00Z",
+                       "pending_at_migration": 0}
+        })
+        from server import resolve_mining_payout_recipient
+        payout_recipient = resolve_mining_payout_recipient(OLD_ADDR)
+        meta = {}
+        if payout_recipient != OLD_ADDR:
+            meta["forwarded_from"] = OLD_ADDR
+        assert meta["forwarded_from"] == OLD_ADDR
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# 14. Preflight agent_blocked gates all binding mutations
+# ───────────────────────────────────────────────────────────────────────────
+
+class TestPreflightGatesMutations:
+    """When agent binding is non-mutable, repair_migration must refuse
+    to proceed with any binding mutations."""
+
+    def test_agent_blocked_returns_blocked_result(self, data_dir, monkeypatch):
+        """repair_migration returns blocked status when agent is non-mutable."""
+        import wallet_v1_migration as wm
+        import server
+
+        monkeypatch.setattr(wm, '_load_map', lambda: {
+            OLD_ADDR: {
+                'old_address': OLD_ADDR,
+                'new_v1_address': NEW_ADDR,
+                'status': 'pending',
+                'ecosystem_bindings_repaired': False,
+                'assets_migrated': False,
+            }
+        })
+        saved = {}
+        monkeypatch.setattr(wm, '_save_map_compat', lambda m: saved.update(m))
+        monkeypatch.setattr(wm, '_collect_assets', lambda addr: {'thr_balance': 0.0})
+
+        def fake_agent_state(addr):
+            if addr == OLD_ADDR:
+                return {'address': OLD_ADDR, 'mutable': False, 'reason': 'env_configured'}
+            return None
+        monkeypatch.setattr(server, 'get_agent_wallet_binding_state', fake_agent_state)
+
+        result = wm.repair_migration(OLD_ADDR, NEW_ADDR)
+        assert result['ok'] is False
+        assert result['action'] == 'blocked_by_agent_binding'
+        assert result['agent_blocked'] is True
+        assert result['status'] == 'blocked'
+
+    def test_agent_blocked_skips_whitelist_mutation(self, data_dir, monkeypatch):
+        """When agent is blocked, whitelist file must NOT be modified."""
+        import wallet_v1_migration as wm
+        import server
+
+        _write(data_dir["whitelist"], [OLD_ADDR])
+        wl_before = _read(data_dir["whitelist"])
+
+        monkeypatch.setattr(wm, '_load_map', lambda: {
+            OLD_ADDR: {
+                'old_address': OLD_ADDR,
+                'new_v1_address': NEW_ADDR,
+                'status': 'pending',
+                'ecosystem_bindings_repaired': False,
+                'assets_migrated': False,
+            }
+        })
+        monkeypatch.setattr(wm, '_save_map_compat', lambda m: None)
+        monkeypatch.setattr(wm, '_collect_assets', lambda addr: {'thr_balance': 0.0})
+
+        def fake_agent_state(addr):
+            if addr == OLD_ADDR:
+                return {'address': OLD_ADDR, 'mutable': False, 'reason': 'env_configured'}
+            return None
+        monkeypatch.setattr(server, 'get_agent_wallet_binding_state', fake_agent_state)
+
+        wm.repair_migration(OLD_ADDR, NEW_ADDR)
+        wl_after = _read(data_dir["whitelist"])
+        assert wl_after == wl_before, "Whitelist must not be mutated when agent blocked"
+
+    def test_mutable_agent_allows_mutations(self, data_dir, monkeypatch):
+        """When agent binding IS mutable, repair proceeds normally (no early return)."""
+        import wallet_v1_migration as wm
+        import server
+
+        monkeypatch.setattr(wm, '_load_map', lambda: {
+            OLD_ADDR: {
+                'old_address': OLD_ADDR,
+                'new_v1_address': NEW_ADDR,
+                'status': 'pending',
+                'ecosystem_bindings_repaired': False,
+                'assets_migrated': False,
+            }
+        })
+        monkeypatch.setattr(wm, '_save_map_compat', lambda m: None)
+        monkeypatch.setattr(wm, '_collect_assets', lambda addr: {'thr_balance': 0.0})
+        monkeypatch.setattr(wm, '_snapshot_state', lambda o, n: {'old_thr': 0, 'new_thr': 0, 'old_tokens': {}, 'new_tokens': {}})
+        monkeypatch.setattr(wm, '_snapshot_migrated_marker', lambda addr: None)
+        monkeypatch.setattr(wm, '_restore_migrated_marker', lambda addr, snap: None)
+        monkeypatch.setattr(wm, 'transfer_balance_atomic', lambda o, n, a: None)
+        monkeypatch.setattr(wm, 'transfer_all_tokens_atomic', lambda o, n: 0)
+        monkeypatch.setattr(wm, 'preserve_admission_to_new_address', lambda o, n: None)
+        monkeypatch.setattr(wm, '_compute_assets_migrated', lambda o, eco: (True, 0))
+        monkeypatch.setattr(wm, '_remaining_old_operational_binding_count', lambda o: 0)
+        monkeypatch.setattr(wm, '_repair_music_bindings', lambda o, n: (True, 0, {}))
+
+        def fake_agent_state(addr):
+            return {'address': addr, 'mutable': True}
+        monkeypatch.setattr(server, 'get_agent_wallet_binding_state', fake_agent_state)
+        monkeypatch.setattr(server, 'move_agent_wallet_binding_state', lambda o, n: 1)
+
+        result = wm.repair_migration(OLD_ADDR, NEW_ADDR)
+        assert result['ok'] is True
+        assert result.get('agent_blocked') is not True
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# 15. Binding file rollback on partial failure
+# ───────────────────────────────────────────────────────────────────────────
+
+class TestBindingFileRollback:
+    """When a binding repair step fails, earlier file mutations must be
+    rolled back so the system is left in a consistent state."""
+
+    def test_snapshot_captures_binding_files(self, data_dir):
+        """_snapshot_binding_files reads whitelist, forwards, and pool_positions."""
+        _write(data_dir["whitelist"], [OLD_ADDR])
+        _write(data_dir["forwards"], {"test": "data"})
+        _write(data_dir["pool_positions"], {OLD_ADDR: {"thr_btc": {"lp_position_balance": 50}}})
+        from wallet_v1_migration import _snapshot_binding_files
+        snap = _snapshot_binding_files()
+        assert 'WHITELIST_WALLETS_FILE' in snap
+        assert 'MINING_PAYOUT_FORWARDS_FILE' in snap
+        assert 'POOL_POSITIONS_FILE' in snap
+
+    def test_restore_reverts_binding_files(self, data_dir):
+        """_restore_binding_files writes back the exact content from the snapshot."""
+        original_wl = [OLD_ADDR]
+        original_fwd = {"test": "original"}
+        original_pool = {OLD_ADDR: {"thr_btc": {"lp_position_balance": 50}}}
+        _write(data_dir["whitelist"], original_wl)
+        _write(data_dir["forwards"], original_fwd)
+        _write(data_dir["pool_positions"], original_pool)
+
+        from wallet_v1_migration import _snapshot_binding_files, _restore_binding_files
+        snap = _snapshot_binding_files()
+
+        _write(data_dir["whitelist"], [NEW_ADDR, "mutated"])
+        _write(data_dir["forwards"], {NEW_ADDR: {"forward_to": "changed"}})
+        _write(data_dir["pool_positions"], {NEW_ADDR: {"something": "else"}})
+
+        _restore_binding_files(snap)
+
+        assert _read(data_dir["whitelist"]) == original_wl
+        assert _read(data_dir["forwards"]) == original_fwd
+        assert _read(data_dir["pool_positions"]) == original_pool
+
+    def test_pool_crash_rolls_back_whitelist(self, data_dir, monkeypatch):
+        """If pool move crashes after whitelist moved, whitelist is restored."""
+        import wallet_v1_migration as wm
+        import server
+
+        _write(data_dir["whitelist"], [OLD_ADDR])
+        _write(data_dir["pool_positions"], {OLD_ADDR: {"thr_btc": FULL_POSITION.copy()}})
+        wl_before = _read(data_dir["whitelist"])
+
+        monkeypatch.setattr(wm, '_load_map', lambda: {
+            OLD_ADDR: {
+                'old_address': OLD_ADDR,
+                'new_v1_address': NEW_ADDR,
+                'status': 'pending',
+                'ecosystem_bindings_repaired': False,
+                'assets_migrated': False,
+            }
+        })
+        monkeypatch.setattr(wm, '_save_map_compat', lambda m: None)
+        monkeypatch.setattr(wm, '_collect_assets', lambda addr: {'thr_balance': 0.0})
+        monkeypatch.setattr(wm, '_snapshot_state', lambda o, n: {'old_thr': 0, 'new_thr': 0, 'old_tokens': {}, 'new_tokens': {}})
+        monkeypatch.setattr(wm, '_snapshot_migrated_marker', lambda addr: None)
+        monkeypatch.setattr(wm, '_restore_migrated_marker', lambda addr, snap: None)
+        monkeypatch.setattr(wm, 'transfer_balance_atomic', lambda o, n, a: None)
+        monkeypatch.setattr(wm, 'transfer_all_tokens_atomic', lambda o, n: 0)
+        monkeypatch.setattr(wm, 'preserve_admission_to_new_address', lambda o, n: None)
+        monkeypatch.setattr(server, 'get_agent_wallet_binding_state', lambda addr: None)
+
+        def crash_pool(old, new):
+            raise IOError("simulated pool write crash")
+        monkeypatch.setattr(wm, 'repair_pool_rewards_wallet_binding', crash_pool)
+
+        with pytest.raises(Exception, match="repair_failed"):
+            wm.repair_migration(OLD_ADDR, NEW_ADDR)
+
+        wl_after = _read(data_dir["whitelist"])
+        assert wl_after == wl_before, "Whitelist must be rolled back after pool crash"
+
+    def test_agent_crash_rolls_back_whitelist_and_pool(self, data_dir, monkeypatch):
+        """If agent move crashes, both whitelist and pool changes are rolled back."""
+        import wallet_v1_migration as wm
+        import server
+
+        _write(data_dir["whitelist"], [OLD_ADDR])
+        _write(data_dir["pool_positions"], {OLD_ADDR: {"thr_btc": FULL_POSITION.copy()}})
+        wl_before = _read(data_dir["whitelist"])
+        pool_before = _read(data_dir["pool_positions"])
+
+        monkeypatch.setattr(wm, '_load_map', lambda: {
+            OLD_ADDR: {
+                'old_address': OLD_ADDR,
+                'new_v1_address': NEW_ADDR,
+                'status': 'pending',
+                'ecosystem_bindings_repaired': False,
+                'assets_migrated': False,
+            }
+        })
+        monkeypatch.setattr(wm, '_save_map_compat', lambda m: None)
+        monkeypatch.setattr(wm, '_collect_assets', lambda addr: {'thr_balance': 0.0})
+        monkeypatch.setattr(wm, '_snapshot_state', lambda o, n: {'old_thr': 0, 'new_thr': 0, 'old_tokens': {}, 'new_tokens': {}})
+        monkeypatch.setattr(wm, '_snapshot_migrated_marker', lambda addr: None)
+        monkeypatch.setattr(wm, '_restore_migrated_marker', lambda addr, snap: None)
+        monkeypatch.setattr(wm, 'transfer_balance_atomic', lambda o, n, a: None)
+        monkeypatch.setattr(wm, 'transfer_all_tokens_atomic', lambda o, n: 0)
+        monkeypatch.setattr(wm, 'preserve_admission_to_new_address', lambda o, n: None)
+        monkeypatch.setattr(server, 'get_agent_wallet_binding_state', lambda addr: None)
+
+        def crash_agent_bindings(old, new):
+            raise IOError("simulated agent crash")
+        monkeypatch.setattr(wm, 'repair_agent_wallet_bindings', crash_agent_bindings)
+
+        with pytest.raises(Exception, match="repair_failed"):
+            wm.repair_migration(OLD_ADDR, NEW_ADDR)
+
+        wl_after = _read(data_dir["whitelist"])
+        pool_after = _read(data_dir["pool_positions"])
+        assert wl_after == wl_before, "Whitelist must be rolled back after agent crash"
+        assert pool_after == pool_before, "Pool positions must be rolled back after agent crash"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

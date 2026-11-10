@@ -33176,6 +33176,7 @@ def _process_mining_submission(data: dict, require_job_id: bool = False):
     chain.append(new_block)
     _index_block_event(new_block)  # Index for fast queries
 
+    payout_recipient = resolve_mining_payout_recipient(thr_address)
     reward_tx_id = f"reward:{pow_hash}:{thr_address}"
     reward_tx = {
         "tx_id": reward_tx_id,
@@ -33183,7 +33184,7 @@ def _process_mining_submission(data: dict, require_job_id: bool = False):
         "kind": "mining_reward",
         "thr_address": thr_address,
         "from": "COINBASE",
-        "to": thr_address,
+        "to": payout_recipient,
         "amount": miner_share,
         "timestamp": ts,
         "height": height,
@@ -33196,7 +33197,8 @@ def _process_mining_submission(data: dict, require_job_id: bool = False):
             "reward_to_ai": ai_share,
             "reward_to_nodes": nodes_share,
             "source": "stratum" if is_stratum else "legacy",
-            **({"heat_bonus": heat_bonus_info} if heat_bonus_info else {})
+            **({"heat_bonus": heat_bonus_info} if heat_bonus_info else {}),
+            **({"forwarded_from": thr_address} if payout_recipient != thr_address else {})
         },
     }
     persist_normalized_tx(reward_tx)
@@ -33244,7 +33246,7 @@ def _process_mining_submission(data: dict, require_job_id: bool = False):
                 ledger[BURN_ADDRESS] = round(ledger.get(BURN_ADDRESS, 0.0) + fee, 6)
 
     # Add mining rewards to same ledger update (batch optimization)
-    ledger[thr_address]=round(ledger.get(thr_address,0.0)+miner_share,6)
+    ledger[payout_recipient]=round(ledger.get(payout_recipient,0.0)+miner_share,6)
     ledger[AI_WALLET_ADDRESS]=round(ledger.get(AI_WALLET_ADDRESS,0.0)+ai_share,6)
     # Ecosystem pool accumulates in ledger (will be distributed by Digital Legacy system)
     # Full nodes rewards would be distributed to registered full node runners (phase future)

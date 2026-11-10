@@ -738,7 +738,8 @@
               '<div class="pool-stat"><div class="pool-stat-label">STAKED</div><div class="pool-stat-value">' + esc(pool.total_staked) + ' ' + esc(pool.token) + '</div></div>' +
               '<div class="pool-stat"><div class="pool-stat-label">STAKERS</div><div class="pool-stat-value">' + pool.stakers + '</div></div>' +
             '</div>' +
-            ((_walletAddress || pool.token === 'THC')
+            '<div class="pool-min">' + (pool.token === 'THC' ? 'THC stake/unstake fee: 0.09% · Pythia THC reserve.' : 'THR staking paused pending signed wallet intent; existing THR unstake remains fee-free.') + '</div>' +
+            (pool.token === 'THC'
               ? '<div class="pool-stake-row"><input type="number" step="any" min="' + esc(pool.min_stake) + '" class="pool-stake-input" data-pool="' + esc(pool.pool_id) + '" placeholder="Amount (' + esc(pool.token) + ')"><button class="pool-stake-btn" data-pool="' + esc(pool.pool_id) + '">Stake</button></div>' +
                 '<div class="pool-min">Min: ' + esc(pool.min_stake) + ' ' + esc(pool.token) + '</div>' +
                 '<div class="pool-msg" data-pool="' + esc(pool.pool_id) + '"></div>'
@@ -757,9 +758,13 @@
             }
             btn.disabled = true;
             try {
+              const quoteRes = await fetch('/api/earn/staking/fee-quote?pool_id=' + encodeURIComponent(poolId) + '&amount=' + encodeURIComponent(amount), { headers: earnAuthHeaders(), cache: 'no-store' });
+              const quote = await quoteRes.json().catch(() => ({}));
+              if (!quoteRes.ok || !quote.ok) throw new Error(quote.error || 'fee_quote_unavailable');
+              if (!window.confirm('Stake ' + quote.amount + ' ' + quote.token + '? Fee: ' + quote.fee + ' ' + quote.token + ' (0.09% to Pythia reserve). Total debit: ' + quote.total_debit + ' ' + quote.token + '.')) return;
               const res = await fetch('/api/earn/staking/stake', {
                 method: 'POST', headers: { ...earnAuthHeaders(), 'Content-Type': 'application/json' },
-                body: JSON.stringify({ pool_id: poolId, amount: amount }),
+                body: JSON.stringify({ pool_id: poolId, amount: quote.amount, accepted_fee: quote.fee, idempotency_key: crypto.randomUUID() }),
               });
               const data = await res.json().catch(() => ({}));
               if (res.ok && data.ok) {
@@ -770,7 +775,7 @@
                 if (msg) { msg.textContent = (data.error || 'error').replace(/_/g, ' '); msg.style.color = '#f87171'; }
               }
             } catch (_) {
-              if (msg) { msg.textContent = 'Staking failed. Try again.'; msg.style.color = '#f87171'; }
+              if (msg) { msg.textContent = _.message || 'Staking failed. Try again.'; msg.style.color = '#f87171'; }
             } finally { btn.disabled = false; }
           });
         });
@@ -792,19 +797,21 @@
             '<span class="pos-reward">+' + esc(pos.projected_rewards) + ' ' + esc(pos.token) + '</span></div>' +
             '<div style="display:flex;align-items:center;gap:6px">' +
             '<span class="pos-status ' + (pos.status === 'active' ? 'active' : 'pending') + '">' + esc(pos.status) + '</span>' +
-            (pos.status === 'active' ? '<button class="pos-unstake" data-pos="' + esc(pos.position_id) + '">Unstake</button>' : '') +
+            (pos.status === 'active' ? '<button class="pos-unstake" data-pos="' + esc(pos.position_id) + '" data-fee="' + esc(pos.unstake_fee || '0.000000') + '" data-token="' + esc(pos.token) + '" data-amount="' + esc(pos.amount) + '">Unstake</button>' : '') +
             '</div></div>';
         }).join('');
         posList.querySelectorAll('.pos-unstake').forEach(function(btn) {
           btn.addEventListener('click', async function() {
+            if (btn.dataset.token === 'THC' && !window.confirm('Unstake ' + btn.dataset.amount + ' THC? Fee: ' + btn.dataset.fee + ' THC to Pythia reserve.')) return;
             btn.disabled = true;
             try {
-              await fetch('/api/earn/staking/unstake', {
+              const res = await fetch('/api/earn/staking/unstake', {
                 method: 'POST', headers: { ...earnAuthHeaders(), 'Content-Type': 'application/json' },
-                body: JSON.stringify({ position_id: btn.dataset.pos }),
+                body: JSON.stringify({ position_id: btn.dataset.pos, accepted_fee: btn.dataset.fee }),
               });
+              if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'unstake_failed');
               refreshDashboard();
-            } catch (_) {} finally { btn.disabled = false; }
+            } catch (error) { alert('Unstake failed: ' + error.message); } finally { btn.disabled = false; }
           });
         });
       }

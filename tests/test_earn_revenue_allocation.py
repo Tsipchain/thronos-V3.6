@@ -37,10 +37,20 @@ def test_receipt_and_allocation_are_atomic_and_idempotent(tmp_path, monkeypatch)
     assert inserted and not duplicate and first['thc_entry_id'] == again['thc_entry_id']
     with sqlite3.connect(db) as con:
         allocation = con.execute('SELECT player_share_usd, referral_cap_usd, '
-            'platform_after_full_referrals_usd, credited_player_thc, status '
+            'platform_after_full_referrals_usd, credited_player_thc, '
+            'conversion_multiplier, conversion_allow_decimals, status '
             'FROM earn_timewall_revenue_allocations WHERE event_id = ?', ('event-1',)).fetchone()
-        assert allocation == ('0.01365', '0.00105', '0.00630', '14.000000',
+        assert allocation == ('0.01365', '0.00105', '0.00630', '14.000000', '670', 0,
                               'pending_reconciliation')
         assert con.execute('SELECT COUNT(*) FROM earn_timewall_revenue_allocations').fetchone()[0] == 1
         assert con.execute('SELECT COUNT(*) FROM thc_ledger WHERE source = ?',
                            ('timewall',)).fetchone()[0] == 1
+
+    monkeypatch.setenv('TIMEWALL_THC_CONVERSION', '900')
+    again, duplicate = store.record_timewall_receipt(**kwargs)
+    assert not duplicate and again['amount_thc'] == first['amount_thc']
+    with sqlite3.connect(db) as con:
+        assert con.execute('SELECT conversion_multiplier FROM '
+            'earn_timewall_revenue_allocations WHERE event_id = ?', ('event-1',)).fetchone()[0] == '670'
+    with pytest.raises(Exception, match='timewall_receipt_conflict'):
+        store.record_timewall_receipt(**{**kwargs, 'revenue_raw': '0.022'})

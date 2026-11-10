@@ -5,6 +5,7 @@ No HTTP route or Wallet V1 issuance is enabled by these store-level tests.
 import hashlib
 import json
 from decimal import Decimal
+from unittest.mock import patch
 
 import pytest
 from cryptography.hazmat.primitives import hashes, serialization
@@ -155,3 +156,15 @@ def test_treasury_write_failure_rolls_back_spend_and_link(store, uid, wallet):
     with store._tx() as con:
         assert con.execute("SELECT COUNT(*) FROM earn_wallet_unlock_purchases").fetchone()[0] == 0
         assert con.execute("SELECT COUNT(*) FROM earn_treasury_thc_credits").fetchone()[0] == 0
+
+
+def test_signed_receipt_retry_after_challenge_expiry_does_not_charge_twice(store, uid, wallet):
+    _fund(store, uid, "20000")
+    challenge = store.paid_wallet_unlock_challenge(uid, wallet[2])
+    args = _signed(challenge, uid, wallet)
+    receipt = store.complete_paid_wallet_unlock(**args)
+    other = store.register("later@example.com", "password123")["earn_user_id"]
+    with patch("services.earn_account.time.time", return_value=int(challenge["expires_at"]) + 1):
+        store.wallet_link_challenge(other, wallet[2])  # invokes challenge cleanup
+        assert store.complete_paid_wallet_unlock(**args)["purchase_id"] == receipt["purchase_id"]
+    assert Decimal(store.thc_balance(uid)["available"]) == Decimal("10000")

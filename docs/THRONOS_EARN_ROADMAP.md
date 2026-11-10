@@ -42,6 +42,12 @@ TimeWall 65/35 allocation and a 5-point referral cap; it does not release funds.
 | THC and THR stake principal | Beta path | THC can lock from cleared Earn balance without wallet; THR requires wallet; validate wallet transaction and device flows |
 | Staking yield / revenue share | Not ready for funded payout | Projected APY is not a payable reward; reserve, quote, fees, lock terms and risk review are outstanding |
 
+### Stake fee policy (owner decision 2026-11-10)
+
+- New THC Earn positions: 9 bps (0.09%) on stake **in addition to principal**, and 9 bps on unstake **deducted from returned principal**, rounded up to six THC decimals. Display the exact fee and total/net before each confirmation. The fee is recorded once per action and position in the separate `pythia_thc_staking_fee_reserve` internal accounting ledger; it is not a funded APY distribution or a THR/BTC transfer. Legacy THC positions retain their original fee-free unstake terms.
+- THR staking remains paused until the Wallet PWA/APK performs biometric/passkey approval, signs the exact address/pool/principal/fee/expiry/nonce intent locally, and the backend verifies it before an atomic debit and Pythia credit. Do not charge a THR fee or advertise THR staking as active until that settlement path and its tests exist. Existing THR unstake remains fee-free for now.
+- These fees do not change the independent slow/fast network send fees or authorize payout of projected staking rewards.
+
 ## Mandatory pilot acceptance matrix
 
 All rows must pass before any clearing or payout discussion.

@@ -20,7 +20,7 @@ import secrets
 import sys
 import threading
 import time
-from decimal import Decimal
+from decimal import Decimal, ROUND_DOWN
 from pathlib import Path
 from unittest.mock import patch
 
@@ -1615,7 +1615,83 @@ def _seed_thc_confirmed(store, earn_user_id, amount):
         )
 
 
+def _stake_thc_with_fee(store, uid, pool_id, amount):
+    principal = Decimal(str(amount)).quantize(Decimal("0.000001"), rounding=ROUND_DOWN)
+    return store.create_stake(uid, pool_id, amount, accepted_fee=str(store.staking_fee(principal)))
+
+
+def _unstake_thc_with_fee(store, uid, position):
+    return store.request_unstake(uid, position["position_id"], accepted_fee=str(store.staking_fee(Decimal(position["amount"]))))
+
+
 class TestStakingPool:
+    def test_fee_quote_and_explicit_acceptance(self, store, user_a):
+        uid = user_a["earn_user_id"]
+        _seed_thc_confirmed(store, uid, "20")
+        pool = next(p for p in store.staking_pools() if p["token"] == "THC")
+        quote = store.staking_fee_quote(pool["pool_id"], "10")
+        assert quote["fee"] == "0.009000"
+        assert quote["total_debit"] == "10.009000"
+        assert quote["unstake_net"] == "9.991000"
+        assert quote["fee_bps"] == 9
+        with pytest.raises(EarnError, match="staking_fee_quote_required"):
+            store.create_stake(uid, pool["pool_id"], "10")
+        with pytest.raises(EarnError, match="staking_fee_quote_required"):
+            store.create_stake(uid, pool["pool_id"], "10", accepted_fee="0.000000")
+        assert store.thc_balance(uid)["available"] == "20.000000"
+        position = store.create_stake(uid, pool["pool_id"], "10", accepted_fee=quote["fee"], idempotency_key="fee-idem")
+        assert store.thc_balance(uid)["available"] == "9.991000"
+        assert store.create_stake(uid, pool["pool_id"], "10", idempotency_key="fee-idem")["position_id"] == position["position_id"]
+        with pytest.raises(EarnError, match="staking_fee_quote_required"):
+            store.request_unstake(uid, position["position_id"])
+        result = store.request_unstake(uid, position["position_id"], accepted_fee=quote["fee"])
+        assert result["fee"] == "0.009000"
+        assert store.thc_balance(uid)["available"] == "19.982000"
+        assert store.request_unstake(uid, position["position_id"])["fee"] == "0.009000"
+        with store._tx() as con:
+            fees = con.execute("SELECT action, amount, reserve_account FROM earn_staking_fees WHERE position_id=? ORDER BY action", (position["position_id"],)).fetchall()
+            assert len(fees) == 2
+            assert all(f["amount"] == "0.009000" and f["reserve_account"] == "pythia_thc_staking_fee_reserve" for f in fees)
+
+    def test_exact_principal_needs_additional_stake_fee(self, store, user_a):
+        uid = user_a["earn_user_id"]
+        _seed_thc_confirmed(store, uid, "10")
+        pool = next(p for p in store.staking_pools() if p["token"] == "THC")
+        with pytest.raises(EarnError, match="insufficient_thc_balance"):
+            store.create_stake(uid, pool["pool_id"], "10", accepted_fee="0.009000")
+
+    def test_fee_receipt_failure_rolls_back_principal_lock(self, store, user_a):
+        uid = user_a["earn_user_id"]
+        _seed_thc_confirmed(store, uid, "20")
+        pool = next(p for p in store.staking_pools() if p["token"] == "THC")
+        with store._tx() as con:
+            con.execute("CREATE TRIGGER fee_insert_fail BEFORE INSERT ON earn_staking_fees BEGIN SELECT RAISE(ABORT, 'no_fee_credit'); END")
+        with pytest.raises(Exception, match="no_fee_credit"):
+            store.create_stake(uid, pool["pool_id"], "10", accepted_fee="0.009000")
+        assert store.staking_positions(uid) == []
+        assert store.thc_balance(uid)["available"] == "20.000000"
+
+    def test_fee_quote_http_is_authenticated_and_noncacheable(self, client, store, user_a):
+        pool = next(p for p in store.staking_pools() if p["token"] == "THC")
+        path = "/api/earn/staking/fee-quote?pool_id=" + pool["pool_id"] + "&amount=10"
+        assert client.get(path).status_code == 401
+        token = _login(client)
+        response = client.get(path, headers=_auth(token))
+        assert response.status_code == 200
+        assert response.headers["Cache-Control"] == "no-store"
+        assert response.get_json()["fee"] == "0.009000"
+
+    def test_existing_position_is_not_charged_retroactively(self, store, user_a):
+        uid = user_a["earn_user_id"]
+        _seed_thc_confirmed(store, uid, "20")
+        pool = next(p for p in store.staking_pools() if p["token"] == "THC")
+        position = _stake_thc_with_fee(store, uid, pool["pool_id"], "10")
+        with store._tx() as con:
+            con.execute("UPDATE earn_staking_positions SET fee_policy_version='legacy_fee_free' WHERE position_id=?", (position["position_id"],))
+        assert store.request_unstake(uid, position["position_id"])["fee"] == "0.000000"
+        with store._tx() as con:
+            assert con.execute("SELECT COUNT(*) FROM earn_staking_fees WHERE position_id=?", (position["position_id"],)).fetchone()[0] == 1
+
     def test_list_pools_returns_default_pools(self, store, user_a):
         pools = store.staking_pools()
         assert len(pools) == 2
@@ -1638,20 +1714,20 @@ class TestStakingPool:
         _seed_thc_confirmed(store, uid, "100")
         pools = store.staking_pools()
         thc_pool = next(p for p in pools if p["token"] == "THC")
-        pos = store.create_stake(uid, thc_pool["pool_id"], "50")
+        pos = _stake_thc_with_fee(store, uid, thc_pool["pool_id"], "50")
         assert pos["status"] == "active"
         assert Decimal(pos["amount"]) == Decimal("50")
         balance = store.thc_balance(uid)
-        assert Decimal(balance["available"]) == Decimal("50.000000")
+        assert Decimal(balance["available"]) == Decimal("49.955000")
         assert Decimal(balance["staked"]) == Decimal("50.000000")
         positions = store.staking_positions(uid)
         assert len(positions) == 1
         assert positions[0]["position_id"] == pos["position_id"]
         assert Decimal(positions[0]["projected_rewards"]) >= 0
-        result = store.request_unstake(uid, pos["position_id"])
+        result = _unstake_thc_with_fee(store, uid, pos)
         assert result["status"] == "unstaked"
         balance_after = store.thc_balance(uid)
-        assert Decimal(balance_after["available"]) == Decimal("100.000000")
+        assert Decimal(balance_after["available"]) == Decimal("99.910000")
         assert Decimal(balance_after["staked"]) == Decimal("0.000000")
         positions = store.staking_positions(uid)
         assert positions[0]["status"] == "unstaked"
@@ -1668,14 +1744,14 @@ class TestStakingPool:
         uid = user_a["earn_user_id"]
         _seed_thc_confirmed(store, uid, "50")
         pool = next(p for p in store.staking_pools() if p["token"] == "THC")
-        position = store.create_stake(uid, pool["pool_id"], "20")
+        position = _stake_thc_with_fee(store, uid, pool["pool_id"], "20")
         assert position["wallet_address"] == ""
         assert position["wallet_tx_id"] is None
         with store._tx() as con:
-            assert store._available_thc_for_staking(con, uid) == Decimal("30")
-        assert store.request_unstake(uid, position["position_id"])["status"] == "unstaked"
+            assert store._available_thc_for_staking(con, uid) == Decimal("29.982000")
+        assert _unstake_thc_with_fee(store, uid, position)["status"] == "unstaked"
         with store._tx() as con:
-            assert store._available_thc_for_staking(con, uid) == Decimal("50")
+            assert store._available_thc_for_staking(con, uid) == Decimal("49.964000")
 
     def test_thr_stake_without_wallet_is_rejected(self, store, user_a):
         uid = user_a["earn_user_id"]
@@ -1713,7 +1789,7 @@ class TestStakingPool:
         thc_pool = next(p for p in data["pools"] if p["token"] == "THC")
         resp = client.post("/api/earn/staking/stake",
             headers=_auth(token),
-            json={"pool_id": thc_pool["pool_id"], "amount": "20"},
+            json={"pool_id": thc_pool["pool_id"], "amount": "20", "accepted_fee": "0.018000"},
         )
         assert resp.status_code == 200
         assert resp.get_json()["ok"]
@@ -1723,7 +1799,7 @@ class TestStakingPool:
         assert len(positions) == 1
         resp = client.post("/api/earn/staking/unstake",
             headers=_auth(token),
-            json={"position_id": positions[0]["position_id"]},
+            json={"position_id": positions[0]["position_id"], "accepted_fee": "0.018000"},
         )
         assert resp.status_code == 200
         assert resp.get_json()["ok"]
@@ -1735,7 +1811,7 @@ class TestStakingPool:
         _seed_thc_confirmed(store, uid_a, "50")
         pools = store.staking_pools()
         thc_pool = next(p for p in pools if p["token"] == "THC")
-        pos = store.create_stake(uid_a, thc_pool["pool_id"], "10")
+        pos = _stake_thc_with_fee(store, uid_a, thc_pool["pool_id"], "10")
         with pytest.raises(EarnError, match="position_not_found"):
             store.request_unstake(uid_b, pos["position_id"])
 
@@ -1745,7 +1821,7 @@ class TestStakingPool:
         _seed_thc_confirmed(store, uid, "50")
         pools = store.staking_pools()
         thc_pool = next(p for p in pools if p["token"] == "THC")
-        pos = store.create_stake(uid, thc_pool["pool_id"], "10.123456789")
+        pos = _stake_thc_with_fee(store, uid, thc_pool["pool_id"], "10.123456789")
         assert pos["amount"] == "10.123456"
 
     def test_thr_stake_debits_wallet(self, store, user_a):
@@ -1766,7 +1842,7 @@ class TestStakingPool:
         pools = store.staking_pools()
         thc_pool = next(p for p in pools if p["token"] == "THC")
         with pytest.raises(EarnError, match="insufficient_thc_balance"):
-            store.create_stake(uid, thc_pool["pool_id"], "10")
+            _stake_thc_with_fee(store, uid, thc_pool["pool_id"], "10")
 
     def test_thr_stake_insufficient_balance_rejected(self, store, user_a):
         uid = user_a["earn_user_id"]
@@ -1784,8 +1860,8 @@ class TestStakingPool:
         _seed_thc_confirmed(store, uid, "50")
         pools = store.staking_pools()
         thc_pool = next(p for p in pools if p["token"] == "THC")
-        pos = store.create_stake(uid, thc_pool["pool_id"], "10")
-        result1 = store.request_unstake(uid, pos["position_id"])
+        pos = _stake_thc_with_fee(store, uid, thc_pool["pool_id"], "10")
+        result1 = _unstake_thc_with_fee(store, uid, pos)
         assert result1["status"] == "unstaked"
         result2 = store.request_unstake(uid, pos["position_id"])
         assert result2["status"] == "unstaked"
@@ -1877,7 +1953,7 @@ class TestPublicPoolRewards:
         _seed_thc_confirmed(store, uid, "100")
         pools = store.staking_pools()
         thc_pool = next(p for p in pools if p["token"] == "THC")
-        store.create_stake(uid, thc_pool["pool_id"], "20")
+        _stake_thc_with_fee(store, uid, thc_pool["pool_id"], "20")
         resp = client.get("/api/earn/pools/public")
         body = resp.get_json()
         for pool in body["pools"]:
@@ -1909,7 +1985,7 @@ class TestPublicPoolRewards:
         thc_pool = next(p for p in pools_before.values() if p["token"] == "THC")
         staked_before = Decimal(thc_pool["total_staked"])
         stakers_before = thc_pool["stakers"]
-        store.create_stake(uid, thc_pool["pool_id"], "50")
+        _stake_thc_with_fee(store, uid, thc_pool["pool_id"], "50")
         resp_after = client.get("/api/earn/pools/public")
         pools_after = {p["pool_id"]: p for p in resp_after.get_json()["pools"]}
         thc_after = pools_after[thc_pool["pool_id"]]
@@ -2344,7 +2420,7 @@ def test_earn_sponsor_visit_uses_native_link_without_blank_popup():
 def test_wallet_pwa_shell_cache_advanced_for_earn_release():
     from pathlib import Path
     sw = (Path(__file__).parent.parent / "public/wallet-pwa/sw.js").read_text()
-    assert "thr-wallet-pwa-v18" in sw
+    assert "thr-wallet-pwa-v19" in sw
     assert "'/wallet-pwa/app.js'" in sw
     assert "'/wallet-pwa/goblins-wood-christmas.webp'" in sw
 

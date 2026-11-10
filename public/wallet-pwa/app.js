@@ -2414,6 +2414,7 @@ async function showEarn(options = {}) {
               <div style="background:#070612;border-radius:6px;padding:6px"><div style="color:var(--muted);font-size:.62rem">STAKED</div><div>${escHtml(pool.total_staked)} ${escHtml(pool.token)}</div></div>
               <div style="background:#070612;border-radius:6px;padding:6px"><div style="color:var(--muted);font-size:.62rem">STAKERS</div><div>${pool.stakers}</div></div>
             </div>
+            <div style="font-size:.66rem;color:var(--muted);margin-bottom:8px">${pool.token === 'THC' ? 'THC stake/unstake fee: 0.09% · Pythia THC reserve.' : 'THR stake paused until signed wallet authorization. Existing THR unstake is fee-free.'}</div>
             ${pool.token === 'THC' ? `
               <div style="display:flex;gap:6px">
                 <input type="number" step="any" min="${escHtml(pool.min_stake)}" class="pwa-stake-input" data-pool="${escHtml(pool.pool_id)}" placeholder="Amount (${escHtml(pool.token)})" style="flex:1;background:#070612;border:1px solid #453b78;border-radius:6px;color:#fff;padding:7px;font-size:.76rem">
@@ -2436,10 +2437,14 @@ async function showEarn(options = {}) {
             }
             btn.disabled = true;
             try {
+              const quoteRes = await fetch(`${earnBase}/api/earn/staking/fee-quote?pool_id=${encodeURIComponent(poolId)}&amount=${encodeURIComponent(amount)}`, { credentials: 'include', cache: 'no-store' });
+              const quote = await quoteRes.json().catch(() => ({}));
+              if (!quoteRes.ok || !quote?.ok) throw new Error(quote?.error || 'fee_quote_unavailable');
+              if (!window.confirm(`Stake ${quote.amount} ${quote.token}? Fee: ${quote.fee} ${quote.token} (0.09% to Pythia reserve). Total debit: ${quote.total_debit} ${quote.token}.`)) return;
               const res = await fetch(`${earnBase}/api/earn/staking/stake`, {
                 method: 'POST', credentials: 'include',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ pool_id: poolId, amount }),
+                body: JSON.stringify({ pool_id: poolId, amount: quote.amount, accepted_fee: quote.fee, idempotency_key: crypto.randomUUID() }),
               });
               const data = await res.json().catch(() => ({}));
               if (res.ok && data?.ok) {
@@ -2449,7 +2454,7 @@ async function showEarn(options = {}) {
               } else {
                 if (msg) { msg.textContent = (data?.error || 'error').replace(/_/g, ' '); msg.style.color = '#f87171'; }
               }
-            } catch { if (msg) { msg.textContent = 'Staking failed. Try again.'; msg.style.color = '#f87171'; }
+            } catch (error) { if (msg) { msg.textContent = error.message || 'Staking failed. Try again.'; msg.style.color = '#f87171'; }
             } finally { btn.disabled = false; }
           });
         });
@@ -2467,21 +2472,23 @@ async function showEarn(options = {}) {
             </div>
             <div style="display:flex;align-items:center;gap:6px">
               <span style="font-size:.62rem;padding:2px 6px;border-radius:4px;${pos.status === 'active' ? 'background:#065f4633;color:#34d399' : 'background:#92400e33;color:#fbbf24'}">${escHtml(pos.status)}</span>
-              ${pos.status === 'active' ? `<button class="pwa-unstake-btn" data-pos="${escHtml(pos.position_id)}" style="font-size:.62rem;color:#f87171;background:none;border:1px solid #f8717144;border-radius:4px;padding:3px 7px;cursor:pointer">Unstake</button>` : ''}
+              ${pos.status === 'active' ? `<button class="pwa-unstake-btn" data-pos="${escHtml(pos.position_id)}" data-fee="${escHtml(pos.unstake_fee || '0.000000')}" data-token="${escHtml(pos.token)}" data-amount="${escHtml(pos.amount)}" style="font-size:.62rem;color:#f87171;background:none;border:1px solid #f8717144;border-radius:4px;padding:3px 7px;cursor:pointer">Unstake</button>` : ''}
             </div>
           </div>
         `).join('');
         list.querySelectorAll('.pwa-unstake-btn').forEach(btn => {
           btn.addEventListener('click', async () => {
+            if (btn.dataset.token === 'THC' && !window.confirm(`Unstake ${btn.dataset.amount} THC? Fee: ${btn.dataset.fee} THC to Pythia reserve.`)) return;
             btn.disabled = true;
             try {
-              await fetch(`${earnBase}/api/earn/staking/unstake`, {
+              const res = await fetch(`${earnBase}/api/earn/staking/unstake`, {
                 method: 'POST', credentials: 'include',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ position_id: btn.dataset.pos }),
+                body: JSON.stringify({ position_id: btn.dataset.pos, accepted_fee: btn.dataset.fee }),
               });
+              if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'unstake_failed');
               showEarn();
-            } catch {} finally { btn.disabled = false; }
+            } catch (error) { alert('Unstake failed: ' + error.message); } finally { btn.disabled = false; }
           });
         });
         const activePositions = posData.positions.filter(p => p.status === 'active');

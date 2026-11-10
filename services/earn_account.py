@@ -326,6 +326,8 @@ class EarnAccountStore:
                     platform_before_referrals_usd TEXT NOT NULL,
                     platform_after_full_referrals_usd TEXT NOT NULL,
                     credited_player_thc TEXT NOT NULL,
+                    conversion_multiplier TEXT NOT NULL,
+                    conversion_allow_decimals INTEGER NOT NULL,
                     status TEXT NOT NULL DEFAULT 'pending_reconciliation',
                     created_at INTEGER NOT NULL
                 );
@@ -3019,7 +3021,12 @@ class EarnAccountStore:
             raise EarnError("invalid_timewall_event")
         if not provider_user_id or len(provider_user_id) > 32:
             raise EarnError("invalid_timewall_user")
-        ledger_amount = timewall_reward_amount(revenue_raw)
+        conversion_raw = os.getenv("TIMEWALL_THC_CONVERSION", "670")
+        allow_decimals = os.getenv("TIMEWALL_ALLOW_DECIMALS", "0") == "1"
+        ledger_amount = timewall_reward_amount(
+            revenue_raw, conversion_raw=conversion_raw,
+            allow_decimals=allow_decimals,
+        )
         from services.earn_revenue_allocation import allocate_timewall_revenue
         allocation = allocate_timewall_revenue(revenue_raw)
         now = int(time.time())
@@ -3038,7 +3045,8 @@ class EarnAccountStore:
                 (event_id,),
             ).fetchone()
             if prior:
-                if prior["earn_user_id"] != uid:
+                if (prior["earn_user_id"] != uid or
+                        Decimal(prior["revenue_raw"]) != Decimal(str(revenue_raw))):
                     raise EarnError("timewall_receipt_conflict")
                 return dict(prior), False
             entry_id = "thc_" + secrets.token_urlsafe(18)
@@ -3067,12 +3075,13 @@ class EarnAccountStore:
                    (event_id, provider_revenue_usd, player_share_usd,
                     referral_cap_usd, platform_before_referrals_usd,
                     platform_after_full_referrals_usd, credited_player_thc,
-                    created_at) VALUES (?,?,?,?,?,?,?,?)""",
+                    conversion_multiplier, conversion_allow_decimals,
+                    created_at) VALUES (?,?,?,?,?,?,?,?,?,?)""",
                 (event_id, allocation["provider_revenue_usd"],
                  allocation["player_share_usd"], allocation["referral_cap_usd"],
                  allocation["platform_before_referrals_usd"],
                  allocation["platform_after_full_referrals_usd"],
-                 str(ledger_amount), now),
+                 str(ledger_amount), str(conversion_raw), int(allow_decimals), now),
             )
             self._append_ledger_audit_in_tx(
                 con, entry_id=entry_id,
@@ -3323,12 +3332,19 @@ def build_pure_offerwall_url(provider_user_id: str) -> str:
     return f"{base}?{query}"
 
 
-def timewall_reward_amount(revenue_raw: str) -> Decimal:
+def timewall_reward_amount(
+    revenue_raw: str, *, conversion_raw: str | None = None,
+    allow_decimals: bool | None = None,
+) -> Decimal:
     """Validate the same Decimal conversion in preflight and live receipt handling."""
     try:
         revenue = Decimal(str(revenue_raw))
-        conversion = Decimal(os.getenv("TIMEWALL_THC_CONVERSION", "670"))
-        allow_decimals = os.getenv("TIMEWALL_ALLOW_DECIMALS", "0") == "1"
+        conversion = Decimal(
+            conversion_raw if conversion_raw is not None
+            else os.getenv("TIMEWALL_THC_CONVERSION", "670")
+        )
+        if allow_decimals is None:
+            allow_decimals = os.getenv("TIMEWALL_ALLOW_DECIMALS", "0") == "1"
         amount_scale = _THC_SCALE if allow_decimals else Decimal("1")
         rounding = ROUND_DOWN if allow_decimals else ROUND_HALF_UP
         amount = (revenue * conversion).quantize(amount_scale, rounding=rounding)

@@ -1048,6 +1048,8 @@ def wallet_v1_transfer():
                         detail='intent, signature, and public_key are required'), 401
 
     intent = intent_raw if isinstance(intent_raw, dict) else {}
+    if intent.get('action') != 'internal_transfer':
+        return _jsonify(ok=False, error='wrong_wallet_action'), 400
     ok, err_code, err_detail = _verify_wallet_action_intent(intent, signature, public_key)
     if not ok:
         return _jsonify(ok=False, error=err_code, detail=err_detail), 400
@@ -1107,6 +1109,8 @@ def wallet_v1_withdraw():
                         detail='intent, signature, and public_key are required'), 401
 
     intent = intent_raw if isinstance(intent_raw, dict) else {}
+    if intent.get('action') != 'crosschain_withdraw':
+        return _jsonify(ok=False, error='wrong_wallet_action'), 400
     ok, err_code, err_detail = _verify_wallet_action_intent(intent, signature, public_key)
     if not ok:
         return _jsonify(ok=False, error=err_code, detail=err_detail), 400
@@ -1350,6 +1354,8 @@ def wallet_v1_swap():
                         detail='intent, signature, and public_key are required'), 401
 
     intent = intent_raw if isinstance(intent_raw, dict) else {}
+    if intent.get('action') != 'swap':
+        return _jsonify(ok=False, error='wrong_wallet_action'), 400
     ok, err_code, err_detail = _verify_wallet_action_intent(intent, signature, public_key)
     if not ok:
         return _jsonify(ok=False, error=err_code, detail=err_detail), 400
@@ -1589,6 +1595,8 @@ def wallet_v1_add_liquidity():
                         detail='intent, signature, and public_key are required'), 401
 
     intent = intent_raw if isinstance(intent_raw, dict) else {}
+    if intent.get('action') != 'pool_deposit_intent':
+        return _jsonify(ok=False, error='wrong_wallet_action'), 400
     ok, err_code, err_detail = _verify_wallet_action_intent(intent, signature, public_key)
     if not ok:
         return _jsonify(ok=False, error=err_code, detail=err_detail), 400
@@ -1742,6 +1750,8 @@ def wallet_v1_create_token():
                         detail='intent, signature, and public_key are required'), 401
 
     intent = intent_raw if isinstance(intent_raw, dict) else {}
+    if intent.get('action') != 'token_create':
+        return _jsonify(ok=False, error='wrong_wallet_action'), 400
     ok, err_code, err_detail = _verify_wallet_action_intent(intent, signature, public_key)
     if not ok:
         return _jsonify(ok=False, error=err_code, detail=err_detail), 400
@@ -1838,6 +1848,8 @@ def wallet_v1_nfts_mint():
                         detail='intent, signature, and public_key are required'), 401
 
     intent = intent_raw if isinstance(intent_raw, dict) else {}
+    if intent.get('action') != 'nft_mint':
+        return _jsonify(ok=False, error='wrong_wallet_action'), 400
     ok, err_code, err_detail = _verify_wallet_action_intent(intent, signature, public_key)
     if not ok:
         return _jsonify(ok=False, error=err_code, detail=err_detail), 400
@@ -1943,6 +1955,8 @@ def wallet_v1_nfts_buy():
                         detail='intent, signature, and public_key are required'), 401
 
     intent = intent_raw if isinstance(intent_raw, dict) else {}
+    if intent.get('action') != 'nft_buy':
+        return _jsonify(ok=False, error='wrong_wallet_action'), 400
     ok, err_code, err_detail = _verify_wallet_action_intent(intent, signature, public_key)
     if not ok:
         return _jsonify(ok=False, error=err_code, detail=err_detail), 400

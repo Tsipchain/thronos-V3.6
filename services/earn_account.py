@@ -357,6 +357,28 @@ class EarnAccountStore:
                 CREATE INDEX IF NOT EXISTS idx_earn_wallet_challenges_expiry
                     ON earn_wallet_challenges(expires_at);
 
+                -- A paid Earn wallet unlock is an internal THC spend. The
+                -- purchase and ownership link commit in the same SQLite tx.
+                -- No THR or new Wallet V1 signing key is created here.
+                CREATE TABLE IF NOT EXISTS earn_wallet_unlock_purchases (
+                    purchase_id     TEXT PRIMARY KEY,
+                    earn_user_id    TEXT NOT NULL UNIQUE
+                        REFERENCES earn_accounts(earn_user_id),
+                    wallet_address  TEXT NOT NULL UNIQUE,
+                    amount_thc      TEXT NOT NULL,
+                    treasury_ref    TEXT NOT NULL UNIQUE,
+                    challenge_id    TEXT NOT NULL UNIQUE,
+                    created_at      INTEGER NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS earn_treasury_thc_credits (
+                    treasury_ref   TEXT PRIMARY KEY,
+                    purchase_id    TEXT NOT NULL UNIQUE
+                        REFERENCES earn_wallet_unlock_purchases(purchase_id),
+                    amount_thc     TEXT NOT NULL,
+                    created_at     INTEGER NOT NULL
+                );
+
                 CREATE TABLE IF NOT EXISTS earn_staking_pools (
                     pool_id          TEXT PRIMARY KEY,
                     token            TEXT NOT NULL,
@@ -834,11 +856,12 @@ class EarnAccountStore:
         self, *, purpose: str, wallet_address: str, earn_user_id: str | None,
     ) -> dict[str, str]:
         wallet_address = self._wallet_address(wallet_address)
-        if purpose not in ("link", "login"):
+        if purpose not in ("link", "login", "paid_unlock"):
             raise EarnError("invalid_wallet_challenge")
         now = int(time.time())
         challenge = {
-            "action": "earn_wallet_link" if purpose == "link" else "earn_wallet_login",
+            "action": {"link": "earn_wallet_link", "login": "earn_wallet_login",
+                       "paid_unlock": "earn_wallet_paid_unlock"}[purpose],
             "challenge_id": "ewc_" + secrets.token_urlsafe(18),
             "wallet_address": wallet_address,
             "nonce": secrets.token_urlsafe(24),
@@ -848,10 +871,19 @@ class EarnAccountStore:
         # must pass its existing biometric/passkey gate before it signs this
         # exact server challenge.  The requirement is included in the signed
         # payload, so a proof for a login challenge cannot be repurposed.
-        if purpose == "link":
+        if purpose in ("link", "paid_unlock"):
             challenge["approval"] = "biometric_passkey"
+        if purpose == "paid_unlock":
+            challenge["amount_thc"] = str(self.WALLET_UNLOCK_THC)
+            challenge["treasury_account"] = "thronos_earn_treasury"
         with self._tx() as con:
-            con.execute("DELETE FROM earn_wallet_challenges WHERE expires_at < ?", (now,))
+            # Keep spent challenges so a signed retry can return the durable
+            # purchase receipt after expiry without another THC debit.
+            con.execute(
+                """DELETE FROM earn_wallet_challenges WHERE expires_at < ?
+                   AND (consumed_at IS NULL OR purpose != 'paid_unlock')""",
+                (now,),
+            )
             con.execute(
                 """INSERT INTO earn_wallet_challenges
                    (challenge_id, purpose, earn_user_id, wallet_address,
@@ -876,9 +908,19 @@ class EarnAccountStore:
             purpose="login", wallet_address=wallet_address, earn_user_id=None,
         )
 
+    def paid_wallet_unlock_challenge(
+        self, earn_user_id: str, wallet_address: str,
+    ) -> dict[str, str]:
+        if not self.paid_wallet_unlock_quote(earn_user_id)["eligible"]:
+            raise EarnError("wallet_unlock_not_eligible")
+        return self._create_wallet_challenge(
+            purpose="paid_unlock", wallet_address=wallet_address,
+            earn_user_id=earn_user_id,
+        )
+
     def wallet_challenge_for_proof(
         self, *, challenge_id: str, purpose: str, wallet_address: str,
-        earn_user_id: str | None = None,
+        earn_user_id: str | None = None, allow_consumed: bool = False,
     ) -> dict[str, str]:
         wallet_address = self._wallet_address(wallet_address)
         now = int(time.time())
@@ -886,21 +928,26 @@ class EarnAccountStore:
             row = con.execute(
                 """SELECT * FROM earn_wallet_challenges
                    WHERE challenge_id = ? AND purpose = ?
-                     AND wallet_address = ? AND consumed_at IS NULL
-                     AND expires_at >= ?""",
-                (challenge_id, purpose, wallet_address, now),
+                     AND wallet_address = ? AND (? OR consumed_at IS NULL)
+                     AND (expires_at >= ? OR (? AND consumed_at IS NOT NULL))""",
+                (challenge_id, purpose, wallet_address,
+                 int(allow_consumed), now, int(allow_consumed)),
             ).fetchone()
             if not row or (earn_user_id is not None and row["earn_user_id"] != earn_user_id):
                 raise EarnError("invalid_or_expired_wallet_challenge")
             proof = {
-                "action": "earn_wallet_link" if purpose == "link" else "earn_wallet_login",
+                "action": {"link": "earn_wallet_link", "login": "earn_wallet_login",
+                           "paid_unlock": "earn_wallet_paid_unlock"}[purpose],
                 "challenge_id": row["challenge_id"],
                 "wallet_address": row["wallet_address"],
                 "nonce": row["nonce"],
                 "expires_at": str(row["expires_at"]),
             }
-            if purpose == "link":
+            if purpose in ("link", "paid_unlock"):
                 proof["approval"] = "biometric_passkey"
+            if purpose == "paid_unlock":
+                proof["amount_thc"] = str(self.WALLET_UNLOCK_THC)
+                proof["treasury_account"] = "thronos_earn_treasury"
             return proof
 
     def complete_wallet_link(
@@ -985,6 +1032,98 @@ class EarnAccountStore:
                 (earn_user_id,),
             ).fetchone()
             return dict(row) if row else None
+
+    WALLET_UNLOCK_THC = Decimal("10000.000000")
+
+    def paid_wallet_unlock_quote(self, earn_user_id: str) -> dict[str, Any]:
+        """Read-only quote; a wallet proof is still required for completion."""
+        balance = self.thc_balance(earn_user_id)
+        linked = self.wallet_link_for_user(earn_user_id) is not None
+        return {
+            "amount_thc": str(self.WALLET_UNLOCK_THC),
+            "available_thc": balance["available"],
+            "eligible": not linked and Decimal(balance["available"]) >= self.WALLET_UNLOCK_THC,
+            "wallet_linked": linked,
+            "purpose": "wallet_unlock_purchase",
+        }
+
+    def complete_paid_wallet_unlock(
+        self, *, challenge_id: str, earn_user_id: str,
+        wallet_address: str, public_key: str, signature: str,
+    ) -> dict[str, str]:
+        """Commit the THC spend and a verified Wallet V1 ownership link together.
+
+        This method verifies the explicit payment signature itself. A future
+        route must additionally enforce mobile 3FA where configured and prove
+        Wallet V1 activation. It does not create a wallet or a THR liability.
+        """
+        wallet_address = self._wallet_address(wallet_address)
+        proof = self.wallet_challenge_for_proof(
+            challenge_id=challenge_id, purpose="paid_unlock",
+            earn_user_id=earn_user_id, wallet_address=wallet_address,
+            allow_consumed=True,
+        )
+        if not verify_earn_wallet_proof(
+            proof, wallet_address=wallet_address,
+            public_key=public_key, signature=signature,
+        ):
+            raise EarnError("invalid_wallet_proof")
+        now = int(time.time())
+        with self._tx() as con:
+            prior = con.execute(
+                "SELECT * FROM earn_wallet_unlock_purchases WHERE earn_user_id = ?",
+                (earn_user_id,),
+            ).fetchone()
+            if prior:
+                if prior["challenge_id"] != challenge_id or prior["wallet_address"] != wallet_address:
+                    raise EarnError("wallet_unlock_already_purchased")
+                return dict(prior)
+            challenge = con.execute(
+                """SELECT 1 FROM earn_wallet_challenges
+                   WHERE challenge_id = ? AND purpose = 'paid_unlock'
+                     AND earn_user_id = ? AND wallet_address = ?
+                     AND consumed_at IS NULL AND expires_at >= ?""",
+                (challenge_id, earn_user_id, wallet_address, now),
+            ).fetchone()
+            if not challenge:
+                raise EarnError("invalid_or_expired_wallet_challenge")
+            if con.execute(
+                "SELECT 1 FROM earn_wallet_links WHERE earn_user_id = ? OR wallet_address = ?",
+                (earn_user_id, wallet_address),
+            ).fetchone():
+                raise EarnError("wallet_already_linked")
+            if self._available_thc_for_staking(con, earn_user_id) < self.WALLET_UNLOCK_THC:
+                raise EarnError("insufficient_thc_balance")
+            purchase_id = "ewu_" + secrets.token_urlsafe(18)
+            treasury_ref = "earn-wallet-unlock:" + purchase_id
+            con.execute(
+                """INSERT INTO earn_wallet_unlock_purchases
+                   (purchase_id, earn_user_id, wallet_address, amount_thc,
+                    treasury_ref, challenge_id, created_at)
+                   VALUES (?,?,?,?,?,?,?)""",
+                (purchase_id, earn_user_id, wallet_address,
+                 str(self.WALLET_UNLOCK_THC), treasury_ref, challenge_id, now),
+            )
+            con.execute(
+                """INSERT INTO earn_treasury_thc_credits
+                   (treasury_ref, purchase_id, amount_thc, created_at)
+                   VALUES (?,?,?,?)""",
+                (treasury_ref, purchase_id, str(self.WALLET_UNLOCK_THC), now),
+            )
+            con.execute(
+                """INSERT INTO earn_wallet_links
+                   (wallet_address, earn_user_id, public_key, linked_at)
+                   VALUES (?,?,?,?)""",
+                (wallet_address, earn_user_id, public_key.lower(), now),
+            )
+            con.execute(
+                "UPDATE earn_wallet_challenges SET consumed_at = ? WHERE challenge_id = ?",
+                (now, challenge_id),
+            )
+            return dict(con.execute(
+                "SELECT * FROM earn_wallet_unlock_purchases WHERE purchase_id = ?",
+                (purchase_id,),
+            ).fetchone())
 
     # ── THC Ledger ───────────────────────────────────────────────────────
 
@@ -1152,7 +1291,12 @@ class EarnAccountStore:
                    WHERE sp.earn_user_id = ? AND sp.status = 'active' AND p.token = 'THC'""",
                 (earn_user_id,),
             ).fetchall()
+            unlock_rows = con.execute(
+                "SELECT amount_thc FROM earn_wallet_unlock_purchases WHERE earn_user_id = ?",
+                (earn_user_id,),
+            ).fetchall()
         staked_thc = sum((Decimal(r["amount"]) for r in staked_rows), Decimal(0))
+        spent_thc = sum((Decimal(r["amount_thc"]) for r in unlock_rows), Decimal(0))
         by_state: dict[str, Decimal] = {}
         earliest_clears: int | None = None
         earliest_hold: int | None = None
@@ -1170,13 +1314,14 @@ class EarnAccountStore:
         payable = by_state.get("payable", Decimal("0"))
         paid = by_state.get("paid", Decimal("0"))
         pending = by_state.get("pending", Decimal("0"))
-        available = max(Decimal(0), confirmed + payable - staked_thc)
+        available = max(Decimal(0), confirmed + payable - staked_thc - spent_thc)
         result: dict[str, Any] = {
             "available": str(available.quantize(_THC_SCALE)),
             "pending": str(pending.quantize(_THC_SCALE)),
             "total_earned": str((confirmed + payable + paid).quantize(_THC_SCALE)),
             "paid_out": str(paid.quantize(_THC_SCALE)),
             "staked": str(staked_thc.quantize(_THC_SCALE)),
+            "wallet_unlock_spent": str(spent_thc.quantize(_THC_SCALE)),
             "clearance_status": "provider_eta_pending",
             "clearance_message": "Clearance date not yet received from provider.",
         }
@@ -1497,7 +1642,12 @@ class EarnAccountStore:
             (earn_user_id,),
         ).fetchall()
         staked = sum((Decimal(r["amount"]) for r in staked_rows), Decimal(0))
-        return confirmed + payable - staked
+        spent_rows = con.execute(
+            "SELECT amount_thc FROM earn_wallet_unlock_purchases WHERE earn_user_id = ?",
+            (earn_user_id,),
+        ).fetchall()
+        spent = sum((Decimal(r["amount_thc"]) for r in spent_rows), Decimal(0))
+        return confirmed + payable - staked - spent
 
     def create_stake(
         self, earn_user_id: str, pool_id: str, amount: str,
@@ -3450,8 +3600,9 @@ def verify_earn_wallet_proof(
 ) -> bool:
     """Verify compact secp256k1 proof and bind its public key to THR address.
 
-    The signed payload contains only an expiring server-issued nonce and the
-    requested action.  It is never a transferable payment approval.
+    Link/login proofs contain an expiring nonce and action. A paid-unlock
+    proof additionally binds the exact THC amount and treasury recipient;
+    it cannot be reused as approval for a different payment.
     """
     try:
         from cryptography.hazmat.primitives import hashes
@@ -3481,6 +3632,10 @@ def verify_earn_wallet_proof(
         # WebAuthn/passkey approval gate succeeds.
         if challenge.get("approval"):
             signed["approval"] = str(challenge["approval"])
+        if challenge.get("amount_thc"):
+            signed["amount_thc"] = str(challenge["amount_thc"])
+        if challenge.get("treasury_account"):
+            signed["treasury_account"] = str(challenge["treasury_account"])
         message = json.dumps(signed, sort_keys=True, separators=(",", ":")).encode()
         digest = hashlib.sha256(message).digest()
         sig_bytes = bytes.fromhex(signature)

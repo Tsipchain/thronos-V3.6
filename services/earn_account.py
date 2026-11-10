@@ -877,7 +877,13 @@ class EarnAccountStore:
             challenge["amount_thc"] = str(self.WALLET_UNLOCK_THC)
             challenge["treasury_account"] = "thronos_earn_treasury"
         with self._tx() as con:
-            con.execute("DELETE FROM earn_wallet_challenges WHERE expires_at < ?", (now,))
+            # Keep spent challenges so a signed retry can return the durable
+            # purchase receipt after expiry without another THC debit.
+            con.execute(
+                """DELETE FROM earn_wallet_challenges WHERE expires_at < ?
+                   AND (consumed_at IS NULL OR purpose != 'paid_unlock')""",
+                (now,),
+            )
             con.execute(
                 """INSERT INTO earn_wallet_challenges
                    (challenge_id, purpose, earn_user_id, wallet_address,

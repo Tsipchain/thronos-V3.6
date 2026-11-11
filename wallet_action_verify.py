@@ -39,6 +39,7 @@ def verify_wallet_action_signature(
     signature_hex: str,
     public_key_hex: str,
     max_age_seconds: int = 300,
+    allowed_actions=None,
 ) -> tuple:
     """Stateless verification of a signed wallet action intent (steps 1-5, 7, 8).
 
@@ -58,7 +59,7 @@ def verify_wallet_action_signature(
         return False, 'invalid_version', f'expected version 1, got {intent.get("version")!r}'
 
     action = str(intent.get('action', ''))
-    if action not in WALLET_ACTION_ALLOWED_ACTIONS:
+    if action not in (WALLET_ACTION_ALLOWED_ACTIONS if allowed_actions is None else allowed_actions):
         return False, 'invalid_action', f'action {action!r} not permitted'
 
     try:

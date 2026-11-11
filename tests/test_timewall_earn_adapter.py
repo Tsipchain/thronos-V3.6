@@ -208,6 +208,69 @@ class TestTimeWallRoutes:
                 ("tw-alias-event-001",),
             ).fetchone()[0] == 1
 
+    def test_zero_value_goblins_install_is_acknowledged_without_reward(self, client, store):
+        token = _login(client)
+        with patch.dict(os.environ, {
+            "TIMEWALL_ENABLED": "1",
+            "TIMEWALL_PLACEMENT_URL": "https://wall.timewall.io/p/abc?user={userID}",
+            "TIMEWALL_POSTBACK_LIVE": "1",
+            "TIMEWALL_SECRET_KEY": "secret",
+            "TIMEWALL_POSTBACK_IPS": "127.0.0.1",
+            "TIMEWALL_THC_CONVERSION": "670",
+        }):
+            wall = client.get("/api/earn/timewall/offerwall", headers=_auth(token)).get_json()
+            user_id = wall["url"].split("user=", 1)[1]
+            payload = {
+                "userID": user_id,
+                "revenue": "0",
+                "currency": "0",
+                "hash": timewall_postback_hash(user_id, "0", "secret"),
+                "txid": "auto-zero-install-1",
+                "withdrawid": "24172121",
+                "type": "credit",
+                "offername": "Prime Earn",
+                "offerdetail": "Prime Earn - Goblins Wood - Install",
+            }
+            first = client.get("/api/earn/timewall/postback", query_string=payload)
+            refire = client.get("/api/earn/timewall/postback", query_string=payload)
+        assert (first.status_code, first.get_data(as_text=True)) == (200, "OK")
+        assert (refire.status_code, refire.get_data(as_text=True)) == (200, "OK")
+        with sqlite3.connect(store.db_path) as con:
+            row = con.execute(
+                "SELECT revenue_raw, amount_thc, thc_entry_id FROM timewall_receipts WHERE event_id=?",
+                ("auto-zero-install-1",),
+            ).fetchone()
+            assert row == ("0", "0.000000", None)
+            assert con.execute("SELECT COUNT(*) FROM timewall_receipts").fetchone()[0] == 1
+            assert con.execute("SELECT COUNT(*) FROM thc_ledger WHERE source='timewall'").fetchone()[0] == 0
+            assert con.execute("SELECT COUNT(*) FROM earn_timewall_revenue_allocations").fetchone()[0] == 0
+
+    def test_zero_value_milestone_rejects_bad_hash_unknown_user_and_changed_reward(self, client, store):
+        token = _login(client)
+        with patch.dict(os.environ, {
+            "TIMEWALL_ENABLED": "1",
+            "TIMEWALL_PLACEMENT_URL": "https://wall.timewall.io/p/abc?user={userID}",
+            "TIMEWALL_POSTBACK_LIVE": "1",
+            "TIMEWALL_SECRET_KEY": "secret",
+            "TIMEWALL_POSTBACK_IPS": "127.0.0.1",
+        }):
+            wall = client.get("/api/earn/timewall/offerwall", headers=_auth(token)).get_json()
+            user_id = wall["url"].split("user=", 1)[1]
+            payload = {"userID": user_id, "revenue": "0", "txid": "zero-event",
+                       "hash": "invalid"}
+            assert client.get("/api/earn/timewall/postback", query_string=payload).status_code == 403
+            payload["userID"] = "tw_missing"
+            payload["hash"] = timewall_postback_hash("tw_missing", "0", "secret")
+            assert client.get("/api/earn/timewall/postback", query_string=payload).status_code == 400
+            payload["userID"] = user_id
+            payload["hash"] = timewall_postback_hash(user_id, "0", "secret")
+            assert client.get("/api/earn/timewall/postback", query_string=payload).status_code == 200
+            payload["revenue"] = "0.10"
+            payload["hash"] = timewall_postback_hash(user_id, "0.10", "secret")
+            assert client.get("/api/earn/timewall/postback", query_string=payload).status_code == 400
+        with sqlite3.connect(store.db_path) as con:
+            assert con.execute("SELECT COUNT(*) FROM thc_ledger WHERE source='timewall'").fetchone()[0] == 0
+
     def test_postback_ip_allowlist_rejects_unlisted_sender(self, client):
         with patch.dict(os.environ, {
             "TIMEWALL_POSTBACK_LIVE": "1",

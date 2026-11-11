@@ -3115,6 +3115,21 @@ class EarnAccountStore:
             raise EarnError("invalid_timewall_event")
         if not provider_user_id or len(provider_user_id) > 32:
             raise EarnError("invalid_timewall_user")
+        # TimeWall sends a signed, zero-value Install milestone before the
+        # first paid game level. Acknowledge its progress without fabricating
+        # a THC credit, clearance hold, revenue allocation, or leaderboard score.
+        try:
+            revenue_decimal = Decimal(str(revenue_raw))
+            if not revenue_decimal.is_finite() or revenue_decimal < 0:
+                raise EarnError("invalid_timewall_revenue")
+        except (InvalidOperation, TypeError) as exc:
+            raise EarnError("invalid_timewall_revenue") from exc
+        if revenue_decimal == 0:
+            return self.record_timewall_zero_milestone(
+                event_id=event_id, provider_user_id=provider_user_id,
+                revenue_raw=revenue_raw, event_type=event_type, reason=reason,
+                offer_name=offer_name, offer_detail=offer_detail, payload=payload,
+            )
         conversion_raw = os.getenv("TIMEWALL_THC_CONVERSION", "670")
         allow_decimals = os.getenv("TIMEWALL_ALLOW_DECIMALS", "0") == "1"
         ledger_amount = timewall_reward_amount(
@@ -3188,6 +3203,44 @@ class EarnAccountStore:
             return dict(con.execute(
                 "SELECT * FROM timewall_receipts WHERE event_id = ?",
                 (event_id,),
+            ).fetchone()), True
+
+    def record_timewall_zero_milestone(
+        self, *, event_id: str, provider_user_id: str, revenue_raw: str,
+        event_type: str, reason: str, offer_name: str, offer_detail: str,
+        payload: dict[str, Any],
+    ) -> tuple[dict[str, Any], bool]:
+        """Store an authenticated, non-paying milestone exactly once."""
+        now = int(time.time())
+        payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        with self._tx() as con:
+            identity = con.execute(
+                """SELECT earn_user_id FROM earn_provider_identities
+                   WHERE provider = 'timewall' AND provider_user_id = ?""",
+                (provider_user_id,),
+            ).fetchone()
+            if not identity:
+                raise EarnError("unknown_provider_user")
+            uid = identity["earn_user_id"]
+            prior = con.execute(
+                "SELECT * FROM timewall_receipts WHERE event_id = ?", (event_id,),
+            ).fetchone()
+            if prior:
+                if (prior["earn_user_id"] != uid or
+                        Decimal(prior["revenue_raw"]) != 0):
+                    raise EarnError("timewall_receipt_conflict")
+                return dict(prior), False
+            con.execute(
+                """INSERT INTO timewall_receipts
+                   (event_id, earn_user_id, revenue_raw, amount_thc, event_type,
+                    reason, offer_name, offer_detail, thc_entry_id, received_at, payload)
+                   VALUES (?,?,?,?,?,?,?,?,NULL,?,?)""",
+                (event_id, uid, str(revenue_raw), "0.000000",
+                 str(event_type)[:100], str(reason)[:500],
+                 str(offer_name)[:500], str(offer_detail)[:1000], now, payload_json),
+            )
+            return dict(con.execute(
+                "SELECT * FROM timewall_receipts WHERE event_id = ?", (event_id,),
             ).fetchone()), True
 
     # ── CPX receipt handling ──────────────────────────────────────────────

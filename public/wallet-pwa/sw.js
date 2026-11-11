@@ -1,5 +1,5 @@
 // Bump when a shell asset changes so installed PWAs fetch the new UI.
-const CACHE = 'thr-wallet-pwa-v22';
+const CACHE = 'thr-wallet-pwa-v23';
 
 const PRECACHE = [
   '/wallet-pwa/',
@@ -35,14 +35,16 @@ self.addEventListener('fetch', e => {
   // Never cache API calls
   if (url.pathname.startsWith('/pwa-api/') || url.pathname.startsWith('/api/')) return;
 
-  // Cache-first for app shell; network-first for everything else
+  // The wallet UI must refresh when a release lands. Keep an offline fallback.
   if (PRECACHE.includes(url.pathname)) {
     e.respondWith(
-      caches.match(request).then(r => r || fetch(request).then(res => {
-        const clone = res.clone();
-        caches.open(CACHE).then(c => c.put(request, clone));
+      fetch(request).then(res => {
+        if (res.ok) {
+          const clone = res.clone();
+          caches.open(CACHE).then(c => c.put(request, clone));
+        }
         return res;
-      }))
+      }).catch(() => caches.match(request))
     );
     return;
   }

@@ -95,7 +95,7 @@
   .earn-staking-pools .pool-stat-label { color:#7fb8d8; font-size:10px; text-transform:uppercase; letter-spacing:.04em; }
   .earn-staking-pools .pool-stat-value { color:#55d6a7; font-weight:700; }
   .earn-staking-pools .pool-stake-row { display:flex; gap:6px; flex-wrap:wrap; }
-  .earn-staking-pools .pool-stake-term { flex:1 1 190px; min-width:0; background:#070c18; border:1px solid #2e5874; border-radius:6px; color:#e2e8f0; padding:7px; font-size:12px; }
+  .earn-staking-pools .pool-stake-term { flex:1 1 100%; min-width:0; min-height:42px; background:#070c18; border:1px solid #f2c14e; border-radius:6px; color:#e2e8f0; padding:7px; font-size:12px; }
   .earn-staking-pools .pool-stake-input { flex:1; background:#070c18; border:1px solid #2e5874; border-radius:6px; color:#e2e8f0; padding:7px; font-size:12px; }
   .earn-staking-pools .pool-stake-btn { background:#00a86b; color:#06120e; font-weight:700; border:none; border-radius:6px; padding:7px 12px; font-size:12px; cursor:pointer; white-space:nowrap; }
   .earn-staking-pools .pool-stake-btn:hover { background:#00c77b; }
@@ -744,14 +744,14 @@
           return '<div class="pool-card">' +
             '<div class="pool-head"><span class="pool-label">' + esc(pool.label) + '</span><span class="pool-token">' + esc(pool.token) + '</span></div>' +
             '<div class="pool-stats">' +
-              '<div class="pool-stat"><div class="pool-stat-label">ILLUSTRATIVE BASE APY</div><div class="pool-stat-value">' + esc(pool.base_apy) + '%</div></div>' +
-              '<div class="pool-stat"><div class="pool-stat-label">ILLUSTRATIVE BOOST</div><div class="pool-stat-value">' + esc(pool.boosted_apy) + '%</div></div>' +
+              '<div class="pool-stat"><div class="pool-stat-label">' + (pool.token === 'THC' ? 'FLEX MODEL APY' : 'ILLUSTRATIVE BASE APY') + '</div><div class="pool-stat-value">' + esc(pool.token === 'THC' ? pool.flex_apy : pool.base_apy) + '%</div></div>' +
+              '<div class="pool-stat"><div class="pool-stat-label">' + (pool.token === 'THC' ? 'FIXED-TERM MODEL APY' : 'ILLUSTRATIVE BOOST') + '</div><div class="pool-stat-value">' + esc(pool.token === 'THC' ? pool.base_apy : pool.boosted_apy) + '%</div></div>' +
               '<div class="pool-stat"><div class="pool-stat-label">STAKED</div><div class="pool-stat-value">' + esc(pool.total_staked) + ' ' + esc(pool.token) + '</div></div>' +
               '<div class="pool-stat"><div class="pool-stat-label">STAKERS</div><div class="pool-stat-value">' + pool.stakers + '</div></div>' +
             '</div>' +
             '<div class="pool-min">APY is a model projection, not accrued or payable yield. ' + (pool.token === 'THC' ? 'THC stake/unstake fee: 0.09% · Pythia THC reserve.' : 'THR staking paused pending signed wallet intent; existing THR unstake remains fee-free.') + '</div>' +
             (pool.token === 'THC'
-              ? '<div class="pool-stake-row"><input type="number" step="any" min="' + esc(pool.min_stake) + '" class="pool-stake-input" data-pool="' + esc(pool.pool_id) + '" placeholder="Amount (' + esc(pool.token) + ')"><select class="pool-stake-term" data-pool="' + esc(pool.pool_id) + '" aria-label="Lock duration"><option value="flex">Flex · withdraw anytime</option><option value="six_months">6 calendar months · no early unstake</option><option value="one_year">1 calendar year · no early unstake</option></select><button class="pool-stake-btn" data-pool="' + esc(pool.pool_id) + '">Stake</button></div>' +
+              ? '<label class="pool-min" style="display:block;color:#f2c14e;margin:8px 0 4px">Choose your THC lock duration</label><div class="pool-stake-row"><input type="number" step="any" min="' + esc(pool.min_stake) + '" class="pool-stake-input" data-pool="' + esc(pool.pool_id) + '" placeholder="Amount (' + esc(pool.token) + ')"><select class="pool-stake-term" data-pool="' + esc(pool.pool_id) + '" aria-label="Lock duration"><option value="flex">Flex · 3% model APY · withdraw anytime</option><option value="six_months">6 calendar months · no early unstake</option><option value="one_year">1 calendar year · no early unstake</option></select><button class="pool-stake-btn" data-pool="' + esc(pool.pool_id) + '">Stake</button></div>' +
                 '<div class="pool-min">Min: ' + esc(pool.min_stake) + ' ' + esc(pool.token) + '</div>' +
                 '<div class="pool-msg" data-pool="' + esc(pool.pool_id) + '"></div>'
               : '') +
@@ -774,7 +774,7 @@
               const quote = await quoteRes.json().catch(() => ({}));
               if (!quoteRes.ok || !quote.ok) throw new Error(quote.error || 'fee_quote_unavailable');
               const duration = quote.term === 'flex' ? 'Flex: unstake anytime' : (quote.term === 'six_months' ? '6 calendar months' : '1 calendar year') + ': no early unstake; estimated unlock ' + new Date(quote.estimated_unlock_at * 1000).toLocaleString();
-              if (!window.confirm('Stake ' + quote.amount + ' ' + quote.token + '? ' + duration + '. Fee: ' + quote.fee + ' ' + quote.token + ' (0.09% to Pythia reserve). Total debit: ' + quote.total_debit + ' ' + quote.token + '. APY is illustrative, not payable.')) return;
+              if (!window.confirm('Stake ' + quote.amount + ' ' + quote.token + '? ' + duration + '. Illustrative APY: ' + quote.illustrative_apy + '%, not accrued or payable. Fee: ' + quote.fee + ' ' + quote.token + ' (0.09% to Pythia reserve). Total debit: ' + quote.total_debit + ' ' + quote.token + '.')) return;
               const res = await fetch('/api/earn/staking/stake', {
                 method: 'POST', headers: { ...earnAuthHeaders(), 'Content-Type': 'application/json' },
                 body: JSON.stringify({ pool_id: poolId, amount: quote.amount, term: quote.term, accepted_fee: quote.fee, idempotency_key: crypto.randomUUID() }),

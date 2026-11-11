@@ -743,12 +743,12 @@
           return '<div class="pool-card">' +
             '<div class="pool-head"><span class="pool-label">' + esc(pool.label) + '</span><span class="pool-token">' + esc(pool.token) + '</span></div>' +
             '<div class="pool-stats">' +
-              '<div class="pool-stat"><div class="pool-stat-label">BASE APY</div><div class="pool-stat-value">' + esc(pool.base_apy) + '%</div></div>' +
-              '<div class="pool-stat"><div class="pool-stat-label">BOOSTED</div><div class="pool-stat-value">' + esc(pool.boosted_apy) + '%</div></div>' +
+              '<div class="pool-stat"><div class="pool-stat-label">ILLUSTRATIVE BASE APY</div><div class="pool-stat-value">' + esc(pool.base_apy) + '%</div></div>' +
+              '<div class="pool-stat"><div class="pool-stat-label">ILLUSTRATIVE BOOST</div><div class="pool-stat-value">' + esc(pool.boosted_apy) + '%</div></div>' +
               '<div class="pool-stat"><div class="pool-stat-label">STAKED</div><div class="pool-stat-value">' + esc(pool.total_staked) + ' ' + esc(pool.token) + '</div></div>' +
               '<div class="pool-stat"><div class="pool-stat-label">STAKERS</div><div class="pool-stat-value">' + pool.stakers + '</div></div>' +
             '</div>' +
-            '<div class="pool-min">' + (pool.token === 'THC' ? 'THC stake/unstake fee: 0.09% · Pythia THC reserve.' : 'THR staking paused pending signed wallet intent; existing THR unstake remains fee-free.') + '</div>' +
+            '<div class="pool-min">APY is a model projection, not accrued or payable yield. ' + (pool.token === 'THC' ? 'THC stake/unstake fee: 0.09% · Pythia THC reserve.' : 'THR staking paused pending signed wallet intent; existing THR unstake remains fee-free.') + '</div>' +
             (pool.token === 'THC'
               ? '<div class="pool-stake-row"><input type="number" step="any" min="' + esc(pool.min_stake) + '" class="pool-stake-input" data-pool="' + esc(pool.pool_id) + '" placeholder="Amount (' + esc(pool.token) + ')"><button class="pool-stake-btn" data-pool="' + esc(pool.pool_id) + '">Stake</button></div>' +
                 '<div class="pool-min">Min: ' + esc(pool.min_stake) + ' ' + esc(pool.token) + '</div>' +
@@ -803,8 +803,8 @@
           const esc = function(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; };
           return '<div class="earn-position-row">' +
             '<div><span class="pos-amount">' + esc(pos.amount) + ' ' + esc(pos.token) + '</span>' +
-            '<span class="pos-apy">APY: ' + esc(pos.apy) + '%</span>' +
-            '<span class="pos-reward">+' + esc(pos.projected_rewards) + ' ' + esc(pos.token) + '</span></div>' +
+            '<span class="pos-apy">Illustrative APY: ' + esc(pos.apy) + '%</span>' +
+            '<span class="pos-reward">Unfunded projection: ' + esc(pos.projected_rewards) + ' ' + esc(pos.token) + '</span></div>' +
             '<div style="display:flex;align-items:center;gap:6px">' +
             '<span class="pos-status ' + (pos.status === 'active' ? 'active' : 'pending') + '">' + esc(pos.status) + '</span>' +
             (pos.status === 'active' ? '<button class="pos-unstake" data-pos="' + esc(pos.position_id) + '" data-fee="' + esc(pos.unstake_fee || '0.000000') + '" data-token="' + esc(pos.token) + '" data-amount="' + esc(pos.amount) + '">Unstake</button>' : '') +

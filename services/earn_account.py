@@ -15,6 +15,7 @@ No wallet required. No auto-mint. No BTC payout. No L2E/THR mixing.
 from __future__ import annotations
 
 import hashlib
+import calendar
 import hmac
 import json
 import logging
@@ -25,7 +26,7 @@ import sqlite3
 import time
 from contextlib import contextmanager
 from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_HALF_UP, ROUND_UP
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
@@ -34,6 +35,22 @@ _THC_SCALE = Decimal("0.000001")
 _STAKING_FEE_BPS = 9  # Owner-approved 0.09% per stake/unstake, 2026-11-10.
 _STAKING_FEE_POLICY = "earn-stake-fee-v1"
 _STAKING_FEE_RESERVE = "pythia_thc_staking_fee_reserve"
+_THC_STAKE_TERMS = {"flex": 0, "six_months": 6, "one_year": 12}
+
+
+def _stake_unlock_at(staked_at: int, term: str) -> int | None:
+    """Fixed terms mature on the same UTC clock time after calendar months."""
+    if term not in _THC_STAKE_TERMS:
+        raise EarnError("invalid_stake_term")
+    months = _THC_STAKE_TERMS[term]
+    if not months:
+        return None
+    start = datetime.fromtimestamp(staked_at, timezone.utc)
+    year, month = divmod(start.year * 12 + start.month - 1 + months, 12)
+    return int(start.replace(
+        year=year, month=month + 1,
+        day=min(start.day, calendar.monthrange(year, month + 1)[1]),
+    ).timestamp())
 # First authorized 30-day beta cycle: Athens midnight, end exclusive. Fixed
 # boundaries survive deploys/restarts; a new cycle requires a separate release.
 _LEADERBOARD_START = int(datetime.fromisoformat("2026-11-05T00:00:00+02:00").timestamp())
@@ -384,7 +401,9 @@ class EarnAccountStore:
                     unstake_requested_at INTEGER,
                     wallet_tx_id         TEXT,
                     idempotency_key      TEXT,
-                    fee_policy_version   TEXT NOT NULL DEFAULT 'legacy_fee_free'
+                    fee_policy_version   TEXT NOT NULL DEFAULT 'legacy_fee_free',
+                    term                 TEXT NOT NULL DEFAULT 'flex',
+                    unlock_at            INTEGER
                 );
 
                 CREATE TABLE IF NOT EXISTS earn_staking_fees (
@@ -598,6 +617,12 @@ class EarnAccountStore:
                 con.commit()
             if "fee_policy_version" not in pos_cols:
                 con.execute("ALTER TABLE earn_staking_positions ADD COLUMN fee_policy_version TEXT NOT NULL DEFAULT 'legacy_fee_free'")
+                con.commit()
+            if "term" not in pos_cols:
+                con.execute("ALTER TABLE earn_staking_positions ADD COLUMN term TEXT NOT NULL DEFAULT 'flex'")
+                con.commit()
+            if "unlock_at" not in pos_cols:
+                con.execute("ALTER TABLE earn_staking_positions ADD COLUMN unlock_at INTEGER")
                 con.commit()
         finally:
             con.close()
@@ -1461,7 +1486,8 @@ class EarnAccountStore:
             result = []
             for r in rows:
                 amt = Decimal(r["amount"])
-                staked_seconds = max(now - r["staked_at"], 0)
+                end_at = (r["unstake_requested_at"] or r["staked_at"]) if r["status"] == "unstaked" else now
+                staked_seconds = max(end_at - r["staked_at"], 0)
                 apy_bps = r["base_apy_bps"]
                 projected_annual = amt * Decimal(apy_bps) / Decimal(10000)
                 projected_earned = (
@@ -1481,6 +1507,7 @@ class EarnAccountStore:
                     "projected_rewards": str(projected_earned),
                     "unstake_fee": str(self.staking_fee(amt)) if r["fee_policy_version"] == _STAKING_FEE_POLICY else "0.000000",
                     "fee_policy_version": r["fee_policy_version"],
+                    "term": r["term"], "unlock_at": r["unlock_at"],
                 })
             return result
 
@@ -1539,7 +1566,7 @@ class EarnAccountStore:
             _THC_SCALE, rounding=ROUND_UP,
         )
 
-    def staking_fee_quote(self, pool_id: str, amount: str) -> dict[str, Any]:
+    def staking_fee_quote(self, pool_id: str, amount: str, term: str = "flex") -> dict[str, Any]:
         with self._tx() as con:
             self._ensure_staking_pools(con)
             pool = con.execute("SELECT token, min_stake FROM earn_staking_pools WHERE pool_id = ? AND status = 'active'", (pool_id,)).fetchone()
@@ -1553,6 +1580,8 @@ class EarnAccountStore:
             raise EarnError("invalid_stake_amount")
         if raw < Decimal(pool["min_stake"]):
             raise EarnError("below_minimum_stake")
+        if term not in _THC_STAKE_TERMS:
+            raise EarnError("invalid_stake_term")
         fee = self.staking_fee(raw)
         return {
             "pool_id": pool_id, "token": pool["token"], "amount": str(raw.quantize(_THC_SCALE)),
@@ -1561,11 +1590,14 @@ class EarnAccountStore:
             "fee_policy_version": _STAKING_FEE_POLICY,
             "fee_destination": _STAKING_FEE_RESERVE if pool["token"] == "THC" else "pythia_thr_staking_fee_reserve",
             "execution_enabled": pool["token"] == "THC",
+            "term": term, "term_months": _THC_STAKE_TERMS[term],
+            "estimated_unlock_at": _stake_unlock_at(int(time.time()), term),
         }
 
     def create_stake(
         self, earn_user_id: str, pool_id: str, amount: str,
         idempotency_key: str = "", accepted_fee: str | None = None,
+        term: str = "flex",
     ) -> dict[str, Any]:
         try:
             amt = Decimal(str(amount)).quantize(_THC_SCALE, rounding=ROUND_DOWN)
@@ -1573,6 +1605,8 @@ class EarnAccountStore:
                 raise ValueError
         except (TypeError, ValueError, InvalidOperation):
             raise EarnError("invalid_stake_amount")
+        if term not in _THC_STAKE_TERMS:
+            raise EarnError("invalid_stake_term")
         with self._tx() as con:
             self._ensure_staking_pools(con)
             if idempotency_key:
@@ -1583,6 +1617,10 @@ class EarnAccountStore:
                     (idempotency_key, earn_user_id),
                 ).fetchone()
                 if existing:
+                    if (existing["pool_id"] != pool_id or
+                            Decimal(existing["amount"]) != amt or
+                            existing["term"] != term):
+                        raise EarnError("stake_idempotency_conflict")
                     return {
                         "position_id": existing["position_id"],
                         "pool_id": existing["pool_id"],
@@ -1594,6 +1632,7 @@ class EarnAccountStore:
                         "wallet_tx_id": existing["wallet_tx_id"],
                         "fee": str(self.staking_fee(Decimal(existing["amount"]))) if existing["fee_policy_version"] == _STAKING_FEE_POLICY else "0.000000",
                         "fee_destination": _STAKING_FEE_RESERVE,
+                        "term": existing["term"], "unlock_at": existing["unlock_at"],
                     }
             pool = con.execute(
                 "SELECT * FROM earn_staking_pools WHERE pool_id = ? AND status = 'active'",
@@ -1624,16 +1663,18 @@ class EarnAccountStore:
                 if available < amt + fee:
                     raise EarnError("insufficient_thc_balance")
             now = int(time.time())
+            unlock_at = _stake_unlock_at(now, term)
             position_id = "pos_" + secrets.token_urlsafe(18)
             con.execute(
                 """INSERT INTO earn_staking_positions
                    (position_id, pool_id, earn_user_id, wallet_address,
-                    amount, status, staked_at, wallet_tx_id, idempotency_key, fee_policy_version)
-                   VALUES (?,?,?,?,?,'active',?,?,?,?)""",
+                    amount, status, staked_at, wallet_tx_id, idempotency_key,
+                    fee_policy_version, term, unlock_at)
+                   VALUES (?,?,?,?,?,'active',?,?,?,?,?,?)""",
                 (
                     position_id, pool_id, earn_user_id,
                     wallet_address, str(amt), now, wallet_tx_id,
-                    idempotency_key or None, _STAKING_FEE_POLICY,
+                    idempotency_key or None, _STAKING_FEE_POLICY, term, unlock_at,
                 ),
             )
             if token == "THC":
@@ -1655,6 +1696,7 @@ class EarnAccountStore:
                 "wallet_address": wallet_address,
                 "wallet_tx_id": wallet_tx_id,
                 "fee": str(fee), "fee_destination": _STAKING_FEE_RESERVE,
+                "term": term, "unlock_at": unlock_at,
             }
 
     def request_unstake(
@@ -1681,6 +1723,8 @@ class EarnAccountStore:
             if row["status"] != "active":
                 raise EarnError("position_not_found")
             now = int(time.time())
+            if row["token"] == "THC" and row["unlock_at"] is not None and now < row["unlock_at"]:
+                raise EarnError("stake_locked_until_maturity")
             amt = Decimal(row["amount"])
             unstake_tx_id = None
             if row["token"] == "THR":
@@ -3952,6 +3996,7 @@ def register_earn_account_routes(
         try:
             quote = store.staking_fee_quote(
                 str(request.args.get("pool_id", "")), str(request.args.get("amount", "")),
+                term=str(request.args.get("term", "flex")),
             )
         except EarnError as exc:
             return jsonify(ok=False, error=str(exc)), 400
@@ -3979,6 +4024,7 @@ def register_earn_account_routes(
                 str(data.get("amount", "")),
                 idempotency_key=str(data.get("idempotency_key", "")),
                 accepted_fee=data.get("accepted_fee"),
+                term=str(data.get("term", "flex")),
             )
         except EarnError as exc:
             return jsonify(ok=False, error=str(exc)), 400

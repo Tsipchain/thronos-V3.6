@@ -2420,12 +2420,12 @@ async function showEarn(options = {}) {
               <span style="font-size:.66rem;background:#f2c14e22;color:#f2c14e;padding:2px 6px;border-radius:99px">${escHtml(pool.token)}</span>
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:.72rem;margin-bottom:8px">
-              <div style="background:#070612;border-radius:6px;padding:6px"><div style="color:var(--muted);font-size:.62rem">BASE APY</div><div style="color:#55d6a7;font-weight:700">${escHtml(pool.base_apy)}%</div></div>
-              <div style="background:#070612;border-radius:6px;padding:6px"><div style="color:var(--muted);font-size:.62rem">BOOSTED</div><div style="color:#55d6a7;font-weight:700">${escHtml(pool.boosted_apy)}%</div></div>
+              <div style="background:#070612;border-radius:6px;padding:6px"><div style="color:var(--muted);font-size:.62rem">ILLUSTRATIVE BASE APY</div><div style="color:#55d6a7;font-weight:700">${escHtml(pool.base_apy)}%</div></div>
+              <div style="background:#070612;border-radius:6px;padding:6px"><div style="color:var(--muted);font-size:.62rem">ILLUSTRATIVE BOOST</div><div style="color:#55d6a7;font-weight:700">${escHtml(pool.boosted_apy)}%</div></div>
               <div style="background:#070612;border-radius:6px;padding:6px"><div style="color:var(--muted);font-size:.62rem">STAKED</div><div>${escHtml(pool.total_staked)} ${escHtml(pool.token)}</div></div>
               <div style="background:#070612;border-radius:6px;padding:6px"><div style="color:var(--muted);font-size:.62rem">STAKERS</div><div>${pool.stakers}</div></div>
             </div>
-            <div style="font-size:.66rem;color:var(--muted);margin-bottom:8px">${pool.token === 'THC' ? 'THC stake/unstake fee: 0.09% · Pythia THC reserve.' : 'THR stake paused until signed wallet authorization. Existing THR unstake is fee-free.'}</div>
+            <div style="font-size:.66rem;color:var(--muted);margin-bottom:8px">APY is a model projection, not accrued or payable yield. ${pool.token === 'THC' ? 'THC stake/unstake fee: 0.09% · Pythia THC reserve.' : 'THR stake paused until signed wallet authorization. Existing THR unstake is fee-free.'}</div>
             ${pool.token === 'THC' ? `
               <div style="display:flex;gap:6px">
                 <input type="number" step="any" min="${escHtml(pool.min_stake)}" class="pwa-stake-input" data-pool="${escHtml(pool.pool_id)}" placeholder="Amount (${escHtml(pool.token)})" style="flex:1;background:#070612;border:1px solid #453b78;border-radius:6px;color:#fff;padding:7px;font-size:.76rem">
@@ -2521,8 +2521,8 @@ async function showEarn(options = {}) {
                 <div style="font-size:.92rem;font-weight:700;color:#f2c14e">${data.staked.toFixed(6)} ${escHtml(token)}</div>
               </div>
               <div style="text-align:right">
-                <div style="font-size:.76rem;color:var(--muted)">Projected rewards</div>
-                <div style="font-size:.92rem;font-weight:700;color:#34d399">+${data.rewards.toFixed(6)} ${escHtml(token)}</div>
+                <div style="font-size:.76rem;color:var(--muted)">Unfunded projection · not payable</div>
+                <div style="font-size:.92rem;font-weight:700;color:var(--muted)">${data.rewards.toFixed(6)} ${escHtml(token)}</div>
               </div>
             </div>
           `).join('');

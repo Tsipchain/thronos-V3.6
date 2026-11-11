@@ -17,9 +17,11 @@ Covers:
 import hashlib
 import os
 import secrets
+import sqlite3
 import sys
 import threading
 import time
+from datetime import datetime, timezone
 from decimal import Decimal, ROUND_DOWN
 from pathlib import Path
 from unittest.mock import patch
@@ -30,6 +32,7 @@ from flask import Flask
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from services.earn_account import (
+    _stake_unlock_at,
     _SESSION_COOKIE,
     _SESSION_TTL,
     EarnAccountStore,
@@ -1625,6 +1628,82 @@ def _unstake_thc_with_fee(store, uid, position):
 
 
 class TestStakingPool:
+    def test_calendar_term_handles_month_end_and_leap_year(self):
+        start = int(datetime(2024, 8, 31, 14, tzinfo=timezone.utc).timestamp())
+        assert datetime.fromtimestamp(_stake_unlock_at(start, "six_months"), timezone.utc) == datetime(2025, 2, 28, 14, tzinfo=timezone.utc)
+        leap_start = int(datetime(2024, 2, 29, 14, tzinfo=timezone.utc).timestamp())
+        assert datetime.fromtimestamp(_stake_unlock_at(leap_start, "one_year"), timezone.utc) == datetime(2025, 2, 28, 14, tzinfo=timezone.utc)
+        assert _stake_unlock_at(start, "flex") is None
+
+    def test_preexisting_position_schema_migrates_to_flex(self, tmp_path):
+        database = tmp_path / "old_stakes.db"
+        with sqlite3.connect(database) as con:
+            con.execute("""CREATE TABLE earn_staking_positions (
+                position_id TEXT PRIMARY KEY, pool_id TEXT, earn_user_id TEXT,
+                wallet_address TEXT, amount TEXT, status TEXT, staked_at INTEGER,
+                unstake_requested_at INTEGER, wallet_tx_id TEXT,
+                idempotency_key TEXT, fee_policy_version TEXT)""")
+            con.execute("""INSERT INTO earn_staking_positions VALUES
+                ('old', 'pool_thc_loyalty', 'owner', '', '10', 'active', 1,
+                 NULL, NULL, NULL, 'legacy_fee_free')""")
+        EarnAccountStore(str(database), _TEST_KEY)
+        with sqlite3.connect(database) as con:
+            assert con.execute("SELECT term, unlock_at FROM earn_staking_positions WHERE position_id='old'").fetchone() == ("flex", None)
+
+    @pytest.mark.parametrize("term", ["six_months", "one_year"])
+    def test_fixed_term_blocks_early_unstake_without_fee(self, store, user_a, term):
+        uid = user_a["earn_user_id"]
+        _seed_thc_confirmed(store, uid, "20")
+        pool = next(p for p in store.staking_pools() if p["token"] == "THC")
+        quote = store.staking_fee_quote(pool["pool_id"], "10", term=term)
+        assert quote["term"] == term and quote["estimated_unlock_at"] is not None
+        position = store.create_stake(uid, pool["pool_id"], "10", accepted_fee=quote["fee"], term=term, idempotency_key="fixed-lock")
+        assert position["unlock_at"] == _stake_unlock_at(position["staked_at"], term)
+        assert store.staking_positions(uid)[0]["term"] == term
+        with pytest.raises(EarnError, match="stake_locked_until_maturity"):
+            store.request_unstake(uid, position["position_id"], accepted_fee=quote["fee"])
+        with store._tx() as con:
+            assert con.execute("SELECT COUNT(*) FROM earn_staking_fees WHERE position_id=?", (position["position_id"],)).fetchone()[0] == 1
+        assert store.staking_positions(uid)[0]["status"] == "active"
+        with patch("services.earn_account.time.time", return_value=position["unlock_at"]):
+            released = store.request_unstake(uid, position["position_id"], accepted_fee=quote["fee"])
+        assert released["status"] == "unstaked"
+        assert store.thc_balance(uid)["available"] == "19.982000"
+
+    def test_term_cannot_be_changed_by_idempotency_replay(self, store, user_a):
+        uid = user_a["earn_user_id"]
+        _seed_thc_confirmed(store, uid, "30")
+        pool = next(p for p in store.staking_pools() if p["token"] == "THC")
+        first = store.create_stake(uid, pool["pool_id"], "10", term="flex", accepted_fee="0.009000", idempotency_key="same")
+        with pytest.raises(EarnError, match="stake_idempotency_conflict"):
+            store.create_stake(uid, pool["pool_id"], "10", term="one_year", accepted_fee="0.009000", idempotency_key="same")
+        assert store.staking_positions(uid)[0]["position_id"] == first["position_id"]
+        with pytest.raises(EarnError, match="invalid_stake_term"):
+            store.staking_fee_quote(pool["pool_id"], "10", term="unknown")
+
+    def test_fixed_term_http_quote_and_early_unstake(self, client, store, user_a):
+        uid = user_a["earn_user_id"]
+        token = _login(client)
+        _seed_thc_confirmed(store, uid, "20")
+        pool = next(p for p in store.staking_pools() if p["token"] == "THC")
+        quote = client.get("/api/earn/staking/fee-quote", headers=_auth(token), query_string={
+            "pool_id": pool["pool_id"], "amount": "10", "term": "six_months",
+        }).get_json()
+        assert quote["term"] == "six_months" and quote["term_months"] == 6
+        response = client.post("/api/earn/staking/stake", headers=_auth(token), json={
+            "pool_id": pool["pool_id"], "amount": "10", "accepted_fee": quote["fee"],
+            "term": quote["term"], "idempotency_key": "http-six-months",
+        })
+        assert response.status_code == 200
+        position = response.get_json()
+        assert position["unlock_at"] > position["staked_at"]
+        denied = client.post("/api/earn/staking/unstake", headers=_auth(token), json={
+            "position_id": position["position_id"], "accepted_fee": quote["fee"],
+        })
+        assert denied.status_code == 400
+        assert denied.get_json()["error"] == "stake_locked_until_maturity"
+        assert store.thc_balance(uid)["staked"] == "10.000000"
+
     def test_fee_quote_and_explicit_acceptance(self, store, user_a):
         uid = user_a["earn_user_id"]
         _seed_thc_confirmed(store, uid, "20")
@@ -2420,7 +2499,7 @@ def test_earn_sponsor_visit_uses_native_link_without_blank_popup():
 def test_wallet_pwa_shell_cache_advanced_for_earn_release():
     from pathlib import Path
     sw = (Path(__file__).parent.parent / "public/wallet-pwa/sw.js").read_text()
-    assert "thr-wallet-pwa-v21" in sw
+    assert "thr-wallet-pwa-v22" in sw
     assert "'/wallet-pwa/app.js'" in sw
     assert "'/wallet-pwa/goblins-wood-christmas.webp'" in sw
 

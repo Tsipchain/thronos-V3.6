@@ -2427,8 +2427,9 @@ async function showEarn(options = {}) {
             </div>
             <div style="font-size:.66rem;color:var(--muted);margin-bottom:8px">APY is a model projection, not accrued or payable yield. ${pool.token === 'THC' ? 'THC stake/unstake fee: 0.09% · Pythia THC reserve.' : 'THR stake paused until signed wallet authorization. Existing THR unstake is fee-free.'}</div>
             ${pool.token === 'THC' ? `
-              <div style="display:flex;gap:6px">
+              <div style="display:flex;gap:6px;flex-wrap:wrap">
                 <input type="number" step="any" min="${escHtml(pool.min_stake)}" class="pwa-stake-input" data-pool="${escHtml(pool.pool_id)}" placeholder="Amount (${escHtml(pool.token)})" style="flex:1;background:#070612;border:1px solid #453b78;border-radius:6px;color:#fff;padding:7px;font-size:.76rem">
+                <select class="pwa-stake-term" data-pool="${escHtml(pool.pool_id)}" aria-label="Lock duration" style="background:#070612;color:#fff;border:1px solid #453b78;border-radius:6px;font-size:.72rem"><option value="flex">Flex · anytime</option><option value="six_months">6 calendar months · locked</option><option value="one_year">1 calendar year · locked</option></select>
                 <button class="btn btn--primary pwa-stake-btn" data-pool="${escHtml(pool.pool_id)}" style="padding:7px 12px;font-size:.72rem;white-space:nowrap">Stake</button>
               </div>
               <div style="font-size:.62rem;color:var(--muted);margin-top:3px">Min: ${escHtml(pool.min_stake)} ${escHtml(pool.token)}</div>
@@ -2442,20 +2443,22 @@ async function showEarn(options = {}) {
             const input = poolsEl.querySelector(`.pwa-stake-input[data-pool="${poolId}"]`);
             const msg = poolsEl.querySelector(`.pwa-stake-msg[data-pool="${poolId}"]`);
             const amount = (input?.value || '').trim();
+            const term = poolsEl.querySelector(`.pwa-stake-term[data-pool="${poolId}"]`)?.value || 'flex';
             if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) {
               if (msg) { msg.textContent = 'Enter a valid amount'; msg.style.color = '#f87171'; }
               return;
             }
             btn.disabled = true;
             try {
-              const quoteRes = await fetch(`${earnBase}/api/earn/staking/fee-quote?pool_id=${encodeURIComponent(poolId)}&amount=${encodeURIComponent(amount)}`, { credentials: 'include', cache: 'no-store' });
+              const quoteRes = await fetch(`${earnBase}/api/earn/staking/fee-quote?pool_id=${encodeURIComponent(poolId)}&amount=${encodeURIComponent(amount)}&term=${encodeURIComponent(term)}`, { credentials: 'include', cache: 'no-store' });
               const quote = await quoteRes.json().catch(() => ({}));
               if (!quoteRes.ok || !quote?.ok) throw new Error(quote?.error || 'fee_quote_unavailable');
-              if (!window.confirm(`Stake ${quote.amount} ${quote.token}? Fee: ${quote.fee} ${quote.token} (0.09% to Pythia reserve). Total debit: ${quote.total_debit} ${quote.token}.`)) return;
+              const duration = quote.term === 'flex' ? 'Flex: unstake anytime' : `${quote.term === 'six_months' ? '6 calendar months' : '1 calendar year'}: no early unstake; estimated unlock ${new Date(quote.estimated_unlock_at * 1000).toLocaleString()}`;
+              if (!window.confirm(`Stake ${quote.amount} ${quote.token}? ${duration}. Fee: ${quote.fee} ${quote.token} (0.09% to Pythia reserve). Total debit: ${quote.total_debit} ${quote.token}. APY is illustrative, not payable.`)) return;
               const res = await fetch(`${earnBase}/api/earn/staking/stake`, {
                 method: 'POST', credentials: 'include',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ pool_id: poolId, amount: quote.amount, accepted_fee: quote.fee, idempotency_key: crypto.randomUUID() }),
+                body: JSON.stringify({ pool_id: poolId, amount: quote.amount, term: quote.term, accepted_fee: quote.fee, idempotency_key: crypto.randomUUID() }),
               });
               const data = await res.json().catch(() => ({}));
               if (res.ok && data?.ok) {
@@ -2478,12 +2481,13 @@ async function showEarn(options = {}) {
           <div style="background:#0d0a1a;border-radius:8px;padding:9px;margin-bottom:5px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px">
             <div>
               <span style="color:#f2c14e;font-weight:700;font-size:.82rem">${escHtml(pos.amount)} ${escHtml(pos.token)}</span>
-              <span style="font-size:.66rem;color:#55d6a7;margin-left:6px">APY: ${escHtml(pos.apy)}%</span>
-              <span style="font-size:.66rem;color:#34d399;margin-left:6px">+${escHtml(pos.projected_rewards)} ${escHtml(pos.token)}</span>
+              <span style="font-size:.66rem;color:#55d6a7;margin-left:6px">Illustrative APY: ${escHtml(pos.apy)}%</span>
+              <span style="font-size:.66rem;color:var(--muted);margin-left:6px">Unfunded projection: ${escHtml(pos.projected_rewards)} ${escHtml(pos.token)}</span>
+              <span style="font-size:.66rem;color:var(--muted);margin-left:6px">${pos.term === 'six_months' ? '6 months' : pos.term === 'one_year' ? '1 year' : 'Flex'}${pos.unlock_at ? ` · unlock ${new Date(pos.unlock_at * 1000).toLocaleString()}` : ''}</span>
             </div>
             <div style="display:flex;align-items:center;gap:6px">
               <span style="font-size:.62rem;padding:2px 6px;border-radius:4px;${pos.status === 'active' ? 'background:#065f4633;color:#34d399' : 'background:#92400e33;color:#fbbf24'}">${escHtml(pos.status)}</span>
-              ${pos.status === 'active' ? `<button class="pwa-unstake-btn" data-pos="${escHtml(pos.position_id)}" data-fee="${escHtml(pos.unstake_fee || '0.000000')}" data-token="${escHtml(pos.token)}" data-amount="${escHtml(pos.amount)}" style="font-size:.62rem;color:#f87171;background:none;border:1px solid #f8717144;border-radius:4px;padding:3px 7px;cursor:pointer">Unstake</button>` : ''}
+              ${pos.status === 'active' ? `<button class="pwa-unstake-btn" data-pos="${escHtml(pos.position_id)}" data-fee="${escHtml(pos.unstake_fee || '0.000000')}" data-token="${escHtml(pos.token)}" data-amount="${escHtml(pos.amount)}" ${pos.unlock_at && Date.now() < pos.unlock_at * 1000 ? 'disabled title="Locked until maturity"' : ''} style="font-size:.62rem;color:#f87171;background:none;border:1px solid #f8717144;border-radius:4px;padding:3px 7px;cursor:pointer">Unstake</button>` : ''}
             </div>
           </div>
         `).join('');

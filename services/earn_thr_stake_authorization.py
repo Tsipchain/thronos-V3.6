@@ -77,4 +77,6 @@ def verify_thr_stake_authorization(
         "idempotency_key": payload["idempotency_key"],
         "payload_hash": intent["payload_hash"],
         "term": term,
+        "created_at": int(intent["created_at"]),
+        "vault_address": vault_address,
     }

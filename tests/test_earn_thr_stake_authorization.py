@@ -12,6 +12,7 @@ from services.earn_thr_stake_authorization import (
     StakeAuthorizationError, verify_thr_stake_authorization,
 )
 from wallet_action_verify import canonical_wallet_action_intent, verify_wallet_action_signature
+from services.earn_account import EarnAccountStore, EarnError
 
 
 @pytest.fixture
@@ -92,6 +93,38 @@ def test_signed_term_cannot_be_switched_or_omitted(signed_stake):
                 payload=changed, linked_wallet=address,
                 pool_id=payload["pool_id"], vault_address=vault,
             )
+
+
+def test_reserved_signed_action_is_idempotent_and_replay_safe(tmp_path, signed_stake):
+    address, vault, pub, payload, sign = signed_stake
+    store = EarnAccountStore(str(tmp_path / "earn.db"), "thr-reservation-test-key")
+    user = store.register("stake@example.com", "password123")
+    uid = user["earn_user_id"]
+    with store._tx() as con:
+        con.execute(
+            "INSERT INTO earn_wallet_links(wallet_address, earn_user_id, public_key, linked_at) VALUES (?,?,?,?)",
+            (address, uid, pub, int(time.time())),
+        )
+    intent, sig = sign(payload)
+    verified = verify_thr_stake_authorization(
+        intent=intent, signature=sig, public_key=pub, payload=payload,
+        linked_wallet=address, pool_id=payload["pool_id"], vault_address=vault,
+    )
+    first = store.reserve_thr_stake_authorization(uid, verified)
+    assert first["status"] == "reserved"
+    assert store.reserve_thr_stake_authorization(uid, verified) == first
+    with store._tx() as con:
+        assert con.execute("SELECT COUNT(*) FROM earn_thr_stake_reservations").fetchone()[0] == 1
+        assert con.execute("SELECT COUNT(*) FROM earn_staking_positions").fetchone()[0] == 0
+    with pytest.raises(EarnError, match="stake_idempotency_conflict"):
+        store.reserve_thr_stake_authorization(uid, {**verified, "nonce": "different"})
+    with pytest.raises(EarnError, match="nonce_reused"):
+        store.reserve_thr_stake_authorization(uid, {**verified, "idempotency_key": "another"})
+    with pytest.raises(EarnError, match="wallet_link_mismatch"):
+        other = store.register("other@example.com", "password123")
+        store.reserve_thr_stake_authorization(other["earn_user_id"], verified)
+    with pytest.raises(EarnError, match="intent_expired"):
+        store.reserve_thr_stake_authorization(uid, {**verified, "created_at": 1})
 
 
 def test_stake_action_is_rejected_by_generic_wallet_verifier(signed_stake):

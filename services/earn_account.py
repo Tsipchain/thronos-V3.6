@@ -423,6 +423,27 @@ class EarnAccountStore:
                 CREATE INDEX IF NOT EXISTS idx_earn_staking_positions_user
                     ON earn_staking_positions(earn_user_id);
 
+                -- A signed THR request is reserved before settlement. This
+                -- table moves no funds and cannot create a staking position.
+                CREATE TABLE IF NOT EXISTS earn_thr_stake_reservations (
+                    reservation_id  TEXT PRIMARY KEY,
+                    earn_user_id     TEXT NOT NULL REFERENCES earn_accounts(earn_user_id),
+                    wallet_address   TEXT NOT NULL,
+                    pool_id          TEXT NOT NULL,
+                    vault_address    TEXT NOT NULL,
+                    amount           TEXT NOT NULL,
+                    fee              TEXT NOT NULL,
+                    term             TEXT NOT NULL,
+                    payload_hash     TEXT NOT NULL,
+                    nonce            TEXT NOT NULL,
+                    idempotency_key  TEXT NOT NULL,
+                    status           TEXT NOT NULL DEFAULT 'reserved',
+                    created_at       INTEGER NOT NULL,
+                    expires_at       INTEGER NOT NULL,
+                    UNIQUE(wallet_address, nonce),
+                    UNIQUE(earn_user_id, idempotency_key)
+                );
+
                 CREATE TABLE IF NOT EXISTS earn_ads (
                     ad_id       TEXT PRIMARY KEY,
                     title       TEXT NOT NULL,
@@ -1514,6 +1535,72 @@ class EarnAccountStore:
                     "term": r["term"], "unlock_at": r["unlock_at"],
                 })
             return result
+
+    def reserve_thr_stake_authorization(
+        self, earn_user_id: str, authorization: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Reserve a verified signed THR action; never move funds or create a stake.
+
+        The caller must first run verify_thr_stake_authorization with a
+        server-selected pool and vault. A separate reviewed execute path is
+        required before a reservation can settle.
+        """
+        now = int(time.time())
+        expires_at = int(authorization["created_at"]) + 300
+        if now >= expires_at or int(authorization["created_at"]) > now + 30:
+            raise EarnError("intent_expired")
+        wallet = str(authorization["wallet_address"]).upper()
+        nonce = str(authorization["nonce"])
+        key = str(authorization["idempotency_key"])
+        if not nonce or not key or len(nonce) > 128 or len(key) > 128:
+            raise EarnError("invalid_stake_reservation")
+        if authorization["term"] not in _THC_STAKE_TERMS:
+            raise EarnError("invalid_stake_term")
+        with self._tx() as con:
+            self._ensure_staking_pools(con)
+            link = con.execute(
+                "SELECT wallet_address FROM earn_wallet_links WHERE earn_user_id = ?",
+                (earn_user_id,),
+            ).fetchone()
+            if not link or link["wallet_address"].upper() != wallet:
+                raise EarnError("wallet_link_mismatch")
+            pool = con.execute(
+                "SELECT token FROM earn_staking_pools WHERE pool_id = ? AND status = 'active'",
+                (authorization["pool_id"],),
+            ).fetchone()
+            if not pool or pool["token"] != "THR":
+                raise EarnError("pool_not_found")
+            existing = con.execute(
+                "SELECT * FROM earn_thr_stake_reservations WHERE earn_user_id = ? AND idempotency_key = ?",
+                (earn_user_id, key),
+            ).fetchone()
+            if existing:
+                if (existing["wallet_address"], existing["nonce"], existing["payload_hash"]) != (
+                    wallet, nonce, authorization["payload_hash"]
+                ):
+                    raise EarnError("stake_idempotency_conflict")
+                if now >= existing["expires_at"]:
+                    raise EarnError("intent_expired")
+                return {"reservation_id": existing["reservation_id"], "status": existing["status"],
+                        "expires_at": existing["expires_at"]}
+            if con.execute(
+                "SELECT 1 FROM earn_thr_stake_reservations WHERE wallet_address = ? AND nonce = ?",
+                (wallet, nonce),
+            ).fetchone():
+                raise EarnError("nonce_reused")
+            reservation_id = "thr_res_" + secrets.token_urlsafe(18)
+            con.execute(
+                """INSERT INTO earn_thr_stake_reservations
+                   (reservation_id, earn_user_id, wallet_address, pool_id, vault_address,
+                    amount, fee, term, payload_hash, nonce, idempotency_key,
+                    created_at, expires_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (reservation_id, earn_user_id, wallet, authorization["pool_id"],
+                 authorization["vault_address"], authorization["amount"],
+                 authorization["fee"], authorization["term"], authorization["payload_hash"],
+                 nonce, key, now, expires_at),
+            )
+            return {"reservation_id": reservation_id, "status": "reserved", "expires_at": expires_at}
 
     def _debit_wallet_for_stake(
         self, wallet_address: str, amount: Decimal,

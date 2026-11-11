@@ -6,10 +6,13 @@ on:
   pull_request:
     paths:
       - "services/earn_account.py"
+      - "services/earn_thr_stake_authorization.py"
+      - "wallet_action_verify.py"
       - "server.py"
       - "templates/earn_beta.html"
       - "public/wallet-pwa/**"
       - "tests/test_earn_account.py"
+      - "tests/test_earn_thr_stake_authorization.py"
       - "tests/test_earn_ad_marketplace.py"
       - "tests/test_earn_wallet_link.py"
       - "tests/test_timewall_earn_adapter.py"
@@ -52,4 +55,4 @@ jobs:
           TIMEWALL_ENABLED: "0"
           TIMEWALL_POSTBACK_LIVE: "0"
         run: |
-          python -m pytest tests/test_earn_account.py tests/test_earn_ad_marketplace.py tests/test_earn_wallet_link.py tests/test_timewall_earn_adapter.py tests/test_earn_receipt_details.py tests/test_earn_leaderboard.py tests/test_earn_internal_hold.py tests/test_earn_loyalty.py -v
+          python -m pytest tests/test_earn_account.py tests/test_earn_thr_stake_authorization.py tests/test_earn_ad_marketplace.py tests/test_earn_wallet_link.py tests/test_timewall_earn_adapter.py tests/test_earn_receipt_details.py tests/test_earn_leaderboard.py tests/test_earn_internal_hold.py tests/test_earn_loyalty.py -v

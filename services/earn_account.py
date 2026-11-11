@@ -36,6 +36,7 @@ _STAKING_FEE_BPS = 9  # Owner-approved 0.09% per stake/unstake, 2026-11-10.
 _STAKING_FEE_POLICY = "earn-stake-fee-v1"
 _STAKING_FEE_RESERVE = "pythia_thc_staking_fee_reserve"
 _THC_STAKE_TERMS = {"flex": 0, "six_months": 6, "one_year": 12}
+_THC_FLEX_ILLUSTRATIVE_APY_BPS = 300  # Model only; no rewards accrue or become payable here.
 
 
 def _stake_unlock_at(staked_at: int, term: str) -> int | None:
@@ -1461,6 +1462,7 @@ class EarnAccountStore:
                     "base_apy_bps": p["base_apy_bps"],
                     "boosted_apy_bps": p["boosted_apy_bps"],
                     "base_apy": str(Decimal(p["base_apy_bps"]) / 100),
+                    "flex_apy": str(Decimal(_THC_FLEX_ILLUSTRATIVE_APY_BPS) / 100) if p["token"] == "THC" else None,
                     "boosted_apy": str(Decimal(p["boosted_apy_bps"]) / 100),
                     "min_stake": p["min_stake"],
                     "fee_bps": _STAKING_FEE_BPS,
@@ -1488,7 +1490,9 @@ class EarnAccountStore:
                 amt = Decimal(r["amount"])
                 end_at = (r["unstake_requested_at"] or r["staked_at"]) if r["status"] == "unstaked" else now
                 staked_seconds = max(end_at - r["staked_at"], 0)
-                apy_bps = r["base_apy_bps"]
+                apy_bps = (_THC_FLEX_ILLUSTRATIVE_APY_BPS
+                           if r["token"] == "THC" and r["term"] == "flex"
+                           else r["base_apy_bps"])
                 projected_annual = amt * Decimal(apy_bps) / Decimal(10000)
                 projected_earned = (
                     projected_annual * Decimal(staked_seconds)
@@ -1569,7 +1573,7 @@ class EarnAccountStore:
     def staking_fee_quote(self, pool_id: str, amount: str, term: str = "flex") -> dict[str, Any]:
         with self._tx() as con:
             self._ensure_staking_pools(con)
-            pool = con.execute("SELECT token, min_stake FROM earn_staking_pools WHERE pool_id = ? AND status = 'active'", (pool_id,)).fetchone()
+            pool = con.execute("SELECT token, min_stake, base_apy_bps FROM earn_staking_pools WHERE pool_id = ? AND status = 'active'", (pool_id,)).fetchone()
         if not pool:
             raise EarnError("pool_not_found")
         try:
@@ -1592,6 +1596,7 @@ class EarnAccountStore:
             "execution_enabled": pool["token"] == "THC",
             "term": term, "term_months": _THC_STAKE_TERMS[term],
             "estimated_unlock_at": _stake_unlock_at(int(time.time()), term),
+            "illustrative_apy": str(Decimal(_THC_FLEX_ILLUSTRATIVE_APY_BPS if pool["token"] == "THC" and term == "flex" else pool["base_apy_bps"]) / 100),
         }
 
     def create_stake(

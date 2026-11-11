@@ -40,12 +40,13 @@ TimeWall 65/35 allocation and a 5-point referral cap; it does not release funds.
 | Clearing, payout and cash-out | Disabled | Require verified receipts, durable settlement state and real confirmations |
 | Wallet unlock using THC | Disabled | Requires separate pledge and settlement specification |
 | THC and THR stake principal | Beta path | THC can lock from cleared Earn balance without wallet; THR requires wallet; validate wallet transaction and device flows |
-| Staking yield / revenue share | Not ready for funded payout | Projected APY is not a payable reward; reserve, quote, fees, lock terms and risk review are outstanding |
+| Staking yield / revenue share | Not ready for funded payout | Quotes, fee receipts and THC lock terms exist. Flex now displays a 3% annual model projection. No reward becomes payable until funding, allocation, distribution and risk review are implemented. |
 
 ### Stake fee policy (owner decision 2026-11-10)
 
 - New THC Earn positions: 9 bps (0.09%) on stake **in addition to principal**, and 9 bps on unstake **deducted from returned principal**, rounded up to six THC decimals. Display the exact fee and total/net before each confirmation. The fee is recorded once per action and position in the separate `pythia_thc_staking_fee_reserve` internal accounting ledger; it is not a funded APY distribution or a THR/BTC transfer. Legacy THC positions retain their original fee-free unstake terms.
 - New THC positions choose `flex`, `six_months`, or `one_year` at creation. Fixed terms mature at the same UTC clock time after six or twelve **calendar** months (month-end capped to the last valid day); no early unstake. Show the estimated date before confirmation and the exact stored date on the receipt. Existing positions migrate to `flex` without retroactive locks. The 9 bps fee is the same for all terms; duration does not create a funded APY bonus. An idempotency retry cannot alter principal, pool, or term.
+- Flex THC positions display an illustrative 3% APY model, including existing Flex stakes. Fixed-term projections use the current pool base model and are not a bonus or a funded payout. Principal and the 9 bps fee accounting are unaffected; actual yield settlement needs a separately funded reserve and approved policy.
 - THR staking remains paused until the Wallet PWA/APK performs biometric/passkey approval, signs the exact address/pool/principal/fee/expiry/nonce intent locally, and the backend verifies it before an atomic debit and Pythia credit. Do not charge a THR fee or advertise THR staking as active until that settlement path and its tests exist. Existing THR unstake remains fee-free for now.
 - These fees do not change the independent slow/fast network send fees or authorize payout of projected staking rewards.
 

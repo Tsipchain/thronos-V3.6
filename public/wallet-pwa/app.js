@@ -2420,16 +2420,17 @@ async function showEarn(options = {}) {
               <span style="font-size:.66rem;background:#f2c14e22;color:#f2c14e;padding:2px 6px;border-radius:99px">${escHtml(pool.token)}</span>
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:.72rem;margin-bottom:8px">
-              <div style="background:#070612;border-radius:6px;padding:6px"><div style="color:var(--muted);font-size:.62rem">ILLUSTRATIVE BASE APY</div><div style="color:#55d6a7;font-weight:700">${escHtml(pool.base_apy)}%</div></div>
-              <div style="background:#070612;border-radius:6px;padding:6px"><div style="color:var(--muted);font-size:.62rem">ILLUSTRATIVE BOOST</div><div style="color:#55d6a7;font-weight:700">${escHtml(pool.boosted_apy)}%</div></div>
+              <div style="background:#070612;border-radius:6px;padding:6px"><div style="color:var(--muted);font-size:.62rem">${pool.token === 'THC' ? 'FLEX MODEL APY' : 'ILLUSTRATIVE BASE APY'}</div><div style="color:#55d6a7;font-weight:700">${escHtml(pool.token === 'THC' ? pool.flex_apy : pool.base_apy)}%</div></div>
+              <div style="background:#070612;border-radius:6px;padding:6px"><div style="color:var(--muted);font-size:.62rem">${pool.token === 'THC' ? 'FIXED-TERM MODEL APY' : 'ILLUSTRATIVE BOOST'}</div><div style="color:#55d6a7;font-weight:700">${escHtml(pool.token === 'THC' ? pool.base_apy : pool.boosted_apy)}%</div></div>
               <div style="background:#070612;border-radius:6px;padding:6px"><div style="color:var(--muted);font-size:.62rem">STAKED</div><div>${escHtml(pool.total_staked)} ${escHtml(pool.token)}</div></div>
               <div style="background:#070612;border-radius:6px;padding:6px"><div style="color:var(--muted);font-size:.62rem">STAKERS</div><div>${pool.stakers}</div></div>
             </div>
             <div style="font-size:.66rem;color:var(--muted);margin-bottom:8px">APY is a model projection, not accrued or payable yield. ${pool.token === 'THC' ? 'THC stake/unstake fee: 0.09% · Pythia THC reserve.' : 'THR stake paused until signed wallet authorization. Existing THR unstake is fee-free.'}</div>
             ${pool.token === 'THC' ? `
+              <label style="display:block;font-size:.7rem;color:#f2c14e;margin:7px 0 4px">Choose your THC lock duration</label>
               <div style="display:flex;gap:6px;flex-wrap:wrap">
                 <input type="number" step="any" min="${escHtml(pool.min_stake)}" class="pwa-stake-input" data-pool="${escHtml(pool.pool_id)}" placeholder="Amount (${escHtml(pool.token)})" style="flex:1;background:#070612;border:1px solid #453b78;border-radius:6px;color:#fff;padding:7px;font-size:.76rem">
-                <select class="pwa-stake-term" data-pool="${escHtml(pool.pool_id)}" aria-label="Lock duration" style="background:#070612;color:#fff;border:1px solid #453b78;border-radius:6px;font-size:.72rem"><option value="flex">Flex · anytime</option><option value="six_months">6 calendar months · locked</option><option value="one_year">1 calendar year · locked</option></select>
+                <select class="pwa-stake-term" data-pool="${escHtml(pool.pool_id)}" aria-label="Lock duration" style="flex:1 1 100%;min-height:42px;background:#070612;color:#fff;border:1px solid #f2c14e;border-radius:6px;font-size:.82rem"><option value="flex">Flex · 3% model APY · withdraw anytime</option><option value="six_months">6 calendar months · locked</option><option value="one_year">1 calendar year · locked</option></select>
                 <button class="btn btn--primary pwa-stake-btn" data-pool="${escHtml(pool.pool_id)}" style="padding:7px 12px;font-size:.72rem;white-space:nowrap">Stake</button>
               </div>
               <div style="font-size:.62rem;color:var(--muted);margin-top:3px">Min: ${escHtml(pool.min_stake)} ${escHtml(pool.token)}</div>
@@ -2454,7 +2455,7 @@ async function showEarn(options = {}) {
               const quote = await quoteRes.json().catch(() => ({}));
               if (!quoteRes.ok || !quote?.ok) throw new Error(quote?.error || 'fee_quote_unavailable');
               const duration = quote.term === 'flex' ? 'Flex: unstake anytime' : `${quote.term === 'six_months' ? '6 calendar months' : '1 calendar year'}: no early unstake; estimated unlock ${new Date(quote.estimated_unlock_at * 1000).toLocaleString()}`;
-              if (!window.confirm(`Stake ${quote.amount} ${quote.token}? ${duration}. Fee: ${quote.fee} ${quote.token} (0.09% to Pythia reserve). Total debit: ${quote.total_debit} ${quote.token}. APY is illustrative, not payable.`)) return;
+              if (!window.confirm(`Stake ${quote.amount} ${quote.token}? ${duration}. Illustrative APY: ${quote.illustrative_apy}%, not accrued or payable. Fee: ${quote.fee} ${quote.token} (0.09% to Pythia reserve). Total debit: ${quote.total_debit} ${quote.token}.`)) return;
               const res = await fetch(`${earnBase}/api/earn/staking/stake`, {
                 method: 'POST', credentials: 'include',
                 headers: { 'Content-Type': 'application/json' },
@@ -6900,6 +6901,11 @@ async function boot() {
       // Check for SW updates now and every 10 minutes
       reg.update().catch(() => {});
       setInterval(() => reg.update().catch(() => {}), 10 * 60 * 1000);
+      // Installed mobile PWAs suspend timers in the background. Check again
+      // when the wallet is brought to the foreground.
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') reg.update().catch(() => {});
+      });
     }
     navigator.serviceWorker.addEventListener('controllerchange', () => {
       if (document.visibilityState === 'visible') _showUpdateToast();

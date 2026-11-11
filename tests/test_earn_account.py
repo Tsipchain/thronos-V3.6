@@ -1704,6 +1704,21 @@ class TestStakingPool:
         assert denied.get_json()["error"] == "stake_locked_until_maturity"
         assert store.thc_balance(uid)["staked"] == "10.000000"
 
+    def test_flex_three_percent_is_only_an_illustrative_projection(self, store, user_a):
+        uid = user_a["earn_user_id"]
+        _seed_thc_confirmed(store, uid, "30")
+        pool = next(p for p in store.staking_pools() if p["token"] == "THC")
+        assert pool["flex_apy"] == "3"
+        flex_quote = store.staking_fee_quote(pool["pool_id"], "10", term="flex")
+        fixed_quote = store.staking_fee_quote(pool["pool_id"], "10", term="six_months")
+        assert flex_quote["illustrative_apy"] == "3"
+        assert fixed_quote["illustrative_apy"] == pool["base_apy"]
+        pos = store.create_stake(uid, pool["pool_id"], "10", accepted_fee=flex_quote["fee"])
+        positions = store.staking_positions(uid)
+        assert positions[0]["position_id"] == pos["position_id"]
+        assert positions[0]["apy"] == "3"
+        assert store.thc_balance(uid)["available"] == "19.991000"
+
     def test_fee_quote_and_explicit_acceptance(self, store, user_a):
         uid = user_a["earn_user_id"]
         _seed_thc_confirmed(store, uid, "20")
@@ -2499,9 +2514,23 @@ def test_earn_sponsor_visit_uses_native_link_without_blank_popup():
 def test_wallet_pwa_shell_cache_advanced_for_earn_release():
     from pathlib import Path
     sw = (Path(__file__).parent.parent / "public/wallet-pwa/sw.js").read_text()
-    assert "thr-wallet-pwa-v22" in sw
+    assert "thr-wallet-pwa-v23" in sw
     assert "'/wallet-pwa/app.js'" in sw
     assert "'/wallet-pwa/goblins-wood-christmas.webp'" in sw
+
+
+def test_wallet_pwa_refreshes_stale_staking_ui_without_losing_offline_fallback():
+    from pathlib import Path
+    root = Path(__file__).parent.parent
+    sw = (root / "public/wallet-pwa/sw.js").read_text()
+    route = (root / "server_ext.py").read_text()
+    app = (root / "public/wallet-pwa/app.js").read_text()
+    assert "fetch(request).then(res =>" in sw
+    assert ".catch(() => caches.match(request))" in sw
+    assert "filename == 'sw.js'" in route
+    assert "no-store, max-age=0" in route
+    assert 'class="pwa-stake-term"' in app
+    assert 'Choose your THC lock duration' in app
 
 
 def test_christmas_banner_only_in_earn_surfaces_without_live_prize_claim():

@@ -2039,7 +2039,14 @@ def wallet_pwa(filename='index.html'):
     # Default to index.html for directory requests
     if not filename or filename.endswith('/'):
         filename = 'index.html'
-    return _send(pwa_dir, filename)
+    response = _send(pwa_dir, filename)
+    # An installed wallet must fetch the latest service worker before it can
+    # replace an old cache-first app shell. Flask's default max-age is 4 hours.
+    if filename == 'sw.js':
+        response.headers['Cache-Control'] = 'no-store, max-age=0'
+    elif filename in ('index.html', 'app.js'):
+        response.headers['Cache-Control'] = 'no-cache, max-age=0, must-revalidate'
+    return response
 
 
 

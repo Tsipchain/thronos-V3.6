@@ -3243,6 +3243,38 @@ class EarnAccountStore:
                 "SELECT * FROM timewall_receipts WHERE event_id = ?", (event_id,),
             ).fetchone()), True
 
+    def goblins_wood_progress(self, earn_user_id: str) -> dict[str, Any]:
+        """Show provider-reported milestones to their owner, never prize eligibility.
+
+        TimeWall signs only the user ID and revenue; the offer title/detail and
+        event ID are not cryptographically bound. These records are therefore
+        useful for personal progress but cannot determine contest winners.
+        """
+        with self._tx() as con:
+            rows = con.execute(
+                """SELECT r.event_id, r.offer_detail, r.revenue_raw,
+                          r.amount_thc, r.received_at, l.state
+                   FROM timewall_receipts r
+                   LEFT JOIN thc_ledger l ON l.entry_id = r.thc_entry_id
+                     AND l.earn_user_id = r.earn_user_id
+                   WHERE r.earn_user_id = ?
+                     AND (lower(r.offer_name) LIKE '%goblins wood%'
+                          OR lower(r.offer_detail) LIKE '%goblins wood%')
+                   ORDER BY r.received_at DESC, r.event_id DESC LIMIT 100""",
+                (earn_user_id,),
+            ).fetchall()
+        return {
+            "verification": "provider_reported_not_contest_eligible",
+            "milestones": [
+                {"event_id": row["event_id"],
+                 "detail": row["offer_detail"],
+                 "amount_thc": row["amount_thc"],
+                 "received_at": row["received_at"],
+                 "state": row["state"] or "progress_only"}
+                for row in rows
+            ],
+        }
+
     # ── CPX receipt handling ──────────────────────────────────────────────
 
     def record_cpx_receipt(
@@ -3861,6 +3893,15 @@ def register_earn_account_routes(
             return jsonify(ok=False, error="earn_auth_required"), 401
         entries = store.thc_history(user["earn_user_id"])
         return jsonify(ok=True, entries=entries)
+
+    @app.get("/api/earn/goblins-wood/progress")
+    def earn_goblins_wood_progress():
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        response = jsonify(ok=True, **store.goblins_wood_progress(user["earn_user_id"]))
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     @app.get("/api/earn/history/<entry_id>")
     def earn_receipt_details(entry_id):

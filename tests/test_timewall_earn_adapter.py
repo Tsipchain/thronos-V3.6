@@ -271,6 +271,53 @@ class TestTimeWallRoutes:
         with sqlite3.connect(store.db_path) as con:
             assert con.execute("SELECT COUNT(*) FROM thc_ledger WHERE source='timewall'").fetchone()[0] == 0
 
+    def test_goblins_progress_is_private_and_never_declares_a_winner(self, client, store):
+        first_token = _login(client)
+        client.post("/api/earn/register", json={
+            "email": "second@example.com", "password": "password123",
+        })
+        second_token = client.post("/api/earn/login", json={
+            "email": "second@example.com", "password": "password123",
+        }).get_json()["access_token"]
+        assert client.get("/api/earn/goblins-wood/progress",
+                          headers={"Authorization": "Bearer invalid"}).status_code == 401
+        with patch.dict(os.environ, {
+            "TIMEWALL_ENABLED": "1", "TIMEWALL_PLACEMENT_URL":
+                "https://wall.timewall.io/p/abc?user={userID}",
+            "TIMEWALL_POSTBACK_LIVE": "1", "TIMEWALL_SECRET_KEY": "secret",
+            "TIMEWALL_POSTBACK_IPS": "127.0.0.1",
+        }):
+            wall = client.get("/api/earn/timewall/offerwall",
+                              headers=_auth(first_token)).get_json()
+            uid = wall["url"].split("user=", 1)[1]
+            for txid, revenue, detail in (
+                ("install-1", "0", "Prime Earn - Goblins Wood - Install"),
+                ("level-6", "0.0262", "Prime Earn - Goblins Wood - Level 6"),
+                ("other-game", "0.1", "Prime Earn - Other Game - Level 6"),
+            ):
+                payload = {"userID": uid, "revenue": revenue,
+                           "hash": timewall_postback_hash(uid, revenue, "secret"),
+                           "txid": txid, "offerdetail": detail,
+                           "offername": "Prime Earn", "type": "credit"}
+                assert client.get("/api/earn/timewall/postback",
+                                  query_string=payload).status_code == 200
+            response = client.get("/api/earn/goblins-wood/progress",
+                                  headers=_auth(first_token))
+            assert response.status_code == 200
+            assert response.headers["Cache-Control"] == "no-store"
+            progress = response.get_json()
+            assert {m["event_id"] for m in progress["milestones"]} == {
+                "install-1", "level-6",
+            }
+            assert {m["state"] for m in progress["milestones"]} == {
+                "pending", "progress_only",
+            }
+            assert progress["verification"] == "provider_reported_not_contest_eligible"
+            assert "winner" not in progress and "rank" not in progress
+            other = client.get("/api/earn/goblins-wood/progress",
+                               headers=_auth(second_token)).get_json()
+            assert other["milestones"] == []
+
     def test_postback_ip_allowlist_rejects_unlisted_sender(self, client):
         with patch.dict(os.environ, {
             "TIMEWALL_POSTBACK_LIVE": "1",

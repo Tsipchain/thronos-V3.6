@@ -165,6 +165,7 @@
         <span class="challenge-kicker">Thronos Earn · Christmas 2026</span>
         <h2 id="earn-christmas-title">Goblins Wood Challenge</h2>
         <p>Στόχος: Level 130 · Η χριστουγεννιάτικη πρόκληση ετοιμάζεται.<br>Reach Level 130 · Christmas challenge coming soon.</p>
+        <p id="earn-goblins-progress" aria-live="polite" hidden></p>
         <button id="earn-christmas-timewall" type="button">Δες το TimeWall / Explore tasks</button>
       </div>
     </section>
@@ -515,7 +516,8 @@
     window.ThronosEarnTabs.reset();
     $('earn-leaderboard').__earnLeaderboard?.stop();
     await fetch('/api/earn/logout', { method:'POST', headers: earnAuthHeaders() }).catch(()=>{});
-    token = null; mainSection.style.display = 'none'; authSection.style.display = ''; frame.style.display = 'none';
+    token = null; $('earn-goblins-progress').hidden = true;
+    mainSection.style.display = 'none'; authSection.style.display = ''; frame.style.display = 'none';
     setStatus(t('signedOut'));
   });
 
@@ -597,6 +599,14 @@
   }
 
   async function refreshDashboard() {
+    const progressToken = token;
+    try {
+      const progressRes = await fetch('/api/earn/goblins-wood/progress', { headers: earnAuthHeaders() });
+      const progress = await progressRes.json();
+      const label = $('earn-goblins-progress');
+      label.hidden = progressToken !== token || mainSection.style.display === 'none' || !progressRes.ok || !progress.ok || !progress.milestones?.length;
+      if (!label.hidden) label.textContent = `TimeWall: ${progress.milestones.length} reported milestones · latest: ${progress.milestones[0].detail || 'milestone'} (${progress.milestones[0].state}). Contest eligibility awaits provider verification.`;
+    } catch (_) { $('earn-goblins-progress').hidden = true; }
     try {
       const meRes = await fetch('/api/earn/me', { headers: earnAuthHeaders() });
       const me = await meRes.json().catch(() => ({}));

@@ -2123,6 +2123,7 @@ async function showEarn(options = {}) {
           <div style="font-size:.66rem;font-weight:800;letter-spacing:.08em;color:#ffd679">THRONOS EARN · CHRISTMAS 2026</div>
           <h2 style="font-size:1.25rem;line-height:1.2;margin:7px 0">Goblins Wood Challenge</h2>
           <p style="font-size:.76rem;line-height:1.45;margin:0 0 12px">Στόχος: Level 130 · Η πρόκληση ετοιμάζεται.<br>Reach Level 130 · Coming soon.</p>
+          <p id="earnWalletGoblinsProgress" style="font-size:.72rem" hidden></p>
           <button class="btn" id="earnChristmasTimewall" type="button" style="background:#f2c14e;color:#111827;font-weight:800">Δες το TimeWall</button>
         </div>
       </section>
@@ -2162,6 +2163,16 @@ async function showEarn(options = {}) {
       });
       return;
     }
+
+    try {
+      const progressRes = await fetch(`${earnBase}/api/earn/goblins-wood/progress`, { credentials: 'include' });
+      const progress = await progressRes.json();
+      const label = document.getElementById('earnWalletGoblinsProgress');
+      if (label && progressRes.ok && progress.ok && progress.milestones?.length) {
+        label.textContent = `TimeWall: ${progress.milestones.length} reported milestones · latest: ${progress.milestones[0].detail || 'milestone'} (${progress.milestones[0].state}). Contest eligibility awaits provider verification.`;
+        label.hidden = false;
+      }
+    } catch (_) { /* Progress is optional; balance and history still load. */ }
 
     const [balanceResponse, historyResponse] = await Promise.all([
       fetch(`${earnBase}/api/earn/balance`, { credentials: 'include' }),

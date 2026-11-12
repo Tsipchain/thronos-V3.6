@@ -68,19 +68,19 @@ PACKAGES: dict[PackageTier, PackageDefinition] = {
     PackageTier.STARTER: PackageDefinition(
         tier=PackageTier.STARTER,
         thc_cost=Decimal("100"),
-        max_views=10_000,
+        max_views=100,
         max_duration_days=7,
     ),
     PackageTier.GROWTH: PackageDefinition(
         tier=PackageTier.GROWTH,
         thc_cost=Decimal("1000"),
-        max_views=100_000,
+        max_views=1_000,
         max_duration_days=30,
     ),
     PackageTier.PREMIUM: PackageDefinition(
         tier=PackageTier.PREMIUM,
         thc_cost=Decimal("10000"),
-        max_views=1_000_000,
+        max_views=10_000,
         max_duration_days=90,
     ),
 }

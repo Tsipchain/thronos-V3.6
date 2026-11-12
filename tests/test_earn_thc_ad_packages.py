@@ -61,8 +61,8 @@ class TestPackageCreation:
         )
         assert c.package_tier == PackageTier.STARTER
         assert c.thc_cost == Decimal("100")
-        assert c.max_views == 10_000
-        assert c.remaining_views == 10_000
+        assert c.max_views == 100
+        assert c.remaining_views == 100
         assert c.state == CampaignState.DRAFT
 
     def test_create_growth(self, store):
@@ -70,14 +70,14 @@ class TestPackageCreation:
             advertiser_id="adv_001", tier="growth", placement="clubs",
         )
         assert c.thc_cost == Decimal("1000")
-        assert c.max_views == 100_000
+        assert c.max_views == 1_000
 
     def test_create_premium(self, store):
         c = store.create_campaign(
             advertiser_id="adv_001", tier="premium", placement="news",
         )
         assert c.thc_cost == Decimal("10000")
-        assert c.max_views == 1_000_000
+        assert c.max_views == 10_000
 
     def test_invalid_tier_rejected(self, store):
         with pytest.raises(PackageCampaignError, match="invalid_tier"):
@@ -445,8 +445,8 @@ class TestSerialization:
         assert d["package_tier"] == "starter"
         assert d["thc_cost"] == "100"
         assert d["state"] == "active"
-        assert d["remaining_views"] == 10_000
-        assert d["max_views"] == 10_000
+        assert d["remaining_views"] == 100
+        assert d["max_views"] == 100
         assert d["total_impressions"] == 0
         assert d["total_clicks"] == 0
         assert d["unique_viewer_count"] == 0

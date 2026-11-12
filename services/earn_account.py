@@ -15,6 +15,7 @@ No wallet required. No auto-mint. No BTC payout. No L2E/THR mixing.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import calendar
 import hmac
 import json
@@ -3672,6 +3673,24 @@ def verify_cpx_postback_signature(trans_id: str, received_hash: str) -> bool:
     return hmac.compare_digest(expected, received_hash.lower())
 
 
+_CPX_POSTBACK_IPS = frozenset(ipaddress.ip_address(value) for value in (
+    "157.90.97.92", "188.40.3.73", "2a01:4f8:d0a:30ff::2",
+))
+
+
+def cpx_postback_ip_allowed(remote_addr: str | None) -> bool:
+    """Match CPX's published source IPs against Flask's trusted remote addr.
+
+    The production app uses ProxyFix(x_for=1), so request.remote_addr is the
+    client address supplied by the single Railway ingress proxy. Do not read
+    user-controlled forwarding headers in this route.
+    """
+    try:
+        return ipaddress.ip_address(str(remote_addr or "")) in _CPX_POSTBACK_IPS
+    except ValueError:
+        return False
+
+
 def verify_earn_wallet_proof(
     challenge: dict[str, str], *, wallet_address: str,
     public_key: str, signature: str,
@@ -4456,6 +4475,8 @@ def register_earn_account_routes(
         ).strip()
         if os.getenv("CPX_POSTBACK_LIVE", "0") != "1":
             return "0", 503
+        if not cpx_postback_ip_allowed(request.remote_addr):
+            return "0", 403
         if not verify_cpx_postback_signature(trans_id, received_hash):
             return "0", 403
         try:

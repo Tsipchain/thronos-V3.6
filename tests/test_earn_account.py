@@ -39,6 +39,7 @@ from services.earn_account import (
     EarnError,
     build_cpx_offerwall_url,
     cpx_postback_hash,
+    cpx_postback_ip_allowed,
     register_earn_account_routes,
     verify_cpx_postback_signature,
 )
@@ -873,7 +874,7 @@ class TestProviderClearancePresentation:
             "status": "1",
             "amount_local": "0",
             "secure_hash": cpx_postback_hash(trans_id, _CPX_ENV["CPX_APP_SECURE_HASH"]),
-        })
+        }, environ_overrides={"REMOTE_ADDR": "157.90.97.92"})
         assert callback.status_code == 200
         headers = _auth(token)
         balance = client.get("/api/earn/balance", headers=headers).get_json()
@@ -1013,6 +1014,31 @@ class TestNoWalletRequired:
 
 
 class TestCPXPostbackAPI:
+    def test_provider_ip_allowlist(self):
+        assert cpx_postback_ip_allowed("157.90.97.92")
+        assert cpx_postback_ip_allowed("188.40.3.73")
+        assert cpx_postback_ip_allowed("2a01:4f8:d0a:30ff::2")
+        assert not cpx_postback_ip_allowed("203.0.113.5")
+        assert not cpx_postback_ip_allowed(None)
+
+    @patch.dict(os.environ, _CPX_ENV, clear=False)
+    def test_signed_callback_from_unlisted_ip_rejected_even_with_forged_forwarding_headers(self, client, store, user_a):
+        tid = "tx-forged-source-ip"
+        response = client.post("/api/earn/cpx/postback", data={
+            "trans_id": tid,
+            "user_id": store._cpx_id(user_a["earn_user_id"]),
+            "status": "1",
+            "amount_local": "100",
+            "hash": cpx_postback_hash(tid, _CPX_ENV["CPX_APP_SECURE_HASH"]),
+        }, headers={
+            "X-Forwarded-For": "157.90.97.92",
+            "X-Real-IP": "157.90.97.92",
+            "CF-Connecting-IP": "157.90.97.92",
+        }, environ_overrides={"REMOTE_ADDR": "203.0.113.5"})
+        assert response.status_code == 403
+        with store._tx() as con:
+            assert con.execute("SELECT COUNT(*) FROM cpx_receipts").fetchone()[0] == 0
+
     @patch.dict(os.environ, _CPX_ENV, clear=False)
     def test_postback_rejects_bad_signature(self, client, user_a):
         resp = client.post("/api/earn/cpx/postback", data={
@@ -1390,7 +1416,7 @@ class TestFullServerRouteIntegration:
                     "secure_hash": sig,
                     "status": "1",
                     "amount_local": "750",
-                })
+                }, environ_overrides={"REMOTE_ADDR": "157.90.97.92"})
                 assert resp.status_code == 200
                 assert resp.data == b"1"
 
@@ -1431,7 +1457,7 @@ class TestFullServerRouteIntegration:
                     "secure_hash": sig,
                     "status": "1",
                     "amount_local": "500",
-                })
+                }, environ_overrides={"REMOTE_ADDR": "188.40.3.73"})
                 assert resp.status_code == 200
 
         # The failed legacy registration cannot receive the callback.  Its

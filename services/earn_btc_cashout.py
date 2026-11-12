@@ -1,27 +1,42 @@
 """
 Thronos Earn — BTC Cash-Out Settlement
 
-Independent path: reserve → signed BTC tx → broadcast → txid → reconciliation.
+Independent path: reserve → signed BTC tx → broadcast → txid → node-confirmed → paid.
 
 State machine:
-  payable → cashout_requested → reserve_locked → signing → broadcasted → paid
+  cashout_requested → reserve_locked → signing → broadcasted
+    → needs_reconciliation (uncertain broadcast)
+    → confirmed → paid
   Any non-terminal state → failed
   cashout_requested → cancelled (user-initiated)
+
+THC-to-USD conversion:
+  THC is an internal reward token, NOT pegged 1:1 to USD. The conversion
+  rate is injected via ThcUsdRateProvider, which the operator sets from
+  the actual provider conversion used when THC was minted. For reference:
+    - TimeWall mints at TIMEWALL_THC_CONVERSION THC per $1 (default 670)
+    - PureSpectrum mints at PURE_THC_CONVERSION THC per $1 (default 100)
+  The cashout rate MUST reflect the operator's redemption policy, not the
+  minting rate — they may differ.
 
 Design constraints:
   - Earn Account is email-and-credential first; Thronos Wallet is optional.
   - THC is the CPX/Earn reward currency; never mixed with THR, L2E, pledge, AMM.
-  - BTC minimum is USD 25 equivalent; rate comes from an injected quote interface.
+  - BTC minimum is USD 25 equivalent; rate comes from injected quote + THC rate.
   - External BTC cashout fee is 8–18%; exact rate from authoritative env config.
   - No float anywhere — Decimal with satoshi precision (8 decimal places).
   - No fake BTC success, no made-up txid.
-  - A payout may become paid ONLY after a real broadcast result with a validated txid.
+  - A payout may become paid ONLY after BTC node confirmation of the txid
+    with correct output address and amount. A 64-char hex string alone is NOT proof.
   - Reserve must be verified against ACTUAL BTC hot wallet balance (UTXO query),
     NOT a ledger entry or accounting assumption.
   - If reserve, signer, rate, or broadcast confirmation is unavailable, status
     must remain pending/reviewable — never paid.
-  - On crash recovery, in-flight requests are detected and either resumed or failed.
-  - No private keys, no secret values in code/logs/tests.
+  - On uncertain broadcast (exception, timeout), enter needs_reconciliation:
+    look up the tx by fingerprint from the BTC node before releasing anything.
+  - On crash recovery, in-flight requests go to needs_reconciliation (not failed)
+    when a broadcast may have occurred.
+  - No keys, no secret values in code/logs/tests.
 """
 from __future__ import annotations
 
@@ -54,16 +69,18 @@ _BTC_ADDR_RE = re.compile(
 )
 
 _CASHOUT_TRANSITIONS = {
-    "cashout_requested": {"reserve_locked", "failed", "cancelled"},
-    "reserve_locked":    {"signing", "failed"},
-    "signing":           {"broadcasted", "failed"},
-    "broadcasted":       {"paid", "failed"},
-    "paid":              set(),      # terminal
-    "failed":            set(),      # terminal
-    "cancelled":         set(),      # terminal
+    "cashout_requested":      {"reserve_locked", "failed", "cancelled"},
+    "reserve_locked":         {"signing", "failed"},
+    "signing":                {"broadcasted", "needs_reconciliation", "failed"},
+    "broadcasted":            {"confirmed", "needs_reconciliation", "failed"},
+    "needs_reconciliation":   {"confirmed", "failed"},
+    "confirmed":              {"paid", "failed"},
+    "paid":                   set(),      # terminal
+    "failed":                 set(),      # terminal
+    "cancelled":              set(),      # terminal
 }
 
-_INFLIGHT_STATES = {"reserve_locked", "signing", "broadcasted"}
+_INFLIGHT_STATES = {"reserve_locked", "signing", "broadcasted", "needs_reconciliation", "confirmed"}
 
 
 class CashoutError(ValueError):
@@ -78,6 +95,16 @@ class QuoteProvider(Protocol):
 
 class FeeSchedule(Protocol):
     def cashout_fee_percent(self) -> Decimal: ...
+
+
+class ThcUsdRateProvider(Protocol):
+    """Returns how many THC equal $1 USD for cashout purposes.
+
+    This is the operator's redemption rate, not necessarily the minting rate.
+    E.g. if THC is minted at 670 per $1 but the cashout policy redeems at
+    700 per $1, this returns Decimal("700").
+    """
+    def thc_per_usd(self) -> Decimal: ...
 
 
 class ReserveProvider(Protocol):
@@ -104,20 +131,52 @@ class BtcBroadcaster(Protocol):
     ) -> "BroadcastResult": ...
 
 
+class BtcNodeVerifier(Protocol):
+    """Confirms a transaction on-chain from the BTC node.
+
+    verify_tx() queries the node for the txid. Returns a VerifyResult
+    with confirmed=True only when the tx exists, has the expected
+    output address, and the output amount in satoshis matches.
+    lookup_by_fingerprint() searches for a tx matching a request_id-based
+    fingerprint (e.g. OP_RETURN, unique UTXO pattern) — used for
+    reconciliation after uncertain broadcast.
+    """
+    def verify_tx(
+        self, *, txid: str, expected_address: str, expected_amount_sat: int,
+    ) -> "VerifyResult": ...
+
+    def lookup_by_fingerprint(self, *, request_id: str) -> "VerifyResult": ...
+
+
 class BroadcastResult:
-    __slots__ = ("success", "txid", "raw_hex", "error")
+    __slots__ = ("success", "txid", "raw_hex", "error", "uncertain")
 
     def __init__(
         self, *, success: bool, txid: str = "",
         raw_hex: str = "", error: str = "",
+        uncertain: bool = False,
     ):
         self.success = success
         self.txid = txid
         self.raw_hex = raw_hex
         self.error = error
+        self.uncertain = uncertain
 
 
-# ── Fee schedule implementation ──────────────────────────────────────────
+class VerifyResult:
+    __slots__ = ("confirmed", "txid", "amount_sat", "error")
+
+    def __init__(
+        self, *, confirmed: bool, txid: str = "",
+        amount_sat: int = 0, error: str = "",
+    ):
+        self.confirmed = confirmed
+        self.txid = txid
+        self.amount_sat = amount_sat
+        self.error = error
+
+
+# ── Fee / rate implementations ───────────────────────────────────────────
 
 class EnvFeeSchedule:
     """Read fee from EARN_CASHOUT_FEE_PERCENT env var."""
@@ -133,6 +192,26 @@ class EnvFeeSchedule:
         if pct < _FEE_FLOOR_PERCENT or pct > _FEE_CEILING_PERCENT:
             raise CashoutError("cashout_fee_out_of_bounds")
         return pct
+
+
+class EnvThcUsdRate:
+    """Read THC-per-USD redemption rate from EARN_THC_CASHOUT_RATE env var.
+
+    Defaults to 670 (the TimeWall minting default) if not set.
+    Must be positive. Operator should set this to match their cashout policy.
+    """
+
+    def thc_per_usd(self) -> Decimal:
+        raw = os.getenv("EARN_THC_CASHOUT_RATE", "").strip()
+        if not raw:
+            raise CashoutError("thc_cashout_rate_not_configured")
+        try:
+            rate = Decimal(raw)
+        except (InvalidOperation, TypeError):
+            raise CashoutError("thc_cashout_rate_invalid")
+        if rate <= 0:
+            raise CashoutError("thc_cashout_rate_invalid")
+        return rate
 
 
 def validate_btc_address(address: str) -> str:
@@ -166,14 +245,18 @@ class EarnBtcCashoutStore:
         *,
         quote_provider: QuoteProvider,
         fee_schedule: FeeSchedule,
+        thc_rate_provider: ThcUsdRateProvider,
         reserve_provider: ReserveProvider | None = None,
         broadcaster: BtcBroadcaster | None = None,
+        node_verifier: BtcNodeVerifier | None = None,
     ):
         self.db_path = db_path
         self._quote = quote_provider
         self._fees = fee_schedule
+        self._thc_rate = thc_rate_provider
         self._reserve = reserve_provider
         self._broadcaster = broadcaster
+        self._verifier = node_verifier
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
@@ -208,16 +291,19 @@ class EarnBtcCashoutStore:
                     fee_percent         TEXT NOT NULL,
                     fee_thc             TEXT NOT NULL,
                     net_thc             TEXT NOT NULL,
+                    thc_per_usd         TEXT NOT NULL,
+                    usd_equivalent      TEXT NOT NULL,
                     btc_usd_quote       TEXT NOT NULL,
                     btc_amount_sat      TEXT NOT NULL,
-                    usd_equivalent      TEXT NOT NULL,
                     state               TEXT NOT NULL DEFAULT 'cashout_requested',
                     btc_txid            TEXT,
                     raw_tx_hex          TEXT,
+                    verified_amount_sat TEXT,
                     failure_reason      TEXT,
                     idempotency_key     TEXT NOT NULL UNIQUE,
                     reserve_locked_at   INTEGER,
                     broadcast_at        INTEGER,
+                    confirmed_at        INTEGER,
                     paid_at             INTEGER,
                     created_at          INTEGER NOT NULL,
                     updated_at          INTEGER NOT NULL
@@ -274,16 +360,26 @@ class EarnBtcCashoutStore:
         if net_thc <= 0:
             raise CashoutError("net_amount_zero_after_fee")
 
+        # Convert THC → USD using the operator's redemption rate
+        try:
+            thc_per_usd = self._thc_rate.thc_per_usd()
+        except CashoutError:
+            raise
+        except Exception as exc:
+            raise CashoutError("thc_rate_unavailable") from exc
+        if thc_per_usd <= 0:
+            raise CashoutError("thc_rate_invalid")
+
+        usd_equiv = (net_thc / thc_per_usd).quantize(_USD_SCALE, rounding=ROUND_DOWN)
+        if usd_equiv < _MIN_CASHOUT_USD:
+            raise CashoutError("below_minimum_usd")
+
         try:
             btc_usd = self._quote.btc_usd_quote()
         except Exception:
             raise CashoutError("btc_quote_unavailable")
         if btc_usd <= 0:
             raise CashoutError("btc_quote_invalid")
-
-        usd_equiv = (net_thc * Decimal("1")).quantize(_USD_SCALE, rounding=ROUND_DOWN)
-        if usd_equiv < _MIN_CASHOUT_USD:
-            raise CashoutError("below_minimum_usd")
 
         btc_amount = (usd_equiv / btc_usd).quantize(_SAT_SCALE, rounding=ROUND_DOWN)
         if btc_amount <= 0:
@@ -309,15 +405,15 @@ class EarnBtcCashoutStore:
             con.execute(
                 """INSERT INTO cashout_requests
                    (request_id, earn_user_id, btc_address, thc_amount,
-                    fee_percent, fee_thc, net_thc, btc_usd_quote,
-                    btc_amount_sat, usd_equivalent, state,
-                    idempotency_key, created_at, updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,'cashout_requested',?,?,?)""",
+                    fee_percent, fee_thc, net_thc, thc_per_usd,
+                    usd_equivalent, btc_usd_quote, btc_amount_sat,
+                    state, idempotency_key, created_at, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,'cashout_requested',?,?,?)""",
                 (
                     request_id, earn_user_id, btc_address,
                     str(thc_amt), str(fee_pct), str(fee_thc), str(net_thc),
-                    str(btc_usd), str(btc_amount_sat), str(usd_equiv),
-                    idem_key, now, now,
+                    str(thc_per_usd), str(usd_equiv), str(btc_usd),
+                    str(btc_amount_sat), idem_key, now, now,
                 ),
             )
             row = con.execute(
@@ -335,6 +431,7 @@ class EarnBtcCashoutStore:
         *,
         btc_txid: str | None = None,
         raw_tx_hex: str | None = None,
+        verified_amount_sat: str | None = None,
         failure_reason: str | None = None,
     ) -> dict[str, Any]:
         if new_state not in _CASHOUT_TRANSITIONS:
@@ -354,9 +451,17 @@ class EarnBtcCashoutStore:
             if new_state not in _CASHOUT_TRANSITIONS.get(current, set()):
                 raise CashoutError("invalid_cashout_transition")
 
-            if new_state == "paid":
+            if new_state == "confirmed":
                 if not btc_txid or not _validate_txid(btc_txid):
                     raise CashoutError("valid_btc_txid_required")
+                if not verified_amount_sat:
+                    raise CashoutError("verified_amount_required")
+
+            if new_state == "paid":
+                if not row["btc_txid"] or not _validate_txid(row["btc_txid"]):
+                    raise CashoutError("valid_btc_txid_required")
+                if not row["verified_amount_sat"]:
+                    raise CashoutError("verified_amount_required")
 
             if new_state == "failed" and not failure_reason:
                 raise CashoutError("failure_reason_required")
@@ -365,13 +470,16 @@ class EarnBtcCashoutStore:
             extra_cols = ""
             extra_vals: list[Any] = []
             if new_state == "reserve_locked":
-                extra_cols = ", reserve_locked_at = ?"
+                extra_cols += ", reserve_locked_at = ?"
                 extra_vals.append(now)
             elif new_state == "broadcasted":
-                extra_cols = ", broadcast_at = ?"
+                extra_cols += ", broadcast_at = ?"
                 extra_vals.append(now)
+            elif new_state == "confirmed":
+                extra_cols += ", confirmed_at = ?, verified_amount_sat = ?"
+                extra_vals.extend([now, verified_amount_sat])
             elif new_state == "paid":
-                extra_cols = ", paid_at = ?"
+                extra_cols += ", paid_at = ?"
                 extra_vals.append(now)
 
             con.execute(
@@ -399,13 +507,15 @@ class EarnBtcCashoutStore:
     # ── Settlement orchestrator ──────────────────────────────────────────
 
     def settle(self, request_id: str) -> dict[str, Any]:
-        """Drive a cashout_requested record through reserve → sign → broadcast → paid.
+        """Drive a request through reserve → sign → broadcast → confirm → paid.
 
         Each step is persisted to the DB before the next begins, so a crash
         at any point leaves the record in a recoverable state.
 
-        Returns the final record dict. On any infrastructure failure the
-        record transitions to 'failed' with a diagnostic reason.
+        After broadcast, the txid is verified against the BTC node (correct
+        output address and amount) before marking confirmed. On uncertain
+        broadcast (exception/timeout), the request enters needs_reconciliation
+        instead of failing — nothing is released until we know the outcome.
         """
         rec = self.get_request(request_id)
         if not rec:
@@ -420,6 +530,9 @@ class EarnBtcCashoutStore:
         if not self._broadcaster:
             return self.transition(request_id, "failed",
                                    failure_reason="broadcaster_not_configured")
+        if not self._verifier:
+            return self.transition(request_id, "failed",
+                                   failure_reason="node_verifier_not_configured")
 
         amount_sat = int(rec["btc_amount_sat"])
 
@@ -439,7 +552,7 @@ class EarnBtcCashoutStore:
                                        failure_reason="reserve_lock_failed")
             rec = self.transition(request_id, "reserve_locked")
 
-        # Step 2: sign
+        # Step 2: signing phase
         if rec["state"] == "reserve_locked":
             rec = self.transition(request_id, "signing")
 
@@ -452,25 +565,101 @@ class EarnBtcCashoutStore:
                     request_id=request_id,
                 )
             except Exception as e:
-                self._reserve.release(request_id)
-                return self.transition(request_id, "failed",
-                                       failure_reason=f"broadcast_exception:{e}")
-            if not result.success:
-                self._reserve.release(request_id)
-                return self.transition(request_id, "failed",
-                                       failure_reason=f"broadcast_failed:{result.error}")
-            if not _validate_txid(result.txid):
-                self._reserve.release(request_id)
-                return self.transition(request_id, "failed",
-                                       failure_reason="broadcast_returned_invalid_txid")
-            rec = self.transition(request_id, "broadcasted",
-                                  btc_txid=result.txid,
-                                  raw_tx_hex=result.raw_hex)
+                rec = self.transition(request_id, "needs_reconciliation",
+                                      failure_reason=f"broadcast_exception:{e}")
+            else:
+                if result.uncertain:
+                    rec = self.transition(request_id, "needs_reconciliation",
+                                          btc_txid=result.txid if _validate_txid(result.txid or "") else None,
+                                          failure_reason="broadcast_uncertain")
+                elif not result.success:
+                    self._reserve.release(request_id)
+                    return self.transition(request_id, "failed",
+                                           failure_reason=f"broadcast_failed:{result.error}")
+                elif not _validate_txid(result.txid):
+                    self._reserve.release(request_id)
+                    return self.transition(request_id, "failed",
+                                           failure_reason="broadcast_returned_invalid_txid")
+                else:
+                    rec = self.transition(request_id, "broadcasted",
+                                          btc_txid=result.txid,
+                                          raw_tx_hex=result.raw_hex)
 
-        # Step 4: mark paid (broadcasted with valid txid means it's in the mempool)
-        if rec["state"] == "broadcasted" and rec.get("btc_txid"):
-            rec = self.transition(request_id, "paid", btc_txid=rec["btc_txid"])
+        # Step 4: verify tx on node
+        if rec["state"] == "broadcasted":
+            rec = self._verify_and_confirm(rec)
 
+        # Step 5: reconcile uncertain broadcasts
+        if rec["state"] == "needs_reconciliation":
+            rec = self._try_reconcile(rec)
+
+        # Step 6: mark paid (confirmed = node-verified output)
+        if rec["state"] == "confirmed":
+            rec = self.transition(request_id, "paid")
+
+        return rec
+
+    def _verify_and_confirm(self, rec: dict[str, Any]) -> dict[str, Any]:
+        rid = rec["request_id"]
+        txid = rec.get("btc_txid", "")
+        amount_sat = int(rec["btc_amount_sat"])
+
+        if not txid or not _validate_txid(txid):
+            return self.transition(rid, "needs_reconciliation",
+                                   failure_reason="broadcasted_without_valid_txid")
+
+        try:
+            vr = self._verifier.verify_tx(
+                txid=txid,
+                expected_address=rec["btc_address"],
+                expected_amount_sat=amount_sat,
+            )
+        except Exception as e:
+            return self.transition(rid, "needs_reconciliation",
+                                   failure_reason=f"verify_exception:{e}")
+
+        if not vr.confirmed:
+            return self.transition(rid, "needs_reconciliation",
+                                   failure_reason=f"verify_failed:{vr.error}")
+
+        return self.transition(rid, "confirmed",
+                               btc_txid=vr.txid or txid,
+                               verified_amount_sat=str(vr.amount_sat))
+
+    def _try_reconcile(self, rec: dict[str, Any]) -> dict[str, Any]:
+        rid = rec["request_id"]
+        if not self._verifier:
+            return rec
+
+        amount_sat = int(rec["btc_amount_sat"])
+
+        # Try by txid first if we have one
+        txid = rec.get("btc_txid", "")
+        if txid and _validate_txid(txid):
+            try:
+                vr = self._verifier.verify_tx(
+                    txid=txid,
+                    expected_address=rec["btc_address"],
+                    expected_amount_sat=amount_sat,
+                )
+                if vr.confirmed:
+                    return self.transition(rid, "confirmed",
+                                           btc_txid=vr.txid or txid,
+                                           verified_amount_sat=str(vr.amount_sat))
+            except Exception:
+                pass
+
+        # Fall back to fingerprint lookup
+        try:
+            vr = self._verifier.lookup_by_fingerprint(request_id=rid)
+            if vr.confirmed:
+                return self.transition(rid, "confirmed",
+                                       btc_txid=vr.txid,
+                                       verified_amount_sat=str(vr.amount_sat))
+        except Exception:
+            pass
+
+        # Still uncertain — stay in needs_reconciliation, don't release anything
         return rec
 
     # ── Crash recovery ───────────────────────────────────────────────────
@@ -478,11 +667,11 @@ class EarnBtcCashoutStore:
     def recover_inflight(self) -> list[dict[str, Any]]:
         """On startup, find requests stuck in non-terminal states and handle them.
 
-        - reserve_locked / signing without a txid → fail (reserve state unknown)
-        - broadcasted with a valid txid → promote to paid
-        - broadcasted without a txid → fail (should not happen but be safe)
-
-        Returns list of records that were recovered.
+        - reserve_locked (no broadcast attempted) → release reserve, fail
+        - signing / broadcasted / needs_reconciliation → try reconciliation
+          from node; if unconfirmed, stay needs_reconciliation (NOT failed,
+          because we don't know if the tx was broadcast)
+        - confirmed → promote to paid
         """
         recovered: list[dict[str, Any]] = []
         pending = self._list_by_states(list(_INFLIGHT_STATES))
@@ -490,9 +679,8 @@ class EarnBtcCashoutStore:
         for rec in pending:
             rid = rec["request_id"]
             state = rec["state"]
-            txid = rec.get("btc_txid")
 
-            if state in ("reserve_locked", "signing"):
+            if state == "reserve_locked":
                 if self._reserve:
                     try:
                         self._reserve.release(rid)
@@ -504,19 +692,19 @@ class EarnBtcCashoutStore:
                 )
                 recovered.append(result)
 
-            elif state == "broadcasted":
-                if txid and _validate_txid(txid):
-                    result = self.transition(rid, "paid", btc_txid=txid)
-                else:
-                    if self._reserve:
-                        try:
-                            self._reserve.release(rid)
-                        except Exception:
-                            pass
-                    result = self.transition(
-                        rid, "failed",
-                        failure_reason="crash_recovery:broadcasted_without_valid_txid",
+            elif state == "confirmed":
+                result = self.transition(rid, "paid")
+                recovered.append(result)
+
+            elif state in ("signing", "broadcasted", "needs_reconciliation"):
+                # A broadcast may have occurred — must check the node
+                recon_rec = rec
+                if state in ("signing", "broadcasted"):
+                    recon_rec = self.transition(
+                        rid, "needs_reconciliation",
+                        failure_reason=f"crash_recovery:stuck_in_{state}",
                     )
+                result = self._try_reconcile(recon_rec)
                 recovered.append(result)
 
         return recovered
@@ -579,6 +767,13 @@ class EarnBtcCashoutStore:
             issues.append(f"fee_schedule: {e}")
 
         try:
+            rate = self._thc_rate.thc_per_usd()
+            if rate <= 0:
+                issues.append("thc_rate_zero_or_negative")
+        except Exception as e:
+            issues.append(f"thc_rate: {e}")
+
+        try:
             quote = self._quote.btc_usd_quote()
             if quote <= 0:
                 issues.append("btc_quote_zero_or_negative")
@@ -597,6 +792,9 @@ class EarnBtcCashoutStore:
 
         if not self._broadcaster:
             issues.append("btc_broadcaster_not_configured")
+
+        if not self._verifier:
+            issues.append("btc_node_verifier_not_configured")
 
         return {
             "cashout_enabled": len(issues) == 0,

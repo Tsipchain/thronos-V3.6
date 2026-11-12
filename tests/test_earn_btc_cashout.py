@@ -125,8 +125,18 @@ class FakeVerifier:
     def lookup_by_fingerprint(self, *, request_id: str) -> VerifyResult:
         self.lookup_calls.append(request_id)
         if self._confirmed:
-            return VerifyResult(confirmed=True, txid=VALID_TXID, amount_sat=self._amount_sat or 1000)
+            return VerifyResult(confirmed=True, txid=VALID_TXID, amount_sat=self._amount_sat)
         return VerifyResult(confirmed=False, error="no_matching_tx")
+
+
+class FakeThcBalance:
+    def __init__(self, balance: Decimal = Decimal("100000.000000")):
+        self._balance = balance
+        self.calls: list[str] = []
+
+    def available_thc(self, earn_user_id: str) -> Decimal:
+        self.calls.append(earn_user_id)
+        return self._balance
 
 
 @pytest.fixture
@@ -771,9 +781,10 @@ class TestCrashRecovery:
         assert recovered[0]["state"] == "needs_reconciliation"
 
     def test_recover_signing_found_on_node_confirms(self, db_path):
-        verifier = FakeVerifier(confirmed=True, amount_sat=5000)
+        verifier = FakeVerifier(confirmed=True)
         store = _full_store(db_path, node_verifier=verifier)
         rec = _make_request(store)
+        verifier._amount_sat = int(rec["btc_amount_sat"])
         store.transition(rec["request_id"], "reserve_locked")
         store.transition(rec["request_id"], "signing")
         recovered = store.recover_inflight()
@@ -965,3 +976,323 @@ class TestQuoteProvider:
             db_path, quote_provider=q, fee_schedule=FakeFee(), thc_rate_provider=FakeThcRate())
         with pytest.raises(CashoutError, match="btc_quote_unavailable"):
             _make_request(store)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 21. Node verification rejects wrong data
+# ══════════════════════════════════════════════════════════════════════════
+
+class TestNodeVerificationNegative:
+    def test_verify_wrong_amount_stays_reconciliation(self, db_path):
+        """Verifier confirms tx but returns wrong amount → needs_reconciliation."""
+        verifier = FakeVerifier(confirmed=True, amount_sat=9999)
+        store = _full_store(db_path, node_verifier=verifier)
+        rec = _make_request(store)
+        actual_sat = int(rec["btc_amount_sat"])
+        assert actual_sat != 9999
+        result = store.settle(rec["request_id"])
+        assert result["state"] == "needs_reconciliation"
+        assert "verify_amount_mismatch" in result["failure_reason"]
+
+    def test_verify_wrong_amount_in_reconcile_txid_path(self, db_path):
+        """During reconciliation by txid, wrong amount → stays reconciliation."""
+        verifier = FakeVerifier(confirmed=True, amount_sat=7777)
+        store = _full_store(db_path, node_verifier=verifier)
+        rec = _make_request(store)
+        rid = rec["request_id"]
+        store.transition(rid, "reserve_locked")
+        store.transition(rid, "signing")
+        store.transition(rid, "broadcasted", btc_txid=VALID_TXID)
+        store.transition(rid, "needs_reconciliation", failure_reason="test")
+        result = store._try_reconcile(store.get_request(rid))
+        assert result["state"] == "needs_reconciliation"
+
+    def test_verify_wrong_amount_in_fingerprint_path(self, db_path):
+        """Fingerprint returns wrong amount → skips confirmation."""
+        verifier = FakeVerifier(confirmed=True, amount_sat=1234)
+        store = _full_store(db_path, node_verifier=verifier)
+        rec = _make_request(store)
+        rid = rec["request_id"]
+        store.transition(rid, "reserve_locked")
+        store.transition(rid, "signing")
+        store.transition(rid, "needs_reconciliation", failure_reason="test")
+        result = store._try_reconcile(store.get_request(rid))
+        assert result["state"] == "needs_reconciliation"
+
+    def test_verify_returns_invalid_txid_stays_reconciliation(self, db_path):
+        """Verifier confirms but returns invalid txid format → needs_reconciliation."""
+        verifier = FakeVerifier(confirmed=True)
+        # Override verify_tx to return a bad txid
+        def bad_verify(*, txid, expected_address, expected_amount_sat):
+            return VerifyResult(confirmed=True, txid="bad", amount_sat=expected_amount_sat)
+        verifier.verify_tx = bad_verify
+        store = _full_store(db_path, node_verifier=verifier)
+        rec = _make_request(store)
+        result = store.settle(rec["request_id"])
+        assert result["state"] == "needs_reconciliation"
+        assert "verify_returned_invalid_txid" in result["failure_reason"]
+
+    def test_not_confirmed_without_node_verify(self, db_path):
+        """Even with valid txid from broadcast, unconfirmed verifier → no confirmed state."""
+        verifier = FakeVerifier(confirmed=False)
+        store = _full_store(db_path, node_verifier=verifier)
+        rec = _make_request(store)
+        result = store.settle(rec["request_id"])
+        assert result["state"] == "needs_reconciliation"
+        assert result["state"] != "confirmed"
+        assert result["state"] != "paid"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 22. Fingerprint cross-verification
+# ══════════════════════════════════════════════════════════════════════════
+
+class TestFingerprintCrossVerify:
+    def test_fingerprint_found_crossverify_confirms(self, db_path):
+        """Fingerprint finds tx AND verify_tx confirms → confirmed."""
+        verifier = FakeVerifier(confirmed=True)
+        store = _full_store(db_path, node_verifier=verifier)
+        rec = _make_request(store)
+        verifier._amount_sat = int(rec["btc_amount_sat"])
+        rid = rec["request_id"]
+        store.transition(rid, "reserve_locked")
+        store.transition(rid, "signing")
+        store.transition(rid, "needs_reconciliation", failure_reason="test")
+        result = store._try_reconcile(store.get_request(rid))
+        assert result["state"] == "confirmed"
+        assert len(verifier.lookup_calls) >= 1
+        assert len(verifier.verify_calls) >= 1
+
+    def test_fingerprint_found_crossverify_rejects_amount(self, db_path):
+        """Fingerprint finds tx but cross-verify returns different amount → stays reconciliation."""
+        verifier = FakeVerifier(confirmed=True)
+        store = _full_store(db_path, node_verifier=verifier)
+        rec = _make_request(store)
+        actual_sat = int(rec["btc_amount_sat"])
+        verifier._amount_sat = actual_sat
+        rid = rec["request_id"]
+        store.transition(rid, "reserve_locked")
+        store.transition(rid, "signing")
+        store.transition(rid, "needs_reconciliation", failure_reason="test")
+
+        # Override verify_tx to return wrong amount on cross-verify call
+        call_count = [0]
+        def crossverify_wrong_amount(*, txid, expected_address, expected_amount_sat):
+            call_count[0] += 1
+            return VerifyResult(confirmed=True, txid=txid, amount_sat=99999)
+        verifier.verify_tx = crossverify_wrong_amount
+
+        result = store._try_reconcile(store.get_request(rid))
+        assert result["state"] == "needs_reconciliation"
+
+    def test_fingerprint_found_crossverify_not_confirmed(self, db_path):
+        """Fingerprint finds tx but cross-verify says not confirmed → stays reconciliation."""
+        verifier = FakeVerifier(confirmed=True)
+        store = _full_store(db_path, node_verifier=verifier)
+        rec = _make_request(store)
+        actual_sat = int(rec["btc_amount_sat"])
+        verifier._amount_sat = actual_sat
+        rid = rec["request_id"]
+        store.transition(rid, "reserve_locked")
+        store.transition(rid, "signing")
+        store.transition(rid, "needs_reconciliation", failure_reason="test")
+
+        # Override verify_tx to return not confirmed on cross-verify
+        def crossverify_not_confirmed(*, txid, expected_address, expected_amount_sat):
+            return VerifyResult(confirmed=False, error="not_found")
+        verifier.verify_tx = crossverify_not_confirmed
+
+        result = store._try_reconcile(store.get_request(rid))
+        assert result["state"] == "needs_reconciliation"
+
+    def test_fingerprint_not_found_stays_reconciliation(self, db_path):
+        """Fingerprint finds nothing → stays needs_reconciliation."""
+        verifier = FakeVerifier(confirmed=False)
+        store = _full_store(db_path, node_verifier=verifier)
+        rec = _make_request(store)
+        rid = rec["request_id"]
+        store.transition(rid, "reserve_locked")
+        store.transition(rid, "signing")
+        store.transition(rid, "needs_reconciliation", failure_reason="test")
+        result = store._try_reconcile(store.get_request(rid))
+        assert result["state"] == "needs_reconciliation"
+
+    def test_fingerprint_returns_invalid_txid_skips(self, db_path):
+        """Fingerprint returns invalid txid → skip fingerprint path, stay reconciliation."""
+        verifier = FakeVerifier(confirmed=True)
+        store = _full_store(db_path, node_verifier=verifier)
+        rec = _make_request(store)
+        verifier._amount_sat = int(rec["btc_amount_sat"])
+        rid = rec["request_id"]
+        store.transition(rid, "reserve_locked")
+        store.transition(rid, "signing")
+        store.transition(rid, "needs_reconciliation", failure_reason="test")
+
+        # Override lookup to return invalid txid
+        def bad_lookup(*, request_id):
+            return VerifyResult(confirmed=True, txid="short", amount_sat=verifier._amount_sat)
+        verifier.lookup_by_fingerprint = bad_lookup
+
+        result = store._try_reconcile(store.get_request(rid))
+        assert result["state"] == "needs_reconciliation"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 23. Atomic THC balance reservation
+# ══════════════════════════════════════════════════════════════════════════
+
+class TestAtomicThcReservation:
+    def test_thc_balance_provider_used(self, db_path):
+        """When provider is set, available_thc param is ignored."""
+        provider = FakeThcBalance(Decimal("100000.000000"))
+        store = _full_store(db_path, thc_balance_provider=provider)
+        rec = store.create_cashout_request(
+            earn_user_id=USER_ID,
+            btc_address=VALID_BTC_ADDR,
+            thc_amount="25000.000000",
+        )
+        assert rec["state"] == "cashout_requested"
+        assert USER_ID in provider.calls
+
+    def test_thc_balance_provider_insufficient(self, db_path):
+        """Provider returns balance lower than request → error."""
+        provider = FakeThcBalance(Decimal("100.000000"))
+        store = _full_store(db_path, thc_balance_provider=provider)
+        with pytest.raises(CashoutError, match="insufficient_thc_balance"):
+            store.create_cashout_request(
+                earn_user_id=USER_ID,
+                btc_address=VALID_BTC_ADDR,
+                thc_amount="25000.000000",
+            )
+
+    def test_no_provider_no_param_raises(self, db_path):
+        """Neither provider nor available_thc → error."""
+        store = _full_store(db_path)
+        with pytest.raises(CashoutError, match="available_thc_required"):
+            store.create_cashout_request(
+                earn_user_id=USER_ID,
+                btc_address=VALID_BTC_ADDR,
+                thc_amount="25000.000000",
+            )
+
+    def test_inflight_deduction_blocks_second_request(self, db_path):
+        """First request consumes balance; second request rejected."""
+        provider = FakeThcBalance(Decimal("30000.000000"))
+        store = _full_store(db_path, thc_balance_provider=provider)
+        r1 = store.create_cashout_request(
+            earn_user_id=USER_ID,
+            btc_address=VALID_BTC_ADDR,
+            thc_amount="25000.000000",
+        )
+        assert r1["state"] == "cashout_requested"
+        with pytest.raises(CashoutError, match="insufficient_thc_balance_after_inflight"):
+            store.create_cashout_request(
+                earn_user_id=USER_ID,
+                btc_address=VALID_BECH32_ADDR,
+                thc_amount="25000.000000",
+            )
+
+    def test_inflight_after_paid_not_counted(self, db_path):
+        """Paid requests don't count against inflight balance."""
+        provider = FakeThcBalance(Decimal("60000.000000"))
+        store = _full_store(db_path, thc_balance_provider=provider)
+        r1 = store.create_cashout_request(
+            earn_user_id=USER_ID,
+            btc_address=VALID_BTC_ADDR,
+            thc_amount="25000.000000",
+        )
+        store.settle(r1["request_id"])
+        assert store.get_request(r1["request_id"])["state"] == "paid"
+        r2 = store.create_cashout_request(
+            earn_user_id=USER_ID,
+            btc_address=VALID_BECH32_ADDR,
+            thc_amount="25000.000000",
+        )
+        assert r2["state"] == "cashout_requested"
+
+    def test_inflight_after_failed_not_counted(self, db_path):
+        """Failed requests don't count against inflight balance."""
+        provider = FakeThcBalance(Decimal("30000.000000"))
+        store = _full_store(db_path, thc_balance_provider=provider)
+        r1 = store.create_cashout_request(
+            earn_user_id=USER_ID,
+            btc_address=VALID_BTC_ADDR,
+            thc_amount="25000.000000",
+        )
+        store.transition(r1["request_id"], "failed", failure_reason="test")
+        r2 = store.create_cashout_request(
+            earn_user_id=USER_ID,
+            btc_address=VALID_BECH32_ADDR,
+            thc_amount="25000.000000",
+        )
+        assert r2["state"] == "cashout_requested"
+
+    def test_inflight_thc_for_user_query(self, db_path):
+        """inflight_thc_for_user returns sum of non-terminal requests."""
+        provider = FakeThcBalance(Decimal("200000.000000"))
+        store = _full_store(db_path, thc_balance_provider=provider)
+        r1 = store.create_cashout_request(
+            earn_user_id=USER_ID,
+            btc_address=VALID_BTC_ADDR,
+            thc_amount="25000.000000",
+        )
+        r2 = store.create_cashout_request(
+            earn_user_id=USER_ID,
+            btc_address=VALID_BECH32_ADDR,
+            thc_amount="50000.000000",
+        )
+        inflight = store.inflight_thc_for_user(USER_ID)
+        assert inflight == Decimal("75000.000000")
+
+    def test_inflight_zero_after_all_terminal(self, db_path):
+        """After settling, inflight is 0."""
+        provider = FakeThcBalance(Decimal("200000.000000"))
+        store = _full_store(db_path, thc_balance_provider=provider)
+        r1 = store.create_cashout_request(
+            earn_user_id=USER_ID,
+            btc_address=VALID_BTC_ADDR,
+            thc_amount="25000.000000",
+        )
+        store.settle(r1["request_id"])
+        assert store.inflight_thc_for_user(USER_ID) == Decimal("0")
+
+    def test_concurrent_requests_cant_double_spend(self, db_path):
+        """Two threads racing to create requests can't exceed available balance."""
+        provider = FakeThcBalance(Decimal("30000.000000"))
+        store = _full_store(db_path, thc_balance_provider=provider)
+        results: list[dict] = []
+        errors: list[CashoutError] = []
+
+        def create_request(addr):
+            try:
+                rec = store.create_cashout_request(
+                    earn_user_id=USER_ID,
+                    btc_address=addr,
+                    thc_amount="25000.000000",
+                )
+                results.append(rec)
+            except CashoutError as e:
+                errors.append(e)
+
+        t1 = threading.Thread(target=create_request, args=(VALID_BTC_ADDR,))
+        t2 = threading.Thread(target=create_request, args=(VALID_BECH32_ADDR,))
+        t1.start()
+        t2.start()
+        t1.join(timeout=10)
+        t2.join(timeout=10)
+
+        assert len(results) == 1, f"Expected 1 success, got {len(results)}"
+        assert len(errors) == 1
+        assert "insufficient_thc_balance_after_inflight" in str(errors[0])
+
+    def test_provider_exception_raises_error(self, db_path):
+        """Provider exception → CashoutError."""
+        provider = FakeThcBalance()
+        provider.available_thc = MagicMock(side_effect=ConnectionError("db down"))
+        store = _full_store(db_path, thc_balance_provider=provider)
+        with pytest.raises(CashoutError, match="thc_balance_query_failed"):
+            store.create_cashout_request(
+                earn_user_id=USER_ID,
+                btc_address=VALID_BTC_ADDR,
+                thc_amount="25000.000000",
+            )

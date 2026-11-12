@@ -107,6 +107,16 @@ class ThcUsdRateProvider(Protocol):
     def thc_per_usd(self) -> Decimal: ...
 
 
+class ThcBalanceProvider(Protocol):
+    """Queries the Earn ledger for a user's available cleared THC balance.
+
+    The returned value is the TOTAL available THC (confirmed + payable - staked
+    - staking_fees). It does NOT account for in-flight cashout requests — that
+    deduction is handled atomically inside the cashout DB transaction.
+    """
+    def available_thc(self, earn_user_id: str) -> Decimal: ...
+
+
 class ReserveProvider(Protocol):
     """Checks actual BTC reserve (UTXO-based, not a ledger entry).
 
@@ -249,6 +259,7 @@ class EarnBtcCashoutStore:
         reserve_provider: ReserveProvider | None = None,
         broadcaster: BtcBroadcaster | None = None,
         node_verifier: BtcNodeVerifier | None = None,
+        thc_balance_provider: ThcBalanceProvider | None = None,
     ):
         self.db_path = db_path
         self._quote = quote_provider
@@ -257,6 +268,7 @@ class EarnBtcCashoutStore:
         self._reserve = reserve_provider
         self._broadcaster = broadcaster
         self._verifier = node_verifier
+        self._thc_balance = thc_balance_provider
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
@@ -326,7 +338,7 @@ class EarnBtcCashoutStore:
         earn_user_id: str,
         btc_address: str,
         thc_amount: str | Decimal,
-        available_thc: str | Decimal,
+        available_thc: str | Decimal | None = None,
     ) -> dict[str, Any]:
         btc_address = validate_btc_address(btc_address)
 
@@ -337,10 +349,21 @@ class EarnBtcCashoutStore:
         if thc_amt <= 0:
             raise CashoutError("invalid_thc_amount")
 
-        try:
-            avail = Decimal(str(available_thc)).quantize(_THC_SCALE)
-        except (InvalidOperation, TypeError):
-            raise CashoutError("invalid_balance")
+        if self._thc_balance:
+            try:
+                avail = self._thc_balance.available_thc(earn_user_id)
+            except CashoutError:
+                raise
+            except Exception as exc:
+                raise CashoutError("thc_balance_query_failed") from exc
+        elif available_thc is not None:
+            try:
+                avail = Decimal(str(available_thc)).quantize(_THC_SCALE)
+            except (InvalidOperation, TypeError):
+                raise CashoutError("invalid_balance")
+        else:
+            raise CashoutError("available_thc_required")
+
         if thc_amt > avail:
             raise CashoutError("insufficient_thc_balance")
 
@@ -401,6 +424,19 @@ class EarnBtcCashoutStore:
             ).fetchone()
             if existing:
                 return self._row_dict(existing)
+
+            inflight_rows = con.execute(
+                """SELECT thc_amount FROM cashout_requests
+                   WHERE earn_user_id = ?
+                     AND state NOT IN ('paid', 'failed', 'cancelled')""",
+                (earn_user_id,),
+            ).fetchall()
+            inflight_thc = sum(
+                (Decimal(r["thc_amount"]) for r in inflight_rows),
+                Decimal("0"),
+            )
+            if thc_amt > avail - inflight_thc:
+                raise CashoutError("insufficient_thc_balance_after_inflight")
 
             con.execute(
                 """INSERT INTO cashout_requests
@@ -622,8 +658,18 @@ class EarnBtcCashoutStore:
             return self.transition(rid, "needs_reconciliation",
                                    failure_reason=f"verify_failed:{vr.error}")
 
+        confirmed_txid = vr.txid or txid
+        if not _validate_txid(confirmed_txid):
+            return self.transition(rid, "needs_reconciliation",
+                                   failure_reason="verify_returned_invalid_txid")
+        if vr.amount_sat != amount_sat:
+            return self.transition(
+                rid, "needs_reconciliation",
+                failure_reason=f"verify_amount_mismatch:expected={amount_sat},got={vr.amount_sat}",
+            )
+
         return self.transition(rid, "confirmed",
-                               btc_txid=vr.txid or txid,
+                               btc_txid=confirmed_txid,
                                verified_amount_sat=str(vr.amount_sat))
 
     def _try_reconcile(self, rec: dict[str, Any]) -> dict[str, Any]:
@@ -643,19 +689,27 @@ class EarnBtcCashoutStore:
                     expected_amount_sat=amount_sat,
                 )
                 if vr.confirmed:
-                    return self.transition(rid, "confirmed",
-                                           btc_txid=vr.txid or txid,
-                                           verified_amount_sat=str(vr.amount_sat))
+                    confirmed_txid = vr.txid or txid
+                    if _validate_txid(confirmed_txid) and vr.amount_sat == amount_sat:
+                        return self.transition(rid, "confirmed",
+                                               btc_txid=confirmed_txid,
+                                               verified_amount_sat=str(vr.amount_sat))
             except Exception:
                 pass
 
-        # Fall back to fingerprint lookup
+        # Fall back to fingerprint lookup — cross-verify with verify_tx
         try:
             vr = self._verifier.lookup_by_fingerprint(request_id=rid)
-            if vr.confirmed:
-                return self.transition(rid, "confirmed",
-                                       btc_txid=vr.txid,
-                                       verified_amount_sat=str(vr.amount_sat))
+            if vr.confirmed and _validate_txid(vr.txid) and vr.amount_sat == amount_sat:
+                vr2 = self._verifier.verify_tx(
+                    txid=vr.txid,
+                    expected_address=rec["btc_address"],
+                    expected_amount_sat=amount_sat,
+                )
+                if vr2.confirmed and vr2.amount_sat == amount_sat:
+                    return self.transition(rid, "confirmed",
+                                           btc_txid=vr.txid,
+                                           verified_amount_sat=str(vr2.amount_sat))
         except Exception:
             pass
 
@@ -753,6 +807,19 @@ class EarnBtcCashoutStore:
                 states,
             ).fetchall()
             return [self._row_dict(r) for r in rows]
+
+    def inflight_thc_for_user(self, earn_user_id: str) -> Decimal:
+        with self._tx() as con:
+            rows = con.execute(
+                """SELECT thc_amount FROM cashout_requests
+                   WHERE earn_user_id = ?
+                     AND state NOT IN ('paid', 'failed', 'cancelled')""",
+                (earn_user_id,),
+            ).fetchall()
+            return sum(
+                (Decimal(r["thc_amount"]) for r in rows),
+                Decimal("0"),
+            )
 
     # ── Capability check ─────────────────────────────────────────────────
 

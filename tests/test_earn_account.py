@@ -1018,6 +1018,7 @@ class TestCPXPostbackAPI:
         assert cpx_postback_ip_allowed("157.90.97.92")
         assert cpx_postback_ip_allowed("188.40.3.73")
         assert cpx_postback_ip_allowed("2a01:4f8:d0a:30ff::2")
+        assert cpx_postback_ip_allowed("79.127.178.81", "157.90.97.92")
         assert not cpx_postback_ip_allowed("203.0.113.5")
         assert not cpx_postback_ip_allowed(None)
 
@@ -1032,12 +1033,25 @@ class TestCPXPostbackAPI:
             "hash": cpx_postback_hash(tid, _CPX_ENV["CPX_APP_SECURE_HASH"]),
         }, headers={
             "X-Forwarded-For": "157.90.97.92",
-            "X-Real-IP": "157.90.97.92",
             "CF-Connecting-IP": "157.90.97.92",
         }, environ_overrides={"REMOTE_ADDR": "203.0.113.5"})
         assert response.status_code == 403
         with store._tx() as con:
             assert con.execute("SELECT COUNT(*) FROM cpx_receipts").fetchone()[0] == 0
+
+    @patch.dict(os.environ, _CPX_ENV, clear=False)
+    def test_callback_uses_railway_real_source_ip_before_forwarded_participant_ip(self, client, store, user_a):
+        tid = "tx-railway-real-ip"
+        response = client.post("/api/earn/cpx/postback", data={
+            "trans_id": tid,
+            "user_id": store._cpx_id(user_a["earn_user_id"]),
+            "status": "1",
+            "amount_local": "100",
+            "hash": cpx_postback_hash(tid, _CPX_ENV["CPX_APP_SECURE_HASH"]),
+        }, headers={"X-Real-IP": "157.90.97.92"}, environ_overrides={
+            "REMOTE_ADDR": "79.127.178.81",
+        })
+        assert response.status_code == 200
 
     @patch.dict(os.environ, _CPX_ENV, clear=False)
     def test_postback_rejects_bad_signature(self, client, user_a):

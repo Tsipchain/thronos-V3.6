@@ -3678,15 +3678,20 @@ _CPX_POSTBACK_IPS = frozenset(ipaddress.ip_address(value) for value in (
 ))
 
 
-def cpx_postback_ip_allowed(remote_addr: str | None) -> bool:
-    """Match CPX's published source IPs against Flask's trusted remote addr.
+def cpx_postback_ip_allowed(
+    remote_addr: str | None, railway_real_ip: str | None = None,
+) -> bool:
+    """Match CPX's source address supplied by Railway's ingress.
 
-    The production app uses ProxyFix(x_for=1), so request.remote_addr is the
-    client address supplied by the single Railway ingress proxy. Do not read
-    user-controlled forwarding headers in this route.
+    ProxyFix(x_for=1) intentionally exposes an offer participant's address
+    as request.remote_addr when CPX forwards that address. Railway's own
+    X-Real-IP preserves the direct caller to the public endpoint, so it is
+    authoritative for this callback. Direct deployments can safely fall back
+    to remote_addr.
     """
+    candidate = railway_real_ip or remote_addr
     try:
-        return ipaddress.ip_address(str(remote_addr or "")) in _CPX_POSTBACK_IPS
+        return ipaddress.ip_address(str(candidate or "")) in _CPX_POSTBACK_IPS
     except ValueError:
         return False
 
@@ -4475,7 +4480,9 @@ def register_earn_account_routes(
         ).strip()
         if os.getenv("CPX_POSTBACK_LIVE", "0") != "1":
             return "0", 503
-        if not cpx_postback_ip_allowed(request.remote_addr):
+        if not cpx_postback_ip_allowed(
+            request.remote_addr, request.headers.get("X-Real-IP"),
+        ):
             return "0", 403
         if not verify_cpx_postback_signature(trans_id, received_hash):
             return "0", 403

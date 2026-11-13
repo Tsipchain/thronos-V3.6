@@ -89,7 +89,10 @@ class PythiaBtcReserveVerifier:
         for utxo in raw:
             if not isinstance(utxo, dict) or utxo.get("address") != self._address:
                 continue
-            confirmations = int(utxo.get("confirmations") or 0)
+            try:
+                confirmations = int(utxo.get("confirmations") or 0)
+            except (TypeError, ValueError) as exc:
+                raise BtcReserveError("invalid_rpc_utxo_confirmations") from exc
             if confirmations < self._min_confirmations:
                 continue
             total += _btc(utxo.get("amount"))

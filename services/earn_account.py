@@ -4512,10 +4512,19 @@ def register_earn_account_routes(
         )
         if os.getenv("BITCOTASKS_POSTBACK_LIVE", "0") != "1":
             return "ERROR", 503
-        sub_id = str(params.get("subId") or "").strip()
-        trans_id = str(params.get("transId") or "").strip()
-        reward = str(params.get("reward") or "").strip()
-        signature = str(params.get("signature") or "").strip()
+        # BitcoTasks requires an exact sub_id match to the opaque ID sent
+        # when the offerwall was opened.  Do not strip, truncate, prefix, or
+        # otherwise normalize it: a changed ID must fail safely rather than
+        # credit a different Earn account.  Accept both documented spellings
+        # of the *parameter name*, never an altered parameter value.
+        raw_sub_id = params["sub_id"] if "sub_id" in params else params.get("subId", "")
+        raw_trans_id = params["trans_id"] if "trans_id" in params else params.get("transId", "")
+        sub_id = raw_sub_id if isinstance(raw_sub_id, str) else str(raw_sub_id or "")
+        trans_id = raw_trans_id if isinstance(raw_trans_id, str) else str(raw_trans_id or "")
+        raw_reward = params.get("reward", "")
+        reward = raw_reward if isinstance(raw_reward, str) else str(raw_reward or "")
+        raw_signature = params.get("signature", "")
+        signature = raw_signature if isinstance(raw_signature, str) else str(raw_signature or "")
         if not verify_bitcotasks_postback_signature(
             sub_id, trans_id, reward, signature,
         ):

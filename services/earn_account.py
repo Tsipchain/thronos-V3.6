@@ -433,7 +433,7 @@ class EarnAccountStore:
                     earn_user_id    TEXT NOT NULL
                         REFERENCES earn_accounts(earn_user_id),
                     reservation_type TEXT NOT NULL CHECK (
-                        reservation_type IN ('cashout', 'ad_escrow', 'wallet_settlement')
+                        reservation_type IN ('cashout', 'ad_escrow', 'wallet_settlement', 'wallet_unlock')
                     ),
                     amount          TEXT NOT NULL,
                     state           TEXT NOT NULL DEFAULT 'reserved' CHECK (
@@ -448,6 +448,35 @@ class EarnAccountStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_earn_thc_reservations_active
                     ON earn_thc_reservations(earn_user_id, state);
+
+                -- Wallet-unlock pledges use the same reservation ledger as
+                -- cashout/staking protection. There is no public route here:
+                -- wallet creation must later be coordinated with this state.
+                CREATE TABLE IF NOT EXISTS earn_wallet_unlock_pledges (
+                    pledge_id            TEXT PRIMARY KEY,
+                    earn_user_id         TEXT NOT NULL
+                        REFERENCES earn_accounts(earn_user_id),
+                    reservation_id       TEXT NOT NULL UNIQUE
+                        REFERENCES earn_thc_reservations(reservation_id),
+                    pledge_kind          TEXT NOT NULL CHECK (
+                        pledge_kind IN ('standard', 'sponsored')
+                    ),
+                    total_thc            TEXT NOT NULL,
+                    permanently_locked_thc TEXT NOT NULL,
+                    burn_eligible_thc    TEXT NOT NULL,
+                    status               TEXT NOT NULL DEFAULT 'reserved' CHECK (
+                        status IN ('reserved', 'settled', 'released')
+                    ),
+                    wallet_address       TEXT,
+                    wallet_creation_ref  TEXT,
+                    idempotency_key      TEXT NOT NULL,
+                    created_at           INTEGER NOT NULL,
+                    settled_at           INTEGER,
+                    released_at          INTEGER,
+                    UNIQUE(earn_user_id, pledge_kind, idempotency_key)
+                );
+                CREATE INDEX IF NOT EXISTS idx_earn_wallet_unlock_pledges_user
+                    ON earn_wallet_unlock_pledges(earn_user_id, created_at DESC);
 
                 CREATE TABLE IF NOT EXISTS earn_ads (
                     ad_id       TEXT PRIMARY KEY,
@@ -1571,7 +1600,7 @@ class EarnAccountStore:
             raise EarnError(str(exc))
         return tx["tx_id"]
 
-    _THC_RESERVATION_TYPES = frozenset({"cashout", "ad_escrow", "wallet_settlement"})
+    _THC_RESERVATION_TYPES = frozenset({"cashout", "ad_escrow", "wallet_settlement", "wallet_unlock"})
     _ACTIVE_THC_RESERVATION_STATES = ("reserved", "settling", "settled")
 
     def _active_thc_reservations_in_tx(
@@ -1685,6 +1714,152 @@ class EarnAccountStore:
                 """SELECT reservation_id, reservation_type, amount, state,
                           source_ref, created_at, updated_at, released_at
                    FROM earn_thc_reservations WHERE earn_user_id=?
+                   ORDER BY created_at DESC""",
+                (earn_user_id,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    _WALLET_UNLOCK_THC = Decimal("10025.000000")
+    _WALLET_UNLOCK_LOCK_RATIO = Decimal("0.5")
+
+    def create_wallet_unlock_pledge(
+        self, earn_user_id: str, *, idempotency_key: str,
+    ) -> dict[str, Any]:
+        """Atomically reserve the approved THC wallet-unlock pledge.
+
+        This stores no private material and does not itself create a wallet.
+        A later wallet-factory adapter must settle or release the pledge.
+        """
+        if not idempotency_key or len(idempotency_key) > 160:
+            raise EarnError("pledge_idempotency_key_required")
+        total = self._WALLET_UNLOCK_THC
+        locked = (total * self._WALLET_UNLOCK_LOCK_RATIO).quantize(_THC_SCALE)
+        burn_eligible = (total - locked).quantize(_THC_SCALE)
+        now = int(time.time())
+        with self._tx() as con:
+            existing = con.execute(
+                """SELECT * FROM earn_wallet_unlock_pledges
+                   WHERE earn_user_id=? AND pledge_kind='standard'
+                     AND idempotency_key=?""",
+                (earn_user_id, idempotency_key),
+            ).fetchone()
+            if existing:
+                return dict(existing)
+            available = self._available_thc_for_staking(con, earn_user_id)
+            if available < total:
+                raise EarnError("insufficient_thc_balance")
+            pledge_id = "ewp_" + secrets.token_urlsafe(18)
+            reservation_id = "thcr_" + secrets.token_urlsafe(18)
+            con.execute(
+                """INSERT INTO earn_thc_reservations
+                   (reservation_id, earn_user_id, reservation_type, amount,
+                    state, source_ref, idempotency_key, created_at, updated_at)
+                   VALUES (?,?,?,?, 'reserved', ?,?,?,?)""",
+                (reservation_id, earn_user_id, "wallet_unlock", str(total),
+                 pledge_id, idempotency_key, now, now),
+            )
+            con.execute(
+                """INSERT INTO earn_wallet_unlock_pledges
+                   (pledge_id, earn_user_id, reservation_id, pledge_kind,
+                    total_thc, permanently_locked_thc, burn_eligible_thc,
+                    status, idempotency_key, created_at)
+                   VALUES (?,?,?,?,?,?,?,'reserved',?,?)""",
+                (pledge_id, earn_user_id, reservation_id, "standard",
+                 str(total), str(locked), str(burn_eligible),
+                 idempotency_key, now),
+            )
+            return dict(con.execute(
+                "SELECT * FROM earn_wallet_unlock_pledges WHERE pledge_id=?",
+                (pledge_id,),
+            ).fetchone())
+
+    def settle_wallet_unlock_pledge(
+        self, earn_user_id: str, pledge_id: str, *,
+        wallet_address: str, wallet_creation_ref: str,
+    ) -> dict[str, Any]:
+        """Commit a pre-reserved pledge after an external wallet factory succeeds."""
+        if not wallet_creation_ref or len(wallet_creation_ref) > 200:
+            raise EarnError("wallet_creation_ref_required")
+        wallet_address = self._wallet_address(wallet_address)
+        now = int(time.time())
+        with self._tx() as con:
+            pledge = con.execute(
+                """SELECT * FROM earn_wallet_unlock_pledges
+                   WHERE pledge_id=? AND earn_user_id=?""",
+                (pledge_id, earn_user_id),
+            ).fetchone()
+            if not pledge:
+                raise EarnError("wallet_unlock_pledge_not_found")
+            if pledge["status"] == "settled":
+                if (pledge["wallet_address"] != wallet_address
+                        or pledge["wallet_creation_ref"] != wallet_creation_ref):
+                    raise EarnError("wallet_unlock_pledge_idempotency_conflict")
+                return dict(pledge)
+            if pledge["status"] != "reserved":
+                raise EarnError("invalid_wallet_unlock_pledge_transition")
+            updated = con.execute(
+                """UPDATE earn_thc_reservations SET state='settled', updated_at=?
+                   WHERE reservation_id=? AND earn_user_id=?
+                     AND reservation_type='wallet_unlock' AND state='reserved'""",
+                (now, pledge["reservation_id"], earn_user_id),
+            )
+            if updated.rowcount != 1:
+                raise EarnError("wallet_unlock_reservation_not_settleable")
+            con.execute(
+                """UPDATE earn_wallet_unlock_pledges
+                   SET status='settled', wallet_address=?, wallet_creation_ref=?,
+                       settled_at=? WHERE pledge_id=?""",
+                (wallet_address, wallet_creation_ref, now, pledge_id),
+            )
+            return dict(con.execute(
+                "SELECT * FROM earn_wallet_unlock_pledges WHERE pledge_id=?",
+                (pledge_id,),
+            ).fetchone())
+
+    def release_wallet_unlock_pledge(
+        self, earn_user_id: str, pledge_id: str,
+    ) -> dict[str, Any]:
+        """Release only an unconsumed pledge after wallet creation failed."""
+        now = int(time.time())
+        with self._tx() as con:
+            pledge = con.execute(
+                """SELECT * FROM earn_wallet_unlock_pledges
+                   WHERE pledge_id=? AND earn_user_id=?""",
+                (pledge_id, earn_user_id),
+            ).fetchone()
+            if not pledge:
+                raise EarnError("wallet_unlock_pledge_not_found")
+            if pledge["status"] == "released":
+                return dict(pledge)
+            if pledge["status"] != "reserved":
+                raise EarnError("invalid_wallet_unlock_pledge_transition")
+            updated = con.execute(
+                """UPDATE earn_thc_reservations
+                   SET state='released', updated_at=?, released_at=?
+                   WHERE reservation_id=? AND earn_user_id=?
+                     AND reservation_type='wallet_unlock' AND state='reserved'""",
+                (now, now, pledge["reservation_id"], earn_user_id),
+            )
+            if updated.rowcount != 1:
+                raise EarnError("wallet_unlock_reservation_not_releasable")
+            con.execute(
+                """UPDATE earn_wallet_unlock_pledges
+                   SET status='released', released_at=? WHERE pledge_id=?""",
+                (now, pledge_id),
+            )
+            return dict(con.execute(
+                "SELECT * FROM earn_wallet_unlock_pledges WHERE pledge_id=?",
+                (pledge_id,),
+            ).fetchone())
+
+    def wallet_unlock_pledges(self, earn_user_id: str) -> list[dict[str, Any]]:
+        with self._tx() as con:
+            rows = con.execute(
+                """SELECT pledge_id, reservation_id, pledge_kind, total_thc,
+                          permanently_locked_thc, burn_eligible_thc, status,
+                          wallet_address, wallet_creation_ref, created_at,
+                          settled_at, released_at
+                   FROM earn_wallet_unlock_pledges WHERE earn_user_id=?
                    ORDER BY created_at DESC""",
                 (earn_user_id,),
             ).fetchall()

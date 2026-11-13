@@ -3,9 +3,8 @@ import { readFileSync } from 'node:fs';
 
 const source = readFileSync('thronos-wallet-app/src/screens/SwapScreen.tsx', 'utf8');
 
-assert.match(
-  source,
-  /imports*{s*getWallet,s*authenticateWithBiometricss*}s*from '../services/wallet';/,
+assert.ok(
+  source.includes("import { getWallet, authenticateWithBiometrics } from '../services/wallet';"),
   'Swap screen must import the device-approval gate.',
 );
 

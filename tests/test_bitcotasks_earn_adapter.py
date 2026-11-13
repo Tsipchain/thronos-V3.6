@@ -4,10 +4,13 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+
+from flask import Flask
 from unittest.mock import patch
 
 from services.earn_account import (
     EarnAccountStore,
+    register_earn_account_routes,
     verify_bitcotasks_postback_signature,
 )
 
@@ -75,6 +78,70 @@ class TestBitcoTasksEarnAdapter(unittest.TestCase):
             self.assertFalse(verify_bitcotasks_postback_signature(
                 self.provider_id, "tx-9", raw_reward, "forged",
             ))
+
+
+    def _postback_client(self):
+        app = Flask(__name__)
+        app.config["TESTING"] = True
+        register_earn_account_routes(app, self.store)
+        return app.test_client()
+
+    @staticmethod
+    def _signature(sub_id, trans_id, reward):
+        return hashlib.md5(
+            f"{sub_id}{trans_id}{reward}test-secret".encode(),
+        ).hexdigest()
+
+    def test_postback_accepts_documented_underscore_sub_id_exactly(self):
+        with patch.dict(os.environ, {
+            "BITCOTASKS_SECRET_KEY": "test-secret",
+            "BITCOTASKS_POSTBACK_LIVE": "1",
+        }, clear=False):
+            response = self._postback_client().get(
+                "/api/earn/bitcotasks/postback",
+                query_string={
+                    "sub_id": self.provider_id,
+                    "trans_id": "underscore-transaction",
+                    "reward": "0.100000",
+                    "status": "1",
+                    "signature": self._signature(
+                        self.provider_id, "underscore-transaction", "0.100000",
+                    ),
+                },
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_data(as_text=True), "ok")
+        self.assertEqual(
+            self.store.thc_balance(self.user["earn_user_id"])["pending"],
+            "0.100000",
+        )
+
+    def test_postback_never_trims_or_reassigns_sub_id(self):
+        changed_sub_id = self.provider_id + " "
+        with patch.dict(os.environ, {
+            "BITCOTASKS_SECRET_KEY": "test-secret",
+            "BITCOTASKS_POSTBACK_LIVE": "1",
+        }, clear=False):
+            response = self._postback_client().get(
+                "/api/earn/bitcotasks/postback",
+                query_string={
+                    "sub_id": changed_sub_id,
+                    "trans_id": "changed-subid-transaction",
+                    "reward": "0.100000",
+                    "status": "1",
+                    "signature": self._signature(
+                        changed_sub_id, "changed-subid-transaction", "0.100000",
+                    ),
+                },
+            )
+        # Signature remains valid for the raw callback, but its ID is not a
+        # known, exact provider identity.  It must not credit this account.
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_data(as_text=True), "ERROR")
+        self.assertEqual(
+            self.store.thc_balance(self.user["earn_user_id"])["pending"],
+            "0.000000",
+        )
 
     def test_unknown_provider_identity_cannot_credit_any_account(self):
         with self.assertRaisesRegex(ValueError, "unknown_provider_user"):

@@ -2666,3 +2666,89 @@ def test_direct_sponsor_link_keeps_origin_referrer():
     tag = source.split('id="promo-visit"', 1)[1].split(">", 1)[0]
     assert 'rel="noopener sponsored"' in tag
     assert 'referrerpolicy="strict-origin-when-cross-origin"' in tag
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# THC reservation ledger — cross-service commitment safety
+# ══════════════════════════════════════════════════════════════════════════
+
+class TestThcReservations:
+    def test_reserve_is_idempotent_and_reduces_available_balance(self, store, user_a):
+        uid = user_a["earn_user_id"]
+        _seed_thc_confirmed(store, uid, "100")
+        first = store.reserve_thc(
+            uid, "30.000000", reservation_type="cashout",
+            source_ref="cashout-1", idempotency_key="cashout-1",
+        )
+        retry = store.reserve_thc(
+            uid, "30.000000", reservation_type="cashout",
+            source_ref="cashout-1", idempotency_key="cashout-1",
+        )
+        assert retry["reservation_id"] == first["reservation_id"]
+        assert store.thc_balance(uid)["reserved"] == "30.000000"
+        assert store.thc_balance(uid)["available"] == "70.000000"
+
+    def test_reservation_blocks_stake_against_same_cleared_thc(self, store, user_a):
+        uid = user_a["earn_user_id"]
+        _seed_thc_confirmed(store, uid, "100")
+        store.reserve_thc(
+            uid, "80.000000", reservation_type="cashout",
+            source_ref="cashout-2", idempotency_key="cashout-2",
+        )
+        # 20 THC principal plus 0.018 THC fee exceeds the 20 THC left.
+        with pytest.raises(EarnError, match="insufficient_thc_balance"):
+            _stake_thc_with_fee(store, uid, "pool_thc_loyalty", "20")
+        position = _stake_thc_with_fee(store, uid, "pool_thc_loyalty", "19.982")
+        assert position["status"] == "active"
+
+    def test_insufficient_reservation_does_not_create_row(self, store, user_a):
+        uid = user_a["earn_user_id"]
+        _seed_thc_confirmed(store, uid, "5")
+        with pytest.raises(EarnError, match="insufficient_thc_balance"):
+            store.reserve_thc(
+                uid, "5.000001", reservation_type="cashout",
+                source_ref="cashout-3", idempotency_key="cashout-3",
+            )
+        assert store.thc_reservations(uid) == []
+
+    def test_released_reservation_returns_balance_to_user(self, store, user_a):
+        uid = user_a["earn_user_id"]
+        _seed_thc_confirmed(store, uid, "50")
+        reservation = store.reserve_thc(
+            uid, "25.000000", reservation_type="ad_escrow",
+            source_ref="campaign-1", idempotency_key="campaign-1",
+        )
+        assert store.thc_balance(uid)["available"] == "25.000000"
+        released = store.transition_thc_reservation(
+            uid, reservation["reservation_id"], "released",
+        )
+        assert released["state"] == "released"
+        assert store.thc_balance(uid)["reserved"] == "0.000000"
+        assert store.thc_balance(uid)["available"] == "50.000000"
+
+    def test_settled_reservation_stays_committed_until_reconciled(self, store, user_a):
+        uid = user_a["earn_user_id"]
+        _seed_thc_confirmed(store, uid, "50")
+        reservation = store.reserve_thc(
+            uid, "25.000000", reservation_type="cashout",
+            source_ref="cashout-4", idempotency_key="cashout-4",
+        )
+        assert store.transition_thc_reservation(
+            uid, reservation["reservation_id"], "settling",
+        )["state"] == "settling"
+        assert store.transition_thc_reservation(
+            uid, reservation["reservation_id"], "settled",
+        )["state"] == "settled"
+        # A settlement that is not yet reflected in thc_ledger is conservatively
+        # still unavailable; only its explicit reconciliation may free it.
+        assert store.thc_balance(uid)["available"] == "25.000000"
+        with pytest.raises(EarnError, match="invalid_thc_reservation_transition"):
+            store.transition_thc_reservation(uid, reservation["reservation_id"], "released")
+
+    @pytest.mark.parametrize("reservation_type", ["invalid", "", "stake"])
+    def test_invalid_reservation_type_is_rejected(self, store, user_a, reservation_type):
+        with pytest.raises(EarnError, match="invalid_thc_reservation_type"):
+            store.reserve_thc(
+                user_a["earn_user_id"], "1.000000",
+                reservation_type=reservation_type, idempotency_key="bad-type",
+            )

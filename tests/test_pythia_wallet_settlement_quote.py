@@ -131,6 +131,7 @@ def test_quote_must_match_request_and_be_short_lived(quote_change, error):
 
 @pytest.mark.parametrize("quote_change", [
     {"fee_thr": Decimal("-0.000001")},
+    {"fee_thr": Decimal("NaN")},
     {"fee_thr": Decimal("100.000000")},
     {"net_thr": Decimal("99.900000")},
 ])

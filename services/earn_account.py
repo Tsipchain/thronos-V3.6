@@ -1577,17 +1577,6 @@ class EarnAccountStore:
     def _active_thc_reservations_in_tx(
         self, con: sqlite3.Connection, earn_user_id: str,
     ) -> Decimal:
-        row = con.execute(
-            """SELECT COALESCE(SUM(CAST(amount AS REAL)), 0) AS total
-               FROM earn_thc_reservations
-               WHERE earn_user_id = ?
-                 AND state IN ('reserved', 'settling', 'settled')""",
-            (earn_user_id,),
-        ).fetchone()
-        # SQLite SUM is only used to aggregate stored fixed-scale decimals;
-        # conversion immediately returns to Decimal and all comparisons remain
-        # Decimal-only.  Individual rows are re-summed below to avoid binary
-        # float precision in financial decisions.
         rows = con.execute(
             """SELECT amount FROM earn_thc_reservations
                WHERE earn_user_id = ?

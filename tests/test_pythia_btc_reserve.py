@@ -61,6 +61,16 @@ def test_invalid_utxo_amount_fails_closed(amount):
         verifier.snapshot()
 
 
+@pytest.mark.parametrize("confirmations", ["not-a-number", {}])
+def test_invalid_utxo_confirmations_fail_closed(confirmations):
+    verifier = PythiaBtcReserveVerifier(
+        FakeRpc([{"address": ADDRESS, "amount": "0.1", "confirmations": confirmations}]),
+        reserve_address=ADDRESS,
+    )
+    with pytest.raises(BtcReserveError, match="invalid_rpc_utxo_confirmations"):
+        verifier.snapshot()
+
+
 def test_dedicated_settlement_reserve_is_required():
     with pytest.raises(BtcReserveError, match="btc_settlement_reserve_not_configured"):
         PythiaBtcReserveVerifier(FakeRpc(), reserve_address="")

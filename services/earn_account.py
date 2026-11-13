@@ -433,7 +433,7 @@ class EarnAccountStore:
                     earn_user_id    TEXT NOT NULL
                         REFERENCES earn_accounts(earn_user_id),
                     reservation_type TEXT NOT NULL CHECK (
-                        reservation_type IN ('cashout', 'ad_escrow', 'wallet_settlement', 'wallet_unlock')
+                        reservation_type IN ('cashout', 'ad_escrow', 'wallet_settlement')
                     ),
                     amount          TEXT NOT NULL,
                     state           TEXT NOT NULL DEFAULT 'reserved' CHECK (
@@ -1600,7 +1600,7 @@ class EarnAccountStore:
             raise EarnError(str(exc))
         return tx["tx_id"]
 
-    _THC_RESERVATION_TYPES = frozenset({"cashout", "ad_escrow", "wallet_settlement", "wallet_unlock"})
+    _THC_RESERVATION_TYPES = frozenset({"cashout", "ad_escrow", "wallet_settlement"})
     _ACTIVE_THC_RESERVATION_STATES = ("reserved", "settling", "settled")
 
     def _active_thc_reservations_in_tx(
@@ -1755,7 +1755,7 @@ class EarnAccountStore:
                    (reservation_id, earn_user_id, reservation_type, amount,
                     state, source_ref, idempotency_key, created_at, updated_at)
                    VALUES (?,?,?,?, 'reserved', ?,?,?,?)""",
-                (reservation_id, earn_user_id, "wallet_unlock", str(total),
+                (reservation_id, earn_user_id, "wallet_settlement", str(total),
                  pledge_id, idempotency_key, now, now),
             )
             con.execute(

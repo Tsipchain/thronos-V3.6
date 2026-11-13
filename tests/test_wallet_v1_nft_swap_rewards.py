@@ -48,7 +48,7 @@ def test_swap_quote_custom_token_no_route_is_clean(monkeypatch):
     assert body["error"] == "no_swap_route"
 
 
-def test_swap_quote_custom_token_direct_pool(monkeypatch):
+def test_swap_quote_rejects_direct_non_thr_pool(monkeypatch):
     import server
     monkeypatch.setattr(server, "get_all_tokens", lambda: [
         {"symbol": "THR"}, {"symbol": "7CEB"}, {"symbol": "HPENNIS"}
@@ -57,11 +57,10 @@ def test_swap_quote_custom_token_direct_pool(monkeypatch):
         "id": "p1", "token_a": "7CEB", "token_b": "HPENNIS", "reserves_a": 1000, "reserves_b": 500, "fee_bps": 30
     }])
     res = server.app.test_client().get('/api/swap/quote?token_in=7CEB&token_out=HPENNIS&amount_in=10')
-    assert res.status_code == 200
+    assert res.status_code == 404
     body = res.get_json()
-    assert body["status"] == "success"
-    assert body["route"] == ["7CEB", "HPENNIS"]
-    assert body["amount_out"] > 0
+    assert body["ok"] is False
+    assert body["error"] == "no_swap_route"
 
 
 def test_reward_diagnostics_endpoint_returns_json(monkeypatch):

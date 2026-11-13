@@ -4843,11 +4843,16 @@ def quote_swap_route(token_in: str, token_out: str, amount_in: float) -> tuple[d
     if token_in == token_out:
         return None, "same_token"
 
-    direct_pool, _ = get_pool_for_pair(token_in, token_out)
-    if direct_pool:
-        leg = _pool_quote_leg(direct_pool, token_in, token_out, amount_in)
-        if leg:
-            return {**leg, "route": [token_in, token_out], "legs": [leg]}, None
+    # Native AMM liquidity is intentionally THR-anchored. Community-issued
+    # assets may trade against THR, or with one another through THR. A direct
+    # non-THR/non-THR entry must not silently become a separate pricing domain
+    # or be confused with a funded cross-chain route.
+    if token_in == "THR" or token_out == "THR":
+        direct_pool, _ = get_pool_for_pair(token_in, token_out)
+        if direct_pool:
+            leg = _pool_quote_leg(direct_pool, token_in, token_out, amount_in)
+            if leg:
+                return {**leg, "route": [token_in, token_out], "legs": [leg]}, None
 
     if token_in != "THR" and token_out != "THR":
         pool_a, _ = get_pool_for_pair(token_in, "THR")

@@ -1228,9 +1228,9 @@ class EarnAccountStore:
                 "SELECT amount FROM earn_staking_fees WHERE earn_user_id = ? AND token = 'THC'",
                 (earn_user_id,),
             ).fetchall()
+            reserved_thc = self._active_thc_reservations_in_tx(con, earn_user_id)
         staked_thc = sum((Decimal(r["amount"]) for r in staked_rows), Decimal(0))
         staking_fees = sum((Decimal(r["amount"]) for r in fee_rows), Decimal(0))
-        reserved_thc = self._active_thc_reservations_in_tx(con, earn_user_id)
         by_state: dict[str, Decimal] = {}
         earliest_clears: int | None = None
         earliest_hold: int | None = None

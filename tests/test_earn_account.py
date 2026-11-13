@@ -2752,3 +2752,90 @@ class TestThcReservations:
                 user_a["earn_user_id"], "1.000000",
                 reservation_type=reservation_type, idempotency_key="bad-type",
             )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# WALLET UNLOCK PLEDGE LEDGER
+# ══════════════════════════════════════════════════════════════════════════
+
+class TestWalletUnlockPledgeLedger:
+    def test_requires_full_cleared_unlock_amount(self, store, user_a):
+        uid = user_a["earn_user_id"]
+        _seed_thc_confirmed(store, uid, "10024.999999")
+        with pytest.raises(EarnError, match="insufficient_thc_balance"):
+            store.create_wallet_unlock_pledge(uid, idempotency_key="unlock-low")
+
+    def test_reserves_full_pledge_with_locked_and_burn_eligible_receipts(self, store, user_a):
+        uid = user_a["earn_user_id"]
+        _seed_thc_confirmed(store, uid, "10025.000000")
+        pledge = store.create_wallet_unlock_pledge(uid, idempotency_key="unlock-1")
+        assert pledge["pledge_kind"] == "standard"
+        assert pledge["status"] == "reserved"
+        assert Decimal(pledge["total_thc"]) == Decimal("10025.000000")
+        assert Decimal(pledge["permanently_locked_thc"]) == Decimal("5012.500000")
+        assert Decimal(pledge["burn_eligible_thc"]) == Decimal("5012.500000")
+        assert store.thc_balance(uid)["available"] == "0.000000"
+        assert store.thc_balance(uid)["reserved"] == "10025.000000"
+
+    def test_retry_is_idempotent_and_cannot_double_reserve(self, store, user_a):
+        uid = user_a["earn_user_id"]
+        _seed_thc_confirmed(store, uid, "10025.000000")
+        first = store.create_wallet_unlock_pledge(uid, idempotency_key="unlock-idem")
+        second = store.create_wallet_unlock_pledge(uid, idempotency_key="unlock-idem")
+        assert second["pledge_id"] == first["pledge_id"]
+        assert len(store.wallet_unlock_pledges(uid)) == 1
+        assert store.thc_balance(uid)["available"] == "0.000000"
+
+    def test_failed_wallet_factory_can_release_and_restore_balance(self, store, user_a):
+        uid = user_a["earn_user_id"]
+        _seed_thc_confirmed(store, uid, "10025.000000")
+        pledge = store.create_wallet_unlock_pledge(uid, idempotency_key="unlock-release")
+        released = store.release_wallet_unlock_pledge(uid, pledge["pledge_id"])
+        assert released["status"] == "released"
+        assert store.thc_balance(uid)["available"] == "10025.000000"
+        assert store.release_wallet_unlock_pledge(uid, pledge["pledge_id"])["status"] == "released"
+
+    def test_settlement_commits_pledge_and_cannot_be_released(self, store, user_a):
+        uid = user_a["earn_user_id"]
+        _seed_thc_confirmed(store, uid, "10025.000000")
+        pledge = store.create_wallet_unlock_pledge(uid, idempotency_key="unlock-settle")
+        address = "THR" + "a" * 40
+        settled = store.settle_wallet_unlock_pledge(
+            uid, pledge["pledge_id"], wallet_address=address,
+            wallet_creation_ref="wallet-factory:one",
+        )
+        assert settled["status"] == "settled"
+        assert settled["wallet_address"] == address
+        assert store.thc_balance(uid)["available"] == "0.000000"
+        assert store.settle_wallet_unlock_pledge(
+            uid, pledge["pledge_id"], wallet_address=address,
+            wallet_creation_ref="wallet-factory:one",
+        )["status"] == "settled"
+        with pytest.raises(EarnError, match="invalid_wallet_unlock_pledge_transition"):
+            store.release_wallet_unlock_pledge(uid, pledge["pledge_id"])
+
+    def test_settlement_requires_valid_wallet_and_factory_receipt(self, store, user_a):
+        uid = user_a["earn_user_id"]
+        _seed_thc_confirmed(store, uid, "10025.000000")
+        pledge = store.create_wallet_unlock_pledge(uid, idempotency_key="unlock-validate")
+        with pytest.raises(EarnError, match="wallet_creation_ref_required"):
+            store.settle_wallet_unlock_pledge(
+                uid, pledge["pledge_id"], wallet_address="THR" + "b" * 40,
+                wallet_creation_ref="",
+            )
+        with pytest.raises(EarnError):
+            store.settle_wallet_unlock_pledge(
+                uid, pledge["pledge_id"], wallet_address="not-a-thr-wallet",
+                wallet_creation_ref="wallet-factory:two",
+            )
+
+    def test_user_isolation_and_no_secret_fields(self, store, user_a, user_b):
+        uid = user_a["earn_user_id"]
+        _seed_thc_confirmed(store, uid, "10025.000000")
+        pledge = store.create_wallet_unlock_pledge(uid, idempotency_key="unlock-isolation")
+        assert store.wallet_unlock_pledges(user_b["earn_user_id"]) == []
+        details = str(store.wallet_unlock_pledges(uid))
+        for forbidden in ("private_key", "seed", "pin", "biometric", "recovery"):
+            assert forbidden not in details.lower()
+        with pytest.raises(EarnError, match="wallet_unlock_pledge_not_found"):
+            store.release_wallet_unlock_pledge(user_b["earn_user_id"], pledge["pledge_id"])

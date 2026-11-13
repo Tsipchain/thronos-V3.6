@@ -20,6 +20,10 @@ on:
       - "tests/test_earn_leaderboard.mjs"
       - "tests/test_earn_internal_hold.py"
       - "tests/test_earn_loyalty.py"
+      - "services/earn_btc_cashout.py"
+      - "services/btc_node_verifier.py"
+      - "tests/test_earn_btc_cashout.py"
+      - "tests/test_btc_node_verifier.py"
       - ".github/workflows/earn-account-tests.yml"
 
 permissions:
@@ -52,4 +56,4 @@ jobs:
           TIMEWALL_ENABLED: "0"
           TIMEWALL_POSTBACK_LIVE: "0"
         run: |
-          python -m pytest tests/test_earn_account.py tests/test_earn_ad_marketplace.py tests/test_earn_wallet_link.py tests/test_timewall_earn_adapter.py tests/test_earn_receipt_details.py tests/test_earn_leaderboard.py tests/test_earn_internal_hold.py tests/test_earn_loyalty.py -v
+          python -m pytest tests/test_earn_account.py tests/test_earn_ad_marketplace.py tests/test_earn_wallet_link.py tests/test_timewall_earn_adapter.py tests/test_earn_receipt_details.py tests/test_earn_leaderboard.py tests/test_earn_internal_hold.py tests/test_earn_loyalty.py tests/test_earn_btc_cashout.py tests/test_btc_node_verifier.py -v

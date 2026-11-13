@@ -424,6 +424,31 @@ class EarnAccountStore:
                 CREATE INDEX IF NOT EXISTS idx_earn_staking_positions_user
                     ON earn_staking_positions(earn_user_id);
 
+                -- Cross-service THC commitment ledger.  Reservations remain
+                -- active until the consuming settlement updates the Earn ledger
+                -- or an explicit failure releases them.  This protects the same
+                -- cleared THC from concurrent stake/cashout/escrow flows.
+                CREATE TABLE IF NOT EXISTS earn_thc_reservations (
+                    reservation_id  TEXT PRIMARY KEY,
+                    earn_user_id    TEXT NOT NULL
+                        REFERENCES earn_accounts(earn_user_id),
+                    reservation_type TEXT NOT NULL CHECK (
+                        reservation_type IN ('cashout', 'ad_escrow', 'wallet_settlement')
+                    ),
+                    amount          TEXT NOT NULL,
+                    state           TEXT NOT NULL DEFAULT 'reserved' CHECK (
+                        state IN ('reserved', 'settling', 'settled', 'released')
+                    ),
+                    source_ref      TEXT,
+                    idempotency_key TEXT,
+                    created_at      INTEGER NOT NULL,
+                    updated_at      INTEGER NOT NULL,
+                    released_at     INTEGER,
+                    UNIQUE(earn_user_id, reservation_type, idempotency_key)
+                );
+                CREATE INDEX IF NOT EXISTS idx_earn_thc_reservations_active
+                    ON earn_thc_reservations(earn_user_id, state);
+
                 CREATE TABLE IF NOT EXISTS earn_ads (
                     ad_id       TEXT PRIMARY KEY,
                     title       TEXT NOT NULL,
@@ -1205,6 +1230,7 @@ class EarnAccountStore:
             ).fetchall()
         staked_thc = sum((Decimal(r["amount"]) for r in staked_rows), Decimal(0))
         staking_fees = sum((Decimal(r["amount"]) for r in fee_rows), Decimal(0))
+        reserved_thc = self._active_thc_reservations_in_tx(con, earn_user_id)
         by_state: dict[str, Decimal] = {}
         earliest_clears: int | None = None
         earliest_hold: int | None = None
@@ -1222,13 +1248,14 @@ class EarnAccountStore:
         payable = by_state.get("payable", Decimal("0"))
         paid = by_state.get("paid", Decimal("0"))
         pending = by_state.get("pending", Decimal("0"))
-        available = max(Decimal(0), confirmed + payable - staked_thc - staking_fees)
+        available = max(Decimal(0), confirmed + payable - staked_thc - staking_fees - reserved_thc)
         result: dict[str, Any] = {
             "available": str(available.quantize(_THC_SCALE)),
             "pending": str(pending.quantize(_THC_SCALE)),
             "total_earned": str((confirmed + payable + paid).quantize(_THC_SCALE)),
             "paid_out": str(paid.quantize(_THC_SCALE)),
             "staked": str(staked_thc.quantize(_THC_SCALE)),
+            "reserved": str(reserved_thc.quantize(_THC_SCALE)),
             "staking_fees_paid": str(staking_fees.quantize(_THC_SCALE)),
             "clearance_status": "provider_eta_pending",
             "clearance_message": "Clearance date not yet received from provider.",
@@ -1544,6 +1571,136 @@ class EarnAccountStore:
             raise EarnError(str(exc))
         return tx["tx_id"]
 
+    _THC_RESERVATION_TYPES = frozenset({"cashout", "ad_escrow", "wallet_settlement"})
+    _ACTIVE_THC_RESERVATION_STATES = ("reserved", "settling", "settled")
+
+    def _active_thc_reservations_in_tx(
+        self, con: sqlite3.Connection, earn_user_id: str,
+    ) -> Decimal:
+        row = con.execute(
+            """SELECT COALESCE(SUM(CAST(amount AS REAL)), 0) AS total
+               FROM earn_thc_reservations
+               WHERE earn_user_id = ?
+                 AND state IN ('reserved', 'settling', 'settled')""",
+            (earn_user_id,),
+        ).fetchone()
+        # SQLite SUM is only used to aggregate stored fixed-scale decimals;
+        # conversion immediately returns to Decimal and all comparisons remain
+        # Decimal-only.  Individual rows are re-summed below to avoid binary
+        # float precision in financial decisions.
+        rows = con.execute(
+            """SELECT amount FROM earn_thc_reservations
+               WHERE earn_user_id = ?
+                 AND state IN ('reserved', 'settling', 'settled')""",
+            (earn_user_id,),
+        ).fetchall()
+        return sum((Decimal(item["amount"]) for item in rows), Decimal(0))
+
+    def reserve_thc(
+        self,
+        earn_user_id: str,
+        amount: str,
+        *,
+        reservation_type: str,
+        source_ref: str = "",
+        idempotency_key: str = "",
+    ) -> dict[str, Any]:
+        """Atomically reserve cleared THC for a cross-service settlement.
+
+        This does not move or burn THC.  A reservation remains unavailable
+        until its consumer releases it after a failed/cancelled flow or
+        reconciles its Earn-ledger debit.  Callers must supply an idempotency
+        key so retries cannot create duplicate commitments.
+        """
+        if reservation_type not in self._THC_RESERVATION_TYPES:
+            raise EarnError("invalid_thc_reservation_type")
+        if not idempotency_key or len(idempotency_key) > 160:
+            raise EarnError("reservation_idempotency_key_required")
+        try:
+            requested = Decimal(str(amount))
+            if (not requested.is_finite() or requested <= 0
+                    or requested != requested.quantize(_THC_SCALE)):
+                raise ValueError
+        except (InvalidOperation, TypeError, ValueError):
+            raise EarnError("invalid_thc_reservation_amount")
+        now = int(time.time())
+        with self._tx() as con:
+            existing = con.execute(
+                """SELECT * FROM earn_thc_reservations
+                   WHERE earn_user_id=? AND reservation_type=?
+                     AND idempotency_key=?""",
+                (earn_user_id, reservation_type, idempotency_key),
+            ).fetchone()
+            if existing:
+                if (Decimal(existing["amount"]) != requested
+                        or (existing["source_ref"] or "") != source_ref):
+                    raise EarnError("thc_reservation_idempotency_conflict")
+                return dict(existing)
+            available = self._available_thc_for_staking(con, earn_user_id)
+            if available < requested:
+                raise EarnError("insufficient_thc_balance")
+            reservation_id = "thcr_" + secrets.token_urlsafe(18)
+            con.execute(
+                """INSERT INTO earn_thc_reservations
+                   (reservation_id, earn_user_id, reservation_type, amount,
+                    state, source_ref, idempotency_key, created_at, updated_at)
+                   VALUES (?,?,?,?, 'reserved', ?,?,?,?)""",
+                (reservation_id, earn_user_id, reservation_type, str(requested),
+                 source_ref or None, idempotency_key, now, now),
+            )
+            return dict(con.execute(
+                "SELECT * FROM earn_thc_reservations WHERE reservation_id=?",
+                (reservation_id,),
+            ).fetchone())
+
+    def transition_thc_reservation(
+        self, earn_user_id: str, reservation_id: str, state: str,
+    ) -> dict[str, Any]:
+        """Advance a reservation without ever silently freeing THC."""
+        if state not in ("settling", "settled", "released"):
+            raise EarnError("invalid_thc_reservation_state")
+        now = int(time.time())
+        with self._tx() as con:
+            row = con.execute(
+                """SELECT * FROM earn_thc_reservations
+                   WHERE reservation_id=? AND earn_user_id=?""",
+                (reservation_id, earn_user_id),
+            ).fetchone()
+            if not row:
+                raise EarnError("thc_reservation_not_found")
+            current = row["state"]
+            if current == state:
+                return dict(row)
+            allowed = {
+                "reserved": {"settling", "released"},
+                "settling": {"settled", "released"},
+                "settled": set(),
+                "released": set(),
+            }
+            if state not in allowed[current]:
+                raise EarnError("invalid_thc_reservation_transition")
+            con.execute(
+                """UPDATE earn_thc_reservations
+                   SET state=?, updated_at=?, released_at=?
+                   WHERE reservation_id=?""",
+                (state, now, now if state == "released" else None, reservation_id),
+            )
+            return dict(con.execute(
+                "SELECT * FROM earn_thc_reservations WHERE reservation_id=?",
+                (reservation_id,),
+            ).fetchone())
+
+    def thc_reservations(self, earn_user_id: str) -> list[dict[str, Any]]:
+        with self._tx() as con:
+            rows = con.execute(
+                """SELECT reservation_id, reservation_type, amount, state,
+                          source_ref, created_at, updated_at, released_at
+                   FROM earn_thc_reservations WHERE earn_user_id=?
+                   ORDER BY created_at DESC""",
+                (earn_user_id,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
     def _available_thc_for_staking(self, con: sqlite3.Connection, earn_user_id: str) -> Decimal:
         """Available THC minus active THC staking locks."""
         rows = con.execute(
@@ -1563,7 +1720,9 @@ class EarnAccountStore:
             "SELECT amount FROM earn_staking_fees WHERE earn_user_id = ? AND token = 'THC'",
             (earn_user_id,),
         ).fetchall()
-        return confirmed + payable - staked - sum((Decimal(r["amount"]) for r in fees), Decimal(0))
+        fees_paid = sum((Decimal(r["amount"]) for r in fees), Decimal(0))
+        reservations = self._active_thc_reservations_in_tx(con, earn_user_id)
+        return max(Decimal(0), confirmed + payable - staked - fees_paid - reservations)
 
     @staticmethod
     def staking_fee(amount: Decimal) -> Decimal:

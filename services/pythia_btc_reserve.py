@@ -89,8 +89,11 @@ class PythiaBtcReserveVerifier:
         for utxo in raw:
             if not isinstance(utxo, dict) or utxo.get("address") != self._address:
                 continue
+            raw_confirmations = utxo.get("confirmations")
+            if isinstance(raw_confirmations, (bool, dict, list, tuple, set)):
+                raise BtcReserveError("invalid_rpc_utxo_confirmations")
             try:
-                confirmations = int(utxo.get("confirmations") or 0)
+                confirmations = int(0 if raw_confirmations is None else raw_confirmations)
             except (TypeError, ValueError) as exc:
                 raise BtcReserveError("invalid_rpc_utxo_confirmations") from exc
             if confirmations < self._min_confirmations:

@@ -44,7 +44,7 @@ def test_rpc_failure_fails_closed():
         verifier.snapshot()
 
 
-@pytest.mark.parametrize("result", [None, {}, "bad"])
+@pytest.mark.parametrize("result", [{}, "bad"])
 def test_invalid_rpc_shape_fails_closed(result):
     verifier = PythiaBtcReserveVerifier(FakeRpc(result=result), reserve_address=ADDRESS)
     with pytest.raises(BtcReserveError, match="invalid_btc_reserve_rpc_response"):

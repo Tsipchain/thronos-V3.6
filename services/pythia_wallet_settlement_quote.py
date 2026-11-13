@@ -150,7 +150,12 @@ class LinkedWalletSettlementQuoteGate:
         if _amount(quote.thc_amount, THC_SCALE) != requested_thc:
             raise PythiaQuoteError("quote_thc_amount_mismatch")
         gross = _amount(quote.gross_thr, THR_SCALE)
-        fee = Decimal(str(quote.fee_thr)).quantize(THR_SCALE)
+        try:
+            fee = Decimal(str(quote.fee_thr)).quantize(THR_SCALE)
+            if not fee.is_finite():
+                raise ValueError
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            raise PythiaQuoteError("invalid_pythia_fee_quote") from exc
         net = _amount(quote.net_thr, THR_SCALE)
         if fee < 0 or gross <= fee or net != gross - fee:
             raise PythiaQuoteError("invalid_pythia_fee_quote")

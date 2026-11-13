@@ -14,6 +14,8 @@ on:
       - "thronos-wallet-app/src/components/CrossChainAssetIcon.tsx"
       - "thronos-wallet-app/src/screens/HomeScreen.tsx"
       - "thronos-wallet-app/src/screens/HistoryScreen.tsx"
+      - "thronos-wallet-app/src/screens/SwapScreen.tsx"
+      - "tests/test_wallet_swap_device_approval.mjs"
       - "thronos-wallet-app/src/services/api.ts"
       - "thronos-wallet-app/src/services/crossChain.ts"
       - ".github/workflows/cross-chain-wallet-assets.yml"
@@ -31,7 +33,9 @@ jobs:
         with:
           node-version: "20"
       - name: Parse wallet PWA JavaScript
-        run: node --check public/wallet-pwa/app.js
+        run: |
+          node --check public/wallet-pwa/app.js
+          node tests/test_wallet_swap_device_approval.mjs
       - name: Test chain-aware wallet history deduplication
         run: node tests/test_wallet_history_dedup.mjs
 
@@ -73,7 +77,7 @@ jobs:
           npx tsc --noEmit --pretty false > /tmp/wallet-tsc.log 2>&1
           tsc_status=$?
           cat /tmp/wallet-tsc.log
-          if grep -E 'src/(components/CrossChainAssetIcon|screens/(HomeScreen|HistoryScreen)|services/(crossChain|api))\.tsx?' /tmp/wallet-tsc.log; then
+          if grep -E 'src/(components/CrossChainAssetIcon|screens/(HomeScreen|HistoryScreen|SwapScreen)|services/(crossChain|api))\.tsx?' /tmp/wallet-tsc.log; then
             echo "TypeScript errors found in files changed by this work."
             exit 1
           fi

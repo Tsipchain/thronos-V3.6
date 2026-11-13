@@ -46,7 +46,7 @@ export interface TokenBalance {
 }
 
 export interface SignedTxEnvelope {
-  nonce: number;
+  nonce: string | number;
   timestamp: number;
   from: string;
   to: string;
@@ -145,7 +145,7 @@ export async function getSwapQuote(from: string, to: string, amount: number): Pr
   return { rate, amount_out: amountOut, fee };
 }
 
-export async function executeSwapSigned(params: { signedTx: SignedTxEnvelope }): Promise<{ success: boolean; txHash?: string }> {
+export async function executeSwapSigned(params: { signedTx: SignedTxEnvelope }): Promise<{ success: boolean; txHash?: string; error?: string }> {
   return request('/api/swap/execute', { method: 'POST', body: JSON.stringify({ tx: params.signedTx }) });
 }
 

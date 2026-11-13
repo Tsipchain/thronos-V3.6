@@ -9,7 +9,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS } from '../constants/theme';
 import { useStore } from '../store/useStore';
 import { getSwapQuote, executeSwapSigned } from '../services/api';
-import { getWallet } from '../services/wallet';
+import { getWallet, authenticateWithBiometrics } from '../services/wallet';
 import { signThronosTransaction } from '../services/signing';
 
 export default function SwapScreen() {
@@ -43,6 +43,15 @@ export default function SwapScreen() {
     const creds = await getWallet();
     if (!creds) { Alert.alert('Error', 'Wallet not found.'); return; }
 
+    // Device approval must happen immediately before any signing material is used.
+    // The helper invokes the enrolled biometric authenticator (or the device
+    // passcode fallback configured by the operating system).
+    const approved = await authenticateWithBiometrics('Approve Thronos swap');
+    if (!approved) {
+      Alert.alert('Swap cancelled', 'Biometric or device approval is required before signing.');
+      return;
+    }
+
     setLoading(true);
     try {
       const signedTx = await signThronosTransaction({
@@ -50,7 +59,7 @@ export default function SwapScreen() {
         to: creds.address,
         amount: parseFloat(amount),
         token: fromToken,
-        nonce: Math.floor(Date.now() / 1000),
+        nonce: String(Math.floor(Date.now() / 1000)),
       });
       const result = await executeSwapSigned({ signedTx });
       if (result.success) {

@@ -77,7 +77,7 @@ jobs:
           npx tsc --noEmit --pretty false > /tmp/wallet-tsc.log 2>&1
           tsc_status=$?
           cat /tmp/wallet-tsc.log
-          if grep -E 'src/(components/CrossChainAssetIcon|screens/(HomeScreen|HistoryScreen)|services/(crossChain|api))\.tsx?' /tmp/wallet-tsc.log; then
+          if grep -E 'src/(components/CrossChainAssetIcon|screens/(HomeScreen|HistoryScreen|SwapScreen)|services/(crossChain|api))\.tsx?' /tmp/wallet-tsc.log; then
             echo "TypeScript errors found in files changed by this work."
             exit 1
           fi

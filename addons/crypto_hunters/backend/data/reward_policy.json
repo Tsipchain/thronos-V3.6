@@ -1,0 +1,7 @@
+{
+  "note": "DRX rewards are placeholder values. No real mint, payout, or balance connection.",
+  "policy": "configurable",
+  "multipliers": { "base": 1.0, "doubler_item": 2.0 },
+  "cooldowns": {},
+  "enabled": false
+}

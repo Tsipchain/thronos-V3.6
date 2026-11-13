@@ -59,7 +59,7 @@ export default function SwapScreen() {
         to: creds.address,
         amount: parseFloat(amount),
         token: fromToken,
-        nonce: Math.floor(Date.now() / 1000),
+        nonce: String(Math.floor(Date.now() / 1000)),
       });
       const result = await executeSwapSigned({ signedTx });
       if (result.success) {

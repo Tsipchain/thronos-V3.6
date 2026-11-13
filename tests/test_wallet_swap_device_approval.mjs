@@ -18,9 +18,9 @@ const signing = handler.indexOf('signThronosTransaction(');
 assert.ok(approval >= 0, 'Swap must request device approval.');
 assert.ok(signing >= 0, 'Swap handler must sign only after approval.');
 assert.ok(approval < signing, 'Device approval must precede signing.');
-assert.match(
-  handler,
-  /ifs*(!approved)s*{[\s\S]*?return;/,
+const denial = handler.indexOf('if (!approved) {');
+const deniedReturn = handler.indexOf('return;', denial);
+assert.ok(denial >= 0 && deniedReturn > denial && deniedReturn < signing,
   'Denied approval must stop the swap before signing.',
 );
 

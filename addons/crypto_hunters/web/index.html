@@ -1,0 +1,782 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Crypto Hunters</title>
+<style>
+/* ── Reset & Base ───────────────────────────────────────────────── */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0b1020;--bg2:#141a33;--bg3:#1a2240;
+  --green:#10b981;--gold:#ffd700;--red:#ef4444;
+  --text:#e5e7eb;--dim:#6b7280;--border:#2d3a5c;
+  --mono:'Courier New',Courier,monospace;
+  --sans:system-ui,-apple-system,sans-serif;
+}
+html{font-size:16px}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);min-height:100vh;overflow-x:hidden}
+a{color:var(--green);text-decoration:none}
+button{font-family:inherit;cursor:pointer;border:none;border-radius:8px;font-weight:700;transition:all .2s}
+button:disabled{opacity:.4;cursor:not-allowed}
+input{font-family:var(--mono);background:#000;color:var(--green);border:1px solid var(--border);border-radius:8px;padding:12px 16px;width:100%;font-size:1rem}
+input:focus{outline:none;border-color:var(--green);box-shadow:0 0 8px rgba(16,185,129,.3)}
+
+/* ── Layout ─────────────────────────────────────────────────────── */
+.app{max-width:860px;margin:0 auto;padding:16px 16px 80px}
+.topbar{display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--border);margin-bottom:20px}
+.logo{font-family:var(--mono);font-size:1.3rem;font-weight:900;color:var(--green);text-transform:uppercase;letter-spacing:2px}
+.logo span{color:var(--gold)}
+.btn-sm{padding:6px 14px;font-size:.75rem;background:var(--bg3);color:var(--text);border:1px solid var(--border)}
+.btn-sm:hover{border-color:var(--green)}
+
+/* ── Screens ────────────────────────────────────────────────────── */
+.screen{display:none;animation:fadeIn .35s ease}
+.screen.active{display:block}
+
+/* ── Login ──────────────────────────────────────────────────────── */
+#login-screen{text-align:center;padding-top:15vh}
+#login-screen h1{font-family:var(--mono);font-size:2.4rem;color:var(--green);text-transform:uppercase;letter-spacing:4px;margin-bottom:8px;text-shadow:0 0 20px rgba(16,185,129,.4)}
+#login-screen h1 span{color:var(--gold)}
+#login-screen .subtitle{color:var(--dim);margin-bottom:32px;font-size:.9rem}
+.login-box{max-width:400px;margin:0 auto}
+.login-box input{margin-bottom:16px}
+.btn-enter{width:100%;padding:14px;font-size:1.1rem;background:linear-gradient(135deg,var(--green),#059669);color:#000;text-transform:uppercase;letter-spacing:2px}
+.btn-enter:hover{box-shadow:0 0 20px rgba(16,185,129,.5)}
+.login-hint{color:var(--dim);font-size:.75rem;margin-top:12px}
+
+/* ── Dashboard ──────────────────────────────────────────────────── */
+.player-card{background:linear-gradient(135deg,var(--bg2),var(--bg3));border:1px solid var(--border);border-radius:16px;padding:24px;margin-bottom:20px;position:relative;overflow:hidden}
+.player-card::before{content:'';position:absolute;top:-50%;right:-50%;width:100%;height:100%;background:radial-gradient(circle,rgba(16,185,129,.06) 0%,transparent 70%);pointer-events:none}
+.player-wallet{font-family:var(--mono);color:var(--green);font-size:.85rem;margin-bottom:4px}
+.player-balance{font-size:2rem;font-weight:900;color:var(--gold);text-shadow:0 0 10px rgba(255,215,0,.3)}
+.player-balance small{font-size:.9rem;color:var(--dim);font-weight:400}
+.tier-badge{display:inline-block;padding:4px 14px;border-radius:20px;font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-top:8px}
+.tier-Easy{background:#10b98133;color:var(--green);box-shadow:0 0 8px rgba(16,185,129,.3)}
+.tier-Normal{background:#3b82f633;color:#60a5fa;box-shadow:0 0 8px rgba(59,130,246,.3)}
+.tier-Expert{background:#a855f733;color:#c084fc;box-shadow:0 0 8px rgba(168,85,247,.3)}
+.tier-Genius{background:#ffd70033;color:var(--gold);box-shadow:0 0 8px rgba(255,215,0,.3)}
+
+.stats-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;margin-bottom:20px}
+.stat-card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px;text-align:center}
+.stat-val{font-size:1.5rem;font-weight:900;color:var(--green)}
+.stat-label{font-size:.7rem;color:var(--dim);text-transform:uppercase;letter-spacing:1px;margin-top:4px}
+
+.nav-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.nav-btn{padding:16px;font-size:1rem;background:var(--bg2);color:var(--text);border:1px solid var(--border);text-transform:uppercase;letter-spacing:1px;transition:all .2s}
+.nav-btn:hover{border-color:var(--green);box-shadow:0 0 12px rgba(16,185,129,.2)}
+.nav-btn .icon{font-size:1.4rem;display:block;margin-bottom:4px}
+.welcome-back{background:var(--bg2);border:1px solid var(--green);border-radius:12px;padding:12px 16px;margin-bottom:16px;font-size:.85rem;color:var(--green);animation:fadeIn .5s}
+
+/* ── Missions ───────────────────────────────────────────────────── */
+.tier-group{margin-bottom:24px}
+.tier-header{font-size:1.1rem;font-weight:700;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--border)}
+.mission-card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:10px;position:relative;transition:all .3s}
+.mission-card.locked{opacity:.4;filter:grayscale(.7)}
+.mission-card.available{animation:pulse-available 2s infinite}
+.mission-card.in_progress{border-color:#3b82f6}
+.mission-card.completed{border-color:var(--green);opacity:.8}
+.mission-state{font-size:1.2rem;float:right}
+.mission-title{font-weight:700;margin-bottom:4px}
+.mission-obj{color:var(--dim);font-size:.85rem;margin-bottom:8px}
+.mission-reward{font-family:var(--mono);color:var(--gold);font-size:.85rem}
+.mission-btn{padding:8px 16px;font-size:.8rem;margin-top:8px}
+.btn-start{background:var(--green);color:#000}
+.btn-complete{background:linear-gradient(135deg,var(--gold),#d4a800);color:#000}
+
+.tier-unlock-banner{display:none;background:linear-gradient(135deg,var(--gold),#d4a800);color:#000;text-align:center;padding:16px;border-radius:12px;margin-bottom:16px;font-weight:900;font-size:1.1rem;text-transform:uppercase;letter-spacing:2px;animation:tier-fanfare .6s ease}
+
+/* ── Story ──────────────────────────────────────────────────────── */
+.timeline{position:relative;padding-left:32px}
+.timeline::before{content:'';position:absolute;left:12px;top:0;bottom:0;width:2px;background:var(--border)}
+.act-card{position:relative;background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:20px;transition:all .3s}
+.act-card::before{content:'';position:absolute;left:-26px;top:24px;width:12px;height:12px;border-radius:50%;background:var(--border);border:2px solid var(--bg)}
+.act-card.unlocked::before{background:var(--green);box-shadow:0 0 8px var(--green)}
+.act-card.locked{opacity:.5;filter:blur(1px)}
+.act-card.locked .act-body{display:none}
+.act-card.just-unlocked{animation:chapter-reveal .6s ease}
+.act-title{font-size:1.1rem;font-weight:700;margin-bottom:4px}
+.act-subtitle{color:var(--dim);font-size:.8rem;margin-bottom:12px}
+.act-body{color:var(--text);font-size:.9rem;line-height:1.6}
+.act-body p{margin-bottom:8px}
+.lock-msg{color:var(--gold);font-size:.8rem;margin-top:8px}
+.char-row{display:flex;gap:12px;flex-wrap:wrap;margin-top:12px}
+.char-avatar{width:40px;height:40px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.75rem;font-weight:900;color:#000}
+
+/* ── Items Shop ─────────────────────────────────────────────────── */
+.item-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px}
+.item-card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px;transition:all .3s}
+.item-card.purchased{animation:item-glow .5s ease}
+.item-icon{font-size:2rem;margin-bottom:8px}
+.item-name{font-weight:700;margin-bottom:4px}
+.item-desc{color:var(--dim);font-size:.8rem;margin-bottom:8px}
+.item-price{font-family:var(--mono);color:var(--gold);font-size:.9rem;margin-bottom:8px}
+.btn-buy{padding:8px 16px;font-size:.8rem;background:var(--gold);color:#000;width:100%}
+
+/* ── Inventory ──────────────────────────────────────────────────── */
+.inv-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:12px}
+.inv-item{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px;text-align:center}
+.inv-item .icon{font-size:2rem;margin-bottom:4px}
+.empty-state{text-align:center;padding:60px 20px;color:var(--dim)}
+.empty-state .icon{font-size:3rem;margin-bottom:12px}
+
+/* ── Skeleton Loader ────────────────────────────────────────────── */
+.skeleton{background:linear-gradient(90deg,var(--bg2) 25%,var(--bg3) 50%,var(--bg2) 75%);background-size:200% 100%;animation:skeleton-pulse 1.5s infinite;border-radius:8px}
+.skeleton-line{height:16px;margin-bottom:8px}
+.skeleton-card{height:100px;border-radius:12px;margin-bottom:12px}
+.skeleton-block{height:60px;margin-bottom:12px;border-radius:12px}
+
+/* ── Error Banner ───────────────────────────────────────────────── */
+.error-banner{background:var(--bg2);border:2px solid var(--red);border-radius:12px;padding:16px;margin-bottom:16px;display:none}
+.error-banner.visible{display:flex;align-items:center;gap:12px;animation:fadeIn .3s}
+.error-banner .msg{flex:1;color:var(--red);font-size:.9rem}
+.btn-retry{padding:8px 16px;font-size:.8rem;background:var(--red);color:#fff}
+
+/* ── Reward Popup ───────────────────────────────────────────────── */
+.reward-popup{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:100;pointer-events:none;display:none}
+.reward-popup.show{display:block}
+.reward-text{font-family:var(--mono);font-size:2rem;font-weight:900;color:var(--gold);text-shadow:0 0 20px rgba(255,215,0,.6);animation:float-up 1.5s ease forwards}
+.reward-particles{position:absolute;top:50%;left:50%;width:0;height:0}
+.particle{position:absolute;width:6px;height:6px;background:var(--gold);border-radius:50%;animation:reward-burst 1s ease forwards}
+
+/* ── Back button row ────────────────────────────────────────────── */
+.back-row{margin-bottom:16px}
+.btn-back{padding:8px 16px;font-size:.85rem;background:var(--bg3);color:var(--text);border:1px solid var(--border)}
+.btn-back:hover{border-color:var(--green)}
+.screen-title{font-size:1.4rem;font-weight:900;margin-bottom:16px;text-transform:uppercase;letter-spacing:1px}
+
+/* ── Animations ─────────────────────────────────────────────────── */
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes pulse-available{0%,100%{border-color:var(--border);box-shadow:none}50%{border-color:var(--green);box-shadow:0 0 12px rgba(16,185,129,.25)}}
+@keyframes tier-fanfare{0%{transform:scale(.8);opacity:0}50%{transform:scale(1.05)}100%{transform:scale(1);opacity:1}}
+@keyframes chapter-reveal{from{opacity:0;transform:translateX(-20px)}to{opacity:1;transform:translateX(0)}}
+@keyframes item-glow{0%{box-shadow:0 0 0 rgba(255,215,0,0)}50%{box-shadow:0 0 20px rgba(255,215,0,.5)}100%{box-shadow:0 0 0 rgba(255,215,0,0)}}
+@keyframes float-up{0%{opacity:1;transform:translateY(0) scale(1)}100%{opacity:0;transform:translateY(-80px) scale(1.3)}}
+@keyframes reward-burst{0%{transform:translate(0,0) scale(1);opacity:1}100%{opacity:0}}
+@keyframes skeleton-pulse{0%{background-position:200% 0}100%{background-position:-200% 0}}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ── Responsive ─────────────────────────────────────────────────── */
+@media(max-width:500px){
+  .nav-grid{grid-template-columns:1fr}
+  .stats-row{grid-template-columns:1fr 1fr}
+  .item-grid{grid-template-columns:1fr}
+  #login-screen h1{font-size:1.6rem}
+  .player-balance{font-size:1.5rem}
+}
+</style>
+</head>
+<body>
+<div class="app" id="app">
+
+  <!-- ── Login Screen ──────────────────────────────────────────── -->
+  <div id="login-screen" class="screen active">
+    <h1>Crypto <span>Hunters</span></h1>
+    <p class="subtitle">Defend the decentralised future</p>
+    <div class="login-box">
+      <input id="wallet-input" type="text" placeholder="Enter wallet address..." maxlength="64" autocomplete="off"/>
+      <button class="btn-enter" onclick="enterGame()">Enter The Source</button>
+      <p class="login-hint">Game demo — no real wallet connection required</p>
+    </div>
+  </div>
+
+  <!-- ── Dashboard ─────────────────────────────────────────────── -->
+  <div id="dashboard-screen" class="screen">
+    <div class="topbar">
+      <div class="logo">Crypto <span>Hunters</span></div>
+      <button class="btn-sm" onclick="logout()">Disconnect</button>
+    </div>
+    <div id="welcome-msg" class="welcome-back" style="display:none"></div>
+    <div class="player-card">
+      <div class="player-wallet" id="dash-wallet"></div>
+      <div class="player-balance"><span id="dash-balance">0</span> <small>DRX</small></div>
+      <div><span class="tier-badge" id="dash-tier">Easy</span></div>
+    </div>
+    <div class="stats-row">
+      <div class="stat-card"><div class="stat-val" id="stat-missions">0/12</div><div class="stat-label">Missions</div></div>
+      <div class="stat-card"><div class="stat-val" id="stat-drx">0</div><div class="stat-label">Total DRX</div></div>
+      <div class="stat-card"><div class="stat-val" id="stat-items">0</div><div class="stat-label">Items</div></div>
+      <div class="stat-card"><div class="stat-val" id="stat-quests">0</div><div class="stat-label">Active</div></div>
+    </div>
+    <div class="nav-grid">
+      <button class="nav-btn" onclick="showScreen('story')"><span class="icon">&#128214;</span>Story</button>
+      <button class="nav-btn" onclick="showScreen('missions')"><span class="icon">&#9889;</span>Missions</button>
+      <button class="nav-btn" onclick="showScreen('items')"><span class="icon">&#128722;</span>Items Shop</button>
+      <button class="nav-btn" onclick="showScreen('inventory')"><span class="icon">&#127890;</span>Inventory</button>
+    </div>
+  </div>
+
+  <!-- ── Missions Screen ───────────────────────────────────────── -->
+  <div id="missions-screen" class="screen">
+    <div class="topbar">
+      <div class="logo">Crypto <span>Hunters</span></div>
+      <button class="btn-sm" onclick="showScreen('dashboard')">Dashboard</button>
+    </div>
+    <div class="back-row"><button class="btn-back" onclick="showScreen('dashboard')">&larr; Back</button></div>
+    <h2 class="screen-title">Missions</h2>
+    <div id="tier-unlock-banner" class="tier-unlock-banner"></div>
+    <div id="error-missions" class="error-banner"><span class="msg"></span><button class="btn-retry" onclick="loadMissions()">Retry</button></div>
+    <div id="missions-loading">
+      <div class="skeleton skeleton-card"></div>
+      <div class="skeleton skeleton-card"></div>
+      <div class="skeleton skeleton-card"></div>
+    </div>
+    <div id="missions-list"></div>
+  </div>
+
+  <!-- ── Story Screen ──────────────────────────────────────────── -->
+  <div id="story-screen" class="screen">
+    <div class="topbar">
+      <div class="logo">Crypto <span>Hunters</span></div>
+      <button class="btn-sm" onclick="showScreen('dashboard')">Dashboard</button>
+    </div>
+    <div class="back-row"><button class="btn-back" onclick="showScreen('dashboard')">&larr; Back</button></div>
+    <h2 class="screen-title">Story</h2>
+    <div id="story-timeline" class="timeline"></div>
+  </div>
+
+  <!-- ── Items Shop Screen ─────────────────────────────────────── -->
+  <div id="items-screen" class="screen">
+    <div class="topbar">
+      <div class="logo">Crypto <span>Hunters</span></div>
+      <button class="btn-sm" onclick="showScreen('dashboard')">Dashboard</button>
+    </div>
+    <div class="back-row"><button class="btn-back" onclick="showScreen('dashboard')">&larr; Back</button></div>
+    <h2 class="screen-title">Items Shop</h2>
+    <p style="color:var(--dim);margin-bottom:16px;font-family:var(--mono);font-size:.85rem">Balance: <span id="shop-balance" style="color:var(--gold)">0</span> DRX</p>
+    <div id="error-items" class="error-banner"><span class="msg"></span><button class="btn-retry" onclick="loadItems()">Retry</button></div>
+    <div id="items-loading">
+      <div class="skeleton skeleton-card"></div>
+      <div class="skeleton skeleton-card"></div>
+    </div>
+    <div id="items-grid" class="item-grid"></div>
+  </div>
+
+  <!-- ── Inventory Screen ──────────────────────────────────────── -->
+  <div id="inventory-screen" class="screen">
+    <div class="topbar">
+      <div class="logo">Crypto <span>Hunters</span></div>
+      <button class="btn-sm" onclick="showScreen('dashboard')">Dashboard</button>
+    </div>
+    <div class="back-row"><button class="btn-back" onclick="showScreen('dashboard')">&larr; Back</button></div>
+    <h2 class="screen-title">Inventory</h2>
+    <div id="inv-content"></div>
+  </div>
+
+  <!-- ── Reward Popup ──────────────────────────────────────────── -->
+  <div id="reward-popup" class="reward-popup">
+    <div class="reward-text" id="reward-text"></div>
+    <div class="reward-particles" id="reward-particles"></div>
+  </div>
+
+</div>
+
+<script>
+/* ================================================================
+   Crypto Hunters — Game Client
+   Talks to backend at API_BASE. DRX is placeholder game currency.
+   No real wallet, mint, payout, or economic connection.
+   ================================================================ */
+
+const API_BASE = 'http://localhost:3000';
+
+/* ── Game State ──────────────────────────────────────────────────── */
+const state = {
+  wallet: '',
+  balance: 0,
+  inventory: [],
+  missions: [],
+  items: [],
+  missionStates: {},   // missionId -> 'locked'|'available'|'in_progress'|'completed'
+  completedMissions: new Set(),
+  totalDrxEarned: 0,
+  isReturning: false,
+};
+
+/* ── Tier / Story unlock definitions ─────────────────────────────── */
+const TIERS = ['Easy','Normal','Expert','Genius'];
+const TIER_COLORS = {Easy:'#10b981',Normal:'#60a5fa',Expert:'#c084fc',Genius:'#ffd700'};
+const TIER_PREFIXES = {Easy:'E',Normal:'N',Expert:'X',Genius:'G'};
+const STORY_ACTS = [
+  {
+    id:'act1', title:'Act I — Spark', subtitle:'2012: First contact with blockchain',
+    unlockTier: null,
+    chars:[{name:'SAfA',color:'#10b981'},{name:'Nato',color:'#3b82f6'}],
+    body:'<p>Greece, 2012. Amidst financial turmoil, a disillusioned hacker named SAfA discovers a whitepaper by Satoshi Nakamoto. He sets up a rudimentary mining operation and mines his first block — a taste of true financial sovereignty.</p><p>The 2013 bull run makes him a fortune. Then Mt. Gox collapses and wipes him out. Devastated, he seeks out his old friend Nato Saka, realising the fight must be waged on both software and hardware fronts.</p>'
+  },
+  {
+    id:'act2', title:'Act II — Formation', subtitle:'The team assembles',
+    unlockTier: 'Easy',
+    chars:[{name:'Niva',color:'#a855f7'},{name:'Kyra',color:'#ec4899'},{name:'Luna',color:'#06b6d4'}],
+    body:'<p>The Dark Node orchestrates a 51% attack on a promising altcoin. The attack draws attention from others fighting the same shadow war.</p><p>Niva, an ex-intelligence operative, sees a pattern. Kyra traces ghost funds through mixers. Luna rallies the developer community. SAfA and Nato find them, and the five unite. The Crypto Hunters are born.</p><p>They thwart phishing campaigns, expose smart contract vulnerabilities, and secure community nodes.</p>'
+  },
+  {
+    id:'act3', title:'Act III — Revelation', subtitle:'Zayne Nexus appears',
+    unlockTier: 'Normal',
+    chars:[{name:'Zayne',color:'#f59e0b'}],
+    body:'<p>The Dark Node\'s attacks evolve — disinformation campaigns designed to destroy trust in the system itself. The Hunters hit a wall.</p><p>An encrypted message arrives from an unknown source: Zayne Nexus, a former Dark Node architect. He provides a partial schematic of their infrastructure and warns that the next target is not a coin, but a country: Greece\'s experimental "Agora Project" for decentralised governance.</p>'
+  },
+  {
+    id:'act4', title:'Act IV — Uplift', subtitle:'The siege of Agora',
+    unlockTier: 'Expert',
+    chars:[{name:'SAfA',color:'#10b981'},{name:'Niva',color:'#a855f7'},{name:'Kyra',color:'#ec4899'},{name:'Luna',color:'#06b6d4'},{name:'Nato',color:'#3b82f6'},{name:'Zayne',color:'#f59e0b'}],
+    body:'<p>The Dark Node launches a multi-pronged assault: DDoS combined with a smart contract exploit, a state-sponsored FUD campaign, and a physical saboteur targeting the server facility.</p><p>The Hunters split up. SAfA and Luna race to patch the code live. Kyra and Zayne counter the FUD with on-chain proof. Niva and Nato intercept the saboteur.</p><p>They succeed. The Agora pilot makes international headlines. But Zayne warns: "You\'ve cut off the head of a hydra. The Dark Node in Greece was just one of them." The fight has gone global.</p>'
+  }
+];
+
+const ITEM_ICONS = {
+  I_SEC_BOOST: '&#128737;',
+  I_HASH_TOOL: '&#128295;',
+  I_DBL_REWARD: '&#10024;',
+  I_NFT_SHARD: '&#128142;',
+  I_COS_SKIN1: '&#128085;',
+};
+
+/* ── Helpers ─────────────────────────────────────────────────────── */
+function truncWallet(w){ return w.length > 12 ? w.slice(0,6)+'...'+w.slice(-4) : w; }
+function $(id){ return document.getElementById(id); }
+function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
+
+/* ── Screen navigation ───────────────────────────────────────────── */
+function showScreen(name){
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+  const el = $(name+'-screen');
+  if(el) el.classList.add('active');
+
+  if(name==='dashboard') refreshDashboard();
+  if(name==='missions') loadMissions();
+  if(name==='story') renderStory();
+  if(name==='items') loadItems();
+  if(name==='inventory') loadInventory();
+}
+
+/* ── API fetch with error handling ───────────────────────────────── */
+async function apiFetch(path, opts){
+  const res = await fetch(API_BASE + path, opts);
+  if(!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+function showError(bannerId, msg){
+  const el = $(bannerId);
+  if(!el) return;
+  el.querySelector('.msg').textContent = msg;
+  el.classList.add('visible');
+}
+function hideError(bannerId){
+  const el = $(bannerId);
+  if(el) el.classList.remove('visible');
+}
+
+/* ── Save / Load from localStorage ───────────────────────────────── */
+function saveLocal(){
+  try{
+    localStorage.setItem('ch_wallet', state.wallet);
+    localStorage.setItem('ch_state_'+state.wallet, JSON.stringify({
+      completedMissions: [...state.completedMissions],
+      missionStates: state.missionStates,
+      totalDrxEarned: state.totalDrxEarned,
+    }));
+  }catch(e){}
+}
+function loadLocal(wallet){
+  try{
+    const raw = localStorage.getItem('ch_state_'+wallet);
+    if(!raw) return false;
+    const d = JSON.parse(raw);
+    state.completedMissions = new Set(d.completedMissions||[]);
+    state.missionStates = d.missionStates||{};
+    state.totalDrxEarned = d.totalDrxEarned||0;
+    return true;
+  }catch(e){ return false; }
+}
+
+/* ── Enter Game ──────────────────────────────────────────────────── */
+async function enterGame(){
+  const w = $('wallet-input').value.trim();
+  if(!w) return;
+  state.wallet = w;
+  state.isReturning = loadLocal(w);
+
+  // Try fetching server state
+  try{
+    const data = await apiFetch('/api/status/'+encodeURIComponent(w));
+    state.balance = data.balance || 0;
+    state.inventory = data.inventory || [];
+  }catch(e){
+    state.balance = 0;
+    state.inventory = [];
+  }
+
+  // Try fetching dashboard if backend supports it
+  try{
+    const dash = await apiFetch('/api/dashboard/'+encodeURIComponent(w));
+    if(dash.balance !== undefined) state.balance = dash.balance;
+    if(dash.inventory) state.inventory = dash.inventory;
+    if(dash.completedMissions){
+      dash.completedMissions.forEach(id => state.completedMissions.add(id));
+    }
+  }catch(e){
+    // Dashboard endpoint may not exist yet — use localStorage state
+  }
+
+  showScreen('dashboard');
+}
+
+/* ── Logout ──────────────────────────────────────────────────────── */
+function logout(){
+  saveLocal();
+  state.wallet = '';
+  state.balance = 0;
+  state.inventory = [];
+  state.missions = [];
+  state.completedMissions = new Set();
+  state.missionStates = {};
+  showScreen('login');
+}
+
+/* ── Dashboard ───────────────────────────────────────────────────── */
+function refreshDashboard(){
+  $('dash-wallet').textContent = truncWallet(state.wallet);
+  $('dash-balance').textContent = state.balance;
+  const tier = getCurrentTier();
+  const badge = $('dash-tier');
+  badge.textContent = tier;
+  badge.className = 'tier-badge tier-'+tier;
+  const total = state.missions.length || 12;
+  const done = state.completedMissions.size;
+  $('stat-missions').textContent = done+'/'+total;
+  $('stat-drx').textContent = state.totalDrxEarned;
+  $('stat-items').textContent = state.inventory.length;
+  const active = Object.values(state.missionStates).filter(s=>s==='in_progress').length;
+  $('stat-quests').textContent = active;
+
+  const welcome = $('welcome-msg');
+  if(state.isReturning){
+    welcome.style.display = 'block';
+    welcome.textContent = 'Welcome back, Hunter. Your progress has been restored.';
+    state.isReturning = false;
+  }else{
+    welcome.style.display = 'none';
+  }
+}
+
+function getCurrentTier(){
+  const done = state.completedMissions;
+  const genius = ['G1','G2','G3'].every(id=>done.has(id));
+  if(genius) return 'Genius';
+  const expert = ['X1','X2','X3'].every(id=>done.has(id));
+  if(expert) return 'Expert';
+  const normal = ['N1','N2','N3'].every(id=>done.has(id));
+  if(normal) return 'Normal';
+  return 'Easy';
+}
+
+function isTierUnlocked(tier){
+  const idx = TIERS.indexOf(tier);
+  if(idx <= 0) return true; // Easy always unlocked
+  const prevTier = TIERS[idx-1];
+  const prefix = TIER_PREFIXES[prevTier];
+  return [1,2,3].every(n => state.completedMissions.has(prefix+n));
+}
+
+/* ── Missions ────────────────────────────────────────────────────── */
+async function loadMissions(){
+  const loading = $('missions-loading');
+  const list = $('missions-list');
+  loading.style.display = 'block';
+  list.innerHTML = '';
+  hideError('error-missions');
+
+  try{
+    const missions = await apiFetch('/api/missions');
+    state.missions = missions;
+    loading.style.display = 'none';
+
+    // Compute states
+    missions.forEach(m => {
+      if(state.completedMissions.has(m.id)){
+        state.missionStates[m.id] = 'completed';
+      }else if(!state.missionStates[m.id] || state.missionStates[m.id]==='locked'){
+        state.missionStates[m.id] = isTierUnlocked(m.tier) ? 'available' : 'locked';
+      }
+    });
+
+    renderMissions(missions, list);
+  }catch(e){
+    loading.style.display = 'none';
+    showError('error-missions','Failed to load missions: '+e.message);
+  }
+}
+
+function renderMissions(missions, container){
+  const grouped = {};
+  TIERS.forEach(t=>grouped[t]=[]);
+  missions.forEach(m=>{
+    if(grouped[m.tier]) grouped[m.tier].push(m);
+  });
+
+  container.innerHTML = '';
+  TIERS.forEach(tier=>{
+    if(!grouped[tier].length) return;
+    const group = document.createElement('div');
+    group.className = 'tier-group';
+    const tierDone = grouped[tier].every(m=>state.completedMissions.has(m.id));
+
+    group.innerHTML = '<div class="tier-header" style="color:'+TIER_COLORS[tier]+'">'+tier+' Tier'+(tierDone?' &#10003;':'')+'</div>';
+    grouped[tier].forEach(m=>{
+      const st = state.missionStates[m.id] || 'locked';
+      const stateIcon = {locked:'&#128274;',available:'&#9889;',in_progress:'&#128260;',completed:'&#9989;'}[st];
+      const card = document.createElement('div');
+      card.className = 'mission-card '+st;
+      card.id = 'mission-'+m.id;
+      let btnHtml = '';
+      if(st==='available') btnHtml = '<button class="mission-btn btn-start" onclick="startMission(\''+m.id+'\')">Start Mission</button>';
+      if(st==='in_progress') btnHtml = '<button class="mission-btn btn-complete" onclick="completeMission(\''+m.id+'\','+m.reward_drx+')">Complete Mission</button>';
+
+      card.innerHTML = '<span class="mission-state">'+stateIcon+'</span>'+
+        '<div class="mission-title">['+m.id+'] '+m.title+'</div>'+
+        '<div class="mission-obj">'+m.objective+'</div>'+
+        '<div class="mission-reward">Reward: '+m.reward_drx+' DRX</div>'+
+        btnHtml;
+      group.appendChild(card);
+    });
+    container.appendChild(group);
+  });
+}
+
+function startMission(id){
+  state.missionStates[id] = 'in_progress';
+  saveLocal();
+  loadMissions();
+}
+
+async function completeMission(id, reward){
+  try{
+    const data = await apiFetch('/api/missions/complete',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({wallet:state.wallet, missionId:id})
+    });
+    state.balance = data.balance;
+    state.completedMissions.add(id);
+    state.missionStates[id] = 'completed';
+    state.totalDrxEarned += reward;
+
+    // Check if completing this mission unlocks a new tier
+    const mission = state.missions.find(m=>m.id===id);
+    if(mission){
+      const prefix = TIER_PREFIXES[mission.tier];
+      const tierIds = [1,2,3].map(n=>prefix+n);
+      const tierDone = tierIds.every(tid=>state.completedMissions.has(tid));
+      if(tierDone){
+        const nextIdx = TIERS.indexOf(mission.tier)+1;
+        if(nextIdx < TIERS.length){
+          // Unlock next tier missions
+          state.missions.forEach(m=>{
+            if(m.tier===TIERS[nextIdx] && state.missionStates[m.id]==='locked'){
+              state.missionStates[m.id] = 'available';
+            }
+          });
+          showTierUnlock(TIERS[nextIdx]);
+        }
+      }
+    }
+
+    saveLocal();
+    showReward('+'+reward+' DRX');
+    await sleep(800);
+    loadMissions();
+  }catch(e){
+    showError('error-missions','Failed: '+e.message);
+  }
+}
+
+function showTierUnlock(tier){
+  const banner = $('tier-unlock-banner');
+  banner.textContent = tier+' Tier Unlocked!';
+  banner.style.display = 'block';
+  banner.style.color = TIER_COLORS[tier];
+  banner.style.animation = 'none';
+  banner.offsetHeight; // reflow
+  banner.style.animation = 'tier-fanfare .6s ease';
+  setTimeout(()=>{ banner.style.display='none'; }, 4000);
+}
+
+/* ── Reward animation ────────────────────────────────────────────── */
+function showReward(text){
+  const popup = $('reward-popup');
+  const txt = $('reward-text');
+  const particles = $('reward-particles');
+  txt.textContent = text;
+  particles.innerHTML = '';
+
+  // Create particles
+  for(let i=0;i<12;i++){
+    const p = document.createElement('div');
+    p.className = 'particle';
+    const angle = (i/12)*360;
+    const dist = 40+Math.random()*60;
+    const tx = Math.cos(angle*Math.PI/180)*dist;
+    const ty = Math.sin(angle*Math.PI/180)*dist;
+    p.style.cssText = 'animation:reward-burst .8s ease forwards;transform:translate('+tx+'px,'+ty+'px) scale(0);animation-delay:'+(i*30)+'ms';
+    // Set the end position using a custom style element
+    p.animate([
+      {transform:'translate(0,0) scale(1)',opacity:1},
+      {transform:'translate('+tx+'px,'+ty+'px) scale(0)',opacity:0}
+    ], {duration:800,delay:i*30,easing:'ease-out',fill:'forwards'});
+    particles.appendChild(p);
+  }
+
+  popup.classList.add('show');
+  txt.style.animation = 'none';
+  txt.offsetHeight;
+  txt.style.animation = 'float-up 1.5s ease forwards';
+  setTimeout(()=>popup.classList.remove('show'), 1600);
+}
+
+/* ── Story ───────────────────────────────────────────────────────── */
+function renderStory(){
+  const container = $('story-timeline');
+  container.innerHTML = '';
+
+  STORY_ACTS.forEach(act=>{
+    const unlocked = !act.unlockTier || isTierUnlocked(act.unlockTier);
+    // Check if just unlocked (tier completed but act wasn't seen)
+    const card = document.createElement('div');
+    card.className = 'act-card '+(unlocked?'unlocked':'locked');
+
+    let charHtml = '';
+    if(unlocked && act.chars.length){
+      charHtml = '<div class="char-row">';
+      act.chars.forEach(c=>{
+        charHtml += '<div class="char-avatar" style="background:'+c.color+'" title="'+c.name+'">'+c.name[0]+'</div>';
+      });
+      charHtml += '</div>';
+    }
+
+    let lockHtml = '';
+    if(!unlocked){
+      lockHtml = '<div class="lock-msg">&#128274; Complete '+act.unlockTier+' tier missions to unlock</div>';
+    }
+
+    card.innerHTML = '<div class="act-title">'+act.title+'</div>'+
+      '<div class="act-subtitle">'+act.subtitle+'</div>'+
+      (unlocked ? '<div class="act-body">'+act.body+charHtml+'</div>' : lockHtml);
+
+    container.appendChild(card);
+  });
+}
+
+/* ── Items Shop ──────────────────────────────────────────────────── */
+async function loadItems(){
+  const loading = $('items-loading');
+  const grid = $('items-grid');
+  loading.style.display = 'block';
+  grid.innerHTML = '';
+  hideError('error-items');
+  $('shop-balance').textContent = state.balance;
+
+  try{
+    const items = await apiFetch('/api/items');
+    state.items = items;
+    loading.style.display = 'none';
+    renderItems(items, grid);
+  }catch(e){
+    loading.style.display = 'none';
+    showError('error-items','Failed to load items: '+e.message);
+  }
+}
+
+function renderItems(items, container){
+  container.innerHTML = '';
+  items.forEach(item=>{
+    const card = document.createElement('div');
+    card.className = 'item-card';
+    card.id = 'item-'+item.id;
+    const canBuy = state.balance >= item.price_drx;
+    const icon = ITEM_ICONS[item.id] || '&#128230;';
+
+    card.innerHTML = '<div class="item-icon">'+icon+'</div>'+
+      '<div class="item-name">'+item.name+'</div>'+
+      '<div class="item-desc">'+item.desc+'</div>'+
+      '<div class="item-price">'+item.price_drx+' DRX</div>'+
+      '<button class="btn-buy" '+(canBuy?'':'disabled')+' onclick="buyItem(\''+item.id+'\')">Buy</button>';
+    container.appendChild(card);
+  });
+}
+
+async function buyItem(id){
+  try{
+    const data = await apiFetch('/api/items/buy/'+id,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({wallet:state.wallet})
+    });
+    state.balance = data.balance;
+    state.inventory = data.inventory;
+    saveLocal();
+    $('shop-balance').textContent = state.balance;
+
+    const card = $('item-'+id);
+    if(card){
+      card.classList.add('purchased');
+      setTimeout(()=>card.classList.remove('purchased'),600);
+    }
+    showReward('Item acquired!');
+    await sleep(500);
+    loadItems();
+  }catch(e){
+    showError('error-items','Purchase failed: '+e.message);
+  }
+}
+
+/* ── Inventory ───────────────────────────────────────────────────── */
+async function loadInventory(){
+  const container = $('inv-content');
+  try{
+    const data = await apiFetch('/api/status/'+encodeURIComponent(state.wallet));
+    state.inventory = data.inventory || [];
+    state.balance = data.balance || state.balance;
+  }catch(e){}
+
+  if(!state.inventory.length){
+    container.innerHTML = '<div class="empty-state"><div class="icon">&#127890;</div><p>No items yet. Visit the shop!</p></div>';
+    return;
+  }
+
+  const itemMap = {};
+  state.items.forEach(i=>itemMap[i.id]=i);
+
+  let html = '<div class="inv-grid">';
+  state.inventory.forEach(id=>{
+    const item = itemMap[id];
+    const name = item ? item.name : id;
+    const icon = ITEM_ICONS[id] || '&#128230;';
+    html += '<div class="inv-item"><div class="icon">'+icon+'</div><div>'+name+'</div></div>';
+  });
+  html += '</div>';
+  container.innerHTML = html;
+}
+
+/* ── Network offline detection ───────────────────────────────────── */
+window.addEventListener('offline', ()=>{
+  document.querySelectorAll('.error-banner').forEach(el=>{
+    el.querySelector('.msg').textContent = 'You are offline. Check your connection.';
+    el.classList.add('visible');
+  });
+});
+window.addEventListener('online', ()=>{
+  document.querySelectorAll('.error-banner').forEach(el=>el.classList.remove('visible'));
+});
+
+/* ── Init: restore wallet from localStorage ──────────────────────── */
+(function init(){
+  try{
+    const saved = localStorage.getItem('ch_wallet');
+    if(saved) $('wallet-input').value = saved;
+  }catch(e){}
+})();
+</script>
+</body>
+</html>

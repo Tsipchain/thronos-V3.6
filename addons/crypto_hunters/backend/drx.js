@@ -328,6 +328,40 @@ app.get('/api/story', (req, res) => {
   res.json(acts);
 });
 
+app.get('/api/story/chapters', (req, res) => {
+  const callsign = req.query.callsign || req.query.wallet;
+  const player = callsign ? getPlayer(callsign) : null;
+
+  const list = chapters.map((ch) => {
+    const completed = player ? (player.storyCompleted || []).includes(ch.id) : false;
+    let available = true;
+    if (ch.prereq) {
+      available = player ? (player.storyCompleted || []).includes(ch.prereq) : false;
+    }
+    return {
+      id: ch.id,
+      act: ch.act,
+      title: ch.title,
+      subtitle: ch.subtitle,
+      completed,
+      available: completed || available
+    };
+  });
+  res.json(list);
+});
+
+app.get('/api/story/chapter/:chapterId', (req, res) => {
+  const chapterId = req.params.chapterId;
+  const callsign = req.query.callsign || req.query.wallet;
+  const ch = chapters.find((c) => c.id === chapterId);
+  if (!ch) {
+    return res.status(404).json({ error: 'chapter not found', code: 'CHAPTER_NOT_FOUND' });
+  }
+  const player = callsign ? getPlayer(callsign) : null;
+  const previousChoices = (player && player.storyChoices && player.storyChoices[chapterId]) || [];
+  res.json({ ...ch, previousChoices });
+});
+
 app.get('/api/story/:actId', (req, res) => {
   const actId = parseInt(req.params.actId, 10);
   const wallet = req.query.wallet || req.query.callsign;
@@ -406,7 +440,7 @@ app.get('/api/items', (_req, res) => {
 });
 
 app.post('/api/items/buy/:itemId', (req, res) => {
-  const { wallet } = req.body || {};
+  const wallet = (req.body || {}).wallet || (req.body || {}).callsign;
   const { itemId } = req.params;
   if (!wallet) {
     return res.status(400).json({ error: 'wallet required', code: 'MISSING_FIELDS' });
@@ -584,7 +618,8 @@ app.get('/api/reward-policy', (_req, res) => {
 
 // E1: Check if the player's SHA-256 hash of `input` matches `answer`
 app.post('/api/puzzles/e1/check', (req, res) => {
-  const { wallet, input, answer } = req.body || {};
+  const wallet = (req.body || {}).wallet || (req.body || {}).callsign;
+  const { input, answer } = req.body || {};
   if (!wallet || !input || !answer) {
     return res.status(400).json({ error: 'wallet, input, and answer required', code: 'MISSING_FIELDS' });
   }
@@ -608,7 +643,7 @@ app.post('/api/puzzles/e1/check', (req, res) => {
 
 // E1: Complete — requires at least 3 correct hashes
 app.post('/api/puzzles/e1/complete', (req, res) => {
-  const { wallet } = req.body || {};
+  const wallet = (req.body || {}).wallet || (req.body || {}).callsign;
   if (!wallet) return res.status(400).json({ error: 'wallet required', code: 'MISSING_FIELDS' });
 
   const player = getPlayer(wallet);
@@ -636,7 +671,7 @@ app.post('/api/puzzles/e1/complete', (req, res) => {
 
 // E2: Generate a block data + difficulty target for the nonce challenge
 app.post('/api/puzzles/e2/generate', (req, res) => {
-  const { wallet } = req.body || {};
+  const wallet = (req.body || {}).wallet || (req.body || {}).callsign;
   if (!wallet) return res.status(400).json({ error: 'wallet required', code: 'MISSING_FIELDS' });
 
   const player = getPlayer(wallet);
@@ -654,7 +689,8 @@ app.post('/api/puzzles/e2/generate', (req, res) => {
 
 // E2: Check nonce — hash(blockData + nonce) must start with target
 app.post('/api/puzzles/e2/check', (req, res) => {
-  const { wallet, nonce } = req.body || {};
+  const wallet = (req.body || {}).wallet || (req.body || {}).callsign;
+  const { nonce } = req.body || {};
   if (!wallet || nonce === undefined) {
     return res.status(400).json({ error: 'wallet and nonce required', code: 'MISSING_FIELDS' });
   }
@@ -680,7 +716,7 @@ app.post('/api/puzzles/e2/check', (req, res) => {
 
 // E2: Complete — requires the nonce puzzle to be solved
 app.post('/api/puzzles/e2/complete', (req, res) => {
-  const { wallet } = req.body || {};
+  const wallet = (req.body || {}).wallet || (req.body || {}).callsign;
   if (!wallet) return res.status(400).json({ error: 'wallet required', code: 'MISSING_FIELDS' });
 
   const player = getPlayer(wallet);
@@ -707,6 +743,160 @@ app.post('/api/puzzles/e2/complete', (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// Character & Player creation endpoints
+// ---------------------------------------------------------------------------
+
+app.get('/api/characters', (_req, res) => {
+  res.json(characters.filter((c) => c.unlocked));
+});
+
+const CALLSIGN_RE = /^[a-zA-Z0-9_]{1,24}$/;
+
+app.post('/api/player/create', (req, res) => {
+  const { callsign, characterId } = req.body || {};
+  if (!callsign || !CALLSIGN_RE.test(callsign)) {
+    return res.status(400).json({ error: 'callsign must be 1-24 alphanumeric/underscore characters', code: 'INVALID_CALLSIGN' });
+  }
+  if (!characterId) {
+    return res.status(400).json({ error: 'characterId required', code: 'MISSING_FIELDS' });
+  }
+  const charDef = characters.find((c) => c.id === characterId);
+  if (!charDef || !charDef.unlocked) {
+    return res.status(400).json({ error: 'character not found or locked', code: 'INVALID_CHARACTER' });
+  }
+  if (players[callsign]) {
+    return res.status(409).json({ error: 'callsign already taken', code: 'CALLSIGN_EXISTS' });
+  }
+
+  const player = defaultPlayerState(callsign);
+  player.character = {
+    id: charDef.id,
+    name: charDef.name,
+    handle: charDef.handle,
+    color: charDef.color,
+    role: charDef.role
+  };
+  player.skills[charDef.startSkill] = 10;
+  players[callsign] = player;
+  persistPlayer(callsign);
+
+  res.json({
+    message: 'Hunter created',
+    callsign,
+    character: player.character,
+    ...levelFromXp(player.xp),
+    skills: player.skills
+  });
+});
+
+app.post('/api/player/connect-wallet', (req, res) => {
+  const { callsign, thrWallet } = req.body || {};
+  if (!callsign || !thrWallet) {
+    return res.status(400).json({ error: 'callsign and thrWallet required', code: 'MISSING_FIELDS' });
+  }
+  if (!players[callsign]) {
+    return res.status(404).json({ error: 'player not found', code: 'PLAYER_NOT_FOUND' });
+  }
+  const player = players[callsign];
+  player.thrWallet = thrWallet;
+  persistPlayer(callsign);
+  res.json({ message: 'wallet connected', callsign, thrWallet });
+});
+
+app.get('/api/player/:callsign', (req, res) => {
+  const callsign = req.params.callsign;
+  const player = getPlayer(callsign);
+  const lvl = levelFromXp(player.xp || 0);
+  res.json({
+    callsign: player.callsign,
+    wallet: player.wallet,
+    character: player.character,
+    balance: player.balance,
+    xp: player.xp || 0,
+    ...lvl,
+    skills: player.skills || {},
+    trust: player.trust || 0,
+    thrWallet: player.thrWallet,
+    inventory: player.inventory,
+    completedMissions: player.completedMissions,
+    storyCompleted: player.storyCompleted || [],
+    stats: player.stats,
+    currentTier: currentTier(player),
+    lastSaved: player.lastSaved
+  });
+});
+
+// (story chapter GET routes moved before /api/story/:actId to avoid route collision)
+
+app.post('/api/story/choice', (req, res) => {
+  const callsign = (req.body || {}).callsign || (req.body || {}).wallet;
+  const { chapterId, sceneId, choiceIndex } = req.body || {};
+  if (!callsign || !chapterId || !sceneId || choiceIndex === undefined) {
+    return res.status(400).json({ error: 'callsign, chapterId, sceneId, and choiceIndex required', code: 'MISSING_FIELDS' });
+  }
+  const ch = chapters.find((c) => c.id === chapterId);
+  if (!ch) return res.status(404).json({ error: 'chapter not found', code: 'CHAPTER_NOT_FOUND' });
+  const scene = ch.scenes.find((s) => s.id === sceneId);
+  if (!scene || !scene.choices) return res.status(400).json({ error: 'scene has no choices', code: 'NO_CHOICES' });
+  const choice = scene.choices[choiceIndex];
+  if (!choice) return res.status(400).json({ error: 'invalid choice index', code: 'INVALID_CHOICE' });
+
+  const player = getPlayer(callsign);
+  if (!player.storyChoices) player.storyChoices = {};
+  if (!player.storyChoices[chapterId]) player.storyChoices[chapterId] = [];
+  player.storyChoices[chapterId].push({ sceneId, choiceIndex, text: choice.text });
+
+  const effects = choice.effects || {};
+  if (effects.xp) player.xp = (player.xp || 0) + effects.xp;
+  if (effects.skill) {
+    if (!player.skills) player.skills = {};
+    player.skills[effects.skill] = (player.skills[effects.skill] || 0) + (effects.xp || 10);
+  }
+  if (effects.trust) player.trust = (player.trust || 0) + effects.trust;
+
+  persistPlayer(callsign);
+
+  res.json({
+    event: 'story_choice',
+    nextScene: choice.next || null,
+    xp: player.xp,
+    ...levelFromXp(player.xp),
+    skills: player.skills,
+    trust: player.trust,
+    effects
+  });
+});
+
+app.post('/api/story/complete-chapter', (req, res) => {
+  const callsign = (req.body || {}).callsign || (req.body || {}).wallet;
+  const { chapterId } = req.body || {};
+  if (!callsign || !chapterId) {
+    return res.status(400).json({ error: 'callsign and chapterId required', code: 'MISSING_FIELDS' });
+  }
+  const ch = chapters.find((c) => c.id === chapterId);
+  if (!ch) return res.status(404).json({ error: 'chapter not found', code: 'CHAPTER_NOT_FOUND' });
+
+  const player = getPlayer(callsign);
+  if (!player.storyCompleted) player.storyCompleted = [];
+  if (player.storyCompleted.includes(chapterId)) {
+    return res.status(400).json({ error: 'chapter already completed', code: 'ALREADY_COMPLETED' });
+  }
+
+  player.storyCompleted.push(chapterId);
+  player.xp = (player.xp || 0) + 50;
+  persistPlayer(callsign);
+
+  res.json({
+    event: 'chapter_complete',
+    chapterId,
+    bonusXp: 50,
+    xp: player.xp,
+    ...levelFromXp(player.xp),
+    storyCompleted: player.storyCompleted
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Error handling
 // ---------------------------------------------------------------------------
 app.use((_req, res) => {
@@ -730,4 +920,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, getPlayer, players, missions, items, storyActs, rewardPolicy, TIER_ORDER, missionsByTier };
+module.exports = { app, getPlayer, players, missions, items, storyActs, rewardPolicy, TIER_ORDER, missionsByTier, characters, chapters, levelFromXp, SKILLS };

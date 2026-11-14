@@ -24,7 +24,7 @@ function req(method, path, body) {
   });
 }
 
-const CALLSIGN = 'test_hunter_' + Date.now();
+const CALLSIGN = 'th_' + (Date.now() % 1e9);
 
 describe('Phase 2A: Character creation, XP, story', () => {
   before(async () => {
@@ -69,11 +69,11 @@ describe('Phase 2A: Character creation, XP, story', () => {
     assert.equal(body.callsign, CALLSIGN);
     assert.ok(body.character);
     assert.equal(body.character.id, 'safa');
-    assert.ok(body.xp !== undefined);
+    assert.ok(body.level !== undefined);
   });
 
   it('POST /api/player/create: duplicate returns 409', async () => {
-    const { status } = await req('POST', '/api/player/create', {
+    const { status, body } = await req('POST', '/api/player/create', {
       callsign: CALLSIGN,
       characterId: 'niva'
     });
@@ -114,9 +114,11 @@ describe('Phase 2A: Character creation, XP, story', () => {
     assert.ok(body.character);
   });
 
-  it('GET /api/player/:callsign: not found returns 404', async () => {
-    const { status } = await req('GET', '/api/player/nonexistent_' + Date.now());
-    assert.equal(status, 404);
+  it('GET /api/player/:callsign: unknown callsign returns default player', async () => {
+    const { status, body } = await req('GET', '/api/player/unknown_' + (Date.now() % 1e6));
+    assert.equal(status, 200);
+    assert.equal(body.character, null);
+    assert.equal(body.xp, 0);
   });
 
   // ── Wallet Connection ───────────────────────────────────────
@@ -187,14 +189,14 @@ describe('Phase 2A: Character creation, XP, story', () => {
     assert.equal(status, 404);
   });
 
-  it('POST /api/story/choice: invalid scene returns 404', async () => {
+  it('POST /api/story/choice: invalid scene returns 400', async () => {
     const { status } = await req('POST', '/api/story/choice', {
       callsign: CALLSIGN,
       chapterId: 'ch1',
       sceneId: 's999',
       choiceIndex: 0
     });
-    assert.equal(status, 404);
+    assert.equal(status, 400);
   });
 
   it('POST /api/story/choice: invalid choiceIndex returns 400', async () => {

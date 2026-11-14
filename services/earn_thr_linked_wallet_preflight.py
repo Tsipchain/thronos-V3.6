@@ -63,6 +63,13 @@ def prepare_linked_wallet_redemption(
     balance = store.thc_balance(earn_user_id)
     if not isinstance(balance, dict) or "available" not in balance:
         raise PythiaQuoteError("cleared_balance_unavailable")
+    # A zero cleared balance means no redeemable funds, not a malformed quote.
+    # Never substitute pending THC for the spendable amount.
+    try:
+        if Decimal(str(balance["available"])) <= 0:
+            raise PythiaQuoteError("insufficient_cleared_thc")
+    except (ValueError, TypeError):
+        raise PythiaQuoteError("cleared_balance_unavailable")
     kwargs = {"now_fn": now_fn} if now_fn is not None else {}
     quote = LinkedWalletSettlementQuoteGate(authority, **kwargs).issue(
         earn_user_id=earn_user_id,

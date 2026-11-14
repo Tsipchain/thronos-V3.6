@@ -626,7 +626,10 @@ function readFile(file) {
 
 const TOKEN_ICONS = { THR: '⬡', BTC: '₿', ETH: 'Ξ', WBTC: '₿', WETH: 'Ξ', USDT: '₮', USDC: '○', TZM: 'T' };
 
-function tokenIcon(symbol) { return TOKEN_ICONS[(symbol || '').toUpperCase()] || '◆'; }
+// Existing ThronosCoin artwork; visual only. No wallet or signing code changes.
+const THR_COIN_LOGO_URL = '/static/img/thronos-coin.png';
+const THR_COIN_MARK = '<img class="thr-coin-mark" src="' + THR_COIN_LOGO_URL + '" alt="" aria-hidden="true" loading="lazy">';
+function tokenIcon(symbol) { return (symbol || '').toUpperCase() === 'THR' ? THR_COIN_MARK : (TOKEN_ICONS[(symbol || '').toUpperCase()] || '◆'); }
 
 function renderBalances(data) {
   if (!data) return '<p style="color:var(--muted);font-size:.88rem">Could not load balances.</p>';
@@ -661,7 +664,7 @@ async function showImport(addingExtra = false) {
 
   render(`
     <div class="screen">
-      <div class="logo">⬡ THR</div>
+      <div class="logo thr-brand thr-brand--large">${THR_COIN_MARK}<span>THR</span></div>
       <p class="tagline">Thronos Chain Wallet</p>
 
       <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">
@@ -1347,7 +1350,7 @@ async function showUnlock() {
 
   render(`
     <div class="screen screen--center">
-      <div class="logo" style="margin-top:0">⬡</div>
+      <div class="logo thr-brand thr-brand--unlock" style="margin-top:0">${THR_COIN_MARK}</div>
       <p style="color:var(--muted);font-size:.88rem">${short}</p>
       ${accs.length > 1 ? `<button class="btn btn--ghost" id="switchAccBtn" style="font-size:.82rem;padding:8px 16px">Switch account ↓</button>` : ''}
       ${hasFid ? `<button class="btn btn--faceid" id="fidBtn">${fidSvg()} Unlock with Face ID</button><div class="divider">or</div>` : ''}
@@ -1600,7 +1603,7 @@ async function showWallet() {
   render(`
     <div class="screen">
       <div class="header">
-        <span class="logo--sm">⬡ THR</span>
+        <span class="logo--sm thr-brand thr-brand--small">${THR_COIN_MARK}<span>THR</span></span>
         <div style="display:flex;gap:8px;align-items:center">
           ${accs.length > 1 ? `<button class="btn--icon" id="accBtn" title="Accounts">👤</button>` : ''}
           <button class="btn--icon" id="addAccBtn" title="Add account">＋</button>
@@ -1761,7 +1764,7 @@ async function showWallet() {
       const bal = Number(t.balance || 0);
       const sym = t.symbol || '?';
       const color = t.color || '#00ff66';
-      const logo = t.logo_url || t.logo || '';
+      const logo = String(sym).toUpperCase() === 'THR' ? THR_COIN_LOGO_URL : (t.logo_url || t.logo || '');
       const valThr = t.value_in_thr != null ? `≈ ${Number(t.value_in_thr).toFixed(4)} THR` : '';
       const valUsd = t.value_usd != null ? `≈ $${Number(t.value_usd).toFixed(2)}` : '';
       const logoHtml = logo
@@ -3339,7 +3342,7 @@ async function showUsdtPledge(address) {
     <div class="screen">
       <div class="header">
         <button class="btn--icon" id="backBtn">←</button>
-        <span class="logo--sm">⬡ THR</span>
+        <span class="logo--sm thr-brand thr-brand--small">${THR_COIN_MARK}<span>THR</span></span>
         <span style="width:32px"></span>
       </div>
       <h2 style="font-size:1.1rem;margin-top:8px">💵 USDT Pledge (BNB Chain)</h2>

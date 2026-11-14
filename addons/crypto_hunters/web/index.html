@@ -197,6 +197,49 @@ input:focus{outline:none;border-color:var(--green);box-shadow:0 0 8px rgba(16,18
 .mining-anim .spinner{display:inline-block;width:32px;height:32px;border:3px solid var(--border);border-top-color:var(--green);border-radius:50%;animation:spin .8s linear infinite}
 .mining-anim p{color:var(--dim);font-size:.8rem;margin-top:8px}
 
+/* ── Character Creation ───────────────────────────────────────── */
+.char-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-bottom:20px}
+.char-card{background:var(--bg2);border:2px solid var(--border);border-radius:16px;padding:20px 16px;text-align:center;cursor:pointer;transition:all .3s}
+.char-card:hover{border-color:var(--green);transform:translateY(-2px)}
+.char-card .portrait{width:64px;height:64px;border-radius:50%;margin:0 auto 10px;display:flex;align-items:center;justify-content:center;font-size:1.5rem;font-weight:900;color:#000;font-family:var(--mono)}
+.char-card .cname{font-weight:700;font-size:.9rem;margin-bottom:4px}
+.char-card .crole{color:var(--dim);font-size:.7rem}
+.char-detail{max-width:500px;margin:0 auto;text-align:center}
+.char-detail-portrait{width:96px;height:96px;border-radius:50%;margin:0 auto 16px;display:flex;align-items:center;justify-content:center;font-size:2.2rem;font-weight:900;color:#000;font-family:var(--mono);border:3px solid var(--green)}
+.stat-bar-row{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.stat-bar-label{width:100px;text-align:right;font-size:.75rem;color:var(--dim);text-transform:uppercase}
+.stat-bar-track{flex:1;height:8px;background:var(--bg3);border-radius:4px;overflow:hidden}
+.stat-bar-fill{height:100%;border-radius:4px;transition:width .5s ease}
+
+/* ── Dialogue / Story Mode ────────────────────────────────────── */
+.dialogue-card{background:var(--bg2);border:1px solid var(--border);border-radius:16px;padding:24px;margin-bottom:16px;animation:fadeIn .4s ease}
+.dialogue-portrait{width:56px;height:56px;border-radius:50%;margin:0 auto 12px;display:flex;align-items:center;justify-content:center;font-size:1.3rem;font-weight:900;color:#000;font-family:var(--mono)}
+.dialogue-speaker{font-family:var(--mono);font-size:.8rem;color:var(--green);text-transform:uppercase;letter-spacing:1px;text-align:center;margin-bottom:8px}
+.dialogue-text{font-size:.95rem;line-height:1.7;text-align:center;color:var(--text)}
+.dialogue-choices{display:flex;flex-direction:column;gap:8px;margin-bottom:12px}
+.dialogue-choice{padding:14px 20px;background:var(--bg3);border:1px solid var(--border);border-radius:12px;color:var(--text);font-size:.9rem;text-align:left;transition:all .2s;cursor:pointer}
+.dialogue-choice:hover{border-color:var(--green);background:rgba(16,185,129,.08)}
+.dialogue-choice .effect-hint{font-size:.7rem;color:var(--green);margin-top:4px;font-family:var(--mono)}
+
+/* ── XP Bar / Level Badge ─────────────────────────────────────── */
+.xp-bar-container{margin:12px 0}
+.xp-bar-label{font-size:.7rem;color:var(--dim);text-transform:uppercase;margin-bottom:4px;display:flex;justify-content:space-between}
+.xp-bar-track{height:6px;background:var(--bg3);border-radius:3px;overflow:hidden}
+.xp-bar-fill{height:100%;background:linear-gradient(90deg,var(--green),#06b6d4);border-radius:3px;transition:width .5s ease}
+.level-badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:.7rem;font-weight:700;background:rgba(6,182,212,.15);color:#06b6d4;margin-left:8px}
+
+/* ── Player card additions ────────────────────────────────────── */
+.player-identity{display:flex;align-items:center;gap:12px;margin-bottom:8px}
+.player-portrait-sm{width:48px;height:48px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:1.2rem;font-weight:900;color:#000;font-family:var(--mono);flex-shrink:0}
+.player-info{flex:1}
+.player-callsign{font-family:var(--mono);font-size:1rem;font-weight:700;color:var(--green)}
+.player-char-role{font-size:.7rem;color:var(--dim)}
+
+/* ── Chapter play button in story ─────────────────────────────── */
+.act-play-btn{display:inline-block;margin-top:12px;padding:8px 16px;font-size:.8rem;background:var(--green);color:#000;border:none;border-radius:8px;font-weight:700;cursor:pointer}
+.act-play-btn:hover{box-shadow:0 0 12px rgba(16,185,129,.4)}
+.act-play-btn.completed-ch{background:var(--bg3);color:var(--dim);cursor:default}
+
 /* ── Responsive ─────────────────────────────────────────────────── */
 @media(max-width:500px){
   .nav-grid{grid-template-columns:1fr}
@@ -204,6 +247,7 @@ input:focus{outline:none;border-color:var(--green);box-shadow:0 0 8px rgba(16,18
   .item-grid{grid-template-columns:1fr}
   #login-screen h1{font-size:1.6rem}
   .player-balance{font-size:1.5rem}
+  .char-grid{grid-template-columns:repeat(auto-fill,minmax(130px,1fr))}
 }
 @media(max-width:480px){
   .app{padding:8px 8px 80px}
@@ -211,6 +255,7 @@ input:focus{outline:none;border-color:var(--green);box-shadow:0 0 8px rgba(16,18
   .player-balance{font-size:1.5rem}
   .stats-row{grid-template-columns:repeat(2,1fr)}
   .item-grid{grid-template-columns:1fr}
+  .char-grid{grid-template-columns:1fr 1fr}
 }
 </style>
 </head>
@@ -222,9 +267,34 @@ input:focus{outline:none;border-color:var(--green);box-shadow:0 0 8px rgba(16,18
     <h1>Crypto <span>Hunters</span></h1>
     <p class="subtitle">Defend the decentralised future</p>
     <div class="login-box">
-      <input id="wallet-input" type="text" placeholder="Enter wallet address..." maxlength="64" autocomplete="off"/>
+      <input id="callsign-input" type="text" placeholder="Choose your callsign..." maxlength="24" autocomplete="off"/>
       <button class="btn-enter" onclick="enterGame()">Enter The Source</button>
-      <p class="login-hint">Game demo — no real wallet connection required</p>
+      <p class="login-hint">Pick any name to start playing</p>
+      <button class="btn-wallet-connect" onclick="toggleWalletConnect()" style="margin-top:16px;padding:10px 20px;font-size:.8rem;background:transparent;color:var(--dim);border:1px solid var(--border);width:100%;border-radius:8px">Connect Thronos Wallet (optional)</button>
+      <div id="wallet-connect-box" style="display:none;margin-top:12px">
+        <input id="thr-wallet-input" type="text" placeholder="THR wallet address..." maxlength="64" autocomplete="off" style="margin-bottom:8px"/>
+        <p style="color:var(--dim);font-size:.7rem">Optional — connect later from your profile</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Character Creation ──────────────────────────────────────── -->
+  <div id="charcreate-screen" class="screen">
+    <div class="topbar">
+      <div class="logo">Crypto <span>Hunters</span></div>
+    </div>
+    <h2 class="screen-title" style="text-align:center;margin-bottom:4px">Choose Your Hunter</h2>
+    <p style="text-align:center;color:var(--dim);margin-bottom:24px;font-size:.85rem">Each hunter has unique stats and abilities</p>
+    <div id="char-grid" class="char-grid"></div>
+    <div id="char-detail" class="char-detail" style="display:none">
+      <div class="char-detail-portrait" id="char-portrait"></div>
+      <h3 id="char-detail-name" style="font-size:1.2rem;margin-bottom:2px"></h3>
+      <p id="char-detail-role" style="color:var(--dim);font-size:.8rem;margin-bottom:8px"></p>
+      <p id="char-detail-desc" style="font-size:.85rem;line-height:1.5;margin-bottom:16px"></p>
+      <div id="char-stats-bars"></div>
+      <p id="char-passive" style="color:var(--gold);font-size:.8rem;margin-top:12px;margin-bottom:16px"></p>
+      <button class="btn-enter" onclick="confirmCharacter()" style="width:100%">Select This Hunter</button>
+      <button class="btn-puzzle-alt" onclick="backToCharGrid()" style="margin-top:8px">Choose Another</button>
     </div>
   </div>
 
@@ -236,9 +306,19 @@ input:focus{outline:none;border-color:var(--green);box-shadow:0 0 8px rgba(16,18
     </div>
     <div id="welcome-msg" class="welcome-back" style="display:none"></div>
     <div class="player-card">
-      <div class="player-wallet" id="dash-wallet"></div>
+      <div class="player-identity">
+        <div class="player-portrait-sm" id="dash-portrait"></div>
+        <div class="player-info">
+          <div class="player-callsign" id="dash-callsign"></div>
+          <div class="player-char-role" id="dash-char-role"></div>
+        </div>
+      </div>
       <div class="player-balance"><span id="dash-balance">0</span> <small>DRX</small></div>
-      <div><span class="tier-badge" id="dash-tier">Easy</span></div>
+      <div><span class="tier-badge" id="dash-tier">Easy</span> <span class="level-badge" id="dash-level">LVL 1</span></div>
+      <div class="xp-bar-container">
+        <div class="xp-bar-label"><span id="dash-xp-text">0 / 100 XP</span><span id="dash-xp-pct">0%</span></div>
+        <div class="xp-bar-track"><div class="xp-bar-fill" id="dash-xp-bar" style="width:0%"></div></div>
+      </div>
     </div>
     <div class="stats-row">
       <div class="stat-card"><div class="stat-val" id="stat-missions">0/12</div><div class="stat-label">Missions</div></div>
@@ -309,6 +389,35 @@ input:focus{outline:none;border-color:var(--green);box-shadow:0 0 8px rgba(16,18
     <div class="back-row"><button class="btn-back" onclick="showScreen('dashboard')">&larr; Back</button></div>
     <h2 class="screen-title">Inventory</h2>
     <div id="inv-content"></div>
+  </div>
+
+  <!-- ── Story Mode: Chapter Player ──────────────────────────────── -->
+  <div id="chapter-screen" class="screen">
+    <div class="topbar">
+      <div class="logo">Crypto <span>Hunters</span></div>
+      <button class="btn-sm" onclick="showScreen('story')">Story</button>
+    </div>
+    <div class="back-row"><button class="btn-back" onclick="showScreen('story')">&larr; Back to Story</button></div>
+    <div id="chapter-title-bar" style="text-align:center;margin-bottom:20px">
+      <h3 id="chapter-title" style="font-family:var(--mono);color:var(--green);margin-bottom:4px"></h3>
+      <p id="chapter-subtitle" style="color:var(--dim);font-size:.85rem"></p>
+    </div>
+    <div id="dialogue-area">
+      <div id="dialogue-card" class="dialogue-card">
+        <div id="dialogue-portrait" class="dialogue-portrait"></div>
+        <div class="dialogue-speaker" id="dialogue-speaker"></div>
+        <div class="dialogue-text" id="dialogue-text"></div>
+      </div>
+      <div id="dialogue-choices" class="dialogue-choices"></div>
+      <button id="dialogue-next-btn" class="btn-puzzle" onclick="advanceDialogue()" style="display:none">Continue</button>
+    </div>
+    <div id="chapter-complete-box" style="display:none;text-align:center;padding:40px 20px">
+      <div style="font-size:3rem;margin-bottom:12px">&#127942;</div>
+      <h3 style="color:var(--gold);margin-bottom:8px" id="chapter-complete-title"></h3>
+      <p style="color:var(--dim);margin-bottom:20px" id="chapter-complete-summary"></p>
+      <div id="chapter-rewards" style="margin-bottom:20px"></div>
+      <button class="btn-enter" onclick="showScreen('story')" style="width:100%;max-width:300px">Back to Story</button>
+    </div>
   </div>
 
   <!-- ── Puzzle E1: Hello Hash ──────────────────────────────────── -->
@@ -387,18 +496,40 @@ input:focus{outline:none;border-color:var(--green);box-shadow:0 0 8px rgba(16,18
 
 const API_BASE = 'http://localhost:3000';
 
+/* ── Character color map (loaded from server, fallback here) ──── */
+const CHAR_COLORS = {safa:'#10b981',niva:'#a855f7',nato:'#3b82f6',kyra:'#ec4899',luna:'#06b6d4',zayne:'#f59e0b'};
+const STAT_COLORS = {hack:'#10b981',shield:'#3b82f6',intel:'#a855f7',stamina:'#f59e0b',charisma:'#ec4899'};
+
 /* ── Game State ──────────────────────────────────────────────────── */
 const state = {
   wallet: '',
+  callsign: '',
+  character: null,
   balance: 0,
   inventory: [],
   missions: [],
   items: [],
-  missionStates: {},   // missionId -> 'locked'|'available'|'in_progress'|'completed'
+  missionStates: {},
   completedMissions: new Set(),
   totalDrxEarned: 0,
   isReturning: false,
+  xp: 0,
+  level: 1,
+  skills: {},
+  trust: 0,
+  thrWallet: null,
+  storyCompleted: [],
+  characters: [],
 };
+
+/* ── XP / Level helpers ─────────────────────────────────────────── */
+function xpForLevel(lvl){ return lvl * 100; }
+function calcLevel(xp){
+  let lvl = 1;
+  let total = 0;
+  while(total + xpForLevel(lvl) <= xp){ total += xpForLevel(lvl); lvl++; }
+  return { level: lvl, currentXp: xp - total, needed: xpForLevel(lvl) };
+}
 
 /* ── Tier / Story unlock definitions ─────────────────────────────── */
 const TIERS = ['Easy','Normal','Expert','Genius'];
@@ -406,25 +537,25 @@ const TIER_COLORS = {Easy:'#10b981',Normal:'#60a5fa',Expert:'#c084fc',Genius:'#f
 const TIER_PREFIXES = {Easy:'E',Normal:'N',Expert:'X',Genius:'G'};
 const STORY_ACTS = [
   {
-    id:'act1', title:'Act I — Spark', subtitle:'2012: First contact with blockchain',
+    id:'act1', actNum:1, chapterId:'ch1', title:'Act I — Spark', subtitle:'2012: First contact with blockchain',
     unlockTier: null,
     chars:[{name:'SAfA',color:'#10b981'},{name:'Nato',color:'#3b82f6'}],
     body:'<p>Greece, 2012. Amidst financial turmoil, a disillusioned hacker named SAfA discovers a whitepaper by Satoshi Nakamoto. He sets up a rudimentary mining operation and mines his first block — a taste of true financial sovereignty.</p><p>The 2013 bull run makes him a fortune. Then Mt. Gox collapses and wipes him out. Devastated, he seeks out his old friend Nato Saka, realising the fight must be waged on both software and hardware fronts.</p>'
   },
   {
-    id:'act2', title:'Act II — Formation', subtitle:'The team assembles',
+    id:'act2', actNum:2, chapterId:null, title:'Act II — Formation', subtitle:'The team assembles',
     unlockTier: 'Easy',
     chars:[{name:'Niva',color:'#a855f7'},{name:'Kyra',color:'#ec4899'},{name:'Luna',color:'#06b6d4'}],
     body:'<p>The Dark Node orchestrates a 51% attack on a promising altcoin. The attack draws attention from others fighting the same shadow war.</p><p>Niva, an ex-intelligence operative, sees a pattern. Kyra traces ghost funds through mixers. Luna rallies the developer community. SAfA and Nato find them, and the five unite. The Crypto Hunters are born.</p><p>They thwart phishing campaigns, expose smart contract vulnerabilities, and secure community nodes.</p>'
   },
   {
-    id:'act3', title:'Act III — Revelation', subtitle:'Zayne Nexus appears',
+    id:'act3', actNum:3, chapterId:null, title:'Act III — Revelation', subtitle:'Zayne Nexus appears',
     unlockTier: 'Normal',
     chars:[{name:'Zayne',color:'#f59e0b'}],
     body:'<p>The Dark Node\'s attacks evolve — disinformation campaigns designed to destroy trust in the system itself. The Hunters hit a wall.</p><p>An encrypted message arrives from an unknown source: Zayne Nexus, a former Dark Node architect. He provides a partial schematic of their infrastructure and warns that the next target is not a coin, but a country: Greece\'s experimental "Agora Project" for decentralised governance.</p>'
   },
   {
-    id:'act4', title:'Act IV — Uplift', subtitle:'The siege of Agora',
+    id:'act4', actNum:4, chapterId:null, title:'Act IV — Uplift', subtitle:'The siege of Agora',
     unlockTier: 'Expert',
     chars:[{name:'SAfA',color:'#10b981'},{name:'Niva',color:'#a855f7'},{name:'Kyra',color:'#ec4899'},{name:'Luna',color:'#06b6d4'},{name:'Nato',color:'#3b82f6'},{name:'Zayne',color:'#f59e0b'}],
     body:'<p>The Dark Node launches a multi-pronged assault: DDoS combined with a smart contract exploit, a state-sponsored FUD campaign, and a physical saboteur targeting the server facility.</p><p>The Hunters split up. SAfA and Luna race to patch the code live. Kyra and Zayne counter the FUD with on-chain proof. Niva and Nato intercept the saboteur.</p><p>They succeed. The Agora pilot makes international headlines. But Zayne warns: "You\'ve cut off the head of a hydra. The Dark Node in Greece was just one of them." The fight has gone global.</p>'
@@ -456,6 +587,7 @@ function showScreen(name){
   if(name==='items') loadItems();
   if(name==='inventory') loadInventory();
   if(name==='puzzle-e1') e1UpdatePips();
+  if(name==='charcreate') loadCharacters();
 }
 
 /* ── API fetch with error handling ───────────────────────────────── */
@@ -479,11 +611,19 @@ function hideError(bannerId){
 /* ── Save / Load from localStorage ───────────────────────────────── */
 function saveLocal(){
   try{
+    localStorage.setItem('ch_callsign', state.callsign);
     localStorage.setItem('ch_wallet', state.wallet);
     localStorage.setItem('ch_state_'+state.wallet, JSON.stringify({
       completedMissions: [...state.completedMissions],
       missionStates: state.missionStates,
       totalDrxEarned: state.totalDrxEarned,
+      character: state.character,
+      xp: state.xp,
+      level: state.level,
+      skills: state.skills,
+      trust: state.trust,
+      thrWallet: state.thrWallet,
+      storyCompleted: state.storyCompleted,
     }));
   }catch(e){}
 }
@@ -495,63 +635,233 @@ function loadLocal(wallet){
     state.completedMissions = new Set(d.completedMissions||[]);
     state.missionStates = d.missionStates||{};
     state.totalDrxEarned = d.totalDrxEarned||0;
+    state.character = d.character||null;
+    state.xp = d.xp||0;
+    state.level = d.level||1;
+    state.skills = d.skills||{};
+    state.trust = d.trust||0;
+    state.thrWallet = d.thrWallet||null;
+    state.storyCompleted = d.storyCompleted||[];
     return true;
   }catch(e){ return false; }
 }
 
+/* ── Toggle wallet connect ──────────────────────────────────────── */
+function toggleWalletConnect(){
+  const box = $('wallet-connect-box');
+  box.style.display = box.style.display === 'none' ? 'block' : 'none';
+}
+
 /* ── Enter Game ──────────────────────────────────────────────────── */
 async function enterGame(){
-  const w = $('wallet-input').value.trim();
-  if(!w) return;
-  state.wallet = w;
-  state.isReturning = loadLocal(w);
-  loadPuzzleLocal(w);
+  const cs = $('callsign-input').value.trim();
+  if(!cs) return;
+  state.callsign = cs;
+  state.wallet = cs;
 
-  // Try fetching server state
-  try{
-    const data = await apiFetch('/api/status/'+encodeURIComponent(w));
-    state.balance = data.balance || 0;
-    state.inventory = data.inventory || [];
-  }catch(e){
-    state.balance = 0;
-    state.inventory = [];
+  const thrInput = $('thr-wallet-input');
+  if(thrInput && thrInput.value.trim()){
+    state.thrWallet = thrInput.value.trim();
   }
 
-  // Try fetching dashboard if backend supports it
+  state.isReturning = loadLocal(cs);
+  loadPuzzleLocal(cs);
+
+  // Try fetching player from server
   try{
-    const dash = await apiFetch('/api/dashboard/'+encodeURIComponent(w));
+    const player = await apiFetch('/api/player/'+encodeURIComponent(cs));
+    if(player && player.callsign){
+      state.balance = player.balance || 0;
+      state.inventory = player.inventory || [];
+      state.character = player.character || state.character;
+      state.xp = player.xp || state.xp;
+      state.level = player.level || state.level;
+      state.skills = player.skills || state.skills;
+      state.trust = player.trust || state.trust;
+      state.thrWallet = player.thrWallet || state.thrWallet;
+      state.storyCompleted = player.storyCompleted || state.storyCompleted;
+      if(player.completedMissions){
+        player.completedMissions.forEach(id => state.completedMissions.add(id));
+      }
+      state.isReturning = true;
+      showScreen('dashboard');
+      return;
+    }
+  }catch(e){
+    // Player doesn't exist on server or server down
+  }
+
+  // Fallback: try old dashboard endpoint
+  try{
+    const dash = await apiFetch('/api/dashboard/'+encodeURIComponent(cs));
     if(dash.balance !== undefined) state.balance = dash.balance;
     if(dash.inventory) state.inventory = dash.inventory;
     if(dash.completedMissions){
       dash.completedMissions.forEach(id => state.completedMissions.add(id));
     }
-  }catch(e){
-    // Dashboard endpoint may not exist yet — use localStorage state
+  }catch(e){}
+
+  // If we have a character from localStorage, go to dashboard
+  if(state.character){
+    showScreen('dashboard');
+    return;
   }
 
-  showScreen('dashboard');
+  // New player — go to character creation
+  showScreen('charcreate');
 }
 
 /* ── Logout ──────────────────────────────────────────────────────── */
 function logout(){
   saveLocal();
   state.wallet = '';
+  state.callsign = '';
+  state.character = null;
   state.balance = 0;
   state.inventory = [];
   state.missions = [];
   state.completedMissions = new Set();
   state.missionStates = {};
+  state.xp = 0;
+  state.level = 1;
+  state.skills = {};
+  state.trust = 0;
+  state.thrWallet = null;
+  state.storyCompleted = [];
   showScreen('login');
+}
+
+/* ── Character Creation ─────────────────────────────────────────── */
+let selectedCharId = null;
+
+async function loadCharacters(){
+  const grid = $('char-grid');
+  const detail = $('char-detail');
+  detail.style.display = 'none';
+  grid.style.display = '';
+  grid.innerHTML = '<div class="skeleton skeleton-card"></div>';
+
+  try{
+    const chars = await apiFetch('/api/characters');
+    state.characters = chars.filter(c => c.unlocked);
+    grid.innerHTML = '';
+    state.characters.forEach(c => {
+      const card = document.createElement('div');
+      card.className = 'char-card';
+      card.onclick = () => selectCharacter(c.id);
+      card.innerHTML =
+        '<div class="portrait" style="background:'+c.color+'">'+c.handle[0]+c.handle[1]+'</div>'+
+        '<div class="cname">'+c.handle+'</div>'+
+        '<div class="crole">'+c.role+'</div>';
+      grid.appendChild(card);
+    });
+  }catch(e){
+    grid.innerHTML = '<p style="color:var(--red);text-align:center">Failed to load characters. Check backend.</p>';
+  }
+}
+
+function selectCharacter(id){
+  const c = state.characters.find(ch => ch.id === id);
+  if(!c) return;
+  selectedCharId = id;
+
+  $('char-grid').style.display = 'none';
+  const detail = $('char-detail');
+  detail.style.display = '';
+
+  $('char-portrait').style.background = c.color;
+  $('char-portrait').textContent = c.handle[0]+c.handle[1];
+  $('char-detail-name').textContent = c.name;
+  $('char-detail-role').textContent = c.role+' — '+c.origin;
+  $('char-detail-desc').textContent = c.desc;
+  $('char-passive').textContent = '✨ '+c.passive;
+
+  const barsEl = $('char-stats-bars');
+  barsEl.innerHTML = '';
+  const statNames = ['hack','shield','intel','stamina','charisma'];
+  statNames.forEach(s => {
+    const val = c.stats[s] || 0;
+    const pct = (val / 10) * 100;
+    barsEl.innerHTML +=
+      '<div class="stat-bar-row">'+
+        '<div class="stat-bar-label">'+s+'</div>'+
+        '<div class="stat-bar-track"><div class="stat-bar-fill" style="width:'+pct+'%;background:'+(STAT_COLORS[s]||'var(--green)')+'"></div></div>'+
+        '<div style="width:24px;text-align:center;font-size:.8rem;font-weight:700;color:'+(STAT_COLORS[s]||'var(--green)')+'">'+val+'</div>'+
+      '</div>';
+  });
+}
+
+function backToCharGrid(){
+  $('char-grid').style.display = '';
+  $('char-detail').style.display = 'none';
+  selectedCharId = null;
+}
+
+async function confirmCharacter(){
+  if(!selectedCharId) return;
+  try{
+    const data = await apiFetch('/api/player/create', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        callsign: state.callsign,
+        characterId: selectedCharId,
+        thrWallet: state.thrWallet || undefined
+      })
+    });
+    state.character = data.character;
+    state.xp = data.xp || 0;
+    state.level = data.level || 1;
+    state.skills = data.skills || {};
+    state.balance = data.balance || 0;
+    state.trust = data.trust || 0;
+    saveLocal();
+    showScreen('dashboard');
+  }catch(e){
+    // Fallback: save character locally
+    const c = state.characters.find(ch => ch.id === selectedCharId);
+    if(c){
+      state.character = { id:c.id, handle:c.handle, name:c.name, role:c.role, color:c.color, stats:{...c.stats} };
+      state.skills[c.startSkill] = 1;
+      saveLocal();
+      showScreen('dashboard');
+    }
+  }
 }
 
 /* ── Dashboard ───────────────────────────────────────────────────── */
 function refreshDashboard(){
-  $('dash-wallet').textContent = truncWallet(state.wallet);
+  const portrait = $('dash-portrait');
+  const callsignEl = $('dash-callsign');
+  const roleEl = $('dash-char-role');
+
+  if(state.character){
+    portrait.style.background = state.character.color || 'var(--green)';
+    portrait.textContent = (state.character.handle||'??').slice(0,2);
+    callsignEl.textContent = state.callsign;
+    roleEl.textContent = (state.character.handle||'')+' — '+(state.character.role||'');
+  }else{
+    portrait.style.background = 'var(--green)';
+    portrait.textContent = state.callsign.slice(0,2).toUpperCase();
+    callsignEl.textContent = state.callsign;
+    roleEl.textContent = '';
+  }
+
   $('dash-balance').textContent = state.balance;
   const tier = getCurrentTier();
   const badge = $('dash-tier');
   badge.textContent = tier;
   badge.className = 'tier-badge tier-'+tier;
+
+  // Level / XP
+  const lvlInfo = calcLevel(state.xp);
+  state.level = lvlInfo.level;
+  $('dash-level').textContent = 'LVL '+lvlInfo.level;
+  const pct = Math.min(100, Math.round((lvlInfo.currentXp / lvlInfo.needed) * 100));
+  $('dash-xp-text').textContent = lvlInfo.currentXp+' / '+lvlInfo.needed+' XP';
+  $('dash-xp-pct').textContent = pct+'%';
+  $('dash-xp-bar').style.width = pct+'%';
+
   const total = state.missions.length || 12;
   const done = state.completedMissions.size;
   $('stat-missions').textContent = done+'/'+total;
@@ -583,7 +893,7 @@ function getCurrentTier(){
 
 function isTierUnlocked(tier){
   const idx = TIERS.indexOf(tier);
-  if(idx <= 0) return true; // Easy always unlocked
+  if(idx <= 0) return true;
   const prevTier = TIERS[idx-1];
   const prefix = TIER_PREFIXES[prevTier];
   return [1,2,3].every(n => state.completedMissions.has(prefix+n));
@@ -602,7 +912,6 @@ async function loadMissions(){
     state.missions = missions;
     loading.style.display = 'none';
 
-    // Compute states
     missions.forEach(m => {
       if(state.completedMissions.has(m.id)){
         state.missionStates[m.id] = 'completed';
@@ -661,7 +970,6 @@ function renderMissions(missions, container){
 function startMission(id){
   state.missionStates[id] = 'in_progress';
   saveLocal();
-  // Route to interactive puzzle screens for E1/E2
   if(id==='E1'){
     apiFetch('/api/missions/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({wallet:state.wallet,missionId:'E1'})}).catch(()=>{});
     e1UpdatePips();
@@ -689,7 +997,6 @@ async function completeMission(id, reward){
     state.missionStates[id] = 'completed';
     state.totalDrxEarned += reward;
 
-    // Check if completing this mission unlocks a new tier
     const mission = state.missions.find(m=>m.id===id);
     if(mission){
       const prefix = TIER_PREFIXES[mission.tier];
@@ -698,7 +1005,6 @@ async function completeMission(id, reward){
       if(tierDone){
         const nextIdx = TIERS.indexOf(mission.tier)+1;
         if(nextIdx < TIERS.length){
-          // Unlock next tier missions
           state.missions.forEach(m=>{
             if(m.tier===TIERS[nextIdx] && state.missionStates[m.id]==='locked'){
               state.missionStates[m.id] = 'available';
@@ -724,7 +1030,7 @@ function showTierUnlock(tier){
   banner.style.display = 'block';
   banner.style.color = TIER_COLORS[tier];
   banner.style.animation = 'none';
-  banner.offsetHeight; // reflow
+  banner.offsetHeight;
   banner.style.animation = 'tier-fanfare .6s ease';
   setTimeout(()=>{ banner.style.display='none'; }, 4000);
 }
@@ -737,7 +1043,6 @@ function showReward(text){
   txt.textContent = text;
   particles.innerHTML = '';
 
-  // Create particles
   for(let i=0;i<12;i++){
     const p = document.createElement('div');
     p.className = 'particle';
@@ -746,7 +1051,6 @@ function showReward(text){
     const tx = Math.cos(angle*Math.PI/180)*dist;
     const ty = Math.sin(angle*Math.PI/180)*dist;
     p.style.cssText = 'animation:reward-burst .8s ease forwards;transform:translate('+tx+'px,'+ty+'px) scale(0);animation-delay:'+(i*30)+'ms';
-    // Set the end position using a custom style element
     p.animate([
       {transform:'translate(0,0) scale(1)',opacity:1},
       {transform:'translate('+tx+'px,'+ty+'px) scale(0)',opacity:0}
@@ -768,7 +1072,6 @@ function renderStory(){
 
   STORY_ACTS.forEach(act=>{
     const unlocked = !act.unlockTier || isTierUnlocked(act.unlockTier);
-    // Check if just unlocked (tier completed but act wasn't seen)
     const card = document.createElement('div');
     card.className = 'act-card '+(unlocked?'unlocked':'locked');
 
@@ -786,12 +1089,210 @@ function renderStory(){
       lockHtml = '<div class="lock-msg">&#128274; Complete '+act.unlockTier+' tier missions to unlock</div>';
     }
 
+    let chapterBtn = '';
+    if(unlocked && act.chapterId){
+      const completed = state.storyCompleted.includes(act.chapterId);
+      if(completed){
+        chapterBtn = '<button class="act-play-btn completed-ch" disabled>&#10003; Chapter Completed</button>';
+      }else{
+        chapterBtn = '<button class="act-play-btn" onclick="loadChapter(\''+act.chapterId+'\')">&#9654; Play Chapter</button>';
+      }
+    }
+
     card.innerHTML = '<div class="act-title">'+act.title+'</div>'+
       '<div class="act-subtitle">'+act.subtitle+'</div>'+
-      (unlocked ? '<div class="act-body">'+act.body+charHtml+'</div>' : lockHtml);
+      (unlocked ? '<div class="act-body">'+act.body+charHtml+chapterBtn+'</div>' : lockHtml);
 
     container.appendChild(card);
   });
+}
+
+/* ── Story Mode: Chapter Dialogue ───────────────────────────────── */
+let currentChapter = null;
+let currentSceneIdx = 0;
+let chapterScenes = [];
+let chapterXpGained = 0;
+let chapterSkillsGained = {};
+let chapterTrustGained = 0;
+
+async function loadChapter(chapterId){
+  try{
+    const data = await apiFetch('/api/story/chapter/'+encodeURIComponent(chapterId)+'?wallet='+encodeURIComponent(state.wallet));
+    currentChapter = data;
+    chapterScenes = data.scenes || [];
+    currentSceneIdx = 0;
+    chapterXpGained = 0;
+    chapterSkillsGained = {};
+    chapterTrustGained = 0;
+
+    $('chapter-title').textContent = data.title;
+    $('chapter-subtitle').textContent = data.subtitle;
+    $('dialogue-area').style.display = '';
+    $('chapter-complete-box').style.display = 'none';
+
+    showScreen('chapter');
+    renderScene();
+  }catch(e){
+    // Fallback if server doesn't have chapter endpoint yet
+    alert('Story chapters coming soon!');
+  }
+}
+
+function renderScene(){
+  if(currentSceneIdx >= chapterScenes.length){
+    finishChapter();
+    return;
+  }
+
+  const scene = chapterScenes[currentSceneIdx];
+  if(scene.id === 'end' || scene.speaker === 'system'){
+    finishChapter();
+    return;
+  }
+
+  const card = $('dialogue-card');
+  const portrait = $('dialogue-portrait');
+  const speaker = $('dialogue-speaker');
+  const text = $('dialogue-text');
+  const choices = $('dialogue-choices');
+  const nextBtn = $('dialogue-next-btn');
+
+  // Portrait
+  if(scene.portrait && CHAR_COLORS[scene.portrait]){
+    portrait.style.background = CHAR_COLORS[scene.portrait];
+    portrait.style.display = '';
+    portrait.textContent = scene.portrait.slice(0,2).toUpperCase();
+  }else if(scene.speaker === 'narrator'){
+    portrait.style.background = 'var(--border)';
+    portrait.style.display = '';
+    portrait.textContent = '✎';
+  }else{
+    portrait.style.display = 'none';
+  }
+
+  // Speaker name
+  speaker.textContent = scene.speaker === 'narrator' ? 'Narrator' : scene.speaker;
+
+  // Text
+  text.textContent = scene.text;
+
+  // Animate in
+  card.style.animation = 'none';
+  card.offsetHeight;
+  card.style.animation = 'fadeIn .4s ease';
+
+  // Choices or continue
+  choices.innerHTML = '';
+  if(scene.choices && scene.choices.length){
+    nextBtn.style.display = 'none';
+    scene.choices.forEach((ch, idx) => {
+      const btn = document.createElement('button');
+      btn.className = 'dialogue-choice';
+      let hint = '';
+      if(ch.effects){
+        const parts = [];
+        if(ch.effects.xp) parts.push('+'+ch.effects.xp+' XP');
+        if(ch.effects.skill) parts.push(ch.effects.skill);
+        if(ch.effects.trust) parts.push('+'+ch.effects.trust+' trust');
+        hint = '<div class="effect-hint">'+parts.join(' · ')+'</div>';
+      }
+      btn.innerHTML = ch.text + hint;
+      btn.onclick = () => makeChoice(idx);
+      choices.appendChild(btn);
+    });
+  }else{
+    nextBtn.style.display = '';
+  }
+}
+
+function makeChoice(idx){
+  const scene = chapterScenes[currentSceneIdx];
+  const choice = scene.choices[idx];
+
+  if(choice.effects){
+    if(choice.effects.xp){
+      chapterXpGained += choice.effects.xp;
+    }
+    if(choice.effects.skill){
+      chapterSkillsGained[choice.effects.skill] = (chapterSkillsGained[choice.effects.skill]||0) + 1;
+    }
+    if(choice.effects.trust){
+      chapterTrustGained += choice.effects.trust;
+    }
+  }
+
+  // Try to post choice to server
+  apiFetch('/api/story/choice', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({
+      wallet:state.wallet,
+      chapterId:currentChapter.id,
+      sceneId:scene.id,
+      choiceIndex:idx
+    })
+  }).catch(()=>{});
+
+  // Advance to next scene — use choice.next or just increment
+  if(choice.next){
+    const targetIdx = chapterScenes.findIndex(s => s.id === choice.next);
+    if(targetIdx >= 0){
+      currentSceneIdx = targetIdx;
+    }else{
+      currentSceneIdx++;
+    }
+  }else{
+    currentSceneIdx++;
+  }
+  renderScene();
+}
+
+function advanceDialogue(){
+  currentSceneIdx++;
+  renderScene();
+}
+
+async function finishChapter(){
+  $('dialogue-area').style.display = 'none';
+  $('chapter-complete-box').style.display = '';
+
+  $('chapter-complete-title').textContent = currentChapter.title + ' Complete!';
+  $('chapter-complete-summary').textContent = 'You witnessed the events that shaped the Crypto Hunters.';
+
+  // Apply rewards
+  state.xp += chapterXpGained;
+  state.trust += chapterTrustGained;
+  for(const [sk, val] of Object.entries(chapterSkillsGained)){
+    state.skills[sk] = (state.skills[sk]||0) + val;
+  }
+  if(!state.storyCompleted.includes(currentChapter.id)){
+    state.storyCompleted.push(currentChapter.id);
+  }
+  state.level = calcLevel(state.xp).level;
+  saveLocal();
+
+  // Render rewards
+  const rewardsEl = $('chapter-rewards');
+  let rHtml = '';
+  if(chapterXpGained) rHtml += '<div style="color:var(--green);font-family:var(--mono);margin-bottom:4px">+'+chapterXpGained+' XP</div>';
+  if(chapterTrustGained) rHtml += '<div style="color:#06b6d4;font-family:var(--mono);margin-bottom:4px">+'+chapterTrustGained+' Trust</div>';
+  for(const [sk, val] of Object.entries(chapterSkillsGained)){
+    rHtml += '<div style="color:var(--gold);font-family:var(--mono);margin-bottom:4px">'+sk+' +'+val+'</div>';
+  }
+  rewardsEl.innerHTML = rHtml || '<div style="color:var(--dim)">No bonus rewards this chapter</div>';
+
+  // Notify server
+  apiFetch('/api/story/complete-chapter', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({
+      wallet:state.wallet,
+      chapterId:currentChapter.id,
+      xpGained:chapterXpGained,
+      skillsGained:chapterSkillsGained,
+      trustGained:chapterTrustGained
+    })
+  }).catch(()=>{});
 }
 
 /* ── Items Shop ──────────────────────────────────────────────────── */
@@ -1054,7 +1555,6 @@ async function e2AutoMine(){
   $('e2-nonce').value = nonce;
   $('e2-hash').textContent = 'Hash: '+hash;
 
-  // Submit to server
   try{
     const data = await apiFetch('/api/puzzles/e2/check',{
       method:'POST',headers:{'Content-Type':'application/json'},
@@ -1125,21 +1625,26 @@ window.addEventListener('online', ()=>{
   document.querySelectorAll('.error-banner').forEach(el=>el.classList.remove('visible'));
 });
 
-/* ── Init: restore wallet from localStorage ──────────────────────── */
+/* ── Init: restore callsign from localStorage ──────────────────── */
 (function init(){
   try{
-    const saved = localStorage.getItem('ch_wallet');
-    if(saved) $('wallet-input').value = saved;
+    const saved = localStorage.getItem('ch_callsign') || localStorage.getItem('ch_wallet');
+    if(saved){
+      const input = $('callsign-input');
+      if(input) input.value = saved;
+    }
   }catch(e){}
 })();
 
 /* ── PWA Service Worker ────────────────────────────────────────── */
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('./sw.js').then(reg => {
+    if (!navigator.serviceWorker.controller) return;
     reg.addEventListener('updatefound', () => {
       const nw = reg.installing;
+      if (!nw) return;
       nw.addEventListener('statechange', () => {
-        if (nw.state === 'activated' && navigator.serviceWorker.controller) {
+        if (nw.state === 'activated') {
           showUpdateBanner();
         }
       });

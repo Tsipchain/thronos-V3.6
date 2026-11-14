@@ -114,11 +114,10 @@ describe('Phase 2A: Character creation, XP, story', () => {
     assert.ok(body.character);
   });
 
-  it('GET /api/player/:callsign: unknown callsign returns default player', async () => {
+  it('GET /api/player/:callsign: unknown callsign returns 404', async () => {
     const { status, body } = await req('GET', '/api/player/unknown_' + (Date.now() % 1e6));
-    assert.equal(status, 200);
-    assert.equal(body.character, null);
-    assert.equal(body.xp, 0);
+    assert.equal(status, 404);
+    assert.equal(body.code, 'PLAYER_NOT_FOUND');
   });
 
   // ── Wallet Connection ───────────────────────────────────────

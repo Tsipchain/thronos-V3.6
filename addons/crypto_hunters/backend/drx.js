@@ -805,6 +805,9 @@ app.post('/api/player/connect-wallet', (req, res) => {
 
 app.get('/api/player/:callsign', (req, res) => {
   const callsign = req.params.callsign;
+  if (!players[callsign]) {
+    return res.status(404).json({ error: 'player not found', code: 'PLAYER_NOT_FOUND' });
+  }
   const player = getPlayer(callsign);
   const lvl = levelFromXp(player.xp || 0);
   res.json({

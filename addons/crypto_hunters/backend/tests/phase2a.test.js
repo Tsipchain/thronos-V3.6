@@ -5,11 +5,12 @@ const http = require('node:http');
 let BASE;
 let server;
 
-function req(method, path, body) {
+function req(method, path, body, token) {
   return new Promise((resolve, reject) => {
     const url = new URL(path, BASE);
-    const opts = { method, hostname: url.hostname, port: url.port, path: url.pathname + (url.search || '') };
-    if (body) opts.headers = { 'Content-Type': 'application/json' };
+    const opts = { method, hostname: url.hostname, port: url.port, path: url.pathname + (url.search || ''), headers: {} };
+    if (body) opts.headers['Content-Type'] = 'application/json';
+    if (token) opts.headers['Authorization'] = 'Bearer ' + token;
     const r = http.request(opts, res => {
       let d = '';
       res.on('data', c => (d += c));
@@ -25,6 +26,7 @@ function req(method, path, body) {
 }
 
 const CALLSIGN = 'th_' + (Date.now() % 1e9);
+let TOKEN;
 
 describe('Phase 2A: Character creation, XP, story', () => {
   before(async () => {
@@ -70,6 +72,8 @@ describe('Phase 2A: Character creation, XP, story', () => {
     assert.ok(body.character);
     assert.equal(body.character.id, 'safa');
     assert.ok(body.level !== undefined);
+    assert.ok(body.sessionToken, 'should return sessionToken');
+    TOKEN = body.sessionToken;
   });
 
   it('POST /api/player/create: duplicate returns 409', async () => {
@@ -122,21 +126,13 @@ describe('Phase 2A: Character creation, XP, story', () => {
 
   // ── Wallet Connection ───────────────────────────────────────
 
-  it('POST /api/player/connect-wallet: success', async () => {
+  it('POST /api/player/connect-wallet: demo-disabled returns 501', async () => {
     const { status, body } = await req('POST', '/api/player/connect-wallet', {
       callsign: CALLSIGN,
       thrWallet: 'rTHR_TEST_ADDRESS_123'
     });
-    assert.equal(status, 200);
-    assert.ok(body.thrWallet);
-  });
-
-  it('POST /api/player/connect-wallet: missing player returns 404', async () => {
-    const { status } = await req('POST', '/api/player/connect-wallet', {
-      callsign: 'nonexistent_' + Date.now(),
-      thrWallet: 'rSOME'
-    });
-    assert.equal(status, 404);
+    assert.equal(status, 501);
+    assert.equal(body.code, 'DEMO_DISABLED');
   });
 
   // ── Story Chapters ──────────────────────────────────────────
@@ -171,7 +167,7 @@ describe('Phase 2A: Character creation, XP, story', () => {
       chapterId: 'ch1',
       sceneId: 's2',
       choiceIndex: 0
-    });
+    }, TOKEN);
     assert.equal(status, 200);
     assert.ok(body.xp > 0);
     assert.ok(body.trust !== undefined);
@@ -184,7 +180,7 @@ describe('Phase 2A: Character creation, XP, story', () => {
       chapterId: 'ch999',
       sceneId: 's1',
       choiceIndex: 0
-    });
+    }, TOKEN);
     assert.equal(status, 404);
   });
 
@@ -194,7 +190,7 @@ describe('Phase 2A: Character creation, XP, story', () => {
       chapterId: 'ch1',
       sceneId: 's999',
       choiceIndex: 0
-    });
+    }, TOKEN);
     assert.equal(status, 400);
   });
 
@@ -204,7 +200,7 @@ describe('Phase 2A: Character creation, XP, story', () => {
       chapterId: 'ch1',
       sceneId: 's2',
       choiceIndex: 99
-    });
+    }, TOKEN);
     assert.equal(status, 400);
   });
 
@@ -214,7 +210,7 @@ describe('Phase 2A: Character creation, XP, story', () => {
     const { status, body } = await req('POST', '/api/story/complete-chapter', {
       callsign: CALLSIGN,
       chapterId: 'ch1'
-    });
+    }, TOKEN);
     assert.equal(status, 200);
     assert.ok(body.xp > 0);
     assert.ok(body.storyCompleted.includes('ch1'));
@@ -224,7 +220,7 @@ describe('Phase 2A: Character creation, XP, story', () => {
     const { status } = await req('POST', '/api/story/complete-chapter', {
       callsign: CALLSIGN,
       chapterId: 'ch1'
-    });
+    }, TOKEN);
     assert.equal(status, 400);
   });
 
@@ -243,7 +239,7 @@ describe('Phase 2A: Character creation, XP, story', () => {
     const { status, body } = await req('POST', '/api/missions/start', {
       wallet: CALLSIGN,
       missionId: 'E1'
-    });
+    }, TOKEN);
     assert.ok(status === 200 || status === 400);
   });
 

@@ -5,11 +5,12 @@ const http = require('node:http');
 let BASE;
 let server;
 
-function req(method, path, body) {
+function req(method, path, body, token) {
   return new Promise((resolve, reject) => {
     const url = new URL(path, BASE);
-    const opts = { method, hostname: url.hostname, port: url.port, path: url.pathname + (url.search || '') };
-    if (body) opts.headers = { 'Content-Type': 'application/json' };
+    const opts = { method, hostname: url.hostname, port: url.port, path: url.pathname + (url.search || ''), headers: {} };
+    if (body) opts.headers['Content-Type'] = 'application/json';
+    if (token) opts.headers['Authorization'] = 'Bearer ' + token;
     const r = http.request(opts, res => {
       let d = '';
       res.on('data', c => (d += c));
@@ -27,6 +28,7 @@ function req(method, path, body) {
 const CALLSIGN = 'av_' + (Date.now() % 1e8);
 const CALLSIGN2 = 'av2_' + (Date.now() % 1e8);
 const COMPAT_CALLSIGN = 'avc_' + (Date.now() % 1e8);
+let TOKEN, TOKEN2, COMPAT_TOKEN;
 
 const VALID_AVATAR = {
   bodyType: 'athletic',
@@ -82,6 +84,8 @@ describe('Avatar & Character Sheet system', () => {
     assert.ok(body.avatar, 'should return avatar');
     assert.ok(body.assetId, 'should return assetId');
     assert.equal(body.avatar.bodyType, 'athletic');
+    assert.ok(body.sessionToken, 'should return sessionToken');
+    TOKEN = body.sessionToken;
   });
 
   it('POST /api/player/create with invalid hunterClass returns 400', async () => {
@@ -112,6 +116,8 @@ describe('Avatar & Character Sheet system', () => {
     assert.equal(status, 200);
     assert.equal(body.callsign, COMPAT_CALLSIGN);
     assert.ok(body.character, 'should return character for backward compat');
+    assert.ok(body.sessionToken, 'should return sessionToken');
+    COMPAT_TOKEN = body.sessionToken;
   });
 
   // ── Avatar Update ───────────────────────────────────────────
@@ -120,19 +126,19 @@ describe('Avatar & Character Sheet system', () => {
     const { status, body } = await req('POST', '/api/player/avatar', {
       callsign: CALLSIGN,
       avatar: { ...VALID_AVATAR, hair: 'mohawk', accentColors: { primary: '#ff0000', secondary: '#06b6d4' } }
-    });
+    }, TOKEN);
     assert.equal(status, 200);
     assert.ok(body.avatar);
     assert.equal(body.avatar.hair, 'mohawk');
     assert.equal(body.avatar.accentColors.primary, '#ff0000');
   });
 
-  it('POST /api/player/avatar with nonexistent player returns 404', async () => {
+  it('POST /api/player/avatar without token returns 401', async () => {
     const { status } = await req('POST', '/api/player/avatar', {
-      callsign: 'nonexistent_' + Date.now(),
+      callsign: CALLSIGN,
       avatar: VALID_AVATAR
     });
-    assert.equal(status, 404);
+    assert.equal(status, 401);
   });
 
   // ── Character Sheet ─────────────────────────────────────────
@@ -183,13 +189,13 @@ describe('Avatar & Character Sheet system', () => {
 
   it('setup: earn DRX by completing missions E1 and E3', async () => {
     // Start and complete E1
-    await req('POST', '/api/missions/start', { callsign: CALLSIGN, missionId: 'E1' });
-    const r1 = await req('POST', '/api/missions/complete', { callsign: CALLSIGN, missionId: 'E1' });
+    await req('POST', '/api/missions/start', { callsign: CALLSIGN, missionId: 'E1' }, TOKEN);
+    const r1 = await req('POST', '/api/missions/complete', { callsign: CALLSIGN, missionId: 'E1' }, TOKEN);
     assert.equal(r1.status, 200);
 
     // Start and complete E3
-    await req('POST', '/api/missions/start', { callsign: CALLSIGN, missionId: 'E3' });
-    const r3 = await req('POST', '/api/missions/complete', { callsign: CALLSIGN, missionId: 'E3' });
+    await req('POST', '/api/missions/start', { callsign: CALLSIGN, missionId: 'E3' }, TOKEN);
+    const r3 = await req('POST', '/api/missions/complete', { callsign: CALLSIGN, missionId: 'E3' }, TOKEN);
     assert.equal(r3.status, 200);
 
     // Verify balance >= 150
@@ -198,7 +204,7 @@ describe('Avatar & Character Sheet system', () => {
   });
 
   it('setup: buy I_SEC_BOOST item', async () => {
-    const { status, body } = await req('POST', '/api/items/buy/I_SEC_BOOST', { callsign: CALLSIGN });
+    const { status, body } = await req('POST', '/api/items/buy/I_SEC_BOOST', { callsign: CALLSIGN }, TOKEN);
     assert.equal(status, 200);
     assert.ok(body.inventory.includes('I_SEC_BOOST'));
   });
@@ -208,7 +214,7 @@ describe('Avatar & Character Sheet system', () => {
       callsign: CALLSIGN,
       slot: 'tool',
       itemId: 'I_SEC_BOOST'
-    });
+    }, TOKEN);
     assert.equal(status, 200);
     assert.ok(body.equipment);
     assert.equal(body.equipment.tool, 'I_SEC_BOOST');
@@ -219,7 +225,7 @@ describe('Avatar & Character Sheet system', () => {
       callsign: CALLSIGN,
       slot: 'wings',
       itemId: 'I_SEC_BOOST'
-    });
+    }, TOKEN);
     assert.equal(status, 400);
   });
 
@@ -228,7 +234,7 @@ describe('Avatar & Character Sheet system', () => {
       callsign: CALLSIGN,
       slot: 'accessory',
       itemId: 'I_NONEXISTENT_ITEM'
-    });
+    }, TOKEN);
     assert.equal(status, 400);
   });
 
@@ -236,7 +242,7 @@ describe('Avatar & Character Sheet system', () => {
     const { status, body } = await req('POST', '/api/player/unequip', {
       callsign: CALLSIGN,
       slot: 'tool'
-    });
+    }, TOKEN);
     assert.equal(status, 200);
     assert.equal(body.equipment.tool, null);
   });
@@ -245,7 +251,7 @@ describe('Avatar & Character Sheet system', () => {
     const { status, body } = await req('POST', '/api/player/unequip', {
       callsign: CALLSIGN,
       slot: 'head'
-    });
+    }, TOKEN);
     assert.equal(status, 200);
     assert.equal(body.equipment.head, null);
   });
@@ -253,12 +259,13 @@ describe('Avatar & Character Sheet system', () => {
   // ── User Isolation ──────────────────────────────────────────
 
   it('setup: create second player', async () => {
-    const { status } = await req('POST', '/api/player/create', {
+    const { status, body } = await req('POST', '/api/player/create', {
       callsign: CALLSIGN2,
       hunterClass: 'defender',
       avatar: { ...VALID_AVATAR, hair: 'bald' }
     });
     assert.equal(status, 200);
+    TOKEN2 = body.sessionToken;
   });
 
   it('player 1 avatar is not visible in player 2 sheet', async () => {
@@ -274,7 +281,7 @@ describe('Avatar & Character Sheet system', () => {
       callsign: CALLSIGN2,
       slot: 'tool',
       itemId: 'I_SEC_BOOST'
-    });
+    }, TOKEN2);
     assert.equal(status, 400);
   });
 
@@ -306,13 +313,13 @@ describe('Avatar & Character Sheet system', () => {
       callsign: CALLSIGN,
       slot: 'tool',
       itemId: 'I_SEC_BOOST'
-    });
+    }, TOKEN);
     // CALLSIGN2 tries to equip same item — should fail (not in their inventory)
     const { status } = await req('POST', '/api/player/equip', {
       callsign: CALLSIGN2,
       slot: 'tool',
       itemId: 'I_SEC_BOOST'
-    });
+    }, TOKEN2);
     assert.equal(status, 400);
   });
 });

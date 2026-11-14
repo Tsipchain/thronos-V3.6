@@ -82,6 +82,43 @@ for (const t of TIER_ORDER) {
 // In-memory state (populated from save files on startup)
 // ---------------------------------------------------------------------------
 const players = {}; // callsign/wallet -> PlayerState
+const sessions = {}; // tokenHash -> { callsign, expiresAt }
+const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+function createSessionToken(callsign) {
+  const raw = crypto.randomBytes(32).toString('hex');
+  const hash = crypto.createHash('sha256').update(raw).digest('hex');
+  sessions[hash] = { callsign, expiresAt: Date.now() + SESSION_TTL_MS };
+  return raw;
+}
+
+function authenticateSession(req) {
+  const auth = req.headers.authorization || '';
+  const match = auth.match(/^Bearer\s+(\S+)$/i);
+  if (!match) return null;
+  const hash = crypto.createHash('sha256').update(match[1]).digest('hex');
+  const entry = sessions[hash];
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) { delete sessions[hash]; return null; }
+  return entry.callsign;
+}
+
+function requireSession(req, res, next) {
+  const sessionCallsign = authenticateSession(req);
+  if (!sessionCallsign) {
+    return res.status(401).json({ error: 'valid session token required', code: 'UNAUTHORIZED' });
+  }
+  req.playerCallsign = sessionCallsign;
+  next();
+}
+
+function requireOwnership(req, res, next) {
+  const bodyCallsign = (req.body || {}).callsign || (req.body || {}).wallet;
+  if (bodyCallsign && req.playerCallsign !== bodyCallsign) {
+    return res.status(403).json({ error: 'session does not own this player', code: 'FORBIDDEN' });
+  }
+  next();
+}
 
 function defaultPlayerState(callsign) {
   const questStates = {};
@@ -263,7 +300,7 @@ app.get('/api/missions', (req, res) => {
 });
 
 // POST /api/missions/start — move available → in_progress
-app.post('/api/missions/start', (req, res) => {
+app.post('/api/missions/start', requireSession, requireOwnership, (req, res) => {
   const wallet = (req.body || {}).wallet || (req.body || {}).callsign;
   const { missionId } = req.body || {};
   if (!wallet || !missionId) {
@@ -298,7 +335,7 @@ app.post('/api/missions/start', (req, res) => {
 });
 
 // POST /api/missions/complete — requires in_progress state
-app.post('/api/missions/complete', (req, res) => {
+app.post('/api/missions/complete', requireSession, requireOwnership, (req, res) => {
   const wallet = (req.body || {}).wallet || (req.body || {}).callsign;
   const { missionId } = req.body || {};
   if (!wallet || !missionId) {
@@ -476,7 +513,7 @@ app.get('/api/items', (_req, res) => {
   res.json(items);
 });
 
-app.post('/api/items/buy/:itemId', (req, res) => {
+app.post('/api/items/buy/:itemId', requireSession, requireOwnership, (req, res) => {
   const wallet = (req.body || {}).wallet || (req.body || {}).callsign;
   const { itemId } = req.params;
   if (!wallet) {
@@ -654,7 +691,7 @@ app.get('/api/reward-policy', (_req, res) => {
 // ---------------------------------------------------------------------------
 
 // E1: Check if the player's SHA-256 hash of `input` matches `answer`
-app.post('/api/puzzles/e1/check', (req, res) => {
+app.post('/api/puzzles/e1/check', requireSession, requireOwnership, (req, res) => {
   const wallet = (req.body || {}).wallet || (req.body || {}).callsign;
   const { input, answer } = req.body || {};
   if (!wallet || !input || !answer) {
@@ -679,7 +716,7 @@ app.post('/api/puzzles/e1/check', (req, res) => {
 });
 
 // E1: Complete — requires at least 3 correct hashes
-app.post('/api/puzzles/e1/complete', (req, res) => {
+app.post('/api/puzzles/e1/complete', requireSession, requireOwnership, (req, res) => {
   const wallet = (req.body || {}).wallet || (req.body || {}).callsign;
   if (!wallet) return res.status(400).json({ error: 'wallet required', code: 'MISSING_FIELDS' });
 
@@ -707,7 +744,7 @@ app.post('/api/puzzles/e1/complete', (req, res) => {
 });
 
 // E2: Generate a block data + difficulty target for the nonce challenge
-app.post('/api/puzzles/e2/generate', (req, res) => {
+app.post('/api/puzzles/e2/generate', requireSession, requireOwnership, (req, res) => {
   const wallet = (req.body || {}).wallet || (req.body || {}).callsign;
   if (!wallet) return res.status(400).json({ error: 'wallet required', code: 'MISSING_FIELDS' });
 
@@ -725,7 +762,7 @@ app.post('/api/puzzles/e2/generate', (req, res) => {
 });
 
 // E2: Check nonce — hash(blockData + nonce) must start with target
-app.post('/api/puzzles/e2/check', (req, res) => {
+app.post('/api/puzzles/e2/check', requireSession, requireOwnership, (req, res) => {
   const wallet = (req.body || {}).wallet || (req.body || {}).callsign;
   const { nonce } = req.body || {};
   if (!wallet || nonce === undefined) {
@@ -752,7 +789,7 @@ app.post('/api/puzzles/e2/check', (req, res) => {
 });
 
 // E2: Complete — requires the nonce puzzle to be solved
-app.post('/api/puzzles/e2/complete', (req, res) => {
+app.post('/api/puzzles/e2/complete', requireSession, requireOwnership, (req, res) => {
   const wallet = (req.body || {}).wallet || (req.body || {}).callsign;
   if (!wallet) return res.status(400).json({ error: 'wallet required', code: 'MISSING_FIELDS' });
 
@@ -891,9 +928,11 @@ app.post('/api/player/create', (req, res) => {
   players[callsign] = player;
   persistPlayer(callsign);
 
+  const sessionToken = createSessionToken(callsign);
   res.json({
     message: 'Hunter created',
     callsign,
+    sessionToken,
     character: player.character,
     avatar: player.avatar,
     hunterClass: player.hunterClass,
@@ -904,18 +943,20 @@ app.post('/api/player/create', (req, res) => {
   });
 });
 
-app.post('/api/player/connect-wallet', (req, res) => {
-  const { callsign, thrWallet } = req.body || {};
-  if (!callsign || !thrWallet) {
-    return res.status(400).json({ error: 'callsign and thrWallet required', code: 'MISSING_FIELDS' });
+app.post('/api/player/login', (req, res) => {
+  const { callsign } = req.body || {};
+  if (!callsign || !CALLSIGN_RE.test(callsign)) {
+    return res.status(400).json({ error: 'valid callsign required', code: 'INVALID_CALLSIGN' });
   }
   if (!players[callsign]) {
     return res.status(404).json({ error: 'player not found', code: 'PLAYER_NOT_FOUND' });
   }
-  const player = players[callsign];
-  player.thrWallet = thrWallet;
-  persistPlayer(callsign);
-  res.json({ message: 'wallet connected', callsign, thrWallet });
+  const sessionToken = createSessionToken(callsign);
+  res.json({ message: 'session created', callsign, sessionToken });
+});
+
+app.post('/api/player/connect-wallet', (_req, res) => {
+  res.status(501).json({ error: 'connect-wallet is demo-disabled pending signed challenge/proof integration', code: 'DEMO_DISABLED' });
 });
 
 app.get('/api/avatar-options', (_req, res) => {
@@ -936,7 +977,7 @@ app.get('/api/npcs', (_req, res) => {
   res.json(characters);
 });
 
-app.post('/api/player/avatar', (req, res) => {
+app.post('/api/player/avatar', requireSession, requireOwnership, (req, res) => {
   const { callsign, avatar } = req.body || {};
   if (!callsign) {
     return res.status(400).json({ error: 'callsign required', code: 'MISSING_FIELDS' });
@@ -957,7 +998,7 @@ app.post('/api/player/avatar', (req, res) => {
   res.json({ message: 'avatar updated', callsign, avatar: player.avatar });
 });
 
-app.post('/api/player/equip', (req, res) => {
+app.post('/api/player/equip', requireSession, requireOwnership, (req, res) => {
   const { callsign, slot, itemId } = req.body || {};
   if (!callsign || !slot || !itemId) {
     return res.status(400).json({ error: 'callsign, slot, and itemId required', code: 'MISSING_FIELDS' });
@@ -977,7 +1018,7 @@ app.post('/api/player/equip', (req, res) => {
   res.json({ message: 'item equipped', callsign, slot, itemId, equipment: player.equipment });
 });
 
-app.post('/api/player/unequip', (req, res) => {
+app.post('/api/player/unequip', requireSession, requireOwnership, (req, res) => {
   const { callsign, slot } = req.body || {};
   if (!callsign || !slot) {
     return res.status(400).json({ error: 'callsign and slot required', code: 'MISSING_FIELDS' });
@@ -1052,7 +1093,7 @@ app.get('/api/player/:callsign', (req, res) => {
 
 // (story chapter GET routes moved before /api/story/:actId to avoid route collision)
 
-app.post('/api/story/choice', (req, res) => {
+app.post('/api/story/choice', requireSession, requireOwnership, (req, res) => {
   const callsign = (req.body || {}).callsign || (req.body || {}).wallet;
   const { chapterId, sceneId, choiceIndex } = req.body || {};
   if (!callsign || !chapterId || !sceneId || choiceIndex === undefined) {
@@ -1091,7 +1132,7 @@ app.post('/api/story/choice', (req, res) => {
   });
 });
 
-app.post('/api/story/complete-chapter', (req, res) => {
+app.post('/api/story/complete-chapter', requireSession, requireOwnership, (req, res) => {
   const callsign = (req.body || {}).callsign || (req.body || {}).wallet;
   const { chapterId } = req.body || {};
   if (!callsign || !chapterId) {
@@ -1144,4 +1185,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, getPlayer, players, missions, items, storyActs, rewardPolicy, TIER_ORDER, missionsByTier, characters, chapters, levelFromXp, SKILLS, AVATAR_OPTIONS, CLASSES, EQUIPMENT_SLOTS, ANIMATION_STATES };
+module.exports = { app, getPlayer, players, sessions, createSessionToken, missions, items, storyActs, rewardPolicy, TIER_ORDER, missionsByTier, characters, chapters, levelFromXp, SKILLS, AVATAR_OPTIONS, CLASSES, EQUIPMENT_SLOTS, ANIMATION_STATES };

@@ -10,12 +10,12 @@ try {
   for (const f of files) fs.unlinkSync(path.join(SAVES_DIR, f));
 } catch (_e) { /* ok */ }
 
-const { app, missions, items, storyActs, rewardPolicy, TIER_ORDER, players } = require('../drx.js');
+const { app, missions, items, storyActs, rewardPolicy, TIER_ORDER, players, sessions } = require('../drx.js');
 
 let server;
 let BASE;
 
-function req(method, urlPath, body) {
+function req(method, urlPath, body, token) {
   return new Promise((resolve, reject) => {
     const url = new URL(urlPath, BASE);
     const opts = { method, hostname: url.hostname, port: url.port, path: url.pathname + url.search, headers: {} };
@@ -24,6 +24,7 @@ function req(method, urlPath, body) {
       opts.headers['Content-Type'] = 'application/json';
       opts.headers['Content-Length'] = Buffer.byteLength(data);
     }
+    if (token) opts.headers['Authorization'] = 'Bearer ' + token;
     const r = http.request(opts, (res) => {
       let chunks = '';
       res.on('data', (c) => chunks += c);
@@ -41,12 +42,18 @@ function req(method, urlPath, body) {
   });
 }
 
+async function createAndAuth(callsign) {
+  const r = await req('POST', '/api/player/create', { callsign, hunterClass: 'hacker', avatar: { bodyType: 'average' } });
+  return r.body.sessionToken;
+}
+
 // Helpers
 const W = 'rTestWallet12345';
 const W2 = 'rTestWallet67890';
 
 function clearPlayers() {
   for (const k of Object.keys(players)) delete players[k];
+  for (const k of Object.keys(sessions)) delete sessions[k];
   try {
     const files = fs.readdirSync(SAVES_DIR).filter(f => f.endsWith('.json'));
     for (const f of files) fs.unlinkSync(path.join(SAVES_DIR, f));
@@ -124,40 +131,46 @@ test('GET /api/missions?wallet enriches quest states', async () => {
 
 // ── POST /api/missions/start ─────────────────────────────────────────────────
 test('start mission: available → in_progress', async () => {
-  const r = await req('POST', '/api/missions/start', { wallet: W, missionId: 'E1' });
+  const token = await createAndAuth(W);
+  const r = await req('POST', '/api/missions/start', { wallet: W, missionId: 'E1' }, token);
   assert.strictEqual(r.status, 200);
   assert.strictEqual(r.body.questState, 'in_progress');
   assert.strictEqual(r.body.animation, 'quest_activate');
 });
 
 test('start mission: locked returns 400', async () => {
-  const r = await req('POST', '/api/missions/start', { wallet: W, missionId: 'N1' });
+  const token = await createAndAuth(W);
+  const r = await req('POST', '/api/missions/start', { wallet: W, missionId: 'N1' }, token);
   assert.strictEqual(r.status, 400);
   assert.strictEqual(r.body.code, 'MISSION_LOCKED');
 });
 
 test('start mission: missing fields returns 400', async () => {
-  const r = await req('POST', '/api/missions/start', { wallet: W });
+  const token = await createAndAuth(W);
+  const r = await req('POST', '/api/missions/start', { wallet: W }, token);
   assert.strictEqual(r.status, 400);
   assert.strictEqual(r.body.code, 'MISSING_FIELDS');
 });
 
 test('start mission: not found returns 404', async () => {
-  const r = await req('POST', '/api/missions/start', { wallet: W, missionId: 'ZZZ' });
+  const token = await createAndAuth(W);
+  const r = await req('POST', '/api/missions/start', { wallet: W, missionId: 'ZZZ' }, token);
   assert.strictEqual(r.status, 404);
 });
 
 test('start mission: already in_progress is idempotent', async () => {
-  await req('POST', '/api/missions/start', { wallet: W, missionId: 'E1' });
-  const r = await req('POST', '/api/missions/start', { wallet: W, missionId: 'E1' });
+  const token = await createAndAuth(W);
+  await req('POST', '/api/missions/start', { wallet: W, missionId: 'E1' }, token);
+  const r = await req('POST', '/api/missions/start', { wallet: W, missionId: 'E1' }, token);
   assert.strictEqual(r.status, 200);
   assert.strictEqual(r.body.questState, 'in_progress');
 });
 
 // ── POST /api/missions/complete ──────────────────────────────────────────────
 test('complete mission: awards DRX and animation', async () => {
-  await req('POST', '/api/missions/start', { wallet: W, missionId: 'E1' });
-  const r = await req('POST', '/api/missions/complete', { wallet: W, missionId: 'E1' });
+  const token = await createAndAuth(W);
+  await req('POST', '/api/missions/start', { wallet: W, missionId: 'E1' }, token);
+  const r = await req('POST', '/api/missions/complete', { wallet: W, missionId: 'E1' }, token);
   assert.strictEqual(r.status, 200);
   assert.strictEqual(r.body.questState, 'completed');
   assert.strictEqual(r.body.animation, 'reward_burst');
@@ -166,30 +179,34 @@ test('complete mission: awards DRX and animation', async () => {
 });
 
 test('complete mission: not started returns 400', async () => {
-  const r = await req('POST', '/api/missions/complete', { wallet: W, missionId: 'E1' });
+  const token = await createAndAuth(W);
+  const r = await req('POST', '/api/missions/complete', { wallet: W, missionId: 'E1' }, token);
   assert.strictEqual(r.status, 400);
   assert.strictEqual(r.body.code, 'NOT_STARTED');
 });
 
 test('complete mission: already completed returns 400', async () => {
-  await req('POST', '/api/missions/start', { wallet: W, missionId: 'E1' });
-  await req('POST', '/api/missions/complete', { wallet: W, missionId: 'E1' });
-  const r = await req('POST', '/api/missions/complete', { wallet: W, missionId: 'E1' });
+  const token = await createAndAuth(W);
+  await req('POST', '/api/missions/start', { wallet: W, missionId: 'E1' }, token);
+  await req('POST', '/api/missions/complete', { wallet: W, missionId: 'E1' }, token);
+  const r = await req('POST', '/api/missions/complete', { wallet: W, missionId: 'E1' }, token);
   assert.strictEqual(r.status, 400);
   assert.strictEqual(r.body.code, 'ALREADY_COMPLETED');
 });
 
 test('complete mission: locked returns 400', async () => {
-  const r = await req('POST', '/api/missions/complete', { wallet: W, missionId: 'N1' });
+  const token = await createAndAuth(W);
+  const r = await req('POST', '/api/missions/complete', { wallet: W, missionId: 'N1' }, token);
   assert.strictEqual(r.status, 400);
   assert.strictEqual(r.body.code, 'MISSION_LOCKED');
 });
 
 // ── Tier progression ─────────────────────────────────────────────────────────
 test('completing Easy tier unlocks Normal tier', async () => {
+  const token = await createAndAuth(W);
   for (const id of ['E1', 'E2', 'E3']) {
-    await req('POST', '/api/missions/start', { wallet: W, missionId: id });
-    await req('POST', '/api/missions/complete', { wallet: W, missionId: id });
+    await req('POST', '/api/missions/start', { wallet: W, missionId: id }, token);
+    await req('POST', '/api/missions/complete', { wallet: W, missionId: id }, token);
   }
   const r = await req('GET', `/api/missions?wallet=${W}`);
   const n1 = r.body.find(m => m.id === 'N1');
@@ -197,21 +214,23 @@ test('completing Easy tier unlocks Normal tier', async () => {
 });
 
 test('completing Easy tier emits tier_unlock event', async () => {
-  await req('POST', '/api/missions/start', { wallet: W, missionId: 'E1' });
-  await req('POST', '/api/missions/complete', { wallet: W, missionId: 'E1' });
-  await req('POST', '/api/missions/start', { wallet: W, missionId: 'E2' });
-  await req('POST', '/api/missions/complete', { wallet: W, missionId: 'E2' });
-  await req('POST', '/api/missions/start', { wallet: W, missionId: 'E3' });
-  const r = await req('POST', '/api/missions/complete', { wallet: W, missionId: 'E3' });
+  const token = await createAndAuth(W);
+  await req('POST', '/api/missions/start', { wallet: W, missionId: 'E1' }, token);
+  await req('POST', '/api/missions/complete', { wallet: W, missionId: 'E1' }, token);
+  await req('POST', '/api/missions/start', { wallet: W, missionId: 'E2' }, token);
+  await req('POST', '/api/missions/complete', { wallet: W, missionId: 'E2' }, token);
+  await req('POST', '/api/missions/start', { wallet: W, missionId: 'E3' }, token);
+  const r = await req('POST', '/api/missions/complete', { wallet: W, missionId: 'E3' }, token);
   const unlock = r.body.unlocks.find(e => e.event === 'tier_unlock');
   assert(unlock, 'should have tier_unlock event');
   assert.strictEqual(unlock.tier, 'Normal');
 });
 
 test('completing Easy tier unlocks story Act II', async () => {
+  const token = await createAndAuth(W);
   for (const id of ['E1', 'E2', 'E3']) {
-    await req('POST', '/api/missions/start', { wallet: W, missionId: id });
-    await req('POST', '/api/missions/complete', { wallet: W, missionId: id });
+    await req('POST', '/api/missions/start', { wallet: W, missionId: id }, token);
+    await req('POST', '/api/missions/complete', { wallet: W, missionId: id }, token);
   }
   const r = await req('GET', `/api/story?wallet=${W}`);
   const act2 = r.body.find(a => a.id === 2);
@@ -219,10 +238,11 @@ test('completing Easy tier unlocks story Act II', async () => {
 });
 
 test('full tier chain: Easy → Normal → Expert → Genius', async () => {
+  const token = await createAndAuth(W);
   const allIds = ['E1','E2','E3','N1','N2','N3','X1','X2','X3','G1','G2','G3'];
   for (const id of allIds) {
-    await req('POST', '/api/missions/start', { wallet: W, missionId: id });
-    await req('POST', '/api/missions/complete', { wallet: W, missionId: id });
+    await req('POST', '/api/missions/start', { wallet: W, missionId: id }, token);
+    await req('POST', '/api/missions/complete', { wallet: W, missionId: id }, token);
   }
   const r = await req('GET', `/api/missions?wallet=${W}`);
   assert(r.body.every(m => m.questState === 'completed'));
@@ -271,8 +291,9 @@ test('GET /api/dashboard/:wallet returns player state', async () => {
 });
 
 test('dashboard reflects completed missions', async () => {
-  await req('POST', '/api/missions/start', { wallet: W, missionId: 'E1' });
-  await req('POST', '/api/missions/complete', { wallet: W, missionId: 'E1' });
+  const token = await createAndAuth(W);
+  await req('POST', '/api/missions/start', { wallet: W, missionId: 'E1' }, token);
+  await req('POST', '/api/missions/complete', { wallet: W, missionId: 'E1' }, token);
   const r = await req('GET', `/api/dashboard/${W}`);
   assert.strictEqual(r.body.missionsCompleted, 1);
   assert.strictEqual(r.body.balance, 100);
@@ -286,18 +307,19 @@ test('GET /api/items returns all items', async () => {
 });
 
 test('POST /api/items/buy: success', async () => {
+  const token = await createAndAuth(W);
   // Give player some DRX first
-  await req('POST', '/api/missions/start', { wallet: W, missionId: 'E1' });
-  await req('POST', '/api/missions/complete', { wallet: W, missionId: 'E1' });
+  await req('POST', '/api/missions/start', { wallet: W, missionId: 'E1' }, token);
+  await req('POST', '/api/missions/complete', { wallet: W, missionId: 'E1' }, token);
   // Balance: 100, buy I_COS_SKIN1 at 120 → fail
-  const fail = await req('POST', '/api/items/buy/I_COS_SKIN1', { wallet: W });
+  const fail = await req('POST', '/api/items/buy/I_COS_SKIN1', { wallet: W }, token);
   assert.strictEqual(fail.status, 400);
   assert.strictEqual(fail.body.code, 'INSUFFICIENT_BALANCE');
   // Complete more missions
-  await req('POST', '/api/missions/start', { wallet: W, missionId: 'E2' });
-  await req('POST', '/api/missions/complete', { wallet: W, missionId: 'E2' });
+  await req('POST', '/api/missions/start', { wallet: W, missionId: 'E2' }, token);
+  await req('POST', '/api/missions/complete', { wallet: W, missionId: 'E2' }, token);
   // Balance: 200, buy I_COS_SKIN1 at 120 → success
-  const ok = await req('POST', '/api/items/buy/I_COS_SKIN1', { wallet: W });
+  const ok = await req('POST', '/api/items/buy/I_COS_SKIN1', { wallet: W }, token);
   assert.strictEqual(ok.status, 200);
   assert.strictEqual(ok.body.balance, 80);
   assert.strictEqual(ok.body.animation, 'item_glow');
@@ -305,12 +327,14 @@ test('POST /api/items/buy: success', async () => {
 });
 
 test('POST /api/items/buy: item not found', async () => {
-  const r = await req('POST', '/api/items/buy/NOPE', { wallet: W });
+  const token = await createAndAuth(W);
+  const r = await req('POST', '/api/items/buy/NOPE', { wallet: W }, token);
   assert.strictEqual(r.status, 404);
 });
 
 test('POST /api/items/buy: no wallet', async () => {
-  const r = await req('POST', '/api/items/buy/I_SEC_BOOST', {});
+  const token = await createAndAuth(W);
+  const r = await req('POST', '/api/items/buy/I_SEC_BOOST', {}, token);
   assert.strictEqual(r.status, 400);
 });
 
@@ -325,8 +349,9 @@ test('GET /api/status/:wallet returns state', async () => {
 
 // ── Withdraw ─────────────────────────────────────────────────────────────────
 test('POST /api/withdraw: queues and zeroes balance', async () => {
-  await req('POST', '/api/missions/start', { wallet: W, missionId: 'E1' });
-  await req('POST', '/api/missions/complete', { wallet: W, missionId: 'E1' });
+  const token = await createAndAuth(W);
+  await req('POST', '/api/missions/start', { wallet: W, missionId: 'E1' }, token);
+  await req('POST', '/api/missions/complete', { wallet: W, missionId: 'E1' }, token);
   const r = await req('POST', `/api/withdraw/${W}`);
   assert.strictEqual(r.status, 200);
   assert.strictEqual(r.body.request.amount, 100);
@@ -343,8 +368,9 @@ test('POST /api/withdraw: no balance returns 400', async () => {
 
 // ── Bridge ───────────────────────────────────────────────────────────────────
 test('POST /api/bridge/drx-to-thr: success', async () => {
-  await req('POST', '/api/missions/start', { wallet: W, missionId: 'E1' });
-  await req('POST', '/api/missions/complete', { wallet: W, missionId: 'E1' });
+  const token = await createAndAuth(W);
+  await req('POST', '/api/missions/start', { wallet: W, missionId: 'E1' }, token);
+  await req('POST', '/api/missions/complete', { wallet: W, missionId: 'E1' }, token);
   const r = await req('POST', '/api/bridge/drx-to-thr', { wallet: W, amount: 50, thrAddress: 'rTHR123' });
   assert.strictEqual(r.status, 200);
   assert.strictEqual(r.body.balance, 50);
@@ -380,8 +406,9 @@ test('404 for unknown endpoints', async () => {
 
 // ── Save / Resume ────────────────────────────────────────────────────────────
 test('save/resume: persists player to disk', async () => {
-  await req('POST', '/api/missions/start', { wallet: W, missionId: 'E1' });
-  await req('POST', '/api/missions/complete', { wallet: W, missionId: 'E1' });
+  const token = await createAndAuth(W);
+  await req('POST', '/api/missions/start', { wallet: W, missionId: 'E1' }, token);
+  await req('POST', '/api/missions/complete', { wallet: W, missionId: 'E1' }, token);
   // Check file exists
   const fpath = path.join(SAVES_DIR, `${W}.json`);
   assert(fs.existsSync(fpath), 'save file should exist');
@@ -393,8 +420,9 @@ test('save/resume: persists player to disk', async () => {
 });
 
 test('players are isolated between wallets', async () => {
-  await req('POST', '/api/missions/start', { wallet: W, missionId: 'E1' });
-  await req('POST', '/api/missions/complete', { wallet: W, missionId: 'E1' });
+  const token = await createAndAuth(W);
+  await req('POST', '/api/missions/start', { wallet: W, missionId: 'E1' }, token);
+  await req('POST', '/api/missions/complete', { wallet: W, missionId: 'E1' }, token);
   const r2 = await req('GET', `/api/dashboard/${W2}`);
   assert.strictEqual(r2.body.balance, 0);
   assert.strictEqual(r2.body.missionsCompleted, 0);
@@ -402,11 +430,12 @@ test('players are isolated between wallets', async () => {
 
 // ── Animation hooks in responses ─────────────────────────────────────────────
 test('animation hooks present in mutation responses', async () => {
-  const start = await req('POST', '/api/missions/start', { wallet: W, missionId: 'E1' });
+  const token = await createAndAuth(W);
+  const start = await req('POST', '/api/missions/start', { wallet: W, missionId: 'E1' }, token);
   assert.strictEqual(start.body.event, 'mission_start');
   assert.strictEqual(start.body.animation, 'quest_activate');
 
-  const complete = await req('POST', '/api/missions/complete', { wallet: W, missionId: 'E1' });
+  const complete = await req('POST', '/api/missions/complete', { wallet: W, missionId: 'E1' }, token);
   assert.strictEqual(complete.body.event, 'mission_complete');
   assert.strictEqual(complete.body.animation, 'reward_burst');
 });

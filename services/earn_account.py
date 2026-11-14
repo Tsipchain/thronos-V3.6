@@ -4383,6 +4383,22 @@ def register_earn_account_routes(
         )
         return response
 
+    def _earn_admin_authorized() -> tuple[bool, int, str]:
+        """Gate operational publisher moderation behind an explicit secret.
+
+        Publisher account sessions prove ownership of a publisher profile;
+        they never confer the right to approve other publishers.  Keep this
+        separate from browser authentication and fail closed if an operator
+        has not configured the moderation credential.
+        """
+        expected = os.getenv("EARN_ADMIN_TOKEN", "").strip()
+        if not expected:
+            return False, 503, "earn_admin_not_configured"
+        received = request.headers.get("X-Earn-Admin-Token", "")
+        if not hmac.compare_digest(expected, received):
+            return False, 403, "earn_admin_required"
+        return True, 200, ""
+
     @app.post("/api/earn/register")
     def earn_register():
         data = request.get_json(silent=True) or {}
@@ -5362,6 +5378,9 @@ def register_earn_account_routes(
 
     @app.post("/api/earn/publisher/moderate")
     def earn_publisher_moderate():
+        authorized, status, error = _earn_admin_authorized()
+        if not authorized:
+            return jsonify(ok=False, error=error), status
         data = request.get_json(silent=True) or {}
         publisher_id = str(data.get("publisher_id", "")).strip()
         action = str(data.get("action", "")).strip()

@@ -1,0 +1,33 @@
+name: Swap Balance Source Truth Checks
+
+on:
+  pull_request:
+    paths:
+      - "templates/swap.html"
+      - "tests/test_swap_balance_source_truth.py"
+      - ".github/workflows/swap-balance-source-truth.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  swap-balance:
+    name: Swap balance provenance and no-signing-regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --disable-pip-version-check -r requirements.txt pytest
+      - name: Verify swap balance source separation
+        env:
+          CPX_POSTBACK_LIVE: "0"
+          TIMEWALL_POSTBACK_LIVE: "0"
+          BITCOTASKS_ENABLED: "0"
+        run: |
+          python -m pytest tests/test_swap_balance_source_truth.py tests/test_wallet_v1_swap_frontend_guards.py -v

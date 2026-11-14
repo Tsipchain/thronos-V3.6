@@ -187,6 +187,8 @@ window.__swapInitDone = true;
 const $ = (id) => document.getElementById(id);
 
 let swapTokenBalances = {};
+let swapBalanceLoadOk = false;
+let swapExternalUsdtBsc = null; // Informational only; NEVER included in spendable AMM balance.
 let availableTokens = [];
 let poolPairs = [];
 let latestQuote = null;
@@ -280,6 +282,25 @@ function isSwapWalletReady(addr) {
 }
 
 
+function swapSpendableBalance(symbol) {
+    const normalized = normalizeSwapSymbol(symbol);
+    if (!swapBalanceLoadOk || !Object.prototype.hasOwnProperty.call(swapTokenBalances, normalized)) return null;
+    const amount = Number(swapTokenBalances[normalized]);
+    return Number.isFinite(amount) && amount >= 0 ? amount : null;
+}
+
+function swapBalanceProblem(symbol) {
+    const sym = normalizeSwapSymbol(symbol);
+    const available = swapSpendableBalance(sym);
+    if (available === null) {
+        if (sym === 'USDT' && swapExternalUsdtBsc !== null) {
+            return 'BSC USDT is held on the cross-chain wallet, not yet verified as THR AMM spendable USDT. Use the verified deposit/settlement path first.';
+        }
+        return 'Spendable ' + sym + ' balance unavailable on this THR AMM ledger. Refresh or verify the network / deposit status.';
+    }
+    return 'Insufficient spendable ' + sym + ' balance on the THR AMM network';
+}
+
 function updateSwapWalletUI() {
     const addr = getSwapActiveWalletAddress();
     const ready = isSwapWalletReady(addr);
@@ -296,7 +317,8 @@ function applySwapBalance(symbol, value, balances) {
 
 function normalizeSwapBalances(data) {
     const balances = {};
-    SWAP_KNOWN_SYMBOLS.forEach(sym => { balances[sym] = 0; });
+    // No synthetic zero balances: absence means this asset was not reported
+    // spendable on the THR-side AMM ledger, not that an EVM asset is empty.
 
     if (Array.isArray(data.tokens)) {
         data.tokens.forEach(token => {
@@ -375,15 +397,25 @@ window.addEventListener('thronos:wallet:state-changed', async () => {
 });
 
 async function loadBalances(addr = getSwapActiveWalletAddress()) {
+    swapBalanceLoadOk = false;
+    swapTokenBalances = {};
+    swapExternalUsdtBsc = null;
     try {
         if (!addr) return;
         const res = await fetch(`/api/balances?address=${encodeURIComponent(addr)}&show_zero=true`);
+        if (!res.ok) throw new Error('balance_http_' + res.status);
         const data = await res.json();
-        swapTokenBalances = normalizeSwapBalances(data || {});
-        updateBalanceDisplays();
+        if (!data || typeof data !== 'object' || Array.isArray(data) || data.error) throw new Error('invalid_balance_response');
+        // Cross-chain BSC USDT is a different asset/ledger. Do not silently
+        // equate it with native AMM USDT or manufacture a bridge credit.
+        const bsc = data.balances?.USDT_bsc ?? data.balances?.USDT_BSC ?? data.token_balances?.USDT_bsc ?? data.USDT_bsc;
+        if (bsc !== undefined && Number.isFinite(Number(bsc))) swapExternalUsdtBsc = Number(bsc);
+        swapTokenBalances = normalizeSwapBalances(data);
+        swapBalanceLoadOk = true;
     } catch (e) {
-        console.error("Load balance error:", e);
+        console.error("Load spendable balance error:", e);
     }
+    updateBalanceDisplays();
 }
 
 async function loadSwapCatalog() {
@@ -438,10 +470,10 @@ function setDefaultTokens() {
 function updateBalanceDisplays() {
     const fromSymbol = normalizeSwapSymbol($('symbolFrom').value);
     const toSymbol = normalizeSwapSymbol($('symbolTo').value);
-    const fromBal = swapTokenBalances[fromSymbol] || 0;
-    const toBal = swapTokenBalances[toSymbol] || 0;
-    $('balanceFrom').textContent = fromBal.toFixed(6);
-    $('balanceTo').textContent = toBal.toFixed(6);
+    const fromBal = swapSpendableBalance(fromSymbol);
+    const toBal = swapSpendableBalance(toSymbol);
+    $('balanceFrom').textContent = fromBal === null ? '—' : fromBal.toFixed(6);
+    $('balanceTo').textContent = toBal === null ? '—' : toBal.toFixed(6);
     refreshSwapButtonState();
 }
 
@@ -504,12 +536,12 @@ function refreshSwapButtonState() {
     const amount = parseFloat($('amountFrom').value) || 0;
     const tokenIn = normalizeSwapSymbol($('symbolFrom').value);
     const tokenOut = normalizeSwapSymbol($('symbolTo').value);
-    const fromBalance = swapTokenBalances[tokenIn] || 0;
+    const fromBalance = swapSpendableBalance(tokenIn);
     const hasValidQuote = latestQuote && latestQuote.status === 'success';
-    const canSubmit = amount > 0 && tokenIn && tokenOut && tokenIn !== tokenOut && hasValidQuote && fromBalance >= amount;
+    const canSubmit = amount > 0 && tokenIn && tokenOut && tokenIn !== tokenOut && hasValidQuote && fromBalance !== null && fromBalance >= amount;
     $('swapBtn').disabled = !canSubmit;
-    if (amount > 0 && fromBalance < amount) {
-        $('swapResult').textContent = `Insufficient ${tokenIn} balance`;
+    if (amount > 0 && (fromBalance === null || fromBalance < amount)) {
+        $('swapResult').textContent = swapBalanceProblem(tokenIn);
     }
 }
 
@@ -524,11 +556,12 @@ async function calcTo() {
         $('swapBtn').disabled = true;
         return;
     }
-    if ((swapTokenBalances[tokenIn] || 0) < fromVal) {
+    const spendableBalance = swapSpendableBalance(tokenIn);
+    if (spendableBalance === null || spendableBalance < fromVal) {
         $('amountTo').value = '';
         $('rateDisplay').textContent = '—';
         $('swapBtn').disabled = true;
-        $('swapResult').textContent = `Insufficient ${tokenIn} balance`;
+        $('swapResult').textContent = swapBalanceProblem(tokenIn);
         return;
     }
     try {
@@ -591,8 +624,9 @@ async function doSwap() {
         alert("Enter a valid amount.");
         return;
     }
-    if ((swapTokenBalances[tokenIn] || 0) < amount) {
-        alert(`Insufficient ${tokenIn} balance.`);
+    const spendableBalance = swapSpendableBalance(tokenIn);
+    if (spendableBalance === null || spendableBalance < amount) {
+        alert(swapBalanceProblem(tokenIn));
         return;
     }
     if (!latestQuote || latestQuote.status !== 'success') {

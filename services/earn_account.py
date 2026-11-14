@@ -1800,7 +1800,7 @@ class EarnAccountStore:
             updated = con.execute(
                 """UPDATE earn_thc_reservations SET state='settled', updated_at=?
                    WHERE reservation_id=? AND earn_user_id=?
-                     AND reservation_type='wallet_unlock' AND state='reserved'""",
+                     AND reservation_type='wallet_settlement' AND state='reserved'""",
                 (now, pledge["reservation_id"], earn_user_id),
             )
             if updated.rowcount != 1:
@@ -1837,7 +1837,7 @@ class EarnAccountStore:
                 """UPDATE earn_thc_reservations
                    SET state='released', updated_at=?, released_at=?
                    WHERE reservation_id=? AND earn_user_id=?
-                     AND reservation_type='wallet_unlock' AND state='reserved'""",
+                     AND reservation_type='wallet_settlement' AND state='reserved'""",
                 (now, now, pledge["reservation_id"], earn_user_id),
             )
             if updated.rowcount != 1:

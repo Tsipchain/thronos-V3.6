@@ -310,3 +310,15 @@ body {
 .gold { color: var(--gold); }
 .red { color: var(--red); }
 .green { color: var(--green); }
+
+
+/* Bundled THR coin artwork, available offline; no wallet action styling changed. */
+.thr-coin-logo {
+  display:block;
+  width:100%;
+  height:100%;
+  max-width:100%;
+  object-fit:contain;
+}
+.thr-coin-logo--welcome {width:84px;height:84px;margin:0 auto;filter:drop-shadow(0 6px 16px rgba(201,168,76,.24));}
+.thr-coin-logo--lock {width:64px;height:64px;margin:0 auto;filter:drop-shadow(0 4px 12px rgba(201,168,76,.2));}

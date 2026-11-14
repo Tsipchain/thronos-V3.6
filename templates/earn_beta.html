@@ -231,12 +231,60 @@
     .earn-beta .earn-provider,.earn-beta .earn-action,.earn-beta button.earn-balance-cell {transition:none;}
     .earn-beta .earn-provider:not(.is-unavailable):hover,.earn-beta .earn-action:not(:disabled):hover,.earn-beta button.earn-balance-cell:hover {transform:none;}
   }
+
+  /* Earn web standalone hero: intentionally unrelated to Wallet PWA home. */
+  .earn-journey {
+    position:relative;isolation:isolate;overflow:hidden;margin:24px 0 22px;
+    padding:clamp(18px,3vw,30px);border-radius:22px;
+    border:1px solid rgba(242,193,78,.34);
+    background:radial-gradient(ellipse at 92% 4%,rgba(74,227,191,.18),transparent 48%),
+               radial-gradient(ellipse at 8% 0%,rgba(242,193,78,.18),transparent 44%),
+               linear-gradient(125deg,#132d3d,#101c2d 62%,#172131);
+    box-shadow:0 16px 44px #0005,inset 0 1px rgba(255,255,255,.06);
+  }
+  .earn-journey::after {content:"";position:absolute;right:-56px;top:-100px;
+    width:220px;height:220px;border:1px solid rgba(242,193,78,.16);
+    border-radius:50%;box-shadow:0 0 0 32px rgba(242,193,78,.035),
+    0 0 0 64px rgba(74,227,191,.028);pointer-events:none;z-index:-1;}
+  .earn-journey-kicker {display:inline-block;color:#75f0cd;font-size:11px;font-weight:800;letter-spacing:.13em;}
+  .earn-journey-heading h2 {color:#fff2c8;font-size:clamp(24px,3vw,34px);
+    line-height:1.13;letter-spacing:-.03em;margin:9px 0 8px;text-wrap:balance;}
+  .earn-journey-heading p {max-width:60ch;margin:0;color:#d3e6e8;font-size:14px;line-height:1.65;}
+  .earn-journey-steps {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;
+    list-style:none;padding:0;margin:22px 0 14px;}
+  .earn-journey-steps li {display:flex;align-items:flex-start;gap:10px;min-width:0;
+    padding:14px 12px;border-radius:14px;background:rgba(4,15,28,.56);
+    border:1px solid rgba(130,194,193,.23);}
+  .earn-journey-step-icon {flex:none;display:grid;place-items:center;width:32px;height:32px;
+    border-radius:10px;color:#0a1919;background:#f4c96b;font-size:12px;font-weight:900;}
+  .earn-journey-steps strong {display:block;color:#f3f8f9;font-size:13px;line-height:1.4;}
+  .earn-journey-steps small {display:block;color:#a8c4d0;font-size:11px;line-height:1.55;margin-top:3px;}
+  .earn-journey-disclaimer {color:#a9bdc7;font-size:11px;line-height:1.5;
+    margin:8px 0 0;padding-top:10px;border-top:1px solid rgba(150,190,200,.13);}
+  @media(max-width:760px){.earn-journey-steps {grid-template-columns:1fr;gap:8px;}
+    .earn-journey {border-radius:18px;margin:18px 0;padding:17px;}
+    .earn-journey-steps li {align-items:center;padding:10px 12px;}}
 </style>
 <main class="earn-beta">
   <section class="earn-card">
     <h1 data-i18n="title">Thronos Earn Project</h1>
     <p style="margin:0;color:#7fb8d8;font-size:12px" data-i18n="powered">Powered by ThronosLabs and ENCOM</p>
     <p id="earn-subtitle" data-i18n="subtitle">Create an Earn Account or sign in. No wallet required.</p>
+    <!-- Earn journey: informative only. Provider confirmation and treasury
+         settlement always determine real reward and payout eligibility. -->
+    <section class="earn-journey" aria-label="How Thronos Earn works">
+      <div class="earn-journey-heading">
+        <span class="earn-journey-kicker">YOUR EARN JOURNEY / Η ΔΙΑΔΡΟΜΗ ΣΟΥ</span>
+        <h2>Explore. Complete. Earn.</h2>
+        <p>Διάλεξε διαθέσιμες αποστολές, ολοκλήρωσέ τες και παρακολούθησε την επιβεβαίωση των ανταμοιβών σου.</p>
+      </div>
+      <ol class="earn-journey-steps">
+        <li><span class="earn-journey-step-icon" aria-hidden="true">01</span><div><strong>Επίλεξε / Explore</strong><small>Surveys &amp; verified offers</small></div></li>
+        <li><span class="earn-journey-step-icon" aria-hidden="true">02</span><div><strong>Ολοκλήρωσε / Complete</strong><small>Provider verification required</small></div></li>
+        <li><span class="earn-journey-step-icon" aria-hidden="true">03</span><div><strong>Κέρδισε / Earn</strong><small>Pending → cleared THC</small></div></li>
+      </ol>
+      <p class="earn-journey-disclaimer">Real rewards depend on verified provider receipts, applicable hold periods and available settlement funding. No wallet is required to start.</p>
+    </section>
     <section class="earn-christmas-banner" aria-labelledby="earn-christmas-title">
       <div class="challenge-copy">
         <span class="challenge-kicker">Thronos Earn · Christmas 2026</span>

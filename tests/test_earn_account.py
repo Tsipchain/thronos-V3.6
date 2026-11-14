@@ -2805,7 +2805,7 @@ class TestWalletUnlockPledgeLedger:
             wallet_creation_ref="wallet-factory:one",
         )
         assert settled["status"] == "settled"
-        assert settled["wallet_address"] == address
+        assert settled["wallet_address"] == address.upper()
         assert store.thc_balance(uid)["available"] == "0.000000"
         assert store.settle_wallet_unlock_pledge(
             uid, pledge["pledge_id"], wallet_address=address,

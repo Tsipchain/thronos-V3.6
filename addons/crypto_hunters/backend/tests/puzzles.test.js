@@ -29,7 +29,7 @@ describe('Puzzle endpoints', () => {
   const W = 'puzzle_test_' + Date.now();
 
   before(async () => {
-    const app = require('../drx');
+    const { app } = require('../drx');
     server = app.listen(0);
     await new Promise(r => server.on('listening', r));
     BASE = `http://127.0.0.1:${server.address().port}`;

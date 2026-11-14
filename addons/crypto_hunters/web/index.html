@@ -165,6 +165,38 @@ input:focus{outline:none;border-color:var(--green);box-shadow:0 0 8px rgba(16,18
 .update-banner{position:fixed;top:0;left:0;right:0;z-index:9999;background:#059669;color:#000;text-align:center;padding:10px;font-weight:700;font-size:.85rem;animation:fadeIn .3s}
 .update-banner button{margin-left:12px;padding:4px 12px;background:#000;color:#10b981;border:none;border-radius:6px;font-weight:700;cursor:pointer}
 
+/* ── Puzzle Screens ────────────────────────────────────────────── */
+.puzzle-header{text-align:center;margin-bottom:24px}
+.puzzle-header h3{font-family:var(--mono);font-size:1.2rem;color:var(--green);text-transform:uppercase;letter-spacing:2px;margin-bottom:4px}
+.puzzle-header p{color:var(--dim);font-size:.85rem}
+.puzzle-instruction{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:16px;font-size:.9rem;line-height:1.6}
+.puzzle-instruction code{font-family:var(--mono);color:var(--green);background:rgba(16,185,129,.1);padding:2px 6px;border-radius:4px}
+.puzzle-field{margin-bottom:12px}
+.puzzle-field label{display:block;font-size:.75rem;color:var(--dim);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px}
+.puzzle-field input{font-size:.95rem}
+.puzzle-output{font-family:var(--mono);background:#000;border:1px solid var(--border);border-radius:8px;padding:12px;font-size:.8rem;color:var(--green);word-break:break-all;min-height:40px;margin-bottom:12px}
+.puzzle-output.error{color:var(--red);border-color:var(--red)}
+.puzzle-output.success{color:var(--gold);border-color:var(--gold)}
+.btn-puzzle{padding:12px 24px;font-size:.95rem;background:linear-gradient(135deg,var(--green),#059669);color:#000;text-transform:uppercase;letter-spacing:1px;width:100%;margin-bottom:8px}
+.btn-puzzle:disabled{background:var(--bg3);color:var(--dim)}
+.btn-puzzle-alt{padding:10px 20px;font-size:.85rem;background:var(--bg3);color:var(--text);border:1px solid var(--border);width:100%}
+.btn-puzzle-alt:hover{border-color:var(--green)}
+.puzzle-progress{display:flex;gap:8px;justify-content:center;margin-bottom:16px}
+.puzzle-pip{width:24px;height:24px;border-radius:50%;background:var(--bg3);border:2px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:.65rem;font-weight:700;transition:all .3s}
+.puzzle-pip.done{background:var(--green);border-color:var(--green);color:#000}
+.puzzle-stats{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px}
+.puzzle-stat{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center}
+.puzzle-stat .val{font-family:var(--mono);font-size:1.2rem;font-weight:900;color:var(--green)}
+.puzzle-stat .lbl{font-size:.65rem;color:var(--dim);text-transform:uppercase;letter-spacing:1px;margin-top:2px}
+.hash-display{font-family:var(--mono);font-size:.7rem;color:var(--dim);word-break:break-all;padding:8px;background:rgba(0,0,0,.4);border-radius:6px;margin-top:8px}
+.nonce-controls{display:flex;gap:8px;margin-bottom:12px}
+.nonce-controls input{flex:1}
+.nonce-controls button{flex-shrink:0;padding:12px 20px}
+.mining-anim{text-align:center;padding:20px;display:none}
+.mining-anim.active{display:block}
+.mining-anim .spinner{display:inline-block;width:32px;height:32px;border:3px solid var(--border);border-top-color:var(--green);border-radius:50%;animation:spin .8s linear infinite}
+.mining-anim p{color:var(--dim);font-size:.8rem;margin-top:8px}
+
 /* ── Responsive ─────────────────────────────────────────────────── */
 @media(max-width:500px){
   .nav-grid{grid-template-columns:1fr}
@@ -279,6 +311,65 @@ input:focus{outline:none;border-color:var(--green);box-shadow:0 0 8px rgba(16,18
     <div id="inv-content"></div>
   </div>
 
+  <!-- ── Puzzle E1: Hello Hash ──────────────────────────────────── -->
+  <div id="puzzle-e1-screen" class="screen">
+    <div class="topbar">
+      <div class="logo">Crypto <span>Hunters</span></div>
+      <button class="btn-sm" onclick="showScreen('missions')">Missions</button>
+    </div>
+    <div class="back-row"><button class="btn-back" onclick="showScreen('missions')">&larr; Back to Missions</button></div>
+    <div class="puzzle-header">
+      <h3>[E1] Hello Hash</h3>
+      <p>Learn SHA-256 hashing — the building block of blockchain</p>
+    </div>
+    <div class="puzzle-instruction">
+      Type any word below and compute its <code>SHA-256</code> hash. The hash is a unique fingerprint of the input. Even a tiny change produces a completely different hash. Get <strong>3 correct hashes</strong> to complete the mission.
+    </div>
+    <div class="puzzle-progress" id="e1-pips"></div>
+    <div class="puzzle-field">
+      <label>Input text</label>
+      <input id="e1-input" type="text" placeholder="Type a word (e.g. blockchain)" autocomplete="off"/>
+    </div>
+    <div class="puzzle-field">
+      <label>Your SHA-256 answer</label>
+      <input id="e1-answer" type="text" placeholder="Paste or type the hex hash" autocomplete="off"/>
+    </div>
+    <button class="btn-puzzle" onclick="e1ComputeHash()">Compute Hash For Me</button>
+    <button class="btn-puzzle-alt" onclick="e1CheckAnswer()">Check Answer</button>
+    <div class="puzzle-output" id="e1-output"></div>
+    <button class="btn-puzzle" id="e1-complete-btn" onclick="e1Complete()" disabled>Complete Mission (need 3 correct)</button>
+  </div>
+
+  <!-- ── Puzzle E2: Nonce Nudge ───────────────────────────────────── -->
+  <div id="puzzle-e2-screen" class="screen">
+    <div class="topbar">
+      <div class="logo">Crypto <span>Hunters</span></div>
+      <button class="btn-sm" onclick="showScreen('missions')">Missions</button>
+    </div>
+    <div class="back-row"><button class="btn-back" onclick="showScreen('missions')">&larr; Back to Missions</button></div>
+    <div class="puzzle-header">
+      <h3>[E2] Nonce Nudge</h3>
+      <p>Find the nonce that produces a hash starting with zeros — this is mining!</p>
+    </div>
+    <div class="puzzle-instruction">
+      A block has data: <code id="e2-block-data">—</code><br>
+      Find a number (nonce) so that <code>SHA-256(data + nonce)</code> starts with <strong id="e2-target-display">00</strong>. This is proof-of-work mining.
+    </div>
+    <div class="puzzle-stats" id="e2-stats">
+      <div class="puzzle-stat"><div class="val" id="e2-attempts">0</div><div class="lbl">Attempts</div></div>
+      <div class="puzzle-stat"><div class="val" id="e2-difficulty">2</div><div class="lbl">Difficulty</div></div>
+    </div>
+    <div class="nonce-controls">
+      <input id="e2-nonce" type="number" placeholder="Enter nonce" min="0" autocomplete="off"/>
+      <button class="btn-puzzle" style="width:auto" onclick="e2CheckNonce()">Check</button>
+    </div>
+    <button class="btn-puzzle-alt" onclick="e2AutoMine()">Auto-Mine (brute force)</button>
+    <div class="mining-anim" id="e2-mining"><div class="spinner"></div><p>Mining...</p></div>
+    <div class="puzzle-output" id="e2-output"></div>
+    <div class="hash-display" id="e2-hash"></div>
+    <button class="btn-puzzle" id="e2-complete-btn" onclick="e2Complete()" disabled>Complete Mission</button>
+  </div>
+
   <!-- ── Reward Popup ──────────────────────────────────────────── -->
   <div id="reward-popup" class="reward-popup">
     <div class="reward-text" id="reward-text"></div>
@@ -364,6 +455,7 @@ function showScreen(name){
   if(name==='story') renderStory();
   if(name==='items') loadItems();
   if(name==='inventory') loadInventory();
+  if(name==='puzzle-e1') e1UpdatePips();
 }
 
 /* ── API fetch with error handling ───────────────────────────────── */
@@ -413,6 +505,7 @@ async function enterGame(){
   if(!w) return;
   state.wallet = w;
   state.isReturning = loadLocal(w);
+  loadPuzzleLocal(w);
 
   // Try fetching server state
   try{
@@ -548,7 +641,11 @@ function renderMissions(missions, container){
       card.id = 'mission-'+m.id;
       let btnHtml = '';
       if(st==='available') btnHtml = '<button class="mission-btn btn-start" onclick="startMission(\''+m.id+'\')">Start Mission</button>';
-      if(st==='in_progress') btnHtml = '<button class="mission-btn btn-complete" onclick="completeMission(\''+m.id+'\','+m.reward_drx+')">Complete Mission</button>';
+      if(st==='in_progress'){
+        if(m.id==='E1') btnHtml = '<button class="mission-btn btn-start" onclick="e1UpdatePips();showScreen(\'puzzle-e1\')">Continue Puzzle</button>';
+        else if(m.id==='E2') btnHtml = '<button class="mission-btn btn-start" onclick="e2Generate();showScreen(\'puzzle-e2\')">Continue Puzzle</button>';
+        else btnHtml = '<button class="mission-btn btn-complete" onclick="completeMission(\''+m.id+'\','+m.reward_drx+')">Complete Mission</button>';
+      }
 
       card.innerHTML = '<span class="mission-state">'+stateIcon+'</span>'+
         '<div class="mission-title">['+m.id+'] '+m.title+'</div>'+
@@ -564,6 +661,19 @@ function renderMissions(missions, container){
 function startMission(id){
   state.missionStates[id] = 'in_progress';
   saveLocal();
+  // Route to interactive puzzle screens for E1/E2
+  if(id==='E1'){
+    apiFetch('/api/missions/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({wallet:state.wallet,missionId:'E1'})}).catch(()=>{});
+    e1UpdatePips();
+    showScreen('puzzle-e1');
+    return;
+  }
+  if(id==='E2'){
+    apiFetch('/api/missions/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({wallet:state.wallet,missionId:'E2'})}).catch(()=>{});
+    e2Generate();
+    showScreen('puzzle-e2');
+    return;
+  }
   loadMissions();
 }
 
@@ -773,6 +883,235 @@ async function loadInventory(){
   });
   html += '</div>';
   container.innerHTML = html;
+}
+
+/* ── Puzzle E1: Hello Hash ───────────────────────────────────────── */
+let e1CorrectCount = 0;
+
+function e1UpdatePips(){
+  const container = $('e1-pips');
+  container.innerHTML = '';
+  for(let i=0;i<3;i++){
+    const pip = document.createElement('div');
+    pip.className = 'puzzle-pip'+(i<e1CorrectCount?' done':'');
+    pip.textContent = i<e1CorrectCount ? '✓' : (i+1);
+    container.appendChild(pip);
+  }
+  const btn = $('e1-complete-btn');
+  if(e1CorrectCount>=3){
+    btn.disabled = false;
+    btn.textContent = 'Complete Mission — Claim 100 DRX!';
+  }else{
+    btn.disabled = true;
+    btn.textContent = 'Complete Mission (need '+(3-e1CorrectCount)+' more)';
+  }
+}
+
+async function e1ComputeHash(){
+  const input = $('e1-input').value.trim();
+  if(!input){ $('e1-output').textContent = 'Enter some text first'; $('e1-output').className='puzzle-output error'; return; }
+  const encoded = new TextEncoder().encode(input);
+  const buf = await crypto.subtle.digest('SHA-256', encoded);
+  const hex = Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+  $('e1-answer').value = hex;
+  $('e1-output').textContent = 'SHA-256("'+input+'") = '+hex;
+  $('e1-output').className = 'puzzle-output';
+}
+
+async function e1CheckAnswer(){
+  const input = $('e1-input').value.trim();
+  const answer = $('e1-answer').value.trim();
+  if(!input||!answer){ $('e1-output').textContent='Fill both fields'; $('e1-output').className='puzzle-output error'; return; }
+  try{
+    const data = await apiFetch('/api/puzzles/e1/check',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({wallet:state.wallet,input,answer})
+    });
+    if(data.correct){
+      e1CorrectCount = data.correctCount;
+      $('e1-output').textContent = '✅ Correct! Hash verified. ('+e1CorrectCount+'/3)';
+      $('e1-output').className = 'puzzle-output success';
+      $('e1-input').value = '';
+      $('e1-answer').value = '';
+    }else{
+      $('e1-output').textContent = '❌ Wrong hash. Expected: '+data.expected;
+      $('e1-output').className = 'puzzle-output error';
+    }
+    e1UpdatePips();
+    savePuzzleLocal();
+  }catch(e){
+    $('e1-output').textContent = 'Error: '+e.message;
+    $('e1-output').className = 'puzzle-output error';
+  }
+}
+
+async function e1Complete(){
+  try{
+    const data = await apiFetch('/api/puzzles/e1/complete',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({wallet:state.wallet})
+    });
+    state.balance = data.balance;
+    state.completedMissions.add('E1');
+    state.missionStates['E1'] = 'completed';
+    state.totalDrxEarned += data.reward_drx;
+    saveLocal();
+    showReward('+'+data.reward_drx+' DRX');
+    await sleep(1200);
+    showScreen('missions');
+  }catch(e){
+    $('e1-output').textContent = 'Error: '+e.message;
+    $('e1-output').className = 'puzzle-output error';
+  }
+}
+
+/* ── Puzzle E2: Nonce Nudge ─────────────────────────────────────── */
+let e2Data = { blockData:'', target:'00', difficulty:2 };
+let e2AttemptCount = 0;
+let e2Solved = false;
+
+async function e2Generate(){
+  try{
+    const data = await apiFetch('/api/puzzles/e2/generate',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({wallet:state.wallet})
+    });
+    e2Data = data;
+    e2AttemptCount = 0;
+    e2Solved = false;
+    $('e2-block-data').textContent = data.blockData;
+    $('e2-target-display').textContent = data.target;
+    $('e2-difficulty').textContent = data.difficulty;
+    $('e2-attempts').textContent = '0';
+    $('e2-output').textContent = 'Enter a nonce and check, or auto-mine.';
+    $('e2-output').className = 'puzzle-output';
+    $('e2-hash').textContent = '';
+    $('e2-complete-btn').disabled = true;
+    $('e2-nonce').value = '';
+  }catch(e){
+    $('e2-output').textContent = 'Error: '+e.message;
+    $('e2-output').className = 'puzzle-output error';
+  }
+}
+
+async function e2CheckNonce(){
+  const nonce = parseInt($('e2-nonce').value, 10);
+  if(isNaN(nonce)||nonce<0){ $('e2-output').textContent='Enter a valid nonce (number >= 0)'; $('e2-output').className='puzzle-output error'; return; }
+  e2AttemptCount++;
+  $('e2-attempts').textContent = e2AttemptCount;
+  try{
+    const data = await apiFetch('/api/puzzles/e2/check',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({wallet:state.wallet,nonce})
+    });
+    $('e2-hash').textContent = 'Hash: '+data.hash;
+    if(data.correct){
+      e2Solved = true;
+      $('e2-output').textContent = '⛏ Nonce '+nonce+' works! Hash starts with "'+e2Data.target+'"';
+      $('e2-output').className = 'puzzle-output success';
+      $('e2-complete-btn').disabled = false;
+      savePuzzleLocal();
+    }else{
+      $('e2-output').textContent = '❌ Nonce '+nonce+' - hash doesn\'t start with "'+e2Data.target+'"';
+      $('e2-output').className = 'puzzle-output error';
+    }
+  }catch(e){
+    $('e2-output').textContent = 'Error: '+e.message;
+    $('e2-output').className = 'puzzle-output error';
+  }
+}
+
+async function e2AutoMine(){
+  if(e2Solved) return;
+  const anim = $('e2-mining');
+  anim.classList.add('active');
+  $('e2-output').textContent = 'Mining...';
+  $('e2-output').className = 'puzzle-output';
+
+  await sleep(50);
+
+  const bd = e2Data.blockData;
+  const target = e2Data.target;
+  let nonce = 0;
+  let hash = '';
+  const encoder = new TextEncoder();
+
+  for(; nonce < 200000; nonce++){
+    const buf = await crypto.subtle.digest('SHA-256', encoder.encode(bd + nonce.toString()));
+    hash = Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+    if(hash.startsWith(target)) break;
+    if(nonce % 500 === 0){
+      e2AttemptCount = nonce;
+      $('e2-attempts').textContent = nonce;
+      $('e2-hash').textContent = 'Trying nonce '+nonce+'... Hash: '+hash;
+      await sleep(0);
+    }
+  }
+
+  anim.classList.remove('active');
+  e2AttemptCount = nonce + 1;
+  $('e2-attempts').textContent = e2AttemptCount;
+  $('e2-nonce').value = nonce;
+  $('e2-hash').textContent = 'Hash: '+hash;
+
+  // Submit to server
+  try{
+    const data = await apiFetch('/api/puzzles/e2/check',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({wallet:state.wallet,nonce})
+    });
+    if(data.correct){
+      e2Solved = true;
+      $('e2-output').textContent = '⛏ Found! Nonce '+nonce+' produces a valid hash after '+e2AttemptCount+' attempts';
+      $('e2-output').className = 'puzzle-output success';
+      $('e2-complete-btn').disabled = false;
+      savePuzzleLocal();
+    }
+  }catch(e){
+    $('e2-output').textContent = 'Mining error: '+e.message;
+    $('e2-output').className = 'puzzle-output error';
+  }
+}
+
+async function e2Complete(){
+  try{
+    const data = await apiFetch('/api/puzzles/e2/complete',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({wallet:state.wallet})
+    });
+    state.balance = data.balance;
+    state.completedMissions.add('E2');
+    state.missionStates['E2'] = 'completed';
+    state.totalDrxEarned += data.reward_drx;
+    saveLocal();
+    showReward('+'+data.reward_drx+' DRX');
+    await sleep(1200);
+    showScreen('missions');
+  }catch(e){
+    $('e2-output').textContent = 'Error: '+e.message;
+    $('e2-output').className = 'puzzle-output error';
+  }
+}
+
+/* ── Puzzle save/restore for localStorage ───────────────────────── */
+function savePuzzleLocal(){
+  try{
+    localStorage.setItem('ch_puzzle_'+state.wallet, JSON.stringify({
+      e1CorrectCount,
+      e2Solved,
+      e2AttemptCount,
+    }));
+  }catch(e){}
+}
+function loadPuzzleLocal(wallet){
+  try{
+    const raw = localStorage.getItem('ch_puzzle_'+wallet);
+    if(!raw) return;
+    const d = JSON.parse(raw);
+    e1CorrectCount = d.e1CorrectCount || 0;
+    e2Solved = d.e2Solved || false;
+    e2AttemptCount = d.e2AttemptCount || 0;
+  }catch(e){}
 }
 
 /* ── Network offline detection ───────────────────────────────────── */

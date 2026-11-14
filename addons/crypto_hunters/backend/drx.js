@@ -61,6 +61,7 @@ function defaultPlayerState(wallet) {
     completedMissions: [],
     storyProgress: [1], // Act 1 unlocked by default
     stats: { totalDrxEarned: 0, missionsCompleted: 0, itemsBought: 0 },
+    puzzleProgress: {},
     lastSaved: null
   };
 }
@@ -166,6 +167,7 @@ function recalcUnlocks(player) {
 // Middleware
 // ---------------------------------------------------------------------------
 app.use(express.json());
+app.use(express.static(path.join(__dirname, '..', 'web')));
 app.use('/panel', express.static(path.join(__dirname, 'panel')));
 
 function requireAdmin(req, res, next) {
@@ -339,12 +341,14 @@ app.get('/api/dashboard/:wallet', (req, res) => {
     balance: player.balance,
     inventoryCount: player.inventory.length,
     inventory: player.inventory,
+    completedMissions: player.completedMissions,
     missionsCompleted: player.stats.missionsCompleted,
     missionsTotal: missions.length,
     currentTier: currentTier(player),
     storyActsUnlocked: unlockedActs,
     stats: player.stats,
     activeQuests: activeMissions,
+    puzzleProgress: player.puzzleProgress || {},
     rewardPolicy: {
       enabled: rewardPolicy.enabled,
       note: rewardPolicy.note
@@ -531,6 +535,134 @@ app.post('/api/bridge/complete/:id', requireAdmin, (req, res) => {
 // ---------------------------------------------------------------------------
 app.get('/api/reward-policy', (_req, res) => {
   res.json(rewardPolicy);
+});
+
+// ---------------------------------------------------------------------------
+// Puzzle endpoints — E1: Hello Hash, E2: Nonce Nudge
+// ---------------------------------------------------------------------------
+
+// E1: Check if the player's SHA-256 hash of `input` matches `answer`
+app.post('/api/puzzles/e1/check', (req, res) => {
+  const { wallet, input, answer } = req.body || {};
+  if (!wallet || !input || !answer) {
+    return res.status(400).json({ error: 'wallet, input, and answer required', code: 'MISSING_FIELDS' });
+  }
+  const player = getPlayer(wallet);
+  if (!player.puzzleProgress) player.puzzleProgress = {};
+  if (!player.puzzleProgress.e1) player.puzzleProgress.e1 = { correctCount: 0, attempts: [] };
+
+  const expected = crypto.createHash('sha256').update(input).digest('hex');
+  const correct = answer === expected;
+
+  if (correct) {
+    player.puzzleProgress.e1.correctCount++;
+    player.puzzleProgress.e1.attempts.push({ input, correct: true, at: new Date().toISOString() });
+    persistPlayer(wallet);
+  } else {
+    player.puzzleProgress.e1.attempts.push({ input, correct: false, at: new Date().toISOString() });
+  }
+
+  res.json({ correct, expected, correctCount: player.puzzleProgress.e1.correctCount });
+});
+
+// E1: Complete — requires at least 3 correct hashes
+app.post('/api/puzzles/e1/complete', (req, res) => {
+  const { wallet } = req.body || {};
+  if (!wallet) return res.status(400).json({ error: 'wallet required', code: 'MISSING_FIELDS' });
+
+  const player = getPlayer(wallet);
+  if (player.completedMissions.includes('E1')) {
+    return res.status(400).json({ error: 'E1 already completed', code: 'ALREADY_COMPLETED' });
+  }
+
+  const progress = (player.puzzleProgress && player.puzzleProgress.e1) || { correctCount: 0 };
+  if (progress.correctCount < 3) {
+    return res.status(400).json({ error: 'need at least 3 correct hashes', needed: 3 - progress.correctCount, code: 'NOT_ENOUGH' });
+  }
+
+  const mission = missions.find(m => m.id === 'E1');
+  const reward = mission ? mission.reward_drx : 100;
+  player.balance += reward;
+  player.completedMissions.push('E1');
+  player.questStates['E1'] = 'completed';
+  player.stats.totalDrxEarned += reward;
+  player.stats.missionsCompleted++;
+  recalcUnlocks(player);
+  persistPlayer(wallet);
+
+  res.json({ event: 'mission_complete', missionId: 'E1', reward_drx: reward, balance: player.balance, animation: 'reward_burst' });
+});
+
+// E2: Generate a block data + difficulty target for the nonce challenge
+app.post('/api/puzzles/e2/generate', (req, res) => {
+  const { wallet } = req.body || {};
+  if (!wallet) return res.status(400).json({ error: 'wallet required', code: 'MISSING_FIELDS' });
+
+  const player = getPlayer(wallet);
+  if (!player.puzzleProgress) player.puzzleProgress = {};
+
+  const blockData = 'block_' + Date.now() + '_' + wallet.slice(0, 8);
+  const difficulty = 2; // 2 leading hex zeros — easy enough for brute-force
+  const target = '0'.repeat(difficulty);
+
+  player.puzzleProgress.e2 = { blockData, target, difficulty, solved: false };
+  persistPlayer(wallet);
+
+  res.json({ blockData, target, difficulty });
+});
+
+// E2: Check nonce — hash(blockData + nonce) must start with target
+app.post('/api/puzzles/e2/check', (req, res) => {
+  const { wallet, nonce } = req.body || {};
+  if (!wallet || nonce === undefined) {
+    return res.status(400).json({ error: 'wallet and nonce required', code: 'MISSING_FIELDS' });
+  }
+
+  const player = getPlayer(wallet);
+  const progress = player.puzzleProgress && player.puzzleProgress.e2;
+  if (!progress || !progress.blockData) {
+    return res.status(400).json({ error: 'call /api/puzzles/e2/generate first', code: 'NO_CHALLENGE' });
+  }
+
+  const hash = crypto.createHash('sha256').update(progress.blockData + nonce.toString()).digest('hex');
+  const correct = hash.startsWith(progress.target);
+
+  if (correct) {
+    progress.solved = true;
+    progress.winningNonce = nonce;
+    progress.winningHash = hash;
+    persistPlayer(wallet);
+  }
+
+  res.json({ correct, hash, nonce });
+});
+
+// E2: Complete — requires the nonce puzzle to be solved
+app.post('/api/puzzles/e2/complete', (req, res) => {
+  const { wallet } = req.body || {};
+  if (!wallet) return res.status(400).json({ error: 'wallet required', code: 'MISSING_FIELDS' });
+
+  const player = getPlayer(wallet);
+  if (player.completedMissions.includes('E2')) {
+    return res.status(400).json({ error: 'E2 already completed', code: 'ALREADY_COMPLETED' });
+  }
+
+  const progress = player.puzzleProgress && player.puzzleProgress.e2;
+  if (!progress || !progress.solved) {
+    return res.status(400).json({ error: 'solve the nonce puzzle first', code: 'NOT_SOLVED' });
+  }
+
+  const mission = missions.find(m => m.id === 'E2');
+  const reward = mission ? mission.reward_drx : 100;
+  player.balance += reward;
+  player.completedMissions.push('E2');
+  player.questStates['E2'] = 'completed';
+  player.stats.totalDrxEarned += reward;
+  player.stats.missionsCompleted++;
+  recalcUnlocks(player);
+  persistPlayer(wallet);
+
+  res.json({ event: 'mission_complete', missionId: 'E2', reward_drx: reward, balance: player.balance, animation: 'reward_burst' });
 });
 
 // ---------------------------------------------------------------------------

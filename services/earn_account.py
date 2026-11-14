@@ -1810,7 +1810,10 @@ class EarnAccountStore:
                 return dict(row)
             allowed = {
                 "reserved": {"settling", "released"},
-                "settling": {"settled", "released"},
+                # Once handed off, an uncertain external settlement must be
+                # reconciled by its dedicated verified coordinator. The
+                # generic transition may never free committed THC.
+                "settling": {"settled"},
                 "settled": set(),
                 "released": set(),
             }

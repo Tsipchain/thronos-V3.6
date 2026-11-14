@@ -4271,8 +4271,8 @@ def register_earn_account_routes(
             return jsonify(ok=False, error=str(exc)), 400
         return jsonify(ok=True, **pledge), 201
 
-    @app.post("/api/earn/wallet-unlock/release")
-    def earn_wallet_unlock_release():
+    @app.post("/api/earn/wallet-unlock/cancel")
+    def earn_wallet_unlock_cancel():
         user, _ = _current_user()
         if not user:
             return jsonify(ok=False, error="earn_auth_required"), 401

@@ -2773,6 +2773,33 @@ class TestThcReservations:
         with pytest.raises(EarnError, match="invalid_thc_reservation_transition"):
             store.transition_thc_reservation(uid, reservation["reservation_id"], "released")
 
+    @pytest.mark.parametrize("kind", ["cashout", "wallet_settlement", "ad_escrow"])
+    def test_settling_reservation_cannot_be_generically_released(self, store, user_a, kind):
+        uid = user_a["earn_user_id"]
+        _seed_thc_confirmed(store, uid, "50")
+        reservation = store.reserve_thc(
+            uid, "25.000000", reservation_type=kind,
+            source_ref="inflight:" + kind, idempotency_key="inflight:" + kind,
+        )
+        store.transition_thc_reservation(uid, reservation["reservation_id"], "settling")
+        with pytest.raises(EarnError, match="invalid_thc_reservation_transition"):
+            store.transition_thc_reservation(uid, reservation["reservation_id"], "released")
+        assert store.thc_balance(uid)["reserved"] == "25.000000"
+        assert store.thc_balance(uid)["available"] == "25.000000"
+
+    def test_reserved_wallet_settlement_can_be_released_before_handoff(self, store, user_a):
+        uid = user_a["earn_user_id"]
+        _seed_thc_confirmed(store, uid, "50")
+        reservation = store.reserve_thc(
+            uid, "25.000000", reservation_type="wallet_settlement",
+            source_ref="preflight-cancel", idempotency_key="preflight-cancel",
+        )
+        released = store.transition_thc_reservation(
+            uid, reservation["reservation_id"], "released",
+        )
+        assert released["state"] == "released"
+        assert store.thc_balance(uid)["available"] == "50.000000"
+
     @pytest.mark.parametrize("reservation_type", ["invalid", "", "stake"])
     def test_invalid_reservation_type_is_rejected(self, store, user_a, reservation_type):
         with pytest.raises(EarnError, match="invalid_thc_reservation_type"):

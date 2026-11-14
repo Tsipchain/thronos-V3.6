@@ -33,6 +33,12 @@ from typing import Any
 from urllib.parse import urlencode
 
 _THC_SCALE = Decimal("0.000001")
+_BTC_EXTERNAL_CASHOUT_MIN_THC = Decimal("100000.000000")
+_BTC_EXTERNAL_FEE_BPS_MIN = 800
+_BTC_EXTERNAL_FEE_BPS_MAX = 1800
+_BTC_ADDRESS_RE = re.compile(
+    r"^(?:1[a-km-zA-HJ-NP-Z1-9]{25,34}|3[a-km-zA-HJ-NP-Z1-9]{25,34}|bc1[a-zA-HJ-NP-Z0-9]{25,90})$"
+)
 _STAKING_FEE_BPS = 9  # Owner-approved 0.09% per stake/unstake, 2026-11-10.
 _STAKING_FEE_POLICY = "earn-stake-fee-v1"
 _STAKING_FEE_RESERVE = "pythia_thc_staking_fee_reserve"
@@ -487,6 +493,40 @@ class EarnAccountStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_earn_wallet_unlock_pledges_user
                     ON earn_wallet_unlock_pledges(earn_user_id, created_at DESC);
+
+                -- An external BTC withdrawal is a two-ledger operation:
+                -- Earn reserves cleared THC first, then a separately managed
+                -- broadcaster submits BTC.  The request can become settled
+                -- only after the BTC node verifies the exact output.  There
+                -- is deliberately no public "mark paid" shortcut.
+                CREATE TABLE IF NOT EXISTS earn_external_btc_cashouts (
+                    cashout_id        TEXT PRIMARY KEY,
+                    earn_user_id      TEXT NOT NULL
+                        REFERENCES earn_accounts(earn_user_id),
+                    reservation_id    TEXT NOT NULL UNIQUE
+                        REFERENCES earn_thc_reservations(reservation_id),
+                    btc_address       TEXT NOT NULL,
+                    gross_thc         TEXT NOT NULL,
+                    fee_bps           INTEGER NOT NULL,
+                    fee_thc           TEXT NOT NULL,
+                    net_thc           TEXT NOT NULL,
+                    btc_amount_sat    INTEGER NOT NULL,
+                    quote_ref         TEXT NOT NULL,
+                    state             TEXT NOT NULL DEFAULT 'reserved' CHECK (
+                        state IN ('reserved', 'settling', 'needs_reconciliation',
+                                  'settled', 'released')
+                    ),
+                    btc_txid          TEXT,
+                    verification_ref  TEXT,
+                    idempotency_key   TEXT NOT NULL,
+                    created_at        INTEGER NOT NULL,
+                    updated_at        INTEGER NOT NULL,
+                    settled_at        INTEGER,
+                    released_at       INTEGER,
+                    UNIQUE(earn_user_id, idempotency_key)
+                );
+                CREATE INDEX IF NOT EXISTS idx_earn_external_btc_cashouts_user
+                    ON earn_external_btc_cashouts(earn_user_id, created_at DESC);
 
                 CREATE TABLE IF NOT EXISTS earn_ads (
                     ad_id       TEXT PRIMARY KEY,
@@ -1795,6 +1835,279 @@ class EarnAccountStore:
                    FROM earn_thc_reservations WHERE earn_user_id=?
                    ORDER BY created_at DESC""",
                 (earn_user_id,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    # ── External BTC cashout (reserved, node-verified settlement) ───────
+
+    @staticmethod
+    def _btc_cashout_address(address: str) -> str:
+        address = (address or "").strip()
+        if not _BTC_ADDRESS_RE.fullmatch(address):
+            raise EarnError("invalid_btc_cashout_address")
+        return address
+
+    @staticmethod
+    def _btc_cashout_txid(txid: str) -> str:
+        txid = (txid or "").strip().lower()
+        if len(txid) != 64:
+            raise EarnError("invalid_btc_cashout_txid")
+        try:
+            bytes.fromhex(txid)
+        except ValueError as exc:
+            raise EarnError("invalid_btc_cashout_txid") from exc
+        return txid
+
+    def create_external_btc_cashout(
+        self,
+        earn_user_id: str,
+        *,
+        btc_address: str,
+        gross_thc: str,
+        fee_bps: int,
+        btc_amount_sat: int,
+        quote_ref: str,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        """Reserve cleared THC for a BTC payout without pretending it was paid.
+
+        The caller is an internal settlement coordinator, never a browser.  It
+        must supply an immutable quote reference and exact satoshi output from
+        the approved pricing service.  This method only creates the
+        account-side commitment; BTC remains unavailable until a separate
+        signer broadcasts and a node verifies the result.
+        """
+        address = self._btc_cashout_address(btc_address)
+        if not idempotency_key or len(idempotency_key) > 160:
+            raise EarnError("cashout_idempotency_key_required")
+        if not quote_ref or len(quote_ref) > 200:
+            raise EarnError("cashout_quote_ref_required")
+        if isinstance(fee_bps, bool) or not isinstance(fee_bps, int):
+            raise EarnError("invalid_btc_cashout_fee")
+        if not _BTC_EXTERNAL_FEE_BPS_MIN <= fee_bps <= _BTC_EXTERNAL_FEE_BPS_MAX:
+            raise EarnError("btc_cashout_fee_out_of_bounds")
+        if isinstance(btc_amount_sat, bool) or not isinstance(btc_amount_sat, int) or btc_amount_sat <= 0:
+            raise EarnError("invalid_btc_cashout_amount")
+        try:
+            gross = Decimal(str(gross_thc))
+            if (not gross.is_finite() or gross != gross.quantize(_THC_SCALE)
+                    or gross < _BTC_EXTERNAL_CASHOUT_MIN_THC):
+                raise ValueError
+        except (InvalidOperation, TypeError, ValueError):
+            raise EarnError("btc_cashout_minimum_not_met")
+        fee = (gross * Decimal(fee_bps) / Decimal(10_000)).quantize(
+            _THC_SCALE, rounding=ROUND_UP,
+        )
+        net = (gross - fee).quantize(_THC_SCALE)
+        if net <= 0:
+            raise EarnError("btc_cashout_net_amount_invalid")
+        now = int(time.time())
+        with self._tx() as con:
+            existing = con.execute(
+                """SELECT * FROM earn_external_btc_cashouts
+                   WHERE earn_user_id=? AND idempotency_key=?""",
+                (earn_user_id, idempotency_key),
+            ).fetchone()
+            if existing:
+                checks = {
+                    "btc_address": address, "gross_thc": str(gross),
+                    "fee_bps": fee_bps, "btc_amount_sat": btc_amount_sat,
+                    "quote_ref": quote_ref,
+                }
+                if any(existing[key] != value for key, value in checks.items()):
+                    raise EarnError("cashout_idempotency_conflict")
+                return dict(existing)
+            available = self._available_thc_for_staking(con, earn_user_id)
+            if available < gross:
+                raise EarnError("insufficient_thc_balance")
+            cashout_id = "ecb_" + secrets.token_urlsafe(18)
+            reservation_id = "thcr_" + secrets.token_urlsafe(18)
+            con.execute(
+                """INSERT INTO earn_thc_reservations
+                   (reservation_id, earn_user_id, reservation_type, amount,
+                    state, source_ref, idempotency_key, created_at, updated_at)
+                   VALUES (?,?,?,?, 'reserved', ?,?,?,?)""",
+                (reservation_id, earn_user_id, "cashout", str(gross),
+                 cashout_id, idempotency_key, now, now),
+            )
+            con.execute(
+                """INSERT INTO earn_external_btc_cashouts
+                   (cashout_id, earn_user_id, reservation_id, btc_address,
+                    gross_thc, fee_bps, fee_thc, net_thc, btc_amount_sat,
+                    quote_ref, state, idempotency_key, created_at, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,'reserved',?,?,?)""",
+                (cashout_id, earn_user_id, reservation_id, address, str(gross),
+                 fee_bps, str(fee), str(net), btc_amount_sat, quote_ref,
+                 idempotency_key, now, now),
+            )
+            return dict(con.execute(
+                "SELECT * FROM earn_external_btc_cashouts WHERE cashout_id=?",
+                (cashout_id,),
+            ).fetchone())
+
+    def begin_external_btc_cashout(self, earn_user_id: str, cashout_id: str) -> dict[str, Any]:
+        """Mark a request as handed to the secure signer; it can no longer be released."""
+        now = int(time.time())
+        with self._tx() as con:
+            row = con.execute(
+                "SELECT * FROM earn_external_btc_cashouts WHERE cashout_id=? AND earn_user_id=?",
+                (cashout_id, earn_user_id),
+            ).fetchone()
+            if not row:
+                raise EarnError("btc_cashout_not_found")
+            if row["state"] == "settling":
+                return dict(row)
+            if row["state"] != "reserved":
+                raise EarnError("invalid_btc_cashout_transition")
+            changed = con.execute(
+                """UPDATE earn_thc_reservations SET state='settling', updated_at=?
+                   WHERE reservation_id=? AND earn_user_id=? AND state='reserved'""",
+                (now, row["reservation_id"], earn_user_id),
+            )
+            if changed.rowcount != 1:
+                raise EarnError("cashout_reservation_not_settleable")
+            con.execute(
+                """UPDATE earn_external_btc_cashouts SET state='settling', updated_at=?
+                   WHERE cashout_id=?""", (now, cashout_id),
+            )
+            return dict(con.execute(
+                "SELECT * FROM earn_external_btc_cashouts WHERE cashout_id=?", (cashout_id,),
+            ).fetchone())
+
+    def mark_external_btc_cashout_uncertain(
+        self, earn_user_id: str, cashout_id: str, *, btc_txid: str = "",
+    ) -> dict[str, Any]:
+        """Record an ambiguous signing/broadcast outcome and hold THC for reconciliation."""
+        txid = self._btc_cashout_txid(btc_txid) if btc_txid else None
+        now = int(time.time())
+        with self._tx() as con:
+            row = con.execute(
+                "SELECT * FROM earn_external_btc_cashouts WHERE cashout_id=? AND earn_user_id=?",
+                (cashout_id, earn_user_id),
+            ).fetchone()
+            if not row:
+                raise EarnError("btc_cashout_not_found")
+            if row["state"] == "needs_reconciliation":
+                return dict(row)
+            if row["state"] != "settling":
+                raise EarnError("invalid_btc_cashout_transition")
+            con.execute(
+                """UPDATE earn_external_btc_cashouts
+                   SET state='needs_reconciliation', btc_txid=COALESCE(?, btc_txid), updated_at=?
+                   WHERE cashout_id=?""", (txid, now, cashout_id),
+            )
+            return dict(con.execute(
+                "SELECT * FROM earn_external_btc_cashouts WHERE cashout_id=?", (cashout_id,),
+            ).fetchone())
+
+    def settle_external_btc_cashout(
+        self, earn_user_id: str, cashout_id: str, *, btc_txid: str, verifier: Any,
+    ) -> dict[str, Any]:
+        """Settle only after an injected BTC node verifier proves exact delivery."""
+        txid = self._btc_cashout_txid(btc_txid)
+        if verifier is None or not callable(getattr(verifier, "verify_tx", None)):
+            raise EarnError("btc_node_verifier_required")
+        # A node RPC may take seconds. Read first without a write lock, verify
+        # externally, then re-check the state under BEGIN IMMEDIATE before
+        # committing the Earn-side settlement.
+        con = sqlite3.connect(self.db_path, timeout=15)
+        con.row_factory = sqlite3.Row
+        try:
+            row = con.execute(
+                "SELECT * FROM earn_external_btc_cashouts WHERE cashout_id=? AND earn_user_id=?",
+                (cashout_id, earn_user_id),
+            ).fetchone()
+        finally:
+            con.close()
+        if not row:
+            raise EarnError("btc_cashout_not_found")
+        if row["state"] == "settled":
+            if row["btc_txid"] != txid:
+                raise EarnError("btc_cashout_idempotency_conflict")
+            return dict(row)
+        if row["state"] not in ("settling", "needs_reconciliation"):
+            raise EarnError("invalid_btc_cashout_transition")
+        expected_address, expected_sat = row["btc_address"], row["btc_amount_sat"]
+        try:
+            proof = verifier.verify_tx(
+                txid=txid, expected_address=expected_address,
+                expected_amount_sat=int(expected_sat),
+            )
+        except Exception as exc:
+            raise EarnError("btc_cashout_node_unavailable") from exc
+        if not getattr(proof, "confirmed", False):
+            raise EarnError("btc_cashout_not_node_verified")
+        if getattr(proof, "txid", txid) not in ("", txid):
+            raise EarnError("btc_cashout_txid_mismatch")
+        if getattr(proof, "amount_sat", None) != int(expected_sat):
+            raise EarnError("btc_cashout_amount_mismatch")
+        now = int(time.time())
+        with self._tx() as con:
+            row = con.execute(
+                "SELECT * FROM earn_external_btc_cashouts WHERE cashout_id=? AND earn_user_id=?",
+                (cashout_id, earn_user_id),
+            ).fetchone()
+            if not row:
+                raise EarnError("btc_cashout_not_found")
+            if row["state"] == "settled":
+                if row["btc_txid"] != txid:
+                    raise EarnError("btc_cashout_idempotency_conflict")
+                return dict(row)
+            if row["state"] not in ("settling", "needs_reconciliation"):
+                raise EarnError("invalid_btc_cashout_transition")
+            committed = con.execute(
+                """UPDATE earn_thc_reservations SET state='settled', updated_at=?
+                   WHERE reservation_id=? AND earn_user_id=? AND state='settling'""",
+                (now, row["reservation_id"], earn_user_id),
+            )
+            if committed.rowcount != 1:
+                raise EarnError("cashout_reservation_not_settleable")
+            con.execute(
+                """UPDATE earn_external_btc_cashouts
+                   SET state='settled', btc_txid=?, verification_ref=?, settled_at=?, updated_at=?
+                   WHERE cashout_id=?""",
+                (txid, f"btc-node:{txid}", now, now, cashout_id),
+            )
+            return dict(con.execute(
+                "SELECT * FROM earn_external_btc_cashouts WHERE cashout_id=?", (cashout_id,),
+            ).fetchone())
+
+    def release_external_btc_cashout(self, earn_user_id: str, cashout_id: str) -> dict[str, Any]:
+        """Release only before hand-off to a signer; later states need reconciliation."""
+        now = int(time.time())
+        with self._tx() as con:
+            row = con.execute(
+                "SELECT * FROM earn_external_btc_cashouts WHERE cashout_id=? AND earn_user_id=?",
+                (cashout_id, earn_user_id),
+            ).fetchone()
+            if not row:
+                raise EarnError("btc_cashout_not_found")
+            if row["state"] == "released":
+                return dict(row)
+            if row["state"] != "reserved":
+                raise EarnError("btc_cashout_reconciliation_required")
+            changed = con.execute(
+                """UPDATE earn_thc_reservations
+                   SET state='released', updated_at=?, released_at=?
+                   WHERE reservation_id=? AND earn_user_id=? AND state='reserved'""",
+                (now, now, row["reservation_id"], earn_user_id),
+            )
+            if changed.rowcount != 1:
+                raise EarnError("cashout_reservation_not_releasable")
+            con.execute(
+                """UPDATE earn_external_btc_cashouts
+                   SET state='released', released_at=?, updated_at=? WHERE cashout_id=?""",
+                (now, now, cashout_id),
+            )
+            return dict(con.execute(
+                "SELECT * FROM earn_external_btc_cashouts WHERE cashout_id=?", (cashout_id,),
+            ).fetchone())
+
+    def external_btc_cashouts(self, earn_user_id: str) -> list[dict[str, Any]]:
+        with self._tx() as con:
+            rows = con.execute(
+                """SELECT * FROM earn_external_btc_cashouts WHERE earn_user_id=?
+                   ORDER BY created_at DESC""", (earn_user_id,),
             ).fetchall()
             return [dict(row) for row in rows]
 

@@ -155,6 +155,82 @@
   .promo-visit:hover { background:#00c77b; }
   .promo-countdown { color:#7fb8d8; font-size:12px; margin-top:14px; }
   .promo-skip { color:#91a7b8; font-size:12px; background:none; border:none; cursor:pointer; margin-top:8px; text-decoration:underline; display:none; }
+
+  /* Earn visual refresh: scoped strictly to Earn web, no payout or wallet changes. */
+  .earn-beta {
+    --earn-gold:#f4c96b; --earn-teal:#4ae3bf;
+    --earn-outline:rgba(149,191,215,.21);
+    max-width:1200px;
+    padding-bottom:clamp(44px,8vh,90px);
+  }
+  .earn-beta>.earn-card {
+    position:relative; isolation:isolate; overflow:hidden;
+    background:
+      radial-gradient(ellipse at 84% 0%,rgba(30,145,145,.16),transparent 45%),
+      radial-gradient(ellipse at 3% 4%,rgba(244,201,107,.12),transparent 35%),
+      linear-gradient(150deg,#101c2e 0%,#0b1625 65%,#101a2b 100%);
+    border:1px solid var(--earn-outline);
+    border-radius:26px;
+    padding:clamp(20px,3.5vw,42px);
+    box-shadow:0 22px 75px rgba(0,0,0,.37),inset 0 1px rgba(255,255,255,.05);
+  }
+  .earn-beta>.earn-card::before {
+    content:""; position:absolute; inset:0 0 auto; height:3px; pointer-events:none;
+    background:linear-gradient(90deg,transparent,#f4c96b 28%,#4ae3bf 75%,transparent);
+  }
+  .earn-beta>.earn-card>h1 {
+    font-size:clamp(27px,3.4vw,43px);letter-spacing:-.035em;line-height:1.13;
+    color:#fff3d0;text-wrap:balance;
+  }
+  .earn-beta #earn-subtitle {max-width:62ch;font-size:clamp(14px,1.5vw,16px);color:#c6d8e6;}
+  .earn-beta .earn-balance-bar {
+    border-radius:18px;border-color:var(--earn-outline);
+    background:linear-gradient(115deg,rgba(26,49,66,.92),rgba(10,25,40,.97));
+    box-shadow:0 10px 30px #0003;padding:16px;
+  }
+  .earn-beta .earn-balance-grid {gap:12px;}
+  .earn-beta button.earn-balance-cell {
+    background:rgba(255,255,255,.035);border:1px solid rgba(160,196,212,.14);
+    border-radius:14px;padding:clamp(12px,2vw,20px);
+    transition:background .18s,border-color .18s,transform .18s;
+  }
+  .earn-beta button.earn-balance-cell:hover {background:rgba(255,255,255,.065);border-color:#6bbbaa;transform:translateY(-2px);}
+  .earn-beta .earn-balance-bar .label {font-size:11px;letter-spacing:.11em;font-weight:800;}
+  .earn-beta .earn-balance-bar .value {font-size:clamp(22px,3vw,34px);letter-spacing:-.035em;overflow-wrap:anywhere;}
+  .earn-beta .earn-provider-grid {gap:14px;margin-top:22px;}
+  .earn-beta .earn-provider {
+    border-radius:18px;border:1px solid var(--earn-outline);
+    background:linear-gradient(145deg,rgba(26,47,64,.92),rgba(12,24,38,.98));
+    box-shadow:0 8px 26px rgba(0,0,0,.16);
+    transition:transform .2s,border-color .2s,box-shadow .2s;
+  }
+  .earn-beta .earn-provider:not(.is-unavailable):hover {
+    transform:translateY(-3px);border-color:rgba(74,227,191,.62);box-shadow:0 14px 35px #0004;
+  }
+  .earn-beta .earn-provider.is-unavailable {opacity:.76;filter:saturate(.7);}
+  .earn-beta .earn-action {
+    border-radius:12px;min-height:44px;
+    background:linear-gradient(120deg,#5ae5b6,#21b997);color:#06221e;
+    box-shadow:0 5px 18px rgba(24,185,150,.18);
+    transition:transform .18s,box-shadow .18s,filter .18s;
+  }
+  .earn-beta .earn-action:not(:disabled):hover {transform:translateY(-2px);filter:brightness(1.08);box-shadow:0 8px 24px rgba(24,185,150,.3);}
+  .earn-beta .earn-action:disabled {box-shadow:none;cursor:not-allowed;}
+  .earn-beta :is(button,a,input,select,summary):focus-visible {outline:3px solid var(--earn-gold);outline-offset:3px;}
+  .earn-beta .earn-input {border-radius:12px;min-height:46px;border-color:var(--earn-outline);}
+  .earn-beta .earn-history-item {border-radius:12px;border-color:var(--earn-outline);}
+  .earn-beta .earn-history-item:hover {background:#152738;}
+  @media (max-width:700px) {
+    .earn-beta {margin-top:14px;}
+    .earn-beta>.earn-card {padding:18px;border-radius:20px;}
+    .earn-beta .earn-provider-grid {gap:10px;}
+    .earn-beta .earn-balance-grid {gap:8px;}
+    .earn-beta button.earn-balance-cell {padding:12px;}
+  }
+  @media (prefers-reduced-motion:reduce) {
+    .earn-beta .earn-provider,.earn-beta .earn-action,.earn-beta button.earn-balance-cell {transition:none;}
+    .earn-beta .earn-provider:not(.is-unavailable):hover,.earn-beta .earn-action:not(:disabled):hover,.earn-beta button.earn-balance-cell:hover {transform:none;}
+  }
 </style>
 <main class="earn-beta">
   <section class="earn-card">

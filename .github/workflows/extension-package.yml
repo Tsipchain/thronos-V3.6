@@ -1,0 +1,51 @@
+name: Build Thronos Wallet Extension
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "public/extension/**"
+      - "tests/test_extension_thr_coin_branding.py"
+      - ".github/workflows/extension-package.yml"
+  pull_request:
+    paths:
+      - "public/extension/**"
+      - "tests/test_extension_thr_coin_branding.py"
+      - ".github/workflows/extension-package.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Verify and package Chrome/Brave wallet extension
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Verify official artwork and wallet JS guards
+        run: |
+          python -m pip install --disable-pip-version-check pytest
+          python -m pytest tests/test_extension_thr_coin_branding.py -q
+          node --check public/extension/popup.js
+          node --check public/extension/background.js
+          node --check public/extension/content.js
+          node --check public/extension/inject.js
+      - name: Assemble extension from tracked files
+        run: |
+          cd public/extension
+          bash build.sh
+          unzip -t thronos-wallet-extension.zip
+          unzip -Z1 thronos-wallet-extension.zip | grep -Fx 'icons/icon48.png'
+          unzip -Z1 thronos-wallet-extension.zip | grep -Fx 'icons/icon128.png'
+          unzip -Z1 thronos-wallet-extension.zip | grep -Fx 'popup.js'
+      - name: Upload inspected package (not auto-published)
+        uses: actions/upload-artifact@v4
+        with:
+          name: thronos-wallet-extension-verified
+          path: public/extension/thronos-wallet-extension.zip
+          if-no-files-found: error
+          retention-days: 14

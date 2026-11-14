@@ -512,6 +512,36 @@ class EarnAccountStore:
                 CREATE INDEX IF NOT EXISTS idx_earn_referrals_referrer
                     ON earn_referrals(referrer_id);
 
+                -- Referral rewards are separate, immutable allocations derived
+                -- from an already-cleared provider reward.  The unique source
+                -- entry/recipient/level key is the settlement idempotency key.
+                -- Browser activity never writes this table.
+                CREATE TABLE IF NOT EXISTS earn_referral_reward_allocations (
+                    allocation_id       TEXT PRIMARY KEY,
+                    source_entry_id     TEXT NOT NULL
+                        REFERENCES thc_ledger(entry_id),
+                    referrer_id         TEXT NOT NULL
+                        REFERENCES earn_accounts(earn_user_id),
+                    referred_id         TEXT NOT NULL
+                        REFERENCES earn_accounts(earn_user_id),
+                    level               INTEGER NOT NULL CHECK (level IN (1,2)),
+                    policy_version      TEXT NOT NULL,
+                    rate_bps            INTEGER NOT NULL,
+                    loyalty_eligible    INTEGER NOT NULL DEFAULT 0,
+                    amount              TEXT NOT NULL,
+                    credit_entry_id     TEXT NOT NULL UNIQUE
+                        REFERENCES thc_ledger(entry_id),
+                    state               TEXT NOT NULL DEFAULT 'confirmed',
+                    created_at          INTEGER NOT NULL,
+                    reversed_at         INTEGER,
+                    reversal_source_ref TEXT,
+                    UNIQUE(source_entry_id, referrer_id, level)
+                );
+                CREATE INDEX IF NOT EXISTS idx_earn_referral_rewards_referrer
+                    ON earn_referral_reward_allocations(referrer_id, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_earn_referral_rewards_source
+                    ON earn_referral_reward_allocations(source_entry_id);
+
                 CREATE TABLE IF NOT EXISTS earn_ad_campaigns (
                     campaign_id    TEXT PRIMARY KEY,
                     advertiser_id  TEXT NOT NULL,
@@ -1281,6 +1311,9 @@ class EarnAccountStore:
                     con, entry_id=row["entry_id"], event_ref=f"earn:hold:release:{row['entry_id']}",
                     event_type="earn_hold_released", state="confirmed", occurred_at=now,
                     provider_status=row["provider_status"], details=_EARN_HOLD_POLICY,
+                )
+                self._settle_referral_rewards_for_thc_entry_in_tx(
+                    con, row["entry_id"],
                 )
                 released += 1
         return released
@@ -2197,6 +2230,158 @@ class EarnAccountStore:
 
     # ── Referrals ──────────────────────────────────────────────────────
 
+    _REFERRAL_POLICY_VERSION = "referral-v1-2026-11"
+    _REFERRAL_RATES_BPS = {
+        False: {1: 200, 2: 100},  # Earn-only: L1 2%, L2 1%
+        True: {1: 300, 2: 200},   # Linked-wallet loyalty: L1 3%, L2 2%
+    }
+    _REFERRAL_PROVIDER_SOURCES = frozenset((
+        "cpx_survey", "timewall", "bitcotasks", "pure",
+    ))
+
+    @staticmethod
+    def _referral_credit_source_ref(source_entry_id: str, referrer_id: str, level: int) -> str:
+        """Stable idempotency key for one referral allocation."""
+        return f"referral:{source_entry_id}:{referrer_id}:l{level}"
+
+    def _settle_referral_rewards_for_thc_entry_in_tx(
+        self, con: sqlite3.Connection, source_entry_id: str,
+    ) -> int:
+        """Create referral credits only for one settled provider reward.
+
+        This is deliberately called from server-side provider clearing paths,
+        never from a registration, UI or provider browser callback.  Each
+        credit is a normal confirmed THC ledger entry, so balance, staking and
+        future cashout guards see it through the same authoritative ledger.
+        """
+        source = con.execute(
+            """SELECT entry_id, earn_user_id, source, source_ref, amount, state
+                 FROM thc_ledger WHERE entry_id=?""", (source_entry_id,),
+        ).fetchone()
+        if (not source or source["source"] not in self._REFERRAL_PROVIDER_SOURCES
+                or source["state"] not in ("confirmed", "payable")):
+            return 0
+        amount = Decimal(source["amount"])
+        if not amount.is_finite() or amount <= 0:
+            return 0
+        # Direct inviter, then the inviter of that inviter.  Registration
+        # makes the edge immutable, so the ancestry cannot change later.
+        l1 = con.execute(
+            "SELECT referrer_id FROM earn_referrals WHERE referred_id=?",
+            (source["earn_user_id"],),
+        ).fetchone()
+        if not l1:
+            return 0
+        recipients = [(1, l1["referrer_id"])]
+        l2 = con.execute(
+            "SELECT referrer_id FROM earn_referrals WHERE referred_id=?",
+            (l1["referrer_id"],),
+        ).fetchone()
+        if l2:
+            recipients.append((2, l2["referrer_id"]))
+
+        now = int(time.time())
+        created = 0
+        for level, referrer_id in recipients:
+            # Defensive guard against corrupted historical rows.
+            if referrer_id == source["earn_user_id"]:
+                continue
+            already = con.execute(
+                """SELECT 1 FROM earn_referral_reward_allocations
+                   WHERE source_entry_id=? AND referrer_id=? AND level=?""",
+                (source_entry_id, referrer_id, level),
+            ).fetchone()
+            if already:
+                continue
+            loyalty = bool(con.execute(
+                "SELECT 1 FROM earn_wallet_links WHERE earn_user_id=?", (referrer_id,),
+            ).fetchone())
+            rate_bps = self._REFERRAL_RATES_BPS[loyalty][level]
+            credit = (amount * Decimal(rate_bps) / Decimal(10_000)).quantize(
+                _THC_SCALE, rounding=ROUND_DOWN,
+            )
+            if credit <= 0:
+                continue
+            credit_entry_id = "thc_" + secrets.token_urlsafe(18)
+            credit_ref = self._referral_credit_source_ref(
+                source_entry_id, referrer_id, level,
+            )
+            con.execute(
+                """INSERT INTO thc_ledger
+                   (entry_id, earn_user_id, source, source_ref, amount,
+                    state, note, provider_status, received_at, cleared_at,
+                    created_at, updated_at)
+                   VALUES (?,?,?,?,?,'confirmed',?,'referral_settled',?,?,?,?)""",
+                (
+                    credit_entry_id, referrer_id, "referral_reward", credit_ref,
+                    str(credit),
+                    f"L{level} referral reward from verified provider receipt",
+                    now, now, now, now,
+                ),
+            )
+            con.execute(
+                """INSERT INTO earn_referral_reward_allocations
+                   (allocation_id, source_entry_id, referrer_id, referred_id,
+                    level, policy_version, rate_bps, loyalty_eligible, amount,
+                    credit_entry_id, state, created_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?, 'confirmed', ?)""",
+                (
+                    "refa_" + secrets.token_urlsafe(18), source_entry_id,
+                    referrer_id, source["earn_user_id"], level,
+                    self._REFERRAL_POLICY_VERSION, rate_bps, int(loyalty),
+                    str(credit), credit_entry_id, now,
+                ),
+            )
+            self._append_ledger_audit_in_tx(
+                con, entry_id=credit_entry_id,
+                event_ref=f"referral:settlement:{credit_ref}",
+                event_type="referral_reward_settled", state="confirmed",
+                provider_status="referral_settled", occurred_at=now,
+                details=f"policy={self._REFERRAL_POLICY_VERSION};rate_bps={rate_bps}",
+            )
+            created += 1
+        return created
+
+    def _reverse_referral_rewards_for_thc_entry_in_tx(
+        self, con: sqlite3.Connection, source_entry_id: str, *, reason: str = "",
+    ) -> int:
+        """Reverse each still-live allocation exactly once with its receipt."""
+        rows = con.execute(
+            """SELECT allocation_id, credit_entry_id FROM earn_referral_reward_allocations
+               WHERE source_entry_id=? AND state='confirmed'""", (source_entry_id,),
+        ).fetchall()
+        now = int(time.time())
+        reversed_count = 0
+        for row in rows:
+            credit = con.execute(
+                "SELECT state FROM thc_ledger WHERE entry_id=?", (row["credit_entry_id"],),
+            ).fetchone()
+            # A referral credit cannot be silently taken back once it was
+            # consumed by a separate settlement.  Keep the allocation visible
+            # for operator reconciliation rather than fabricating a balance.
+            if not credit or credit["state"] not in ("confirmed", "payable"):
+                con.execute(
+                    """UPDATE earn_referral_reward_allocations
+                       SET state='reversal_pending_reconciliation', reversed_at=?,
+                           reversal_source_ref=?
+                       WHERE allocation_id=? AND state='confirmed'""",
+                    (now, source_entry_id, row["allocation_id"]),
+                )
+                continue
+            self._reverse_thc_in_tx(
+                con, row["credit_entry_id"], provider_status="referral_reversed",
+                reversal_reason=reason or "source_provider_receipt_reversed",
+                event_ref=f"referral:reversal:{row['allocation_id']}",
+            )
+            con.execute(
+                """UPDATE earn_referral_reward_allocations
+                   SET state='reversed', reversed_at=?, reversal_source_ref=?
+                   WHERE allocation_id=? AND state='confirmed'""",
+                (now, source_entry_id, row["allocation_id"]),
+            )
+            reversed_count += 1
+        return reversed_count
+
     def referral_code(self, earn_user_id: str) -> str:
         return earn_user_id
 
@@ -2216,6 +2401,14 @@ class EarnAccountStore:
             return {
                 "referral_count": first["cnt"],
                 "level2_count": second["cnt"],
+                "pending_rewards": "0.000000",
+                "cleared_rewards": str(sum(
+                    (Decimal(row["amount"]) for row in con.execute(
+                        """SELECT amount FROM earn_referral_reward_allocations
+                           WHERE referrer_id=? AND state='confirmed'""",
+                        (earn_user_id,),
+                    ).fetchall()), Decimal("0"),
+                ).quantize(_THC_SCALE)),
             }
 
     def referral_list(self, earn_user_id: str) -> list[dict[str, Any]]:
@@ -3322,6 +3515,9 @@ class EarnAccountStore:
             updated = con.execute(
                 "SELECT * FROM thc_ledger WHERE entry_id = ?", (row["entry_id"],),
             ).fetchone()
+            self._settle_referral_rewards_for_thc_entry_in_tx(
+                con, row["entry_id"],
+            )
             return self._ledger_dict(updated), True
 
     # ── BitcoTasks receipt handling ───────────────────────────────────────
@@ -3849,6 +4045,9 @@ class EarnAccountStore:
         if "reversed" not in _THC_TRANSITIONS.get(row["state"], set()):
             raise EarnError("invalid_thc_transition")
         now = int(time.time())
+        self._reverse_referral_rewards_for_thc_entry_in_tx(
+            con, entry_id, reason=reversal_reason or "source_provider_receipt_reversed",
+        )
         con.execute(
             """UPDATE thc_ledger
                SET state = 'reversed', provider_status = COALESCE(?, provider_status),

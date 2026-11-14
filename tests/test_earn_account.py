@@ -2867,3 +2867,118 @@ class TestWalletUnlockPledgeLedger:
             assert forbidden not in details.lower()
         with pytest.raises(EarnError, match="wallet_unlock_pledge_not_found"):
             store.release_wallet_unlock_pledge(user_b["earn_user_id"], pledge["pledge_id"])
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# External BTC cashout — one Earn reservation, node proof before settlement
+# ══════════════════════════════════════════════════════════════════════════
+
+class _VerifiedBtcPayment:
+    def __init__(self, *, confirmed=True, txid="a" * 64, amount_sat=2500):
+        self.confirmed = confirmed
+        self.txid = txid
+        self.amount_sat = amount_sat
+
+
+class _FakeBtcVerifier:
+    def __init__(self, proof):
+        self.proof = proof
+        self.calls = []
+
+    def verify_tx(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.proof
+
+
+class TestExternalBtcCashoutReservations:
+    _ADDRESS = "bc1q" + "a" * 40
+    _TXID = "a" * 64
+
+    @staticmethod
+    def _request(store, uid, *, gross="100000.000000", fee_bps=800,
+                 sats=2500, key="cashout-1"):
+        return store.create_external_btc_cashout(
+            uid, btc_address=TestExternalBtcCashoutReservations._ADDRESS,
+            gross_thc=gross, fee_bps=fee_bps, btc_amount_sat=sats,
+            quote_ref="quote:provider:2026-11-14:1", idempotency_key=key,
+        )
+
+    def test_external_btc_requires_one_hundred_thousand_cleared_thc(self, store, user_a):
+        uid = user_a["earn_user_id"]
+        _seed_thc_confirmed(store, uid, "99999.999999")
+        with pytest.raises(EarnError, match="btc_cashout_minimum_not_met"):
+            self._request(store, uid, gross="99999.999999")
+        assert store.external_btc_cashouts(uid) == []
+
+    def test_cashout_reserves_the_same_authoritative_thc_balance(self, store, user_a):
+        uid = user_a["earn_user_id"]
+        _seed_thc_confirmed(store, uid, "100100.000000")
+        request = self._request(store, uid)
+        assert request["state"] == "reserved"
+        assert store.thc_balance(uid)["reserved"] == "100000.000000"
+        assert store.thc_balance(uid)["available"] == "100.000000"
+        with pytest.raises(EarnError, match="insufficient_thc_balance"):
+            _stake_thc_with_fee(store, uid, "pool_thc_loyalty", "100")
+
+    def test_fee_policy_is_bounded_at_eight_to_eighteen_percent(self, store, user_a):
+        uid = user_a["earn_user_id"]
+        _seed_thc_confirmed(store, uid, "100000.000000")
+        with pytest.raises(EarnError, match="btc_cashout_fee_out_of_bounds"):
+            self._request(store, uid, fee_bps=799)
+        with pytest.raises(EarnError, match="btc_cashout_fee_out_of_bounds"):
+            self._request(store, uid, fee_bps=1801)
+
+    def test_settlement_needs_begin_then_exact_node_proof(self, store, user_a):
+        uid = user_a["earn_user_id"]
+        _seed_thc_confirmed(store, uid, "100000.000000")
+        request = self._request(store, uid, sats=2500)
+        with pytest.raises(EarnError, match="invalid_btc_cashout_transition"):
+            store.settle_external_btc_cashout(
+                uid, request["cashout_id"], btc_txid=self._TXID,
+                verifier=_FakeBtcVerifier(_VerifiedBtcPayment(amount_sat=2500)),
+            )
+        started = store.begin_external_btc_cashout(uid, request["cashout_id"])
+        assert started["state"] == "settling"
+        verifier = _FakeBtcVerifier(_VerifiedBtcPayment(amount_sat=2500))
+        settled = store.settle_external_btc_cashout(
+            uid, request["cashout_id"], btc_txid=self._TXID, verifier=verifier,
+        )
+        assert settled["state"] == "settled"
+        assert settled["btc_txid"] == self._TXID
+        assert verifier.calls == [{
+            "txid": self._TXID, "expected_address": self._ADDRESS,
+            "expected_amount_sat": 2500,
+        }]
+        assert store.thc_balance(uid)["available"] == "0.000000"
+
+    def test_wrong_amount_or_unconfirmed_node_result_never_settles(self, store, user_a):
+        uid = user_a["earn_user_id"]
+        _seed_thc_confirmed(store, uid, "100000.000000")
+        request = self._request(store, uid, sats=2500)
+        store.begin_external_btc_cashout(uid, request["cashout_id"])
+        with pytest.raises(EarnError, match="btc_cashout_amount_mismatch"):
+            store.settle_external_btc_cashout(
+                uid, request["cashout_id"], btc_txid=self._TXID,
+                verifier=_FakeBtcVerifier(_VerifiedBtcPayment(amount_sat=2499)),
+            )
+        with pytest.raises(EarnError, match="btc_cashout_not_node_verified"):
+            store.settle_external_btc_cashout(
+                uid, request["cashout_id"], btc_txid=self._TXID,
+                verifier=_FakeBtcVerifier(_VerifiedBtcPayment(confirmed=False, amount_sat=2500)),
+            )
+        assert store.external_btc_cashouts(uid)[0]["state"] == "settling"
+
+    def test_release_is_safe_only_before_signer_handoff(self, store, user_a):
+        uid = user_a["earn_user_id"]
+        _seed_thc_confirmed(store, uid, "100000.000000")
+        request = self._request(store, uid)
+        released = store.release_external_btc_cashout(uid, request["cashout_id"])
+        assert released["state"] == "released"
+        assert store.thc_balance(uid)["available"] == "100000.000000"
+        second = self._request(store, uid, key="cashout-2")
+        store.begin_external_btc_cashout(uid, second["cashout_id"])
+        store.mark_external_btc_cashout_uncertain(
+            uid, second["cashout_id"], btc_txid=self._TXID,
+        )
+        with pytest.raises(EarnError, match="btc_cashout_reconciliation_required"):
+            store.release_external_btc_cashout(uid, second["cashout_id"])

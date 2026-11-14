@@ -228,6 +228,55 @@ input:focus{outline:none;border-color:var(--green);box-shadow:0 0 8px rgba(16,18
 .xp-bar-fill{height:100%;background:linear-gradient(90deg,var(--green),#06b6d4);border-radius:3px;transition:width .5s ease}
 .level-badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:.7rem;font-weight:700;background:rgba(6,182,212,.15);color:#06b6d4;margin-left:8px}
 
+/* ── Avatar Builder ──────────────────────────────────────────── */
+.avatar-builder{max-width:520px;margin:0 auto}
+.avatar-row{display:flex;align-items:center;gap:12px;margin-bottom:14px}
+.avatar-row label{width:100px;text-align:right;font-size:.75rem;color:var(--dim);text-transform:uppercase;letter-spacing:1px;flex-shrink:0}
+.avatar-options{display:flex;flex-wrap:wrap;gap:6px;flex:1}
+.av-opt{padding:6px 12px;font-size:.75rem;background:var(--bg3);border:2px solid var(--border);border-radius:8px;color:var(--text);cursor:pointer;transition:all .2s}
+.av-opt:hover{border-color:var(--green)}
+.av-opt.selected{border-color:var(--green);background:rgba(16,185,129,.15);color:var(--green)}
+.class-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;margin-bottom:20px}
+.class-card{background:var(--bg2);border:2px solid var(--border);border-radius:12px;padding:14px 12px;text-align:center;cursor:pointer;transition:all .3s}
+.class-card:hover{border-color:var(--green);transform:translateY(-2px)}
+.class-card.selected{border-color:var(--green);box-shadow:0 0 12px rgba(16,185,129,.3)}
+.class-card .class-icon{width:48px;height:48px;border-radius:50%;margin:0 auto 8px;display:flex;align-items:center;justify-content:center;font-size:1.2rem;font-weight:900;color:#000;font-family:var(--mono)}
+.class-card .class-name{font-weight:700;font-size:.85rem;margin-bottom:2px}
+.class-card .class-desc{color:var(--dim);font-size:.7rem}
+.avatar-preview{width:96px;height:96px;border-radius:50%;margin:0 auto 16px;display:flex;align-items:center;justify-content:center;font-size:2.2rem;font-weight:900;color:#000;font-family:var(--mono);border:3px solid var(--green);position:relative}
+.avatar-preview .av-badge{position:absolute;bottom:-4px;right:-4px;width:28px;height:28px;border-radius:50%;background:var(--gold);display:flex;align-items:center;justify-content:center;font-size:.7rem;font-weight:900;border:2px solid var(--bg)}
+.color-swatch{width:28px;height:28px;border-radius:6px;cursor:pointer;border:2px solid transparent;transition:all .2s}
+.color-swatch:hover,.color-swatch.selected{border-color:#fff;transform:scale(1.15)}
+
+/* ── Character Sheet ─────────────────────────────────────────── */
+.sheet-portrait{width:120px;height:120px;border-radius:50%;margin:0 auto 16px;display:flex;align-items:center;justify-content:center;font-size:3rem;font-weight:900;color:#000;font-family:var(--mono);border:4px solid var(--green);position:relative}
+.sheet-portrait .sheet-level{position:absolute;bottom:-6px;right:-6px;width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,#06b6d4,var(--green));display:flex;align-items:center;justify-content:center;font-size:.85rem;font-weight:900;color:#000;border:3px solid var(--bg)}
+.sheet-header{text-align:center;margin-bottom:20px}
+.sheet-callsign{font-family:var(--mono);font-size:1.3rem;font-weight:900;color:var(--green)}
+.sheet-class{font-size:.8rem;color:var(--dim);margin-top:2px}
+.sheet-section{margin-bottom:20px}
+.sheet-section-title{font-size:.75rem;color:var(--dim);text-transform:uppercase;letter-spacing:2px;margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border)}
+.equip-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px}
+.equip-slot{background:var(--bg2);border:1px dashed var(--border);border-radius:12px;padding:14px 10px;text-align:center;position:relative;min-height:80px;transition:all .2s}
+.equip-slot.filled{border-style:solid;border-color:var(--green)}
+.equip-slot .slot-label{font-size:.65rem;color:var(--dim);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px}
+.equip-slot .slot-icon{font-size:1.5rem;margin-bottom:4px}
+.equip-slot .slot-item{font-size:.75rem;color:var(--green);font-weight:700}
+.equip-slot .slot-empty{font-size:.7rem;color:var(--dim);font-style:italic}
+.equip-slot .btn-unequip{position:absolute;top:4px;right:4px;width:20px;height:20px;border-radius:50%;background:var(--red);color:#fff;font-size:.6rem;display:flex;align-items:center;justify-content:center;border:none;cursor:pointer;opacity:0;transition:opacity .2s}
+.equip-slot:hover .btn-unequip{opacity:1}
+.skill-row{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.skill-name{width:120px;text-align:right;font-size:.75rem;color:var(--dim);text-transform:uppercase}
+.skill-bar{flex:1;height:8px;background:var(--bg3);border-radius:4px;overflow:hidden}
+.skill-bar-fill{height:100%;border-radius:4px;transition:width .5s ease}
+.skill-val{width:30px;font-size:.75rem;font-weight:700;color:var(--green);text-align:center}
+.trust-meter{display:flex;align-items:center;gap:8px;margin-bottom:12px}
+.trust-track{flex:1;height:10px;background:var(--bg3);border-radius:5px;overflow:hidden}
+.trust-fill{height:100%;background:linear-gradient(90deg,#06b6d4,var(--green));border-radius:5px;transition:width .5s}
+.trust-val{font-family:var(--mono);font-size:.9rem;font-weight:700;color:#06b6d4}
+.anim-state{display:inline-block;padding:4px 12px;border-radius:20px;font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:1px;background:rgba(16,185,129,.15);color:var(--green);margin-top:4px}
+.asset-id-tag{font-family:var(--mono);font-size:.65rem;color:var(--dim);margin-top:4px;word-break:break-all}
+
 /* ── Player card additions ────────────────────────────────────── */
 .player-identity{display:flex;align-items:center;gap:12px;margin-bottom:8px}
 .player-portrait-sm{width:48px;height:48px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:1.2rem;font-weight:900;color:#000;font-family:var(--mono);flex-shrink:0}
@@ -278,23 +327,72 @@ input:focus{outline:none;border-color:var(--green);box-shadow:0 0 8px rgba(16,18
     </div>
   </div>
 
-  <!-- ── Character Creation ──────────────────────────────────────── -->
+  <!-- ── Avatar Creation ──────────────────────────────────────── -->
   <div id="charcreate-screen" class="screen">
     <div class="topbar">
       <div class="logo">Crypto <span>Hunters</span></div>
     </div>
-    <h2 class="screen-title" style="text-align:center;margin-bottom:4px">Choose Your Hunter</h2>
-    <p style="text-align:center;color:var(--dim);margin-bottom:24px;font-size:.85rem">Each hunter has unique stats and abilities</p>
-    <div id="char-grid" class="char-grid"></div>
-    <div id="char-detail" class="char-detail" style="display:none">
-      <div class="char-detail-portrait" id="char-portrait"></div>
-      <h3 id="char-detail-name" style="font-size:1.2rem;margin-bottom:2px"></h3>
-      <p id="char-detail-role" style="color:var(--dim);font-size:.8rem;margin-bottom:8px"></p>
-      <p id="char-detail-desc" style="font-size:.85rem;line-height:1.5;margin-bottom:16px"></p>
-      <div id="char-stats-bars"></div>
-      <p id="char-passive" style="color:var(--gold);font-size:.8rem;margin-top:12px;margin-bottom:16px"></p>
-      <button class="btn-enter" onclick="confirmCharacter()" style="width:100%">Select This Hunter</button>
-      <button class="btn-puzzle-alt" onclick="backToCharGrid()" style="margin-top:8px">Choose Another</button>
+
+    <!-- Step 1: Choose class -->
+    <div id="avatar-step1">
+      <h2 class="screen-title" style="text-align:center;margin-bottom:4px">Create Your Hunter</h2>
+      <p style="text-align:center;color:var(--dim);margin-bottom:24px;font-size:.85rem">Choose a class to define your starting skills</p>
+      <div id="class-grid" class="class-grid"></div>
+      <button class="btn-enter" id="btn-to-step2" onclick="avatarStep2()" style="width:100%;max-width:400px;margin:20px auto;display:block" disabled>Customise Appearance</button>
+    </div>
+
+    <!-- Step 2: Customise appearance -->
+    <div id="avatar-step2" style="display:none">
+      <h2 class="screen-title" style="text-align:center;margin-bottom:4px">Customise Your Hunter</h2>
+      <p style="text-align:center;color:var(--dim);margin-bottom:20px;font-size:.85rem">Make your avatar unique</p>
+      <div class="avatar-preview" id="av-preview"></div>
+      <div class="avatar-builder" id="avatar-builder"></div>
+      <button class="btn-enter" onclick="confirmAvatar()" style="width:100%;max-width:400px;margin:20px auto;display:block">Create Hunter</button>
+      <button class="btn-puzzle-alt" onclick="avatarBackToStep1()" style="margin-top:8px;max-width:400px;margin-left:auto;margin-right:auto;display:block">Change Class</button>
+    </div>
+  </div>
+
+  <!-- ── Character Sheet ──────────────────────────────────────── -->
+  <div id="sheet-screen" class="screen">
+    <div class="topbar">
+      <div class="logo">Crypto <span>Hunters</span></div>
+      <button class="btn-sm" onclick="showScreen('dashboard')">Dashboard</button>
+    </div>
+    <div class="back-row"><button class="btn-back" onclick="showScreen('dashboard')">&larr; Back</button></div>
+    <div class="sheet-header">
+      <div class="sheet-portrait" id="sheet-portrait"><span class="sheet-level" id="sheet-level-badge"></span></div>
+      <div class="sheet-callsign" id="sheet-callsign"></div>
+      <div class="sheet-class" id="sheet-class"></div>
+      <div class="anim-state" id="sheet-anim-state">idle</div>
+      <div class="asset-id-tag" id="sheet-asset-id"></div>
+    </div>
+
+    <div class="sheet-section">
+      <div class="sheet-section-title">XP &amp; Trust</div>
+      <div class="xp-bar-container">
+        <div class="xp-bar-label"><span id="sheet-xp-text">0 / 100 XP</span><span id="sheet-xp-pct">0%</span></div>
+        <div class="xp-bar-track"><div class="xp-bar-fill" id="sheet-xp-bar" style="width:0%"></div></div>
+      </div>
+      <div class="trust-meter">
+        <span style="font-size:.75rem;color:var(--dim);text-transform:uppercase">Trust</span>
+        <div class="trust-track"><div class="trust-fill" id="sheet-trust-bar" style="width:0%"></div></div>
+        <div class="trust-val" id="sheet-trust-val">0</div>
+      </div>
+    </div>
+
+    <div class="sheet-section">
+      <div class="sheet-section-title">Skills</div>
+      <div id="sheet-skills"></div>
+    </div>
+
+    <div class="sheet-section">
+      <div class="sheet-section-title">Equipment</div>
+      <div id="sheet-equipment" class="equip-grid"></div>
+    </div>
+
+    <div class="sheet-section">
+      <div class="sheet-section-title">Inventory</div>
+      <div id="sheet-inventory" class="inv-grid"></div>
     </div>
   </div>
 
@@ -327,10 +425,12 @@ input:focus{outline:none;border-color:var(--green);box-shadow:0 0 8px rgba(16,18
       <div class="stat-card"><div class="stat-val" id="stat-quests">0</div><div class="stat-label">Active</div></div>
     </div>
     <div class="nav-grid">
+      <button class="nav-btn" onclick="showScreen('sheet')"><span class="icon">&#128100;</span>Character</button>
       <button class="nav-btn" onclick="showScreen('story')"><span class="icon">&#128214;</span>Story</button>
       <button class="nav-btn" onclick="showScreen('missions')"><span class="icon">&#9889;</span>Missions</button>
       <button class="nav-btn" onclick="showScreen('items')"><span class="icon">&#128722;</span>Items Shop</button>
       <button class="nav-btn" onclick="showScreen('inventory')"><span class="icon">&#127890;</span>Inventory</button>
+      <button class="nav-btn" onclick="showScreen('npcs')"><span class="icon">&#129333;</span>NPCs</button>
     </div>
   </div>
 
@@ -389,6 +489,27 @@ input:focus{outline:none;border-color:var(--green);box-shadow:0 0 8px rgba(16,18
     <div class="back-row"><button class="btn-back" onclick="showScreen('dashboard')">&larr; Back</button></div>
     <h2 class="screen-title">Inventory</h2>
     <div id="inv-content"></div>
+  </div>
+
+  <!-- ── NPCs / Companions ──────────────────────────────────────── -->
+  <div id="npcs-screen" class="screen">
+    <div class="topbar">
+      <div class="logo">Crypto <span>Hunters</span></div>
+      <button class="btn-sm" onclick="showScreen('dashboard')">Dashboard</button>
+    </div>
+    <div class="back-row"><button class="btn-back" onclick="showScreen('dashboard')">&larr; Back</button></div>
+    <h2 class="screen-title">NPCs &amp; Companions</h2>
+    <p style="color:var(--dim);margin-bottom:20px;font-size:.85rem">The canonical Crypto Hunters — allies you meet throughout the story</p>
+    <div id="npc-grid" class="char-grid"></div>
+    <div id="npc-detail" class="char-detail" style="display:none">
+      <div class="char-detail-portrait" id="npc-portrait"></div>
+      <h3 id="npc-detail-name" style="font-size:1.2rem;margin-bottom:2px"></h3>
+      <p id="npc-detail-role" style="color:var(--dim);font-size:.8rem;margin-bottom:8px"></p>
+      <p id="npc-detail-desc" style="font-size:.85rem;line-height:1.5;margin-bottom:16px"></p>
+      <div id="npc-stats-bars"></div>
+      <p id="npc-passive" style="color:var(--gold);font-size:.8rem;margin-top:12px;margin-bottom:16px"></p>
+      <button class="btn-puzzle-alt" onclick="backToNpcGrid()">Back to NPCs</button>
+    </div>
   </div>
 
   <!-- ── Story Mode: Chapter Player ──────────────────────────────── -->
@@ -505,6 +626,11 @@ const state = {
   wallet: '',
   callsign: '',
   character: null,
+  avatar: null,
+  hunterClass: null,
+  equipment: { head:null, outfit:null, accessory:null, tool:null, badge:null },
+  animationState: 'idle',
+  assetId: null,
   balance: 0,
   inventory: [],
   missions: [],
@@ -520,6 +646,8 @@ const state = {
   thrWallet: null,
   storyCompleted: [],
   characters: [],
+  avatarOptions: null,
+  classes: null,
 };
 
 /* ── XP / Level helpers ─────────────────────────────────────────── */
@@ -587,7 +715,9 @@ function showScreen(name){
   if(name==='items') loadItems();
   if(name==='inventory') loadInventory();
   if(name==='puzzle-e1') e1UpdatePips();
-  if(name==='charcreate') loadCharacters();
+  if(name==='charcreate') loadAvatarOptions();
+  if(name==='sheet') loadCharacterSheet();
+  if(name==='npcs') loadNpcs();
 }
 
 /* ── API fetch with error handling ───────────────────────────────── */
@@ -618,6 +748,11 @@ function saveLocal(){
       missionStates: state.missionStates,
       totalDrxEarned: state.totalDrxEarned,
       character: state.character,
+      avatar: state.avatar,
+      hunterClass: state.hunterClass,
+      equipment: state.equipment,
+      animationState: state.animationState,
+      assetId: state.assetId,
       xp: state.xp,
       level: state.level,
       skills: state.skills,
@@ -636,6 +771,11 @@ function loadLocal(wallet){
     state.missionStates = d.missionStates||{};
     state.totalDrxEarned = d.totalDrxEarned||0;
     state.character = d.character||null;
+    state.avatar = d.avatar||null;
+    state.hunterClass = d.hunterClass||null;
+    state.equipment = d.equipment||{head:null,outfit:null,accessory:null,tool:null,badge:null};
+    state.animationState = d.animationState||'idle';
+    state.assetId = d.assetId||null;
     state.xp = d.xp||0;
     state.level = d.level||1;
     state.skills = d.skills||{};
@@ -674,6 +814,11 @@ async function enterGame(){
       state.balance = player.balance || 0;
       state.inventory = player.inventory || [];
       state.character = player.character || state.character;
+      state.avatar = player.avatar || state.avatar;
+      state.hunterClass = player.hunterClass || state.hunterClass;
+      state.equipment = player.equipment || state.equipment;
+      state.animationState = player.animationState || 'idle';
+      state.assetId = player.assetId || state.assetId;
       state.xp = player.xp || state.xp;
       state.level = player.level || state.level;
       state.skills = player.skills || state.skills;
@@ -717,6 +862,11 @@ function logout(){
   state.wallet = '';
   state.callsign = '';
   state.character = null;
+  state.avatar = null;
+  state.hunterClass = null;
+  state.equipment = {head:null,outfit:null,accessory:null,tool:null,badge:null};
+  state.animationState = 'idle';
+  state.assetId = null;
   state.balance = 0;
   state.inventory = [];
   state.missions = [];
@@ -731,55 +881,215 @@ function logout(){
   showScreen('login');
 }
 
-/* ── Character Creation ─────────────────────────────────────────── */
-let selectedCharId = null;
+/* ── Avatar Creation ────────────────────────────────────────────── */
+let selectedClass = null;
+let avatarChoice = { bodyType:'athletic', face:'angular', hair:'cyber_cut', eyes:'green', skinTone:'medium', outfit:'hacker_hoodie', accentColors:{ primary:'#10b981', secondary:'#06b6d4' } };
+const ACCENT_PRESETS = ['#10b981','#3b82f6','#a855f7','#ec4899','#f59e0b','#06b6d4','#ef4444','#8b5cf6'];
+const CLASS_ICONS = {hacker:'H',defender:'D',engineer:'E',analyst:'A',infiltrator:'I'};
 
-async function loadCharacters(){
-  const grid = $('char-grid');
-  const detail = $('char-detail');
+async function loadAvatarOptions(){
+  $('avatar-step1').style.display = '';
+  $('avatar-step2').style.display = 'none';
+  selectedClass = null;
+  $('btn-to-step2').disabled = true;
+
+  try{
+    const opts = await apiFetch('/api/avatar-options');
+    state.avatarOptions = opts;
+    state.classes = opts.classes || {};
+    renderClassGrid(opts.classes);
+  }catch(e){
+    const fallbackClasses = {
+      hacker:{label:'Hacker',startSkill:'cryptography',color:'#10b981',desc:'Breaks codes and exploits vulnerabilities'},
+      defender:{label:'Defender',startSkill:'network_security',color:'#3b82f6',desc:'Protects networks and infrastructure'},
+      engineer:{label:'Engineer',startSkill:'smart_contracts',color:'#f59e0b',desc:'Builds and audits smart contracts'},
+      analyst:{label:'Analyst',startSkill:'data_analysis',color:'#ec4899',desc:'Reads data and spots anomalies'},
+      infiltrator:{label:'Infiltrator',startSkill:'social_engineering',color:'#a855f7',desc:'Masters deception and social engineering'}
+    };
+    state.classes = fallbackClasses;
+    renderClassGrid(fallbackClasses);
+  }
+}
+
+function renderClassGrid(classes){
+  const grid = $('class-grid');
+  grid.innerHTML = '';
+  for(const [id, cls] of Object.entries(classes)){
+    const card = document.createElement('div');
+    card.className = 'class-card';
+    card.id = 'class-'+id;
+    card.onclick = () => selectClass(id);
+    card.innerHTML =
+      '<div class="class-icon" style="background:'+cls.color+'">'+(CLASS_ICONS[id]||id[0].toUpperCase())+'</div>'+
+      '<div class="class-name">'+cls.label+'</div>'+
+      '<div class="class-desc">'+cls.desc+'</div>';
+    grid.appendChild(card);
+  }
+}
+
+function selectClass(id){
+  selectedClass = id;
+  document.querySelectorAll('.class-card').forEach(c => c.classList.remove('selected'));
+  const el = $('class-'+id);
+  if(el) el.classList.add('selected');
+  $('btn-to-step2').disabled = false;
+  avatarChoice.accentColors.primary = (state.classes[id]||{}).color || '#10b981';
+}
+
+function avatarStep2(){
+  if(!selectedClass) return;
+  $('avatar-step1').style.display = 'none';
+  $('avatar-step2').style.display = '';
+  renderAvatarBuilder();
+  updateAvatarPreview();
+}
+
+function avatarBackToStep1(){
+  $('avatar-step1').style.display = '';
+  $('avatar-step2').style.display = 'none';
+}
+
+function renderAvatarBuilder(){
+  const builder = $('avatar-builder');
+  const opts = state.avatarOptions || {};
+  let html = '';
+
+  const rows = [
+    { label:'Body', key:'bodyType', options: opts.bodyTypes || ['athletic','slim','muscular','average'] },
+    { label:'Face', key:'face', options: opts.faces || ['round','angular','sharp','soft'] },
+    { label:'Hair', key:'hair', options: opts.hairStyles || ['short_dark','long_light','mohawk','braids','bald','cyber_cut','wild_curls'] },
+    { label:'Eyes', key:'eyes', options: opts.eyeColors || ['blue','green','brown','amber','cyber_red','violet'] },
+    { label:'Skin', key:'skinTone', options: opts.skinTones || ['light','medium','dark','olive','cyber_pale'] },
+    { label:'Outfit', key:'outfit', options: opts.outfits || ['hacker_hoodie','tactical_vest','lab_coat','street_tech','cyber_suit'] },
+  ];
+
+  rows.forEach(r => {
+    html += '<div class="avatar-row"><label>'+r.label+'</label><div class="avatar-options">';
+    r.options.forEach(o => {
+      const sel = avatarChoice[r.key] === o ? ' selected' : '';
+      const display = o.replace(/_/g,' ');
+      html += '<button class="av-opt'+sel+'" onclick="setAvatar(\''+r.key+'\',\''+o+'\',this)">'+display+'</button>';
+    });
+    html += '</div></div>';
+  });
+
+  html += '<div class="avatar-row"><label>Accent</label><div class="avatar-options">';
+  ACCENT_PRESETS.forEach(c => {
+    const sel = avatarChoice.accentColors.primary === c ? ' selected' : '';
+    html += '<div class="color-swatch'+sel+'" style="background:'+c+'" onclick="setAccent(\''+c+'\',this)"></div>';
+  });
+  html += '</div></div>';
+
+  builder.innerHTML = html;
+}
+
+function setAvatar(key, val, el){
+  avatarChoice[key] = val;
+  el.parentElement.querySelectorAll('.av-opt').forEach(b => b.classList.remove('selected'));
+  el.classList.add('selected');
+  updateAvatarPreview();
+}
+
+function setAccent(color, el){
+  avatarChoice.accentColors.primary = color;
+  el.parentElement.querySelectorAll('.color-swatch').forEach(s => s.classList.remove('selected'));
+  el.classList.add('selected');
+  updateAvatarPreview();
+}
+
+function updateAvatarPreview(){
+  const preview = $('av-preview');
+  const cls = state.classes[selectedClass] || {};
+  preview.style.background = avatarChoice.accentColors.primary;
+  preview.style.borderColor = avatarChoice.accentColors.primary;
+  preview.innerHTML = state.callsign.slice(0,2).toUpperCase() +
+    '<div class="av-badge">'+(CLASS_ICONS[selectedClass]||'?')+'</div>';
+}
+
+async function confirmAvatar(){
+  if(!selectedClass) return;
+  try{
+    const data = await apiFetch('/api/player/create', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        callsign: state.callsign,
+        hunterClass: selectedClass,
+        avatar: avatarChoice,
+        thrWallet: state.thrWallet || undefined
+      })
+    });
+    state.character = data.character;
+    state.avatar = data.avatar || avatarChoice;
+    state.hunterClass = data.hunterClass || selectedClass;
+    state.assetId = data.assetId || null;
+    state.animationState = data.animationState || 'idle';
+    state.xp = data.xp || 0;
+    state.level = data.level || 1;
+    state.skills = data.skills || {};
+    state.balance = data.balance || 0;
+    state.trust = data.trust || 0;
+    saveLocal();
+    showScreen('dashboard');
+  }catch(e){
+    const cls = state.classes[selectedClass] || {};
+    state.character = { id:selectedClass, handle:state.callsign, name:state.callsign, role:cls.label||selectedClass, color:cls.color||'#10b981' };
+    state.avatar = avatarChoice;
+    state.hunterClass = selectedClass;
+    state.assetId = 'hunter_'+state.callsign+'_'+Date.now();
+    state.skills[cls.startSkill||'cryptography'] = 10;
+    saveLocal();
+    showScreen('dashboard');
+  }
+}
+
+/* ── NPCs ───────────────────────────────────────────────────────── */
+let npcList = [];
+
+async function loadNpcs(){
+  const grid = $('npc-grid');
+  const detail = $('npc-detail');
   detail.style.display = 'none';
   grid.style.display = '';
   grid.innerHTML = '<div class="skeleton skeleton-card"></div>';
 
   try{
-    const chars = await apiFetch('/api/characters');
-    state.characters = chars.filter(c => c.unlocked);
+    const npcs = await apiFetch('/api/npcs');
+    npcList = npcs;
     grid.innerHTML = '';
-    state.characters.forEach(c => {
+    npcs.forEach(c => {
       const card = document.createElement('div');
       card.className = 'char-card';
-      card.onclick = () => selectCharacter(c.id);
+      if(!c.unlocked) card.style.opacity = '0.5';
+      card.onclick = () => selectNpc(c.id);
       card.innerHTML =
         '<div class="portrait" style="background:'+c.color+'">'+c.handle[0]+c.handle[1]+'</div>'+
-        '<div class="cname">'+c.handle+'</div>'+
+        '<div class="cname">'+c.handle+(c.unlocked?'':' &#128274;')+'</div>'+
         '<div class="crole">'+c.role+'</div>';
       grid.appendChild(card);
     });
   }catch(e){
-    grid.innerHTML = '<p style="color:var(--red);text-align:center">Failed to load characters. Check backend.</p>';
+    grid.innerHTML = '<p style="color:var(--red);text-align:center">Failed to load NPCs.</p>';
   }
 }
 
-function selectCharacter(id){
-  const c = state.characters.find(ch => ch.id === id);
+function selectNpc(id){
+  const c = npcList.find(ch => ch.id === id);
   if(!c) return;
-  selectedCharId = id;
 
-  $('char-grid').style.display = 'none';
-  const detail = $('char-detail');
-  detail.style.display = '';
+  $('npc-grid').style.display = 'none';
+  $('npc-detail').style.display = '';
 
-  $('char-portrait').style.background = c.color;
-  $('char-portrait').textContent = c.handle[0]+c.handle[1];
-  $('char-detail-name').textContent = c.name;
-  $('char-detail-role').textContent = c.role+' — '+c.origin;
-  $('char-detail-desc').textContent = c.desc;
-  $('char-passive').textContent = '✨ '+c.passive;
+  $('npc-portrait').style.background = c.color;
+  $('npc-portrait').textContent = c.handle[0]+c.handle[1];
+  $('npc-detail-name').textContent = c.name;
+  $('npc-detail-role').textContent = c.role+' — '+c.origin;
+  $('npc-detail-desc').textContent = c.desc;
+  $('npc-passive').textContent = (c.unlocked?'':'&#128274; Locked — ') + c.passive;
 
-  const barsEl = $('char-stats-bars');
+  const barsEl = $('npc-stats-bars');
   barsEl.innerHTML = '';
-  const statNames = ['hack','shield','intel','stamina','charisma'];
-  statNames.forEach(s => {
+  ['hack','shield','intel','stamina','charisma'].forEach(s => {
     const val = c.stats[s] || 0;
     const pct = (val / 10) * 100;
     barsEl.innerHTML +=
@@ -791,42 +1101,128 @@ function selectCharacter(id){
   });
 }
 
-function backToCharGrid(){
-  $('char-grid').style.display = '';
-  $('char-detail').style.display = 'none';
-  selectedCharId = null;
+function backToNpcGrid(){
+  $('npc-grid').style.display = '';
+  $('npc-detail').style.display = 'none';
 }
 
-async function confirmCharacter(){
-  if(!selectedCharId) return;
+/* ── Character Sheet ────────────────────────────────────────────── */
+async function loadCharacterSheet(){
   try{
-    const data = await apiFetch('/api/player/create', {
+    const sheet = await apiFetch('/api/player/'+encodeURIComponent(state.callsign)+'/sheet');
+    if(sheet.avatar) state.avatar = sheet.avatar;
+    if(sheet.hunterClass) state.hunterClass = sheet.hunterClass;
+    if(sheet.equipment) state.equipment = sheet.equipment;
+    if(sheet.animationState) state.animationState = sheet.animationState;
+    if(sheet.assetId) state.assetId = sheet.assetId;
+    if(sheet.xp !== undefined) state.xp = sheet.xp;
+    if(sheet.skills) state.skills = sheet.skills;
+    if(sheet.trust !== undefined) state.trust = sheet.trust;
+    if(sheet.inventory) state.inventory = sheet.inventory;
+  }catch(e){}
+
+  renderCharacterSheet();
+}
+
+function renderCharacterSheet(){
+  const portrait = $('sheet-portrait');
+  const accentColor = (state.avatar && state.avatar.accentColors && state.avatar.accentColors.primary) ||
+    (state.character && state.character.color) || 'var(--green)';
+  portrait.style.background = accentColor;
+  portrait.style.borderColor = accentColor;
+  const initials = state.callsign.slice(0,2).toUpperCase();
+  const lvlInfo = calcLevel(state.xp);
+  portrait.innerHTML = initials + '<span class="sheet-level" id="sheet-level-badge">'+lvlInfo.level+'</span>';
+
+  $('sheet-callsign').textContent = state.callsign;
+  const clsLabel = state.hunterClass ?
+    ((state.classes && state.classes[state.hunterClass]) || {}).label || state.hunterClass :
+    (state.character && state.character.role) || '';
+  $('sheet-class').textContent = clsLabel;
+  $('sheet-anim-state').textContent = state.animationState || 'idle';
+  $('sheet-asset-id').textContent = state.assetId ? 'Asset: '+state.assetId : '';
+
+  const pct = Math.min(100, Math.round((lvlInfo.currentXp / lvlInfo.needed) * 100));
+  $('sheet-xp-text').textContent = lvlInfo.currentXp+' / '+lvlInfo.needed+' XP';
+  $('sheet-xp-pct').textContent = pct+'%';
+  $('sheet-xp-bar').style.width = pct+'%';
+
+  const trustMax = 50;
+  const trustPct = Math.min(100, Math.round((state.trust / trustMax) * 100));
+  $('sheet-trust-bar').style.width = trustPct+'%';
+  $('sheet-trust-val').textContent = state.trust;
+
+  const skillsEl = $('sheet-skills');
+  const SKILL_NAMES = ['cryptography','network_security','smart_contracts','data_analysis','social_engineering'];
+  const SKILL_COLORS = {cryptography:'#10b981',network_security:'#3b82f6',smart_contracts:'#f59e0b',data_analysis:'#ec4899',social_engineering:'#a855f7'};
+  skillsEl.innerHTML = '';
+  SKILL_NAMES.forEach(sk => {
+    const val = state.skills[sk] || 0;
+    const maxSk = 100;
+    const pctSk = Math.min(100, Math.round((val/maxSk)*100));
+    skillsEl.innerHTML +=
+      '<div class="skill-row">'+
+        '<div class="skill-name">'+sk.replace(/_/g,' ')+'</div>'+
+        '<div class="skill-bar"><div class="skill-bar-fill" style="width:'+pctSk+'%;background:'+(SKILL_COLORS[sk]||'var(--green)')+'"></div></div>'+
+        '<div class="skill-val">'+val+'</div>'+
+      '</div>';
+  });
+
+  const equipEl = $('sheet-equipment');
+  const SLOT_ICONS = {head:'&#128081;',outfit:'&#128085;',accessory:'&#128142;',tool:'&#128295;',badge:'&#127942;'};
+  equipEl.innerHTML = '';
+  ['head','outfit','accessory','tool','badge'].forEach(slot => {
+    const itemId = state.equipment[slot];
+    const filled = !!itemId;
+    const itemObj = (state.items||[]).find(i=>i.id===itemId);
+    const itemName = itemObj ? itemObj.name : (itemId || '');
+    const icon = ITEM_ICONS[itemId] || SLOT_ICONS[slot] || '&#128230;';
+
+    let html = '<div class="equip-slot'+(filled?' filled':'')+'">'+
+      '<div class="slot-label">'+slot+'</div>'+
+      '<div class="slot-icon">'+icon+'</div>';
+    if(filled){
+      html += '<div class="slot-item">'+itemName+'</div>'+
+        '<button class="btn-unequip" onclick="unequipSlot(\''+slot+'\')" title="Unequip">x</button>';
+    }else{
+      html += '<div class="slot-empty">Empty</div>';
+    }
+    html += '</div>';
+    equipEl.innerHTML += html;
+  });
+
+  const invEl = $('sheet-inventory');
+  if(!state.inventory.length){
+    invEl.innerHTML = '<div class="empty-state" style="padding:20px"><p style="color:var(--dim)">No items yet</p></div>';
+  }else{
+    const itemMap = {};
+    (state.items||[]).forEach(i=>itemMap[i.id]=i);
+    let invHtml = '';
+    state.inventory.forEach(id => {
+      const item = itemMap[id];
+      const name = item ? item.name : id;
+      const icon = ITEM_ICONS[id] || '&#128230;';
+      const equipped = Object.values(state.equipment).includes(id);
+      invHtml += '<div class="inv-item" style="cursor:pointer;'+(equipped?'border-color:var(--green);':'')+'">'+
+        '<div class="icon">'+icon+'</div><div>'+name+'</div>'+
+        (equipped ? '<div style="font-size:.6rem;color:var(--green);margin-top:4px">EQUIPPED</div>' : '')+
+      '</div>';
+    });
+    invEl.innerHTML = invHtml;
+  }
+}
+
+async function unequipSlot(slot){
+  try{
+    await apiFetch('/api/player/unequip', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({
-        callsign: state.callsign,
-        characterId: selectedCharId,
-        thrWallet: state.thrWallet || undefined
-      })
+      body:JSON.stringify({ callsign: state.callsign, slot })
     });
-    state.character = data.character;
-    state.xp = data.xp || 0;
-    state.level = data.level || 1;
-    state.skills = data.skills || {};
-    state.balance = data.balance || 0;
-    state.trust = data.trust || 0;
-    saveLocal();
-    showScreen('dashboard');
-  }catch(e){
-    // Fallback: save character locally
-    const c = state.characters.find(ch => ch.id === selectedCharId);
-    if(c){
-      state.character = { id:c.id, handle:c.handle, name:c.name, role:c.role, color:c.color, stats:{...c.stats} };
-      state.skills[c.startSkill] = 1;
-      saveLocal();
-      showScreen('dashboard');
-    }
-  }
+  }catch(e){}
+  state.equipment[slot] = null;
+  saveLocal();
+  renderCharacterSheet();
 }
 
 /* ── Dashboard ───────────────────────────────────────────────────── */

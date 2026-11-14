@@ -30,6 +30,28 @@ const rewardPolicy = JSON.parse(fs.readFileSync(path.join(__dirname, 'data', 're
 const characters = JSON.parse(fs.readFileSync(path.join(__dirname, 'data', 'characters.json'), 'utf8'));
 const chapters = JSON.parse(fs.readFileSync(path.join(__dirname, 'data', 'chapters.json'), 'utf8'));
 
+// Avatar customisation options
+const AVATAR_OPTIONS = {
+  bodyTypes: ['athletic', 'slim', 'muscular', 'average'],
+  faces: ['round', 'angular', 'sharp', 'soft'],
+  hairStyles: ['short_dark', 'long_light', 'mohawk', 'braids', 'bald', 'cyber_cut', 'wild_curls'],
+  eyeColors: ['blue', 'green', 'brown', 'amber', 'cyber_red', 'violet'],
+  skinTones: ['light', 'medium', 'dark', 'olive', 'cyber_pale'],
+  outfits: ['hacker_hoodie', 'tactical_vest', 'lab_coat', 'street_tech', 'cyber_suit']
+};
+
+const CLASSES = {
+  hacker: { label: 'Hacker', startSkill: 'cryptography', color: '#10b981', desc: 'Specialises in breaking codes and exploiting vulnerabilities' },
+  defender: { label: 'Defender', startSkill: 'network_security', color: '#3b82f6', desc: 'Protects networks and hardens infrastructure' },
+  engineer: { label: 'Engineer', startSkill: 'smart_contracts', color: '#f59e0b', desc: 'Builds and audits smart contract systems' },
+  analyst: { label: 'Analyst', startSkill: 'data_analysis', color: '#ec4899', desc: 'Reads blockchain data and spots anomalies' },
+  infiltrator: { label: 'Infiltrator', startSkill: 'social_engineering', color: '#a855f7', desc: 'Masters deception and social engineering' }
+};
+
+const EQUIPMENT_SLOTS = ['head', 'outfit', 'accessory', 'tool', 'badge'];
+
+const ANIMATION_STATES = ['idle', 'walk', 'victory', 'puzzle_focus', 'raid_ready'];
+
 // Tier ordering for progression
 const TIER_ORDER = ['Easy', 'Normal', 'Expert', 'Genius'];
 const TIER_PREREQUISITES = {
@@ -83,6 +105,11 @@ function defaultPlayerState(callsign) {
     storyCompleted: [],
     trust: 0,
     thrWallet: null,
+    avatar: null,
+    hunterClass: null,
+    equipment: { head: null, outfit: null, accessory: null, tool: null, badge: null },
+    animationState: 'idle',
+    assetId: null,
     lastSaved: null
   };
 }
@@ -100,6 +127,11 @@ function getPlayer(key) {
   if (p.trust === undefined) p.trust = 0;
   if (p.thrWallet === undefined) p.thrWallet = null;
   if (p.character === undefined) p.character = null;
+  if (p.avatar === undefined) p.avatar = null;
+  if (p.hunterClass === undefined) p.hunterClass = null;
+  if (!p.equipment) p.equipment = { head: null, outfit: null, accessory: null, tool: null, badge: null };
+  if (!p.animationState) p.animationState = 'idle';
+  if (p.assetId === undefined) p.assetId = null;
   return p;
 }
 
@@ -407,6 +439,11 @@ app.get('/api/dashboard/:wallet', (req, res) => {
     wallet,
     callsign: player.callsign || wallet,
     character: player.character || null,
+    avatar: player.avatar || null,
+    hunterClass: player.hunterClass || null,
+    equipment: player.equipment || { head: null, outfit: null, accessory: null, tool: null, badge: null },
+    animationState: player.animationState || 'idle',
+    assetId: player.assetId || null,
     balance: player.balance,
     inventoryCount: player.inventory.length,
     inventory: player.inventory,
@@ -752,31 +789,105 @@ app.get('/api/characters', (_req, res) => {
 
 const CALLSIGN_RE = /^[a-zA-Z0-9_]{1,24}$/;
 
+function validateAvatar(av) {
+  if (!av || typeof av !== 'object') return null;
+  const validated = {};
+  if (av.bodyType) {
+    if (!AVATAR_OPTIONS.bodyTypes.includes(av.bodyType)) return 'invalid bodyType';
+    validated.bodyType = av.bodyType;
+  } else { validated.bodyType = 'average'; }
+  if (av.face) {
+    if (!AVATAR_OPTIONS.faces.includes(av.face)) return 'invalid face';
+    validated.face = av.face;
+  } else { validated.face = 'round'; }
+  if (av.hair) {
+    if (!AVATAR_OPTIONS.hairStyles.includes(av.hair)) return 'invalid hair';
+    validated.hair = av.hair;
+  } else { validated.hair = 'short_dark'; }
+  if (av.eyes) {
+    if (!AVATAR_OPTIONS.eyeColors.includes(av.eyes)) return 'invalid eyes';
+    validated.eyes = av.eyes;
+  } else { validated.eyes = 'brown'; }
+  if (av.skinTone) {
+    if (!AVATAR_OPTIONS.skinTones.includes(av.skinTone)) return 'invalid skinTone';
+    validated.skinTone = av.skinTone;
+  } else { validated.skinTone = 'medium'; }
+  if (av.outfit) {
+    if (!AVATAR_OPTIONS.outfits.includes(av.outfit)) return 'invalid outfit';
+    validated.outfit = av.outfit;
+  } else { validated.outfit = 'hacker_hoodie'; }
+  validated.accentColors = {
+    primary: (av.accentColors && av.accentColors.primary) || '#10b981',
+    secondary: (av.accentColors && av.accentColors.secondary) || '#0f172a'
+  };
+  return validated;
+}
+
 app.post('/api/player/create', (req, res) => {
-  const { callsign, characterId } = req.body || {};
+  const { callsign, characterId, hunterClass, avatar } = req.body || {};
   if (!callsign || !CALLSIGN_RE.test(callsign)) {
     return res.status(400).json({ error: 'callsign must be 1-24 alphanumeric/underscore characters', code: 'INVALID_CALLSIGN' });
-  }
-  if (!characterId) {
-    return res.status(400).json({ error: 'characterId required', code: 'MISSING_FIELDS' });
-  }
-  const charDef = characters.find((c) => c.id === characterId);
-  if (!charDef || !charDef.unlocked) {
-    return res.status(400).json({ error: 'character not found or locked', code: 'INVALID_CHARACTER' });
   }
   if (players[callsign]) {
     return res.status(409).json({ error: 'callsign already taken', code: 'CALLSIGN_EXISTS' });
   }
 
   const player = defaultPlayerState(callsign);
-  player.character = {
-    id: charDef.id,
-    name: charDef.name,
-    handle: charDef.handle,
-    color: charDef.color,
-    role: charDef.role
-  };
-  player.skills[charDef.startSkill] = 10;
+  player.assetId = 'hunter_' + callsign + '_' + Date.now();
+
+  if (characterId) {
+    const charDef = characters.find((c) => c.id === characterId);
+    if (!charDef || !charDef.unlocked) {
+      return res.status(400).json({ error: 'character not found or locked', code: 'INVALID_CHARACTER' });
+    }
+    player.character = {
+      id: charDef.id,
+      name: charDef.name,
+      handle: charDef.handle,
+      color: charDef.color,
+      role: charDef.role
+    };
+    player.skills[charDef.startSkill] = 10;
+    if (!player.avatar) {
+      player.avatar = {
+        bodyType: 'average', face: 'round', hair: 'short_dark',
+        eyes: 'brown', skinTone: 'medium', outfit: 'hacker_hoodie',
+        accentColors: { primary: charDef.color, secondary: '#0f172a' }
+      };
+    }
+  } else if (hunterClass) {
+    if (!CLASSES[hunterClass]) {
+      return res.status(400).json({ error: 'invalid hunterClass', code: 'INVALID_CLASS' });
+    }
+    const cls = CLASSES[hunterClass];
+    player.hunterClass = hunterClass;
+    player.character = {
+      id: hunterClass,
+      name: cls.label + ' Hunter',
+      handle: callsign,
+      color: cls.color,
+      role: cls.label
+    };
+    player.skills[cls.startSkill] = 10;
+  } else {
+    return res.status(400).json({ error: 'characterId or hunterClass required', code: 'MISSING_FIELDS' });
+  }
+
+  if (avatar) {
+    const result = validateAvatar(avatar);
+    if (typeof result === 'string') {
+      return res.status(400).json({ error: result, code: 'INVALID_AVATAR' });
+    }
+    player.avatar = result;
+  } else if (!player.avatar) {
+    const color = (player.character && player.character.color) || '#10b981';
+    player.avatar = {
+      bodyType: 'average', face: 'round', hair: 'short_dark',
+      eyes: 'brown', skinTone: 'medium', outfit: 'hacker_hoodie',
+      accentColors: { primary: color, secondary: '#0f172a' }
+    };
+  }
+
   players[callsign] = player;
   persistPlayer(callsign);
 
@@ -784,6 +895,10 @@ app.post('/api/player/create', (req, res) => {
     message: 'Hunter created',
     callsign,
     character: player.character,
+    avatar: player.avatar,
+    hunterClass: player.hunterClass,
+    assetId: player.assetId,
+    animationState: player.animationState,
     ...levelFromXp(player.xp),
     skills: player.skills
   });
@@ -803,6 +918,107 @@ app.post('/api/player/connect-wallet', (req, res) => {
   res.json({ message: 'wallet connected', callsign, thrWallet });
 });
 
+app.get('/api/avatar-options', (_req, res) => {
+  res.json({
+    bodyTypes: AVATAR_OPTIONS.bodyTypes,
+    faces: AVATAR_OPTIONS.faces,
+    hairStyles: AVATAR_OPTIONS.hairStyles,
+    eyeColors: AVATAR_OPTIONS.eyeColors,
+    skinTones: AVATAR_OPTIONS.skinTones,
+    outfits: AVATAR_OPTIONS.outfits,
+    classes: CLASSES,
+    equipmentSlots: EQUIPMENT_SLOTS,
+    animationStates: ANIMATION_STATES
+  });
+});
+
+app.get('/api/npcs', (_req, res) => {
+  res.json(characters);
+});
+
+app.post('/api/player/avatar', (req, res) => {
+  const { callsign, avatar } = req.body || {};
+  if (!callsign) {
+    return res.status(400).json({ error: 'callsign required', code: 'MISSING_FIELDS' });
+  }
+  if (!players[callsign]) {
+    return res.status(404).json({ error: 'player not found', code: 'PLAYER_NOT_FOUND' });
+  }
+  if (!avatar || typeof avatar !== 'object') {
+    return res.status(400).json({ error: 'avatar object required', code: 'MISSING_FIELDS' });
+  }
+  const result = validateAvatar(avatar);
+  if (typeof result === 'string') {
+    return res.status(400).json({ error: result, code: 'INVALID_AVATAR' });
+  }
+  const player = getPlayer(callsign);
+  player.avatar = result;
+  persistPlayer(callsign);
+  res.json({ message: 'avatar updated', callsign, avatar: player.avatar });
+});
+
+app.post('/api/player/equip', (req, res) => {
+  const { callsign, slot, itemId } = req.body || {};
+  if (!callsign || !slot || !itemId) {
+    return res.status(400).json({ error: 'callsign, slot, and itemId required', code: 'MISSING_FIELDS' });
+  }
+  if (!players[callsign]) {
+    return res.status(404).json({ error: 'player not found', code: 'PLAYER_NOT_FOUND' });
+  }
+  if (!EQUIPMENT_SLOTS.includes(slot)) {
+    return res.status(400).json({ error: 'invalid equipment slot', code: 'INVALID_SLOT' });
+  }
+  const player = getPlayer(callsign);
+  if (!player.inventory.includes(itemId)) {
+    return res.status(400).json({ error: 'item not in inventory', code: 'ITEM_NOT_OWNED' });
+  }
+  player.equipment[slot] = itemId;
+  persistPlayer(callsign);
+  res.json({ message: 'item equipped', callsign, slot, itemId, equipment: player.equipment });
+});
+
+app.post('/api/player/unequip', (req, res) => {
+  const { callsign, slot } = req.body || {};
+  if (!callsign || !slot) {
+    return res.status(400).json({ error: 'callsign and slot required', code: 'MISSING_FIELDS' });
+  }
+  if (!players[callsign]) {
+    return res.status(404).json({ error: 'player not found', code: 'PLAYER_NOT_FOUND' });
+  }
+  if (!EQUIPMENT_SLOTS.includes(slot)) {
+    return res.status(400).json({ error: 'invalid equipment slot', code: 'INVALID_SLOT' });
+  }
+  const player = getPlayer(callsign);
+  player.equipment[slot] = null;
+  persistPlayer(callsign);
+  res.json({ message: 'slot cleared', callsign, slot, equipment: player.equipment });
+});
+
+app.get('/api/player/:callsign/sheet', (req, res) => {
+  const callsign = req.params.callsign;
+  if (!players[callsign]) {
+    return res.status(404).json({ error: 'player not found', code: 'PLAYER_NOT_FOUND' });
+  }
+  const player = getPlayer(callsign);
+  const lvl = levelFromXp(player.xp || 0);
+  res.json({
+    callsign: player.callsign,
+    avatar: player.avatar,
+    hunterClass: player.hunterClass,
+    character: player.character,
+    xp: player.xp || 0,
+    ...lvl,
+    skills: player.skills || {},
+    trust: player.trust || 0,
+    equipment: player.equipment,
+    inventory: player.inventory,
+    animationState: player.animationState,
+    assetId: player.assetId,
+    storyCompleted: player.storyCompleted || [],
+    stats: player.stats
+  });
+});
+
 app.get('/api/player/:callsign', (req, res) => {
   const callsign = req.params.callsign;
   if (!players[callsign]) {
@@ -814,6 +1030,11 @@ app.get('/api/player/:callsign', (req, res) => {
     callsign: player.callsign,
     wallet: player.wallet,
     character: player.character,
+    avatar: player.avatar,
+    hunterClass: player.hunterClass,
+    equipment: player.equipment,
+    animationState: player.animationState,
+    assetId: player.assetId,
     balance: player.balance,
     xp: player.xp || 0,
     ...lvl,
@@ -923,4 +1144,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, getPlayer, players, missions, items, storyActs, rewardPolicy, TIER_ORDER, missionsByTier, characters, chapters, levelFromXp, SKILLS };
+module.exports = { app, getPlayer, players, missions, items, storyActs, rewardPolicy, TIER_ORDER, missionsByTier, characters, chapters, levelFromXp, SKILLS, AVATAR_OPTIONS, CLASSES, EQUIPMENT_SLOTS, ANIMATION_STATES };

@@ -3,6 +3,11 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
+<meta name="theme-color" content="#10b981"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<link rel="manifest" href="manifest.json"/>
+<link rel="apple-touch-icon" href="icons/icon-192.svg"/>
 <title>Crypto Hunters</title>
 <style>
 /* ── Reset & Base ───────────────────────────────────────────────── */
@@ -156,6 +161,10 @@ input:focus{outline:none;border-color:var(--green);box-shadow:0 0 8px rgba(16,18
 @keyframes skeleton-pulse{0%{background-position:200% 0}100%{background-position:-200% 0}}
 @keyframes spin{to{transform:rotate(360deg)}}
 
+/* ── PWA Update Banner ─────────────────────────────────────────── */
+.update-banner{position:fixed;top:0;left:0;right:0;z-index:9999;background:#059669;color:#000;text-align:center;padding:10px;font-weight:700;font-size:.85rem;animation:fadeIn .3s}
+.update-banner button{margin-left:12px;padding:4px 12px;background:#000;color:#10b981;border:none;border-radius:6px;font-weight:700;cursor:pointer}
+
 /* ── Responsive ─────────────────────────────────────────────────── */
 @media(max-width:500px){
   .nav-grid{grid-template-columns:1fr}
@@ -163,6 +172,13 @@ input:focus{outline:none;border-color:var(--green);box-shadow:0 0 8px rgba(16,18
   .item-grid{grid-template-columns:1fr}
   #login-screen h1{font-size:1.6rem}
   .player-balance{font-size:1.5rem}
+}
+@media(max-width:480px){
+  .app{padding:8px 8px 80px}
+  .nav-grid{grid-template-columns:1fr}
+  .player-balance{font-size:1.5rem}
+  .stats-row{grid-template-columns:repeat(2,1fr)}
+  .item-grid{grid-template-columns:1fr}
 }
 </style>
 </head>
@@ -777,6 +793,26 @@ window.addEventListener('online', ()=>{
     if(saved) $('wallet-input').value = saved;
   }catch(e){}
 })();
+
+/* ── PWA Service Worker ────────────────────────────────────────── */
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('./sw.js').then(reg => {
+    reg.addEventListener('updatefound', () => {
+      const nw = reg.installing;
+      nw.addEventListener('statechange', () => {
+        if (nw.state === 'activated' && navigator.serviceWorker.controller) {
+          showUpdateBanner();
+        }
+      });
+    });
+  });
+}
+function showUpdateBanner(){
+  const b = document.createElement('div');
+  b.className = 'update-banner';
+  b.innerHTML = 'New version available! <button onclick="location.reload()">Reload</button>';
+  document.body.prepend(b);
+}
 </script>
 </body>
 </html>

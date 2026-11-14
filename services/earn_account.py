@@ -95,6 +95,16 @@ _RATE_LOCKOUT = 1800
 _WALLET_CHALLENGE_TTL = 300
 _ESCROW_INTENT_TTL = 300
 
+
+def _wallet_unlock_enabled() -> bool:
+    """Keep the Earn-to-wallet pledge flow closed until its device UX is released.
+
+    This is deliberately read at request time so an operator can enable the
+    staged feature with an environment change after device QA, without a code
+    path that ever manufactures or receives wallet private material.
+    """
+    return os.getenv("EARN_WALLET_UNLOCK_ENABLED", "0") == "1"
+
 _THC_TRANSITIONS = {
     "pending":   {"confirmed", "reversed"},
     "confirmed": {"payable", "reversed"},
@@ -1006,7 +1016,7 @@ class EarnAccountStore:
 
     def complete_wallet_link(
         self, *, challenge_id: str, earn_user_id: str, wallet_address: str,
-        public_key: str,
+        public_key: str, wallet_unlock_pledge_id: str | None = None,
     ) -> dict[str, str]:
         wallet_address = self._wallet_address(wallet_address)
         now = int(time.time())
@@ -1032,6 +1042,10 @@ class EarnAccountStore:
                 raise EarnError("wallet_already_linked")
             if existing_user and existing_user["wallet_address"] != wallet_address:
                 raise EarnError("earn_account_already_linked")
+            if wallet_unlock_pledge_id and existing_user:
+                # A pledge unlock creates a first wallet for an Earn account;
+                # it is never a discounted settlement for an already-linked one.
+                raise EarnError("earn_wallet_already_linked")
             con.execute(
                 """INSERT OR REPLACE INTO earn_wallet_links
                    (wallet_address, earn_user_id, public_key, linked_at)
@@ -1042,7 +1056,39 @@ class EarnAccountStore:
                 "UPDATE earn_wallet_challenges SET consumed_at = ? WHERE challenge_id = ?",
                 (now, challenge_id),
             )
-            return {"wallet_address": wallet_address, "earn_user_id": earn_user_id}
+            result = {"wallet_address": wallet_address, "earn_user_id": earn_user_id}
+            if wallet_unlock_pledge_id:
+                pledge = con.execute(
+                    """SELECT * FROM earn_wallet_unlock_pledges
+                       WHERE pledge_id=? AND earn_user_id=?""",
+                    (wallet_unlock_pledge_id, earn_user_id),
+                ).fetchone()
+                if not pledge:
+                    raise EarnError("wallet_unlock_pledge_not_found")
+                creation_ref = "earn_wallet_link:" + challenge_id
+                if pledge["status"] == "settled":
+                    if (pledge["wallet_address"] != wallet_address
+                            or pledge["wallet_creation_ref"] != creation_ref):
+                        raise EarnError("wallet_unlock_pledge_idempotency_conflict")
+                elif pledge["status"] == "reserved":
+                    settled = con.execute(
+                        """UPDATE earn_thc_reservations SET state='settled', updated_at=?
+                           WHERE reservation_id=? AND earn_user_id=?
+                             AND reservation_type='wallet_settlement' AND state='reserved'""",
+                        (now, pledge["reservation_id"], earn_user_id),
+                    )
+                    if settled.rowcount != 1:
+                        raise EarnError("wallet_unlock_reservation_not_settleable")
+                    con.execute(
+                        """UPDATE earn_wallet_unlock_pledges
+                           SET status='settled', wallet_address=?, wallet_creation_ref=?,
+                               settled_at=? WHERE pledge_id=?""",
+                        (wallet_address, creation_ref, now, wallet_unlock_pledge_id),
+                    )
+                else:
+                    raise EarnError("invalid_wallet_unlock_pledge_transition")
+                result["wallet_unlock_pledge_id"] = wallet_unlock_pledge_id
+            return result
 
     def complete_wallet_login(
         self, *, challenge_id: str, wallet_address: str,
@@ -1737,6 +1783,10 @@ class EarnAccountStore:
         burn_eligible = (total - locked).quantize(_THC_SCALE)
         now = int(time.time())
         with self._tx() as con:
+            if con.execute(
+                "SELECT 1 FROM earn_wallet_links WHERE earn_user_id=?", (earn_user_id,),
+            ).fetchone():
+                raise EarnError("earn_wallet_already_linked")
             existing = con.execute(
                 """SELECT * FROM earn_wallet_unlock_pledges
                    WHERE earn_user_id=? AND pledge_kind='standard'
@@ -4192,6 +4242,51 @@ def register_earn_account_routes(
             loyalty=store.loyalty_status(user["earn_user_id"]),
         )
 
+    @app.get("/api/earn/wallet-unlock/status")
+    def earn_wallet_unlock_status():
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        return jsonify(
+            ok=True,
+            enabled=_wallet_unlock_enabled(),
+            pledge_thc=str(EarnAccountStore._WALLET_UNLOCK_THC),
+            pledges=store.wallet_unlock_pledges(user["earn_user_id"]),
+        )
+
+    @app.post("/api/earn/wallet-unlock/pledge")
+    def earn_wallet_unlock_pledge():
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        if not _wallet_unlock_enabled():
+            return jsonify(ok=False, error="earn_wallet_unlock_not_enabled"), 409
+        data = request.get_json(silent=True) or {}
+        try:
+            pledge = store.create_wallet_unlock_pledge(
+                user["earn_user_id"],
+                idempotency_key=str(data.get("idempotency_key", "")),
+            )
+        except EarnError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, **pledge), 201
+
+    @app.post("/api/earn/wallet-unlock/cancel")
+    def earn_wallet_unlock_cancel():
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        if not _wallet_unlock_enabled():
+            return jsonify(ok=False, error="earn_wallet_unlock_not_enabled"), 409
+        data = request.get_json(silent=True) or {}
+        try:
+            pledge = store.release_wallet_unlock_pledge(
+                user["earn_user_id"], str(data.get("pledge_id", "")),
+            )
+        except EarnError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, **pledge)
+
     @app.post("/api/earn/wallet-link/challenge")
     def earn_wallet_link_challenge():
         user, _ = _current_user()
@@ -4214,6 +4309,9 @@ def register_earn_account_routes(
         data = request.get_json(silent=True) or {}
         challenge_id = str(data.get("challenge_id", ""))
         wallet_address = str(data.get("wallet_address", ""))
+        pledge_id = str(data.get("wallet_unlock_pledge_id", "")).strip() or None
+        if pledge_id and not _wallet_unlock_enabled():
+            return jsonify(ok=False, error="earn_wallet_unlock_not_enabled"), 409
         try:
             challenge = store.wallet_challenge_for_proof(
                 challenge_id=challenge_id, purpose="link", wallet_address=wallet_address,
@@ -4235,6 +4333,7 @@ def register_earn_account_routes(
             link = store.complete_wallet_link(
                 challenge_id=challenge_id, earn_user_id=user["earn_user_id"],
                 wallet_address=wallet_address, public_key=str(data.get("public_key", "")),
+                wallet_unlock_pledge_id=pledge_id,
             )
         except EarnError as exc:
             return jsonify(ok=False, error=str(exc)), 400

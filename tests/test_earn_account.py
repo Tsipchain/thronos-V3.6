@@ -2541,6 +2541,34 @@ class TestPublisherIsolation:
         assert len(placements) == 1
         assert placements[0]["placement_type"] == "survey"
 
+    def test_publisher_moderation_requires_operator_secret(self):
+        app = Flask(__name__)
+        app.config["TESTING"] = True
+        register_earn_account_routes(app, self.store)
+        publisher = self.store.register("moderation@test.com", "StrongPass1!")
+        pub = self.store.publisher_register(
+            publisher["earn_user_id"], "cpx", "Moderation Test",
+        )
+        payload = {"publisher_id": pub["publisher_id"], "action": "approve"}
+        with app.test_client() as client:
+            with patch.dict(os.environ, {"EARN_ADMIN_TOKEN": ""}):
+                missing = client.post("/api/earn/publisher/moderate", json=payload)
+            assert missing.status_code == 503
+            assert missing.get_json()["error"] == "earn_admin_not_configured"
+
+            with patch.dict(os.environ, {"EARN_ADMIN_TOKEN": "admin-secret"}):
+                denied = client.post(
+                    "/api/earn/publisher/moderate", json=payload,
+                    headers={"X-Earn-Admin-Token": "wrong"},
+                )
+                assert denied.status_code == 403
+                approved = client.post(
+                    "/api/earn/publisher/moderate", json=payload,
+                    headers={"X-Earn-Admin-Token": "admin-secret"},
+                )
+            assert approved.status_code == 200
+            assert approved.get_json()["status"] == "active"
+
 
 
 def test_earn_sponsor_visit_uses_native_link_without_blank_popup():

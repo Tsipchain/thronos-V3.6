@@ -2035,7 +2035,7 @@ async function _requestEarnLinkMobileApproval(earnBase, walletAddress, challenge
   throw new Error('mobile_wallet_approval_required');
 }
 
-async function _linkActiveWalletToEarn(earnBase) {
+async function _linkActiveWalletToEarn(earnBase, walletUnlockPledgeId = null) {
   const wallet_address = getActiveAddr();
   if (!wallet_address || !_pwaSigningCtx?.privHex) throw new Error('wallet_locked');
   const start = await fetch(`${earnBase}/api/earn/wallet-link/challenge`, {
@@ -2060,7 +2060,13 @@ async function _linkActiveWalletToEarn(earnBase) {
   const complete = await fetch(`${earnBase}/api/earn/wallet-link/complete`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
-    body: JSON.stringify({ ...proof, mobile_approval_id: mobileApprovalId }),
+    // A first-wallet Earn unlock is settled only in the same signed link
+    // completion. This client never transmits recovery material or a PIN.
+    body: JSON.stringify({
+      ...proof,
+      mobile_approval_id: mobileApprovalId,
+      ...(walletUnlockPledgeId ? { wallet_unlock_pledge_id: walletUnlockPledgeId } : {}),
+    }),
   });
   const result = await complete.json().catch(() => null);
   if (!complete.ok || !result?.ok) throw new Error(result?.error || 'wallet_link_failed');

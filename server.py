@@ -2865,6 +2865,257 @@ def get_mining_whitelist_entry(thr_address: str) -> dict | None:
     return None
 
 
+MINING_PAYOUT_FORWARDS_FILE = os.path.join(DATA_DIR, "mining_payout_forwards.json")
+BINDING_MIGRATION_JOURNAL_FILE = os.path.join(DATA_DIR, "binding_migration_journal.json")
+
+
+def _load_migration_journal() -> dict:
+    return load_json(BINDING_MIGRATION_JOURNAL_FILE, {"entries": []})
+
+
+def _save_migration_journal(journal: dict) -> None:
+    save_json(BINDING_MIGRATION_JOURNAL_FILE, journal)
+
+
+def _append_journal_entry(old_address: str, new_v1_address: str,
+                          step_name: str, status: str, detail: dict | None = None) -> None:
+    journal = _load_migration_journal()
+    import time as _time_j
+    entry = {
+        "old_address": old_address,
+        "new_v1_address": new_v1_address,
+        "step": step_name,
+        "status": status,
+        "at": _time_j.strftime("%Y-%m-%dT%H:%M:%SZ", _time_j.gmtime()),
+    }
+    if detail:
+        entry["detail"] = detail
+    journal.setdefault("entries", []).append(entry)
+    _save_migration_journal(journal)
+
+
+def move_mining_whitelist_entry(old_address: str, new_v1_address: str) -> bool:
+    """Rebind a mining whitelist entry from old_address to new_v1_address.
+    Idempotent: if new_v1_address already has an entry, skip.
+    Journals the operation for reconciliation."""
+    if not old_address or not new_v1_address:
+        return False
+    entries = load_json(WHITELIST_WALLETS_FILE, [])
+    if not isinstance(entries, list):
+        return False
+    new_already = any(
+        (isinstance(e, str) and e == new_v1_address) or
+        (isinstance(e, dict) and (e.get("address") or e.get("thr_address")) == new_v1_address)
+        for e in entries
+    )
+    if new_already:
+        old_deactivated = False
+        for i, entry in enumerate(entries):
+            if isinstance(entry, str) and entry == old_address:
+                entries[i] = {"address": old_address, "active": False,
+                              "migrated_to": new_v1_address}
+                old_deactivated = True
+                break
+            if isinstance(entry, dict):
+                addr = entry.get("address") or entry.get("thr_address")
+                if addr == old_address:
+                    entry["active"] = False
+                    entry["migrated_to"] = new_v1_address
+                    old_deactivated = True
+                    break
+        if old_deactivated:
+            save_json(WHITELIST_WALLETS_FILE, entries)
+        _append_journal_entry(old_address, new_v1_address, "whitelist",
+                              "skipped_idempotent",
+                              {"reason": "new_address_already_present",
+                               "old_deactivated": old_deactivated})
+        return True
+    changed = False
+    for i, entry in enumerate(entries):
+        if isinstance(entry, str) and entry == old_address:
+            entries[i] = new_v1_address
+            changed = True
+            break
+        if isinstance(entry, dict):
+            addr = entry.get("address") or entry.get("thr_address")
+            if addr == old_address:
+                if "address" in entry:
+                    entry["address"] = new_v1_address
+                if "thr_address" in entry:
+                    entry["thr_address"] = new_v1_address
+                entry["migrated_from"] = old_address
+                changed = True
+                break
+    if changed:
+        save_json(WHITELIST_WALLETS_FILE, entries)
+        _append_journal_entry(old_address, new_v1_address, "whitelist", "completed")
+    else:
+        _append_journal_entry(old_address, new_v1_address, "whitelist",
+                              "no_entry_found", {"reason": "old_address_not_in_whitelist"})
+    return changed
+
+
+def get_mining_payout_state(thr_address: str) -> dict | None:
+    """Check if address has pending mining rewards in the chain."""
+    if not thr_address:
+        return None
+    chain = load_json(CHAIN_FILE, [])
+    pending = [
+        tx for tx in chain
+        if tx.get("to") == thr_address
+        and tx.get("type") in ("coinbase", "mining_reward")
+        and not tx.get("confirmed")
+    ]
+    forwards = load_json(MINING_PAYOUT_FORWARDS_FILE, {})
+    fwd = forwards.get(thr_address)
+    if not pending and not fwd:
+        return None
+    result = {"address": thr_address, "pending_count": len(pending)}
+    if fwd:
+        result["forwarded_to"] = fwd.get("forward_to")
+    return result
+
+
+def move_mining_payout_state(old_address: str, new_v1_address: str) -> int:
+    """Record a forwarding claim for pending mining rewards.
+    Does NOT mutate chain history. Instead writes to a forwarding
+    table that the payout distributor reads at settlement time.
+    Idempotent: overwrites any existing forward for old_address."""
+    if not old_address or not new_v1_address:
+        return 0
+    chain = load_json(CHAIN_FILE, [])
+    pending_count = sum(
+        1 for tx in chain
+        if tx.get("to") == old_address
+        and tx.get("type") in ("coinbase", "mining_reward")
+        and not tx.get("confirmed")
+    )
+    forwards = load_json(MINING_PAYOUT_FORWARDS_FILE, {})
+    import time as _time_fwd
+    forwards[old_address] = {
+        "forward_to": new_v1_address,
+        "migrated_at": _time_fwd.strftime("%Y-%m-%dT%H:%M:%SZ", _time_fwd.gmtime()),
+        "pending_at_migration": pending_count,
+    }
+    save_json(MINING_PAYOUT_FORWARDS_FILE, forwards)
+    _append_journal_entry(old_address, new_v1_address, "mining_payout",
+                          "forwarded", {"pending_count": pending_count})
+    return pending_count
+
+
+def resolve_mining_payout_recipient(thr_address: str) -> str:
+    """Resolve the actual recipient for mining payouts to thr_address.
+    If a forward exists in mining_payout_forwards.json, returns the
+    forwarded-to address. Otherwise returns the original address.
+    This is the function the payout distributor calls at settlement time."""
+    if not thr_address:
+        return thr_address
+    forwards = load_json(MINING_PAYOUT_FORWARDS_FILE, {})
+    fwd = forwards.get(thr_address)
+    if fwd and fwd.get("forward_to"):
+        return fwd["forward_to"]
+    return thr_address
+
+
+def get_pool_rewards_state(thr_address: str) -> dict | None:
+    """Check if address has active pool positions (any non-zero balance)."""
+    if not thr_address:
+        return None
+    positions = _load_pool_positions()
+    user_positions = positions.get(thr_address)
+    if not user_positions:
+        return None
+    active = {}
+    for pid, pos in user_positions.items():
+        lp = float(pos.get("lp_position_balance", 0))
+        ext = float(pos.get("external_side_balance", 0))
+        thr = float(pos.get("thr_side_balance", 0))
+        if lp > 0 or ext > 0 or thr > 0:
+            active[pid] = pos
+    if not active:
+        return None
+    return {"address": thr_address, "active_pools": list(active.keys()),
+            "position_count": len(active)}
+
+
+def move_pool_rewards_state(old_address: str, new_v1_address: str) -> int:
+    """Move pool positions from old to new address with complete balance transfer.
+    Transfers lp_position_balance, external_side_balance, and thr_side_balance.
+    Zeros ALL balance fields on the old position to prevent double-withdrawal.
+    Idempotent: skips pools where new address already has a non-zero position."""
+    if not old_address or not new_v1_address:
+        return 0
+    positions = _load_pool_positions()
+    old_pos = positions.get(old_address)
+    if not old_pos:
+        return 0
+    new_pos = positions.get(new_v1_address, {})
+    moved = 0
+    import time as _time_pool
+    now_iso = _time_pool.strftime("%Y-%m-%dT%H:%M:%SZ", _time_pool.gmtime())
+    for pool_id, pos in list(old_pos.items()):
+        lp = float(pos.get("lp_position_balance", 0))
+        ext = float(pos.get("external_side_balance", 0))
+        thr = float(pos.get("thr_side_balance", 0))
+        if lp <= 0 and ext <= 0 and thr <= 0:
+            continue
+        if pool_id in new_pos:
+            new_existing = new_pos[pool_id]
+            if (float(new_existing.get("lp_position_balance", 0)) > 0 or
+                    float(new_existing.get("external_side_balance", 0)) > 0 or
+                    float(new_existing.get("thr_side_balance", 0)) > 0):
+                continue
+        new_pos[pool_id] = {
+            **pos,
+            "address": new_v1_address,
+            "migrated_from": old_address,
+            "migrated_at": now_iso,
+        }
+        old_pos[pool_id] = {
+            **pos,
+            "lp_position_balance": 0,
+            "external_side_balance": 0,
+            "thr_side_balance": 0,
+            "migrated_to": new_v1_address,
+            "migrated_at": now_iso,
+        }
+        moved += 1
+    if moved:
+        positions[new_v1_address] = new_pos
+        _save_pool_positions(positions)
+        _append_journal_entry(old_address, new_v1_address, "pool_positions",
+                              "completed", {"pools_moved": moved})
+    return moved
+
+
+def get_agent_wallet_binding_state(thr_address: str) -> dict | None:
+    """Check if address is used as an agent/Pythia wallet binding."""
+    if not thr_address:
+        return None
+    if thr_address == PYTHIA_SYSTEM_THR_ADDRESS:
+        return {"address": thr_address, "role": "pythia_system", "mutable": False}
+    if thr_address == AI_WALLET_ADDRESS:
+        return {"address": thr_address, "role": "ai_wallet", "mutable": False}
+    return None
+
+
+def move_agent_wallet_binding_state(old_address: str, new_v1_address: str) -> int:
+    """Agent wallet bindings are env-configured, not file-mutable.
+    Returns -1 when a binding exists but cannot be moved at runtime
+    (requires PYTHIA_SYSTEM_THR_ADDRESS or THR_AI_AGENT_WALLET env var change).
+    Returns 0 when no binding exists for old_address."""
+    state = get_agent_wallet_binding_state(old_address)
+    if state:
+        _append_journal_entry(
+            old_address, new_v1_address, "agent_binding",
+            "blocked_env_configured",
+            {"role": state["role"],
+             "env_var": "PYTHIA_SYSTEM_THR_ADDRESS" if state["role"] == "pythia_system"
+             else "THR_AI_AGENT_WALLET"})
+        return -1
+    return 0
+
+
 def _whitelist_allows_no_pledge(entry: dict | None) -> bool:
     if not entry:
         return False
@@ -32777,6 +33028,7 @@ def _process_mining_submission(data: dict, require_job_id: bool = False):
     chain.append(new_block)
     _index_block_event(new_block)  # Index for fast queries
 
+    payout_recipient = resolve_mining_payout_recipient(thr_address)
     reward_tx_id = f"reward:{pow_hash}:{thr_address}"
     reward_tx = {
         "tx_id": reward_tx_id,
@@ -32784,7 +33036,7 @@ def _process_mining_submission(data: dict, require_job_id: bool = False):
         "kind": "mining_reward",
         "thr_address": thr_address,
         "from": "COINBASE",
-        "to": thr_address,
+        "to": payout_recipient,
         "amount": miner_share,
         "timestamp": ts,
         "height": height,
@@ -32797,7 +33049,8 @@ def _process_mining_submission(data: dict, require_job_id: bool = False):
             "reward_to_ai": ai_share,
             "reward_to_nodes": nodes_share,
             "source": "stratum" if is_stratum else "legacy",
-            **({"heat_bonus": heat_bonus_info} if heat_bonus_info else {})
+            **({"heat_bonus": heat_bonus_info} if heat_bonus_info else {}),
+            **({"forwarded_from": thr_address} if payout_recipient != thr_address else {})
         },
     }
     persist_normalized_tx(reward_tx)
@@ -32845,7 +33098,7 @@ def _process_mining_submission(data: dict, require_job_id: bool = False):
                 ledger[BURN_ADDRESS] = round(ledger.get(BURN_ADDRESS, 0.0) + fee, 6)
 
     # Add mining rewards to same ledger update (batch optimization)
-    ledger[thr_address]=round(ledger.get(thr_address,0.0)+miner_share,6)
+    ledger[payout_recipient]=round(ledger.get(payout_recipient,0.0)+miner_share,6)
     ledger[AI_WALLET_ADDRESS]=round(ledger.get(AI_WALLET_ADDRESS,0.0)+ai_share,6)
     # Ecosystem pool accumulates in ledger (will be distributed by Digital Legacy system)
     # Full nodes rewards would be distributed to registered full node runners (phase future)

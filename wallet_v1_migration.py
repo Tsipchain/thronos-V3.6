@@ -813,16 +813,28 @@ def _compute_assets_migrated(old_address, ecosystem_bindings_repaired=False):
 
 def _remaining_old_operational_binding_count(old_address):
     c = 0
-    if get_mining_whitelist_entry(old_address):
-        c += 1
-    if get_mining_payout_state(old_address):
-        c += 1
+    wl_entry = get_mining_whitelist_entry(old_address)
+    if wl_entry:
+        if isinstance(wl_entry, dict) and not wl_entry.get('active', True):
+            pass  # deactivated entry doesn't count
+        else:
+            c += 1
+    payout_state = get_mining_payout_state(old_address)
+    if payout_state:
+        if payout_state.get('forwarded_to'):
+            pass  # forward exists — payout is resolved, not active
+        else:
+            c += 1
     if get_pool_rewards_state(old_address):
         c += 1
     s = _server()
     ag = getattr(s, 'get_agent_wallet_binding_state', None)
-    if callable(ag) and ag(old_address):
-        c += 1
+    if callable(ag):
+        agent_state = ag(old_address)
+        if agent_state and agent_state.get('mutable', True):
+            c += 1
+            # non-mutable (env-configured) bindings don't count — they
+            # require a manual env var change, not a migration step
     return c
 
 
@@ -875,6 +887,22 @@ def _restore_snapshot(old_address, new_address, snap):
     set_authoritative_token_balances_for_address(new_address, snap['new_tokens'])
 
 
+def _snapshot_binding_files():
+    s = _server()
+    snap = {}
+    for attr in ('WHITELIST_WALLETS_FILE', 'MINING_PAYOUT_FORWARDS_FILE', 'POOL_POSITIONS_FILE'):
+        path = getattr(s, attr, None)
+        if path and Path(path).is_file():
+            snap[attr] = Path(path).read_text()
+    return snap
+
+
+def _restore_binding_files(snap):
+    s = _server()
+    for attr, content in snap.items():
+        path = getattr(s, attr, None)
+        if path and content is not None:
+            Path(path).write_text(content)
 
 
 def _snapshot_migrated_marker(old_address):
@@ -1019,13 +1047,40 @@ def repair_migration(old_address, new_v1_address):
     assets_old = _collect_assets(old_address)
     moved_thr = 0.0
     moved_tokens = 0
+
+    s = _server()
+    agent_state_fn = getattr(s, 'get_agent_wallet_binding_state', None)
+    agent_move_fn = getattr(s, 'move_agent_wallet_binding_state', None)
+    agent_blocked = False
+    if callable(agent_state_fn):
+        agent_state = agent_state_fn(old_address)
+        if agent_state and not agent_state.get('mutable', True):
+            agent_blocked = True
+
+    if agent_blocked:
+        rec['status'] = 'blocked'
+        rec['blocked_reason'] = 'non_mutable_agent_binding'
+        rec['repaired_at'] = _now()
+        mmap[old_address] = rec
+        _save_map_compat(mmap)
+        return {
+            'ok': False,
+            'old_address': old_address,
+            'new_v1_address': new_v1_address,
+            'action': 'blocked_by_agent_binding',
+            'agent_blocked': True,
+            'moved_thr_amount': 0.0,
+            'moved_token_count': 0,
+            'status': 'blocked',
+        }
+
     snap = _snapshot_state(old_address, new_v1_address)
     marker_snap = _snapshot_migrated_marker(old_address)
+    binding_snap = {}
     mutation_started = False
 
     try:
         old_thr = float(assets_old.get('thr_balance') or 0.0)
-        # If THR already moved, do not move again; only move remaining tokens/admission.
         if old_thr > 0:
             transfer_balance_atomic(old_address, new_v1_address, old_thr)
             moved_thr = old_thr
@@ -1035,6 +1090,7 @@ def repair_migration(old_address, new_v1_address):
         mutation_started = mutation_started or (moved_tokens > 0)
         preserve_admission_to_new_address(old_address, new_v1_address)
 
+        binding_snap = _snapshot_binding_files()
         mining_ok, mining_admission_ok, _ = repair_mining_wallet_binding(old_address, new_v1_address)
         pool_ok, _ = repair_pool_rewards_wallet_binding(old_address, new_v1_address)
         agent_ok, _ = repair_agent_wallet_bindings(old_address, new_v1_address)
@@ -1097,6 +1153,8 @@ def repair_migration(old_address, new_v1_address):
         }
     except Exception as e:
         try:
+            if binding_snap:
+                _restore_binding_files(binding_snap)
             if mutation_started:
                 _restore_snapshot(old_address, new_v1_address, snap)
             _restore_migrated_marker(old_address, marker_snap)

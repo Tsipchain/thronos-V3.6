@@ -120,6 +120,17 @@ function requireOwnership(req, res, next) {
   next();
 }
 
+function generatePlayerSecret() {
+  const raw = crypto.randomBytes(32).toString('hex');
+  const hash = crypto.createHash('sha256').update(raw).digest('hex');
+  return { raw, hash };
+}
+
+function verifyPlayerSecret(raw, storedHash) {
+  const hash = crypto.createHash('sha256').update(raw).digest('hex');
+  return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(storedHash, 'hex'));
+}
+
 function defaultPlayerState(callsign) {
   const questStates = {};
   for (const m of missions) {
@@ -147,6 +158,7 @@ function defaultPlayerState(callsign) {
     equipment: { head: null, outfit: null, accessory: null, tool: null, badge: null },
     animationState: 'idle',
     assetId: null,
+    secretHash: null,
     lastSaved: null
   };
 }
@@ -925,6 +937,9 @@ app.post('/api/player/create', (req, res) => {
     };
   }
 
+  const { raw: playerSecret, hash: secretHash } = generatePlayerSecret();
+  player.secretHash = secretHash;
+
   players[callsign] = player;
   persistPlayer(callsign);
 
@@ -933,6 +948,7 @@ app.post('/api/player/create', (req, res) => {
     message: 'Hunter created',
     callsign,
     sessionToken,
+    playerSecret,
     character: player.character,
     avatar: player.avatar,
     hunterClass: player.hunterClass,
@@ -944,12 +960,26 @@ app.post('/api/player/create', (req, res) => {
 });
 
 app.post('/api/player/login', (req, res) => {
-  const { callsign } = req.body || {};
+  const { callsign, playerSecret } = req.body || {};
   if (!callsign || !CALLSIGN_RE.test(callsign)) {
     return res.status(400).json({ error: 'valid callsign required', code: 'INVALID_CALLSIGN' });
   }
-  if (!players[callsign]) {
+  if (!playerSecret || typeof playerSecret !== 'string') {
+    return res.status(400).json({ error: 'playerSecret required', code: 'MISSING_SECRET' });
+  }
+  const player = players[callsign];
+  if (!player) {
     return res.status(404).json({ error: 'player not found', code: 'PLAYER_NOT_FOUND' });
+  }
+  if (!player.secretHash) {
+    return res.status(403).json({ error: 'player has no secret configured', code: 'NO_SECRET' });
+  }
+  try {
+    if (!verifyPlayerSecret(playerSecret, player.secretHash)) {
+      return res.status(401).json({ error: 'invalid player secret', code: 'INVALID_SECRET' });
+    }
+  } catch (_e) {
+    return res.status(401).json({ error: 'invalid player secret', code: 'INVALID_SECRET' });
   }
   const sessionToken = createSessionToken(callsign);
   res.json({ message: 'session created', callsign, sessionToken });
@@ -1185,4 +1215,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, getPlayer, players, sessions, createSessionToken, missions, items, storyActs, rewardPolicy, TIER_ORDER, missionsByTier, characters, chapters, levelFromXp, SKILLS, AVATAR_OPTIONS, CLASSES, EQUIPMENT_SLOTS, ANIMATION_STATES };
+module.exports = { app, getPlayer, players, sessions, createSessionToken, generatePlayerSecret, verifyPlayerSecret, missions, items, storyActs, rewardPolicy, TIER_ORDER, missionsByTier, characters, chapters, levelFromXp, SKILLS, AVATAR_OPTIONS, CLASSES, EQUIPMENT_SLOTS, ANIMATION_STATES };

@@ -28,7 +28,7 @@ function req(method, path, body, token) {
 
 const CALLSIGN_A = 'sec_a_' + (Date.now() % 1e7);
 const CALLSIGN_B = 'sec_b_' + (Date.now() % 1e7);
-let TOKEN_A, TOKEN_B;
+let TOKEN_A, TOKEN_B, SECRET_A, SECRET_B;
 
 describe('Session security & ownership enforcement', () => {
   before(async () => {
@@ -40,9 +40,9 @@ describe('Session security & ownership enforcement', () => {
 
   after(() => server?.close());
 
-  // ── Session Token Creation ─────────────────────────────────
+  // ── Player Secret on Creation ─────────────────────────────
 
-  it('POST /api/player/create returns sessionToken', async () => {
+  it('POST /api/player/create returns sessionToken and playerSecret', async () => {
     const { status, body } = await req('POST', '/api/player/create', {
       callsign: CALLSIGN_A,
       hunterClass: 'hacker',
@@ -50,38 +50,89 @@ describe('Session security & ownership enforcement', () => {
     });
     assert.equal(status, 200);
     assert.ok(body.sessionToken, 'create should return sessionToken');
-    assert.equal(typeof body.sessionToken, 'string');
-    assert.ok(body.sessionToken.length >= 32);
+    assert.ok(body.playerSecret, 'create should return playerSecret');
+    assert.equal(typeof body.playerSecret, 'string');
+    assert.ok(body.playerSecret.length >= 32, 'playerSecret should be high-entropy');
     TOKEN_A = body.sessionToken;
+    SECRET_A = body.playerSecret;
   });
 
-  it('POST /api/player/create returns sessionToken for second player', async () => {
+  it('POST /api/player/create returns playerSecret for second player', async () => {
     const { status, body } = await req('POST', '/api/player/create', {
       callsign: CALLSIGN_B,
       hunterClass: 'defender',
       avatar: { bodyType: 'slim', face: 'round', hair: 'braids', eyes: 'blue', skinTone: 'dark', outfit: 'lab_coat', accentColors: { primary: '#3b82f6', secondary: '#0f172a' } }
     });
     assert.equal(status, 200);
-    assert.ok(body.sessionToken);
+    assert.ok(body.playerSecret);
     TOKEN_B = body.sessionToken;
+    SECRET_B = body.playerSecret;
   });
 
-  // ── Login ──────────────────────────────────────────────────
+  // ── Secret never leaks via read APIs ──────────────────────
 
-  it('POST /api/player/login returns sessionToken', async () => {
-    const { status, body } = await req('POST', '/api/player/login', { callsign: CALLSIGN_A });
+  it('GET /api/player/:callsign does not expose secretHash', async () => {
+    const { body } = await req('GET', '/api/player/' + encodeURIComponent(CALLSIGN_A));
+    assert.equal(body.secretHash, undefined, 'secretHash must not appear in player read');
+    assert.equal(body.playerSecret, undefined, 'playerSecret must not appear in player read');
+  });
+
+  it('GET /api/player/:callsign/sheet does not expose secretHash', async () => {
+    const { body } = await req('GET', '/api/player/' + encodeURIComponent(CALLSIGN_A) + '/sheet');
+    assert.equal(body.secretHash, undefined);
+    assert.equal(body.playerSecret, undefined);
+  });
+
+  // ── Login requires callsign + playerSecret ────────────────
+
+  it('POST /api/player/login with correct secret returns sessionToken', async () => {
+    const { status, body } = await req('POST', '/api/player/login', {
+      callsign: CALLSIGN_A,
+      playerSecret: SECRET_A
+    });
     assert.equal(status, 200);
     assert.ok(body.sessionToken);
     assert.equal(body.callsign, CALLSIGN_A);
   });
 
+  it('POST /api/player/login without playerSecret returns 400', async () => {
+    const { status, body } = await req('POST', '/api/player/login', {
+      callsign: CALLSIGN_A
+    });
+    assert.equal(status, 400);
+    assert.equal(body.code, 'MISSING_SECRET');
+  });
+
+  it('POST /api/player/login with wrong secret returns 401', async () => {
+    const { status, body } = await req('POST', '/api/player/login', {
+      callsign: CALLSIGN_A,
+      playerSecret: 'aaaa' + SECRET_A.slice(4)
+    });
+    assert.equal(status, 401);
+    assert.equal(body.code, 'INVALID_SECRET');
+  });
+
+  it('POST /api/player/login with player B secret on player A returns 401', async () => {
+    const { status } = await req('POST', '/api/player/login', {
+      callsign: CALLSIGN_A,
+      playerSecret: SECRET_B
+    });
+    assert.equal(status, 401);
+  });
+
   it('POST /api/player/login with unknown player returns 404', async () => {
-    const { status } = await req('POST', '/api/player/login', { callsign: 'noexist_' + (Date.now() % 1e7) });
+    const { status } = await req('POST', '/api/player/login', {
+      callsign: 'noexist_' + (Date.now() % 1e7),
+      playerSecret: SECRET_A
+    });
     assert.equal(status, 404);
   });
 
   it('POST /api/player/login with invalid callsign returns 400', async () => {
-    const { status } = await req('POST', '/api/player/login', { callsign: '!! invalid !!' });
+    const { status } = await req('POST', '/api/player/login', {
+      callsign: '!! invalid !!',
+      playerSecret: SECRET_A
+    });
     assert.equal(status, 400);
   });
 

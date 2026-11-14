@@ -147,3 +147,32 @@ def test_no_float_conversion_in_quote_gate_source():
     import services.pythia_wallet_settlement_quote as module
     source = inspect.getsource(module)
     assert "float(" not in source
+
+
+@pytest.mark.parametrize("invalid", [
+    "25000.0000001", "25000.0000009", "30000.0000001",
+    "Infinity", "NaN",
+])
+def test_rejects_unrepresentable_or_nonfinite_requested_thc(gate, pythia, invalid):
+    with pytest.raises(PythiaQuoteError, match="invalid_quote_amount"):
+        issue(gate, requested_thc=invalid)
+    assert pythia.calls == []
+
+
+def test_rejects_fractional_subunit_available_thc(gate, pythia):
+    with pytest.raises(PythiaQuoteError, match="invalid_quote_amount"):
+        issue(gate, cleared_available_thc="25000.0000009")
+    assert pythia.calls == []
+
+
+@pytest.mark.parametrize("change", [
+    {"thc_amount": Decimal("25000.0000009")},
+    {"gross_thr": Decimal("100.0000001")},
+    {"net_thr": Decimal("99.9100001")},
+    {"gross_thr": Decimal("Infinity")},
+])
+def test_rejects_fractional_subunit_or_nonfinite_authority_quote(change):
+    pythia = FakePythia(replace(valid_quote(), **change))
+    gate = LinkedWalletSettlementQuoteGate(pythia, now_fn=lambda: NOW)
+    with pytest.raises(PythiaQuoteError, match="invalid_quote_amount"):
+        issue(gate)

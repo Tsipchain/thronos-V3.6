@@ -76,7 +76,12 @@ def _amount(value: Decimal | str, scale: Decimal) -> Decimal:
         parsed = Decimal(str(value))
         if not parsed.is_finite() or parsed <= 0:
             raise ValueError
-        return parsed.quantize(scale)
+        # Never round away sub-unit value. A rounded quote could authorize
+        # spending less THC or receiving a different THR amount than signed.
+        quantized = parsed.quantize(scale)
+        if parsed != quantized:
+            raise ValueError
+        return quantized
     except (InvalidOperation, TypeError, ValueError) as exc:
         raise PythiaQuoteError("invalid_quote_amount") from exc
 

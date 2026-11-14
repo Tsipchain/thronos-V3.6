@@ -192,7 +192,7 @@ let swapExternalUsdtBsc = null; // Informational only; NEVER included in spendab
 let availableTokens = [];
 let poolPairs = [];
 let latestQuote = null;
-const KNOWN_BALANCE_SYMBOLS = ['THR', 'WBTC', 'L2E', 'JAM', 'LOUMIDIS', 'HPENNIS', 'CVT', '7CEB', 'MAR'];
+const KNOWN_BALANCE_SYMBOLS = ['THR', 'USDT', 'USDC', 'WBTC', 'L2E', 'JAM', 'LOUMIDIS', 'HPENNIS', 'CVT', '7CEB', 'MAR'];
 
 function setBalance(symbol, value) {
     if (!symbol) return;
@@ -251,7 +251,7 @@ async function requireSwapWalletAuth(txCore) {
     };
 }
 
-const SWAP_KNOWN_SYMBOLS = ['THR', 'WBTC', 'L2E', 'JAM', 'LOUMIDIS', 'HPENNIS', 'CVT', '7CEB', 'MAR'];
+const SWAP_KNOWN_SYMBOLS = ['THR', 'USDT', 'USDC', 'WBTC', 'L2E', 'JAM', 'LOUMIDIS', 'HPENNIS', 'CVT', '7CEB', 'MAR'];
 
 function normalizeSwapSymbol(symbol) {
     return String(symbol || '').trim().toUpperCase();
@@ -340,6 +340,12 @@ function normalizeSwapBalances(data) {
 
     if (data.THR !== undefined || data.thr !== undefined || data.balance !== undefined) {
         applySwapBalance('THR', data.THR ?? data.thr ?? data.balance, balances);
+    }
+    if (data.USDT !== undefined || data.usdt !== undefined) {
+        applySwapBalance('USDT', data.USDT ?? data.usdt, balances);
+    }
+    if (data.USDC !== undefined || data.usdc !== undefined) {
+        applySwapBalance('USDC', data.USDC ?? data.usdc, balances);
     }
     if (data.WBTC !== undefined || data.wbtc !== undefined) {
         applySwapBalance('WBTC', data.WBTC ?? data.wbtc, balances);

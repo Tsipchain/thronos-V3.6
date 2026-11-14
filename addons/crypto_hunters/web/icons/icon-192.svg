@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="192" height="192" viewBox="0 0 192 192">
+  <defs>
+    <clipPath id="r"><rect width="192" height="192" rx="32" ry="32"/></clipPath>
+  </defs>
+  <g clip-path="url(#r)">
+    <rect width="192" height="192" fill="#0b1020"/>
+    <text x="96" y="108" text-anchor="middle" font-family="'Courier New',Courier,monospace" font-size="72" font-weight="bold" fill="#10b981">CH</text>
+    <text x="96" y="148" text-anchor="middle" font-family="system-ui,sans-serif" font-size="16" fill="#6b7280">HUNTERS</text>
+  </g>
+</svg>

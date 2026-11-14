@@ -481,3 +481,30 @@ body {
   #earnPwaBody .earn-provider-btn {transition:none;}
   #earnPwaBody .earn-provider-btn:not(:disabled):active {transform:none;}
 }
+
+/* Official THR coin branding. Scopes visuals only; does not affect wallet
+   interactions, network selection, authentication, signing or settlement. */
+.thr-brand {
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:.38em;
+  vertical-align:middle;
+}
+.thr-coin-mark {
+  display:inline-block;
+  width:1.1em;
+  height:1.1em;
+  max-width:100%;
+  object-fit:contain;
+  flex:none;
+  vertical-align:middle;
+}
+.thr-brand--large .thr-coin-mark {width:1.12em;height:1.12em;}
+.thr-brand--small .thr-coin-mark {width:1.28em;height:1.28em;}
+.thr-brand--unlock .thr-coin-mark {width:1.7em;height:1.7em;}
+.token-icon .thr-coin-mark {width:27px;height:27px;}
+#balancesArea .token-tap-row img {flex:none;}
+@media (max-width:380px) {
+  .thr-brand--small {gap:.24em;}
+}

@@ -27,6 +27,8 @@ const missions = JSON.parse(fs.readFileSync(path.join(__dirname, 'data', 'missio
 const items = JSON.parse(fs.readFileSync(path.join(__dirname, 'data', 'items.json'), 'utf8'));
 const storyActs = JSON.parse(fs.readFileSync(path.join(__dirname, 'data', 'story_acts.json'), 'utf8'));
 const rewardPolicy = JSON.parse(fs.readFileSync(path.join(__dirname, 'data', 'reward_policy.json'), 'utf8'));
+const characters = JSON.parse(fs.readFileSync(path.join(__dirname, 'data', 'characters.json'), 'utf8'));
+const chapters = JSON.parse(fs.readFileSync(path.join(__dirname, 'data', 'chapters.json'), 'utf8'));
 
 // Tier ordering for progression
 const TIER_ORDER = ['Easy', 'Normal', 'Expert', 'Genius'];
@@ -37,6 +39,17 @@ const TIER_PREREQUISITES = {
   Genius: 'Expert'
 };
 
+// XP / Level / Skill system
+const SKILLS = ['cryptography', 'network_security', 'smart_contracts', 'data_analysis', 'social_engineering'];
+const XP_PER_LEVEL = 100;
+function levelFromXp(xp) {
+  let lvl = 1;
+  let remaining = xp;
+  let needed = XP_PER_LEVEL;
+  while (remaining >= needed) { remaining -= needed; lvl++; needed = lvl * XP_PER_LEVEL; }
+  return { level: lvl, currentXp: remaining, nextLevelXp: needed };
+}
+
 // Group missions by tier
 const missionsByTier = {};
 for (const t of TIER_ORDER) {
@@ -46,31 +59,48 @@ for (const t of TIER_ORDER) {
 // ---------------------------------------------------------------------------
 // In-memory state (populated from save files on startup)
 // ---------------------------------------------------------------------------
-const players = {}; // wallet -> PlayerState
+const players = {}; // callsign/wallet -> PlayerState
 
-function defaultPlayerState(wallet) {
+function defaultPlayerState(callsign) {
   const questStates = {};
   for (const m of missions) {
     questStates[m.id] = m.tier === 'Easy' ? 'available' : 'locked';
   }
   return {
-    wallet,
+    callsign,
+    wallet: callsign,
+    character: null,
     balance: 0,
     inventory: [],
     questStates,
     completedMissions: [],
-    storyProgress: [1], // Act 1 unlocked by default
+    storyProgress: [1],
     stats: { totalDrxEarned: 0, missionsCompleted: 0, itemsBought: 0 },
     puzzleProgress: {},
+    xp: 0,
+    skills: {},
+    storyChoices: {},
+    storyCompleted: [],
+    trust: 0,
+    thrWallet: null,
     lastSaved: null
   };
 }
 
-function getPlayer(wallet) {
-  if (!players[wallet]) {
-    players[wallet] = defaultPlayerState(wallet);
+function getPlayer(key) {
+  if (!players[key]) {
+    players[key] = defaultPlayerState(key);
   }
-  return players[wallet];
+  const p = players[key];
+  if (!p.callsign) p.callsign = p.wallet || key;
+  if (p.xp === undefined) p.xp = 0;
+  if (!p.skills) p.skills = {};
+  if (!p.storyChoices) p.storyChoices = {};
+  if (!p.storyCompleted) p.storyCompleted = [];
+  if (p.trust === undefined) p.trust = 0;
+  if (p.thrWallet === undefined) p.thrWallet = null;
+  if (p.character === undefined) p.character = null;
+  return p;
 }
 
 // ---------------------------------------------------------------------------
@@ -99,8 +129,9 @@ function loadAllSaves() {
     for (const file of files) {
       try {
         const data = JSON.parse(fs.readFileSync(path.join(SAVES_DIR, file), 'utf8'));
-        if (data.wallet) {
-          players[data.wallet] = data;
+        const key = data.callsign || data.wallet;
+        if (key) {
+          players[key] = data;
         }
       } catch (_e) { /* skip corrupt saves */ }
     }
@@ -187,7 +218,7 @@ if (cors) app.use(cors());
 
 // GET /api/missions — list all missions with per-user quest states
 app.get('/api/missions', (req, res) => {
-  const wallet = req.query.wallet;
+  const wallet = req.query.wallet || req.query.callsign;
   if (!wallet) {
     return res.json(missions);
   }
@@ -201,7 +232,8 @@ app.get('/api/missions', (req, res) => {
 
 // POST /api/missions/start — move available → in_progress
 app.post('/api/missions/start', (req, res) => {
-  const { wallet, missionId } = req.body || {};
+  const wallet = (req.body || {}).wallet || (req.body || {}).callsign;
+  const { missionId } = req.body || {};
   if (!wallet || !missionId) {
     return res.status(400).json({ error: 'wallet and missionId required', code: 'MISSING_FIELDS' });
   }
@@ -235,7 +267,8 @@ app.post('/api/missions/start', (req, res) => {
 
 // POST /api/missions/complete — requires in_progress state
 app.post('/api/missions/complete', (req, res) => {
-  const { wallet, missionId } = req.body || {};
+  const wallet = (req.body || {}).wallet || (req.body || {}).callsign;
+  const { missionId } = req.body || {};
   if (!wallet || !missionId) {
     return res.status(400).json({ error: 'wallet and missionId required', code: 'MISSING_FIELDS' });
   }
@@ -283,7 +316,7 @@ app.post('/api/missions/complete', (req, res) => {
 // Story endpoints
 // ---------------------------------------------------------------------------
 app.get('/api/story', (req, res) => {
-  const wallet = req.query.wallet;
+  const wallet = req.query.wallet || req.query.callsign;
   const player = wallet ? getPlayer(wallet) : null;
 
   const acts = storyActs.map((act) => ({
@@ -297,7 +330,7 @@ app.get('/api/story', (req, res) => {
 
 app.get('/api/story/:actId', (req, res) => {
   const actId = parseInt(req.params.actId, 10);
-  const wallet = req.query.wallet;
+  const wallet = req.query.wallet || req.query.callsign;
   const act = storyActs.find((a) => a.id === actId);
   if (!act) {
     return res.status(404).json({ error: 'act not found', code: 'ACT_NOT_FOUND' });
@@ -338,6 +371,8 @@ app.get('/api/dashboard/:wallet', (req, res) => {
 
   res.json({
     wallet,
+    callsign: player.callsign || wallet,
+    character: player.character || null,
     balance: player.balance,
     inventoryCount: player.inventory.length,
     inventory: player.inventory,
@@ -349,6 +384,12 @@ app.get('/api/dashboard/:wallet', (req, res) => {
     stats: player.stats,
     activeQuests: activeMissions,
     puzzleProgress: player.puzzleProgress || {},
+    xp: player.xp || 0,
+    ...levelFromXp(player.xp || 0),
+    skills: player.skills || {},
+    trust: player.trust || 0,
+    thrWallet: player.thrWallet || null,
+    storyCompleted: player.storyCompleted || [],
     rewardPolicy: {
       enabled: rewardPolicy.enabled,
       note: rewardPolicy.note

@@ -1,0 +1,80 @@
+[
+  {
+    "id": "safa",
+    "name": "SAfA Valor",
+    "handle": "SAfA",
+    "role": "Visionary / Team Lead",
+    "origin": "Athens, Greece",
+    "desc": "A former hacktivist radicalised by the 2008 financial crisis. Brilliant strategist and smart contract developer driven by a fierce belief in self-sovereignty.",
+    "color": "#10b981",
+    "stats": { "hack": 7, "shield": 4, "intel": 6, "stamina": 8, "charisma": 9 },
+    "startSkill": "cryptography",
+    "passive": "Squad members gain +10% stamina",
+    "unlocked": true
+  },
+  {
+    "id": "niva",
+    "name": "Niva ReBorN",
+    "handle": "Niva",
+    "role": "Infiltrator / Security Expert",
+    "origin": "Classified",
+    "desc": "Former intelligence operative who grew disgusted by state-level corruption. Master of OPSEC, social engineering, and physical infiltration.",
+    "color": "#a855f7",
+    "stats": { "hack": 8, "shield": 6, "intel": 7, "stamina": 5, "charisma": 5 },
+    "startSkill": "network_security",
+    "passive": "Critical exploit chance +15%",
+    "unlocked": true
+  },
+  {
+    "id": "nato",
+    "name": "Nato Saka",
+    "handle": "Nato",
+    "role": "Engineer / Hardware Specialist",
+    "origin": "Piraeus, Greece",
+    "desc": "SAfA's childhood friend and a hardware genius who can build secure mining rigs from scrap parts. Trusts circuits and steel more than people.",
+    "color": "#3b82f6",
+    "stats": { "hack": 5, "shield": 9, "intel": 6, "stamina": 7, "charisma": 4 },
+    "startSkill": "smart_contracts",
+    "passive": "Hardware defence +20%",
+    "unlocked": true
+  },
+  {
+    "id": "kyra",
+    "name": "Kyra Blaze",
+    "handle": "Kyra",
+    "role": "Analyst / On-Chain Detective",
+    "origin": "London, UK",
+    "desc": "Data scientist who once built predictive algorithms for hedge funds. Can read a blockchain transaction log like a story, spotting anomalies through complex chains.",
+    "color": "#ec4899",
+    "stats": { "hack": 6, "shield": 5, "intel": 9, "stamina": 4, "charisma": 7 },
+    "startSkill": "data_analysis",
+    "passive": "On-chain analysis speed +25%",
+    "unlocked": true
+  },
+  {
+    "id": "luna",
+    "name": "Luna Myst",
+    "handle": "Luna",
+    "role": "Cryptographer / Community Voice",
+    "origin": "Berlin, Germany",
+    "desc": "Brilliant mathematician who understands the deep magic of zero-knowledge proofs and consensus algorithms. The heart of the team and a passionate educator.",
+    "color": "#06b6d4",
+    "stats": { "hack": 6, "shield": 5, "intel": 8, "stamina": 6, "charisma": 8 },
+    "startSkill": "cryptography",
+    "passive": "Puzzle XP bonus +20%",
+    "unlocked": true
+  },
+  {
+    "id": "zayne",
+    "name": "Zayne Nexus",
+    "handle": "Zayne",
+    "role": "Defector / Oracle",
+    "origin": "Unknown",
+    "desc": "Former systems architect for the Dark Node. His knowledge of the enemy's infrastructure is unparalleled, but his motives remain unclear.",
+    "color": "#f59e0b",
+    "stats": { "hack": 9, "shield": 7, "intel": 8, "stamina": 5, "charisma": 3 },
+    "startSkill": "network_security",
+    "passive": "Intel gathering +30%",
+    "unlocked": false
+  }
+]

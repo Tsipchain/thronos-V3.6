@@ -708,6 +708,39 @@ class EarnAccountStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_earn_publisher_placements_pub
                     ON earn_publisher_placements(publisher_id);
+
+                CREATE TABLE IF NOT EXISTS earn_ad_delivery_proofs (
+                    proof_id       TEXT PRIMARY KEY,
+                    campaign_id    TEXT NOT NULL,
+                    creative_id    TEXT NOT NULL,
+                    placement      TEXT NOT NULL,
+                    publisher_id   TEXT NOT NULL,
+                    viewer_hash    TEXT NOT NULL,
+                    country        TEXT,
+                    signature      TEXT NOT NULL,
+                    issued_at      INTEGER NOT NULL,
+                    expires_at     INTEGER NOT NULL,
+                    consumed_at    INTEGER
+                );
+                CREATE INDEX IF NOT EXISTS idx_earn_ad_delivery_proofs_expires
+                    ON earn_ad_delivery_proofs(expires_at);
+                CREATE INDEX IF NOT EXISTS idx_earn_ad_delivery_proofs_viewer
+                    ON earn_ad_delivery_proofs(viewer_hash, campaign_id, issued_at);
+
+                CREATE TABLE IF NOT EXISTS earn_ad_delivery_events (
+                    event_id        TEXT PRIMARY KEY,
+                    proof_id        TEXT NOT NULL,
+                    campaign_id     TEXT NOT NULL,
+                    creative_id     TEXT NOT NULL,
+                    event_type      TEXT NOT NULL,
+                    charged_amount  TEXT NOT NULL DEFAULT '0.000000',
+                    viewer_hash     TEXT NOT NULL,
+                    country         TEXT,
+                    recorded_at     INTEGER NOT NULL,
+                    UNIQUE(proof_id, event_type)
+                );
+                CREATE INDEX IF NOT EXISTS idx_earn_ad_delivery_events_campaign
+                    ON earn_ad_delivery_events(campaign_id, recorded_at);
             """)
             # Existing production Earn databases predate the provider
             # clearance and separate internal hold fields. SQLite lacks ADD COLUMN IF NOT
@@ -3420,6 +3453,344 @@ class EarnAccountStore:
                 )
         return {"event_id": event_id, "cost": str(cost)}
 
+    # ── Ad Marketplace — Verified Delivery ──────────────────────────
+
+    _DELIVERY_PROOF_TTL = 300  # 5 minutes
+    _DELIVERY_FREQ_CAP = 3     # max impressions per viewer per campaign per day
+
+    _EXCLUDED_PLACEMENTS = frozenset((
+        "wallet_home", "wallet_signing", "wallet_send", "wallet_receive",
+        "wallet_staking", "wallet_confirmation",
+    ))
+
+    def _delivery_secret(self) -> bytes:
+        return os.getenv("EARN_DELIVERY_SECRET", "").encode()
+
+    def _sign_delivery_proof(self, proof_payload: dict[str, Any]) -> str:
+        secret = self._delivery_secret()
+        msg = json.dumps(proof_payload, sort_keys=True, separators=(",", ":")).encode()
+        return hmac.new(secret, msg, hashlib.sha256).hexdigest()
+
+    def _verify_delivery_proof(self, proof_payload: dict[str, Any], signature: str) -> bool:
+        expected = self._sign_delivery_proof(proof_payload)
+        return hmac.compare_digest(expected, signature)
+
+    def verified_serve(
+        self,
+        placement: str,
+        publisher_id: str,
+        viewer_hash: str,
+        country: str | None = None,
+    ) -> dict[str, Any]:
+        if not self._delivery_secret():
+            raise EarnError("verified_ad_delivery_required")
+
+        if placement in self._EXCLUDED_PLACEMENTS:
+            return {"ad": None, "reason": "excluded_placement"}
+
+        now = int(time.time())
+        day_start = now - (now % 86400)
+
+        with self._tx() as con:
+            # Validate publisher
+            pub = con.execute(
+                "SELECT publisher_id, status FROM earn_publishers WHERE publisher_id = ?",
+                (publisher_id,),
+            ).fetchone()
+            if not pub or pub["status"] != "active":
+                raise EarnError("publisher_not_active")
+
+            # Find eligible campaigns with approved creatives
+            rows = con.execute(
+                """SELECT c.campaign_id, c.advertiser_id, c.campaign_type,
+                          c.bid_amount, c.total_budget, c.spent,
+                          c.daily_budget, c.country_targets,
+                          cr.creative_id, cr.title, cr.image_url,
+                          cr.target_url
+                     FROM earn_ad_campaigns c
+                     JOIN earn_ad_creatives cr ON cr.campaign_id = c.campaign_id
+                    WHERE c.status = 'active'
+                      AND cr.status = 'approved'
+                      AND (c.starts_at IS NULL OR c.starts_at <= ?)
+                      AND (c.ends_at IS NULL OR c.ends_at > ?)
+                 ORDER BY c.bid_amount DESC
+                    LIMIT 50""",
+                (now, now),
+            ).fetchall()
+
+            candidates: list[dict[str, Any]] = []
+            for r in rows:
+                # Country targeting
+                targets = str(r["country_targets"] or "").strip()
+                if targets:
+                    allowed = {c.strip().upper() for c in targets.split(",") if c.strip()}
+                    if not country or country.upper() not in allowed:
+                        continue
+
+                # Budget checks
+                tb = Decimal(r["total_budget"])
+                bid = Decimal(r["bid_amount"])
+                spent = Decimal(r["spent"])
+                if tb > 0:
+                    unit_cost = (bid / 1000 if r["campaign_type"] == "cpm"
+                                 else bid).quantize(_THC_SCALE)
+                    if spent + unit_cost > tb:
+                        continue
+
+                # Escrow balance check
+                bal = self._escrow_balance_in_tx(con, r["campaign_id"])
+                unit_cost = (bid / 1000 if r["campaign_type"] == "cpm"
+                             else bid).quantize(_THC_SCALE)
+                if bal < unit_cost:
+                    continue
+
+                # Daily budget
+                db = Decimal(r["daily_budget"])
+                if db > 0:
+                    cost_rows = con.execute(
+                        """SELECT charged_amount FROM earn_ad_delivery_events
+                           WHERE campaign_id = ? AND recorded_at >= ?""",
+                        (r["campaign_id"], day_start),
+                    ).fetchall()
+                    day_spent = sum(
+                        (Decimal(cr["charged_amount"]) for cr in cost_rows),
+                        Decimal("0"),
+                    )
+                    if day_spent >= db:
+                        continue
+
+                # Frequency cap: max impressions per viewer per campaign per day
+                freq = con.execute(
+                    """SELECT COUNT(*) AS cnt FROM earn_ad_delivery_events
+                       WHERE campaign_id = ? AND viewer_hash = ?
+                         AND event_type = 'view' AND recorded_at >= ?""",
+                    (r["campaign_id"], viewer_hash, day_start),
+                ).fetchone()
+                if (freq["cnt"] or 0) >= self._DELIVERY_FREQ_CAP:
+                    continue
+
+                candidates.append(dict(r))
+
+            if not candidates:
+                # Fall back to house ads
+                house = self.list_ads(placement or "earn")
+                if house:
+                    import random
+                    h = random.choice(house)
+                    return {
+                        "ad": {
+                            "title": h["title"],
+                            "image_url": h.get("image_url"),
+                            "target_url": h.get("target_url"),
+                            "ad_id": h.get("ad_id"),
+                        },
+                        "is_house": True,
+                    }
+                return {"ad": None, "reason": "no_eligible_campaigns"}
+
+            # Weighted random selection using bid_amount as weight
+            import random
+            weights = [max(float(Decimal(c["bid_amount"])), 0.001) for c in candidates]
+            selected = random.choices(candidates, weights=weights, k=1)[0]
+
+            # Issue delivery proof token
+            proof_id = "dprf_" + secrets.token_urlsafe(18)
+            expires_at = now + self._DELIVERY_PROOF_TTL
+            proof_payload = {
+                "proof_id": proof_id,
+                "campaign_id": selected["campaign_id"],
+                "creative_id": selected["creative_id"],
+                "placement": placement,
+                "publisher_id": publisher_id,
+                "viewer_hash": viewer_hash,
+                "country": country or "",
+                "issued_at": now,
+                "expires_at": expires_at,
+            }
+            signature = self._sign_delivery_proof(proof_payload)
+
+            con.execute(
+                """INSERT INTO earn_ad_delivery_proofs
+                   (proof_id, campaign_id, creative_id, placement,
+                    publisher_id, viewer_hash, country, signature,
+                    issued_at, expires_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (proof_id, selected["campaign_id"], selected["creative_id"],
+                 placement, publisher_id, viewer_hash,
+                 country or "", signature, now, expires_at),
+            )
+
+            # Purge expired proofs older than 1 hour
+            con.execute(
+                "DELETE FROM earn_ad_delivery_proofs WHERE expires_at < ?",
+                (now - 3600,),
+            )
+
+        return {
+            "ad": {
+                "campaign_id": selected["campaign_id"],
+                "creative_id": selected["creative_id"],
+                "title": selected["title"],
+                "image_url": selected["image_url"],
+                "target_url": selected["target_url"],
+                "campaign_type": selected["campaign_type"],
+            },
+            "is_house": False,
+            "proof": {
+                "proof_id": proof_id,
+                "proof_token": signature,
+                "expires_at": expires_at,
+            },
+        }
+
+    def verified_record_event(
+        self,
+        proof_id: str,
+        event_type: str,
+        proof_token: str,
+    ) -> dict[str, Any]:
+        if not self._delivery_secret():
+            raise EarnError("verified_ad_event_required")
+        if event_type not in ("view", "click"):
+            raise EarnError("invalid_event_type")
+
+        now = int(time.time())
+
+        with self._tx() as con:
+            proof = con.execute(
+                "SELECT * FROM earn_ad_delivery_proofs WHERE proof_id = ?",
+                (proof_id,),
+            ).fetchone()
+            if not proof:
+                raise EarnError("proof_not_found")
+
+            # Check expiry
+            if now > proof["expires_at"]:
+                raise EarnError("proof_expired")
+
+            # Verify HMAC signature
+            proof_payload = {
+                "proof_id": proof["proof_id"],
+                "campaign_id": proof["campaign_id"],
+                "creative_id": proof["creative_id"],
+                "placement": proof["placement"],
+                "publisher_id": proof["publisher_id"],
+                "viewer_hash": proof["viewer_hash"],
+                "country": proof["country"],
+                "issued_at": proof["issued_at"],
+                "expires_at": proof["expires_at"],
+            }
+            if not self._verify_delivery_proof(proof_payload, proof_token):
+                raise EarnError("invalid_proof_signature")
+
+            # Idempotency: check if already consumed for this event_type
+            existing = con.execute(
+                """SELECT event_id, charged_amount FROM earn_ad_delivery_events
+                   WHERE proof_id = ? AND event_type = ?""",
+                (proof_id, event_type),
+            ).fetchone()
+            if existing:
+                return {
+                    "event_id": existing["event_id"],
+                    "charged_amount": existing["charged_amount"],
+                    "idempotent": True,
+                }
+
+            # Mark proof consumed (first event of any type)
+            if proof["consumed_at"] is None:
+                con.execute(
+                    "UPDATE earn_ad_delivery_proofs SET consumed_at = ? WHERE proof_id = ?",
+                    (now, proof_id),
+                )
+
+            # Calculate cost
+            camp = con.execute(
+                "SELECT campaign_type, bid_amount, advertiser_id, total_budget, spent, daily_budget FROM earn_ad_campaigns WHERE campaign_id = ?",
+                (proof["campaign_id"],),
+            ).fetchone()
+            if not camp:
+                raise EarnError("campaign_not_found")
+
+            bid = Decimal(camp["bid_amount"])
+            if camp["campaign_type"] == "cpm" and event_type == "view":
+                cost = (bid / 1000).quantize(_THC_SCALE)
+            elif camp["campaign_type"] == "cpc" and event_type == "click":
+                cost = bid.quantize(_THC_SCALE)
+            else:
+                cost = Decimal("0").quantize(_THC_SCALE)
+
+            # Budget enforcement
+            if cost > 0:
+                tb = Decimal(camp["total_budget"])
+                cur_spent = Decimal(camp["spent"])
+                if tb > 0 and cur_spent + cost > tb:
+                    raise EarnError("total_budget_exhausted")
+
+                db = Decimal(camp["daily_budget"])
+                if db > 0:
+                    day_start = now - (now % 86400)
+                    day_rows = con.execute(
+                        """SELECT charged_amount FROM earn_ad_delivery_events
+                           WHERE campaign_id = ? AND recorded_at >= ?""",
+                        (proof["campaign_id"], day_start),
+                    ).fetchall()
+                    day_spent = sum(
+                        (Decimal(dr["charged_amount"]) for dr in day_rows),
+                        Decimal("0"),
+                    )
+                    if day_spent + cost > db:
+                        raise EarnError("daily_budget_exhausted")
+
+                # Escrow balance check
+                bal = self._escrow_balance_in_tx(con, proof["campaign_id"])
+                if bal < cost:
+                    raise EarnError("insufficient_escrow_balance")
+
+            # Record event
+            event_id = "devt_" + secrets.token_hex(8)
+            con.execute(
+                """INSERT INTO earn_ad_delivery_events
+                   (event_id, proof_id, campaign_id, creative_id,
+                    event_type, charged_amount, viewer_hash, country,
+                    recorded_at)
+                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                (event_id, proof_id, proof["campaign_id"],
+                 proof["creative_id"], event_type,
+                 str(cost), proof["viewer_hash"],
+                 proof["country"], now),
+            )
+
+            # Atomic escrow debit + campaign counter update
+            if cost > 0:
+                self._escrow_spend_in_tx(
+                    con, proof["campaign_id"], camp["advertiser_id"], cost,
+                )
+
+            new_spent = (Decimal(camp["spent"]) + cost).quantize(_THC_SCALE)
+            if event_type == "view":
+                con.execute(
+                    "UPDATE earn_ad_campaigns SET impressions = impressions + 1, spent = ? WHERE campaign_id = ?",
+                    (str(new_spent), proof["campaign_id"]),
+                )
+            elif event_type == "click":
+                con.execute(
+                    "UPDATE earn_ad_campaigns SET clicks = clicks + 1, spent = ? WHERE campaign_id = ?",
+                    (str(new_spent), proof["campaign_id"]),
+                )
+
+            # Auto-complete when budget exhausted
+            tb = Decimal(camp["total_budget"])
+            if tb > 0 and new_spent >= tb:
+                con.execute(
+                    "UPDATE earn_ad_campaigns SET status = 'completed' WHERE campaign_id = ?",
+                    (proof["campaign_id"],),
+                )
+
+        return {
+            "event_id": event_id,
+            "charged_amount": str(cost),
+        }
+
     # ── Ad Marketplace — Reporting ────────────────────────────────────
 
     def campaign_report(
@@ -5308,18 +5679,57 @@ def register_earn_account_routes(
 
     @app.get("/api/earn/ads/serve")
     def earn_ads_serve():
-        # Paid campaigns cannot be delivered while their public event path is
-        # disabled: that would serve advertiser inventory with no verifiable
-        # view/click accounting. Legacy house banners use /api/earn/ads.
-        return jsonify(ok=False, error="verified_ad_delivery_required"), 503
+        if not os.getenv("EARN_DELIVERY_SECRET", ""):
+            return jsonify(ok=False, error="verified_ad_delivery_required"), 503
+
+        placement = request.args.get("placement", "")
+        publisher_id = request.args.get("publisher_id", "")
+        viewer_hash = request.args.get("viewer_hash", "")
+        country = request.args.get("country") or None
+
+        if not placement or not publisher_id or not viewer_hash:
+            return jsonify(ok=False, error="missing_params"), 400
+
+        try:
+            result = store.verified_serve(
+                placement=placement,
+                publisher_id=publisher_id,
+                viewer_hash=viewer_hash,
+                country=country,
+            )
+            return jsonify(ok=True, **result)
+        except EarnError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
 
     @app.post("/api/earn/ads/serve/event")
     def earn_ads_serve_event():
-        # This endpoint previously accepted arbitrary client-supplied IDs and
-        # could debit a funded THC escrow without a verified view or click.
-        # Keep paid delivery closed until a server-issued, single-use proof
-        # binds creative, placement, trusted geo and a unique viewer.
-        return jsonify(ok=False, error="verified_ad_event_required"), 503
+        if not os.getenv("EARN_DELIVERY_SECRET", ""):
+            return jsonify(ok=False, error="verified_ad_event_required"), 503
+
+        body = request.get_json(silent=True) or {}
+        proof_id = body.get("proof_id", "")
+        event_type = body.get("event_type", "")
+        proof_token = body.get("proof_token", "")
+
+        if not proof_id or not event_type or not proof_token:
+            return jsonify(ok=False, error="missing_params"), 400
+
+        try:
+            result = store.verified_record_event(
+                proof_id=proof_id,
+                event_type=event_type,
+                proof_token=proof_token,
+            )
+            return jsonify(ok=True, **result)
+        except EarnError as exc:
+            code = 400
+            err = str(exc)
+            if err in ("proof_expired", "proof_not_found"):
+                code = 410
+            elif err in ("total_budget_exhausted", "daily_budget_exhausted",
+                         "insufficient_escrow_balance"):
+                code = 402
+            return jsonify(ok=False, error=err), code
 
     @app.get("/api/earn/ads/campaign/<campaign_id>/report")
     def earn_campaign_report(campaign_id):

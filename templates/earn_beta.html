@@ -593,6 +593,12 @@
   };
   const candidates = navigator.languages?.length ? navigator.languages : [navigator.language || 'en'];
   let lang = stored() ? normalize(stored()) : normalize(candidates[0]);
+  // Seed the shared preference only on the first visit. Otherwise the
+  // inherited core initializer would overwrite the browser-locale default.
+  if (!stored()) {
+    try { localStorage.setItem('thr_lang', lang); }
+    catch (_) { /* Continue with in-memory language when storage is blocked. */ }
+  }
   const copy = {
     en: {
       language:'Language',journeyKicker:'YOUR EARN JOURNEY',journeyHeadline:'Explore. Complete. Earn.',

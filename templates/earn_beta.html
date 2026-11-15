@@ -8,6 +8,13 @@
   body:has(.earn-beta) > .container { max-width:none; padding:0; }
   body:has(.earn-beta) { overflow-x:hidden; }
 {% endblock %}
+{% block app_manifest %}
+  <link rel="manifest" href="{{ url_for('static', filename='earn.webmanifest') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='img/thronos-coin.png') }}">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Thronos Earn">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+{% endblock %}
 {% block content %}
 <style>
   .earn-beta { max-width: 1160px; margin: 32px auto; padding: 0 18px 42px; }

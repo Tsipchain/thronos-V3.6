@@ -841,7 +841,7 @@
   };
   const message = (key, replacements = {}) => {
     const text = (dynamic[lang] && dynamic[lang][key]) || dynamic.en[key] || key;
-    return text.replace(/\\{([a-z]+)\\}/g, (_, token) => String(replacements[token] ?? ''));
+    return text.replace(/\{([a-z]+)\}/g, (_, token) => String(replacements[token] ?? ''));
   };
   window.ThronosEarnLocale = { current: () => lang, change, apply, message };
   document.getElementById('earn-language')?.addEventListener('change', event => {

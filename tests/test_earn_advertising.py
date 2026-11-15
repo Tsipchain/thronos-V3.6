@@ -261,6 +261,28 @@ class TestWalletlessEscrow:
                 intent["csrf_token"], session_token_hash="invalid_hash",
             )
 
+    def test_walletless_expired_session_rejected(self, store, advertiser, campaign):
+        uid = advertiser["earn_user_id"]
+        _credit_thc(store, uid, "5000.000000")
+        store.moderate_campaign(campaign["campaign_id"], "approve")
+        token = secrets.token_urlsafe(32)
+        expired_hash = hashlib.sha256(token.encode()).hexdigest()
+        now = int(time.time())
+        with store._tx() as con:
+            con.execute(
+                "INSERT INTO earn_sessions (token_hash, earn_user_id, created_at, expires_at) VALUES (?,?,?,?)",
+                (expired_hash, uid, now - 7200, now - 3600),
+            )
+        intent = store.escrow_create_intent_walletless(
+            uid, campaign["campaign_id"], "deposit", "100.000000",
+            session_token_hash=expired_hash,
+        )
+        with pytest.raises(EarnError, match="session_reauth_required"):
+            store.escrow_execute_walletless(
+                intent["intent_id"], uid, intent["nonce"],
+                intent["csrf_token"], session_token_hash=expired_hash,
+            )
+
     def test_walletless_refund(self, store, advertiser, campaign):
         uid = advertiser["earn_user_id"]
         _credit_thc(store, uid, "5000.000000")

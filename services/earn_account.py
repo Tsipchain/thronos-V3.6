@@ -4152,10 +4152,10 @@ class EarnAccountStore:
             if not hmac.compare_digest(intent["csrf_token"], csrf_token):
                 raise EarnError("csrf_token_mismatch")
             sess = con.execute(
-                "SELECT 1 FROM earn_sessions WHERE token_hash = ? AND earn_user_id = ?",
+                "SELECT expires_at FROM earn_sessions WHERE token_hash = ? AND earn_user_id = ?",
                 (session_token_hash, earn_user_id),
             ).fetchone()
-            if not sess:
+            if not sess or sess["expires_at"] < now:
                 raise EarnError("session_reauth_required")
             existing = con.execute(
                 "SELECT escrow_id FROM earn_ad_escrow WHERE idempotency_key = ?",

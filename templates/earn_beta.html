@@ -332,6 +332,8 @@
   @media(max-width:520px){.earn-advertiser-fields{grid-template-columns:1fr}.earn-advertiser-form .earn-action{max-width:none}}
 
 
+  .earn-product-logo{display:block;width:min(100%,350px);height:auto;max-height:80px;object-fit:contain;object-position:left center}
+  @media(max-width:520px){.earn-product-logo{width:min(100%,235px);max-height:64px}}
   .earn-product-header{display:flex;align-items:center;justify-content:space-between;gap:16px;
     padding:14px 18px;margin:0 0 16px;border:1px solid #305970;border-radius:15px;
     background:linear-gradient(125deg,#0f2b37,#112333)}
@@ -356,8 +358,7 @@
 <main class="earn-beta">
     <header class="earn-product-header" aria-label="Thronos Earn">
       <div class="earn-product-identity">
-        <span class="earn-product-icon" aria-hidden="true">THR</span>
-        <div><strong>THRONOS <span>EARN</span></strong><small>ThronosLabs · ENCOM</small></div>
+        <img src="/static/img/thronos-earn-lockup.svg" class="earn-product-logo" alt="Thronos Earn — Powered by ThronosLabs &amp; ENNCOM" width="640" height="148">
       </div>
       <label class="earn-language-field" for="earn-language">
         <span data-earn-copy="language">Language / Γλώσσα</span>

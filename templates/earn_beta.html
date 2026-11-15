@@ -576,6 +576,135 @@
     <button class="promo-skip" id="promo-skip" type="button" data-i18n="skip">Skip</button>
   </div>
 </div>
+
+<script>
+/* Earn-specific localized copy. Explicit user preference wins over device
+   locale; no IP geolocation or automatic network calls are performed. */
+(() => {
+  'use strict';
+  const supported = new Set(['gr', 'en', 'es', 'ja', 'ru']);
+  const normalize = value => {
+    const code = String(value || '').toLowerCase().split(/[-_]/)[0];
+    return code === 'el' ? 'gr' : supported.has(code) ? code : 'en';
+  };
+  const stored = () => {
+    try { return localStorage.getItem('thr_lang') || localStorage.getItem('lang'); }
+    catch (_) { return null; }
+  };
+  const candidates = navigator.languages?.length ? navigator.languages : [navigator.language || 'en'];
+  let lang = stored() ? normalize(stored()) : normalize(candidates[0]);
+  const copy = {
+    en: {
+      language:'Language',journeyKicker:'YOUR EARN JOURNEY',journeyHeadline:'Explore. Complete. Earn.',
+      journeyDescription:'Choose available missions, complete them and track verified rewards.',
+      explore:'Explore',complete:'Complete',earn:'Earn',surveys:'Surveys & verified offers',
+      verification:'Provider verification required',clearing:'Pending → cleared THC',
+      journeyDisclaimer:'Rewards require verified provider receipts, applicable hold periods and funded settlement. No wallet is required to start.',
+      offersTab:'Offers',rewardsTab:'Rewards',communityTab:'Community',accountTab:'Account',advertiseTab:'Advertise',
+      accountHelp:'Your account and verified reward history. Pending provider receipts are not yet spendable.',
+      advertiseHeadline:'Promote your business',advertiseDescription:'Create Thronos Earn campaigns. Ads and creatives require approval and verified funding before display.',
+      advertisePlacement:'Ads appear only in Earn, never in wallet home, signing, send or receive.',
+      newCampaign:'Create campaign',creativeHeading:'Campaign artwork',createDraft:'Create draft campaign',
+      submitCreative:'Submit creative for review',myCampaigns:'My campaigns',refresh:'Refresh',
+      gymDescription:'Training and gym challenges with verified participation. Independent app in preparation.',
+      gymStatus:'No THC rewards yet · Verified integration pending'
+    },
+    gr: {
+      language:'Γλώσσα',journeyKicker:'Η ΔΙΑΔΡΟΜΗ ΣΟΥ',journeyHeadline:'Εξερεύνησε. Ολοκλήρωσε. Κέρδισε.',
+      journeyDescription:'Διάλεξε διαθέσιμες αποστολές, ολοκλήρωσέ τες και παρακολούθησε τις επαληθευμένες ανταμοιβές.',
+      explore:'Εξερεύνησε',complete:'Ολοκλήρωσε',earn:'Κέρδισε',surveys:'Έρευνες και επιβεβαιωμένες προσφορές',
+      verification:'Απαιτείται επαλήθευση παρόχου',clearing:'Σε αναμονή → διαθέσιμα THC',
+      journeyDisclaimer:'Οι ανταμοιβές απαιτούν επιβεβαίωση παρόχου, περίοδο αναμονής και επαρκή χρηματοδότηση. Δεν απαιτείται wallet για να ξεκινήσεις.',
+      offersTab:'Αποστολές',rewardsTab:'Ανταμοιβές',communityTab:'Κοινότητα',accountTab:'Λογαριασμός',advertiseTab:'Διαφήμιση',
+      accountHelp:'Ο λογαριασμός και το ιστορικό σου. Οι εκκρεμείς ανταμοιβές δεν είναι ακόμη διαθέσιμες.',
+      advertiseHeadline:'Προώθησε την επιχείρησή σου',advertiseDescription:'Δημιούργησε καμπάνιες στο Thronos Earn. Η προβολή απαιτεί έγκριση και επιβεβαιωμένη χρηματοδότηση.',
+      advertisePlacement:'Οι διαφημίσεις προβάλλονται μόνο στο Earn, ποτέ σε αρχική, υπογραφές ή μεταφορές wallet.',
+      newCampaign:'Νέα καμπάνια',creativeHeading:'Εικόνα και δημιουργικό',createDraft:'Δημιουργία πρόχειρης καμπάνιας',
+      submitCreative:'Υποβολή δημιουργικού για έγκριση',myCampaigns:'Οι καμπάνιες μου',refresh:'Ανανέωση',
+      gymDescription:'Προπονήσεις και προκλήσεις με επιβεβαιωμένη συμμετοχή από γυμναστήριο. Η εφαρμογή ετοιμάζεται.',
+      gymStatus:'Χωρίς THC ακόμη · Αναμονή επαληθευμένης σύνδεσης'
+    },
+    es: {
+      language:'Idioma',journeyKicker:'TU RECORRIDO',journeyHeadline:'Explora. Completa. Gana.',
+      journeyDescription:'Elige misiones disponibles, complétalas y sigue tus recompensas verificadas.',
+      explore:'Explora',complete:'Completa',earn:'Gana',surveys:'Encuestas y ofertas verificadas',
+      verification:'Requiere verificación del proveedor',clearing:'Pendiente → THC liberado',
+      journeyDisclaimer:'Las recompensas requieren recibos verificados, plazos de espera y fondos disponibles. No necesitas wallet para empezar.',
+      offersTab:'Ofertas',rewardsTab:'Recompensas',communityTab:'Comunidad',accountTab:'Cuenta',advertiseTab:'Publicidad',
+      accountHelp:'Cuenta e historial de recompensas. Las recompensas pendientes todavía no se pueden gastar.',
+      advertiseHeadline:'Promociona tu negocio',advertiseDescription:'Crea campañas en Thronos Earn. Se requiere aprobación y financiación verificada.',
+      advertisePlacement:'Los anuncios solo aparecen en Earn, nunca en las pantallas de firma o envío de wallet.',
+      newCampaign:'Crear campaña',creativeHeading:'Creatividad del anuncio',createDraft:'Crear campaña pendiente',
+      submitCreative:'Enviar creatividad para revisión',myCampaigns:'Mis campañas',refresh:'Actualizar',
+      gymDescription:'Entrenamientos y retos verificados por gimnasios. Aplicación en preparación.',
+      gymStatus:'Todavía sin THC · Integración pendiente'
+    },
+    ja: {
+      language:'言語',journeyKicker:'EARN の進め方',journeyHeadline:'探そう。達成しよう。獲得しよう。',
+      journeyDescription:'利用可能なミッションに参加し、認証済みの報酬を確認できます。',
+      explore:'探す',complete:'達成',earn:'獲得',surveys:'アンケートと認証済みオファー',
+      verification:'提供元による確認が必要',clearing:'保留中 → 確定THC',
+      journeyDisclaimer:'報酬には提供元の検証、保留期間、決済資金の確認が必要です。開始時にウォレットは不要です。',
+      offersTab:'オファー',rewardsTab:'報酬',communityTab:'コミュニティ',accountTab:'アカウント',advertiseTab:'広告',
+      accountHelp:'アカウントと報酬履歴。保留中の報酬は使用できません。',
+      advertiseHeadline:'事業を宣伝する',advertiseDescription:'広告キャンペーンの掲載には審査と資金確認が必要です。',
+      advertisePlacement:'広告はEarn内のみ表示され、ウォレットの送金・署名画面には表示されません。',
+      newCampaign:'キャンペーン作成',creativeHeading:'広告素材',createDraft:'下書きキャンペーン作成',
+      submitCreative:'広告素材を審査に送信',myCampaigns:'キャンペーン一覧',refresh:'更新',
+      gymDescription:'ジム認証済みトレーニングチャレンジ。アプリ準備中。',
+      gymStatus:'THC報酬は未提供 · 認証連携待ち'
+    },
+    ru: {
+      language:'Язык',journeyKicker:'ВАШ ПУТЬ',journeyHeadline:'Выбирайте. Выполняйте. Получайте.',
+      journeyDescription:'Выбирайте задания, выполняйте их и отслеживайте подтверждённые награды.',
+      explore:'Выбирайте',complete:'Выполняйте',earn:'Получайте',surveys:'Опросы и подтверждённые предложения',
+      verification:'Требуется проверка провайдера',clearing:'Ожидает → подтверждённые THC',
+      journeyDisclaimer:'Награды требуют подтверждения провайдера, периода ожидания и финансирования. Кошелёк для старта не нужен.',
+      offersTab:'Задания',rewardsTab:'Награды',communityTab:'Сообщество',accountTab:'Аккаунт',advertiseTab:'Реклама',
+      accountHelp:'Аккаунт и история наград. Ожидающие награды пока недоступны.',
+      advertiseHeadline:'Продвигайте свой бизнес',advertiseDescription:'Создавайте кампании. Показы требуют одобрения и подтверждённого финансирования.',
+      advertisePlacement:'Реклама отображается только в Earn, не при отправке и подписании транзакций.',
+      newCampaign:'Создать кампанию',creativeHeading:'Рекламные материалы',createDraft:'Создать черновик',
+      submitCreative:'Отправить материалы на проверку',myCampaigns:'Мои кампании',refresh:'Обновить',
+      gymDescription:'Проверенные тренировки и задания от спортивных залов. Приложение готовится.',
+      gymStatus:'THC пока не начисляются · Ожидается проверенная интеграция'
+    }
+  };
+  function apply() {
+    document.documentElement.lang = lang === 'gr' ? 'el' : lang;
+    const select = document.getElementById('earn-language');
+    if (select && select.value !== lang) select.value = lang;
+    document.querySelectorAll('.earn-beta [data-earn-copy]').forEach(element => {
+      const key = element.dataset.earnCopy;
+      const value = copy[lang]?.[key] || copy.en[key];
+      if (value) element.textContent = value;
+    });
+  }
+  function change(next, save) {
+    const normalized = normalize(next);
+    if (save) {
+      try { localStorage.setItem('thr_lang', normalized); }
+      catch (_) { /* Language can still change for this session. */ }
+    }
+    lang = normalized;
+    apply();
+    window.dispatchEvent(new CustomEvent('earnLocaleChanged', {detail:{lang}}));
+  }
+  window.ThronosEarnLocale = { current: () => lang, change, apply };
+  document.getElementById('earn-language')?.addEventListener('change', event => {
+    const next = event.target.value;
+    if (typeof window.setLanguage === 'function') {
+      window.setLanguage(next); // Shares explicit user preference with core.
+    } else {
+      change(next, true);
+    }
+  });
+  window.addEventListener('langChanged', event => {
+    change(event.detail?.lang || lang, false);
+  });
+  apply();
+})();
+</script>
 <script src="/wallet-pwa/earn-provider-tabs.js"></script>
 <script src="/wallet-pwa/earn-receipt-details.js"></script>
 <script src="/wallet-pwa/earn-leaderboard.js"></script>
@@ -598,8 +727,13 @@
     ko: { title:'Thronos Earn 프로젝트', subtitle:'Earn 계정을 만들거나 로그인하세요. 지갑 불필요.', signIn:'로그인', createAcct:'계정 만들기', signOut:'로그아웃', openSurveys:'설문조사 열기', recentActivity:'최근 활동', skip:'건너뛰기', signInView:'잔액과 활동을 보려면 로그인하세요', lbTitle:'월간 리더보드', lbEmpty:'이번 달 수익이 아직 없습니다. 첫 번째가 되세요!', lbYou:'당신', lbUnranked:'아직 순위 없음', lbStakingTitle:'로열티 스테이킹 풀', lbStakingBadge:'곧 출시', lbStake1:'연결된 지갑에서 THC 스테이킹' },
   };
 
-  const _userLang = (navigator.language || 'en').split('-')[0].toLowerCase();
-  const _lang = _i18n[_userLang] ? _userLang : 'en';
+  const _preferred = window.ThronosEarnLocale?.current() || (navigator.language || 'en');
+  let _lang = _preferred === 'gr' ? 'el' : (_i18n[_preferred] ? _preferred : 'en');
+  window.addEventListener('earnLocaleChanged', event => {
+    const requested = event.detail?.lang === 'gr' ? 'el' : event.detail?.lang;
+    _lang = _i18n[requested] ? requested : 'en';
+    applyI18n();
+  });
   function t(key) { return (_i18n[_lang] && _i18n[_lang][key]) || _i18n.en[key] || key; }
 
   function applyI18n() {

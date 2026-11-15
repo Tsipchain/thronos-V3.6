@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 76 76" role="img" aria-labelledby="title">
+<title id="title">CPX Research</title>
+<rect width="76" height="76" rx="16" fill="#ffffff"/>
+<g fill="none" stroke="#111827" stroke-linecap="round" stroke-linejoin="round">
+<circle cx="38" cy="29" r="21" stroke-width="5"/>
+<path d="M19 49 49 19M14 51 28 51" stroke-width="5"/>
+</g>
+<text x="38" y="68" fill="#0f172a" font-family="Arial,Helvetica,sans-serif" font-size="16" font-weight="900" text-anchor="middle" letter-spacing="1.1">CPX</text>
+</svg>

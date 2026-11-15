@@ -513,35 +513,35 @@
       </div><!-- /Account -->
       <section id="earn-panel-advertise" class="earn-section-panel" role="tabpanel" aria-labelledby="earn-tab-advertise" hidden>
         <div class="earn-advertiser-intro">
-          <span class="earn-panel-kicker">THRONOS EARN · ADVERTISERS</span>
+          <span class="earn-panel-kicker" data-earn-copy="advertiserKicker">THRONOS EARN · ADVERTISERS</span>
           <h2 data-earn-copy="advertiseHeadline">Promote your business</h2>
           <p data-earn-copy="advertiseDescription">Create a Thronos Earn campaign. All campaigns and creatives require review and verified funding before delivery.</p>
           <p class="earn-advertiser-disclosure" data-earn-copy="advertisePlacement">Ads appear only in approved Earn placements, never in wallet home, signing, send or receive.</p>
         </div>
         <form id="earn-advertiser-form" class="earn-advertiser-form">
           <h3 data-earn-copy="newCampaign">Create campaign</h3>
-          <label>Campaign name <input id="earn-ad-campaign-name" required minlength="3" maxlength="100" placeholder="Business or campaign name" autocomplete="off"></label>
+          <label><span data-earn-copy="campaignLabel">Campaign name</span><input id="earn-ad-campaign-name" required minlength="3" maxlength="100" placeholder="Business or campaign name" autocomplete="off"></label>
           <div class="earn-advertiser-fields">
-            <label>Type <select id="earn-ad-campaign-type"><option value="cpm">CPM · impressions</option><option value="cpc">CPC · clicks</option></select></label>
-            <label>Bid (THC) <input id="earn-ad-campaign-bid" required type="number" min="0.000001" step="0.000001" value="1.000000"></label>
-            <label>Daily cap (THC) <input id="earn-ad-campaign-daily" required type="number" min="0" step="0.000001" value="0"></label>
-            <label>Total cap (THC) <input id="earn-ad-campaign-total" required type="number" min="0" step="0.000001" value="0"></label>
+            <label><span data-earn-copy="typeLabel">Type</span><select id="earn-ad-campaign-type"><option value="cpm" data-earn-copy="cpmText">CPM · impressions</option><option value="cpc" data-earn-copy="cpcText">CPC · clicks</option></select></label>
+            <label><span data-earn-copy="bidLabel">Bid (THC)</span><input id="earn-ad-campaign-bid" required type="number" min="0.000001" step="0.000001" value="1.000000"></label>
+            <label><span data-earn-copy="dailyLabel">Daily cap (THC)</span><input id="earn-ad-campaign-daily" required type="number" min="0" step="0.000001" value="0"></label>
+            <label><span data-earn-copy="totalLabel">Total cap (THC)</span><input id="earn-ad-campaign-total" required type="number" min="0" step="0.000001" value="0"></label>
           </div>
-          <p class="earn-advertiser-disclosure">Οι τιμές είναι το όριο που προτείνεις, όχι άμεση χρέωση. Μια νέα καμπάνια καταχωρίζεται ως pending review.</p>
+          <p class="earn-advertiser-disclosure" data-earn-copy="capsInfo">These are proposed budget limits, not an immediate charge. New campaigns require review.</p>
           <button class="earn-action" type="submit" data-earn-copy="createDraft">Create draft campaign</button>
         </form>
         <form id="earn-advertiser-creative-form" class="earn-advertiser-form">
           <h3 data-earn-copy="creativeHeading">Campaign artwork</h3>
-          <label>Campaign <select id="earn-ad-creative-campaign" required><option value="">Select a campaign first</option></select></label>
-          <label>Title <input id="earn-ad-creative-title" required maxlength="100" placeholder="Ad headline"></label>
-          <label>Image URL (HTTPS) <input id="earn-ad-creative-image" type="url" required placeholder="https://example.com/banner.png"></label>
-          <label>Destination URL (HTTPS) <input id="earn-ad-creative-target" type="url" required placeholder="https://example.com"></label>
+          <label><span data-earn-copy="campaignSelect">Campaign</span><select id="earn-ad-creative-campaign" required><option value="" data-earn-copy="chooseCampaign">Select a campaign first</option></select></label>
+          <label><span data-earn-copy="creativeTitle">Title</span><input id="earn-ad-creative-title" required maxlength="100" placeholder="Ad headline"></label>
+          <label><span data-earn-copy="creativeImage">Image URL (HTTPS)</span><input id="earn-ad-creative-image" type="url" required placeholder="https://example.com/banner.png"></label>
+          <label><span data-earn-copy="creativeTarget">Destination URL (HTTPS)</span><input id="earn-ad-creative-target" type="url" required placeholder="https://example.com"></label>
           <button class="earn-action" type="submit" data-earn-copy="submitCreative">Submit creative for review</button>
         </form>
         <div id="earn-advertiser-feedback" class="earn-provider-status" role="status" aria-live="polite"></div>
         <div class="earn-advertiser-existing">
           <div class="earn-advertiser-existing-head"><h3 data-earn-copy="myCampaigns">My campaigns</h3><button type="button" id="earn-advertiser-refresh" class="earn-toggle" data-earn-copy="refresh">Refresh</button></div>
-          <div id="earn-advertiser-list" aria-live="polite"><p class="earn-tab-help">Select Advertise to load your campaigns.</p></div>
+          <div id="earn-advertiser-list" aria-live="polite"><p class="earn-tab-help" data-earn-copy="loadingCampaigns">Select Advertise to load your campaigns.</p></div>
         </div>
       </section>
     </div>
@@ -607,7 +607,22 @@
       newCampaign:'Create campaign',creativeHeading:'Campaign artwork',createDraft:'Create draft campaign',
       submitCreative:'Submit creative for review',myCampaigns:'My campaigns',refresh:'Refresh',
       gymDescription:'Training and gym challenges with verified participation. Independent app in preparation.',
-      gymStatus:'No THC rewards yet · Verified integration pending'
+      gymStatus:'No THC rewards yet · Verified integration pending',
+      campaignLabel:"Campaign name",
+      typeLabel:"Type",
+      bidLabel:"Bid (THC)",
+      dailyLabel:"Daily cap (THC)",
+      totalLabel:"Total cap (THC)",
+      capsInfo:"These are proposed budget limits, not an immediate charge. New campaigns require review.",
+      campaignSelect:"Campaign",
+      creativeTitle:"Title",
+      creativeImage:"Image URL (HTTPS)",
+      creativeTarget:"Destination URL (HTTPS)",
+      cpmText:"CPM · impressions",
+      cpcText:"CPC · clicks",
+      chooseCampaign:"Select a campaign first",
+      loadingCampaigns:"Select Advertise to load your campaigns.",
+      advertiserKicker:"THRONOS EARN · ADVERTISERS"
     },
     gr: {
       language:'Γλώσσα',journeyKicker:'Η ΔΙΑΔΡΟΜΗ ΣΟΥ',journeyHeadline:'Εξερεύνησε. Ολοκλήρωσε. Κέρδισε.',
@@ -622,7 +637,22 @@
       newCampaign:'Νέα καμπάνια',creativeHeading:'Εικόνα και δημιουργικό',createDraft:'Δημιουργία πρόχειρης καμπάνιας',
       submitCreative:'Υποβολή δημιουργικού για έγκριση',myCampaigns:'Οι καμπάνιες μου',refresh:'Ανανέωση',
       gymDescription:'Προπονήσεις και προκλήσεις με επιβεβαιωμένη συμμετοχή από γυμναστήριο. Η εφαρμογή ετοιμάζεται.',
-      gymStatus:'Χωρίς THC ακόμη · Αναμονή επαληθευμένης σύνδεσης'
+      gymStatus:'Χωρίς THC ακόμη · Αναμονή επαληθευμένης σύνδεσης',
+      campaignLabel:"Όνομα καμπάνιας",
+      typeLabel:"Τύπος",
+      bidLabel:"Προσφορά (THC)",
+      dailyLabel:"Ημερήσιο όριο (THC)",
+      totalLabel:"Συνολικό όριο (THC)",
+      capsInfo:"Τα ποσά είναι προτεινόμενα όρια, όχι άμεση χρέωση. Οι νέες καμπάνιες χρειάζονται έγκριση.",
+      campaignSelect:"Καμπάνια",
+      creativeTitle:"Τίτλος",
+      creativeImage:"Σύνδεσμος εικόνας (HTTPS)",
+      creativeTarget:"Σύνδεσμος προορισμού (HTTPS)",
+      cpmText:"CPM · εμφανίσεις",
+      cpcText:"CPC · κλικ",
+      chooseCampaign:"Επίλεξε πρώτα καμπάνια",
+      loadingCampaigns:"Άνοιξε τη Διαφήμιση για να φορτωθούν οι καμπάνιες σου.",
+      advertiserKicker:"THRONOS EARN · ΔΙΑΦΗΜΙΖΟΜΕΝΟΙ"
     },
     es: {
       language:'Idioma',journeyKicker:'TU RECORRIDO',journeyHeadline:'Explora. Completa. Gana.',
@@ -637,7 +667,22 @@
       newCampaign:'Crear campaña',creativeHeading:'Creatividad del anuncio',createDraft:'Crear campaña pendiente',
       submitCreative:'Enviar creatividad para revisión',myCampaigns:'Mis campañas',refresh:'Actualizar',
       gymDescription:'Entrenamientos y retos verificados por gimnasios. Aplicación en preparación.',
-      gymStatus:'Todavía sin THC · Integración pendiente'
+      gymStatus:'Todavía sin THC · Integración pendiente',
+      campaignLabel:"Nombre de campaña",
+      typeLabel:"Tipo",
+      bidLabel:"Oferta (THC)",
+      dailyLabel:"Límite diario (THC)",
+      totalLabel:"Límite total (THC)",
+      capsInfo:"Son límites propuestos, no cargos inmediatos. Las campañas requieren revisión.",
+      campaignSelect:"Campaña",
+      creativeTitle:"Título",
+      creativeImage:"URL de imagen (HTTPS)",
+      creativeTarget:"URL de destino (HTTPS)",
+      cpmText:"CPM · impresiones",
+      cpcText:"CPC · clics",
+      chooseCampaign:"Selecciona primero una campaña",
+      loadingCampaigns:"Abre Publicidad para cargar tus campañas.",
+      advertiserKicker:"THRONOS EARN · ANUNCIANTES"
     },
     ja: {
       language:'言語',journeyKicker:'EARN の進め方',journeyHeadline:'探そう。達成しよう。獲得しよう。',
@@ -652,7 +697,22 @@
       newCampaign:'キャンペーン作成',creativeHeading:'広告素材',createDraft:'下書きキャンペーン作成',
       submitCreative:'広告素材を審査に送信',myCampaigns:'キャンペーン一覧',refresh:'更新',
       gymDescription:'ジム認証済みトレーニングチャレンジ。アプリ準備中。',
-      gymStatus:'THC報酬は未提供 · 認証連携待ち'
+      gymStatus:'THC報酬は未提供 · 認証連携待ち',
+      campaignLabel:"キャンペーン名",
+      typeLabel:"種類",
+      bidLabel:"入札額 (THC)",
+      dailyLabel:"1日上限 (THC)",
+      totalLabel:"合計上限 (THC)",
+      capsInfo:"これは予算上限で、即時請求ではありません。審査が必要です。",
+      campaignSelect:"キャンペーン",
+      creativeTitle:"タイトル",
+      creativeImage:"画像URL (HTTPS)",
+      creativeTarget:"移動先URL (HTTPS)",
+      cpmText:"CPM · 表示",
+      cpcText:"CPC · クリック",
+      chooseCampaign:"先にキャンペーンを選択",
+      loadingCampaigns:"広告タブでキャンペーンを読み込みます。",
+      advertiserKicker:"THRONOS EARN · 広告主"
     },
     ru: {
       language:'Язык',journeyKicker:'ВАШ ПУТЬ',journeyHeadline:'Выбирайте. Выполняйте. Получайте.',
@@ -667,7 +727,22 @@
       newCampaign:'Создать кампанию',creativeHeading:'Рекламные материалы',createDraft:'Создать черновик',
       submitCreative:'Отправить материалы на проверку',myCampaigns:'Мои кампании',refresh:'Обновить',
       gymDescription:'Проверенные тренировки и задания от спортивных залов. Приложение готовится.',
-      gymStatus:'THC пока не начисляются · Ожидается проверенная интеграция'
+      gymStatus:'THC пока не начисляются · Ожидается проверенная интеграция',
+      campaignLabel:"Название кампании",
+      typeLabel:"Тип",
+      bidLabel:"Ставка (THC)",
+      dailyLabel:"Дневной лимит (THC)",
+      totalLabel:"Общий лимит (THC)",
+      capsInfo:"Это предлагаемые лимиты, не немедленное списание. Требуется проверка.",
+      campaignSelect:"Кампания",
+      creativeTitle:"Название",
+      creativeImage:"URL изображения (HTTPS)",
+      creativeTarget:"Целевой URL (HTTPS)",
+      cpmText:"CPM · показы",
+      cpcText:"CPC · клики",
+      chooseCampaign:"Сначала выберите кампанию",
+      loadingCampaigns:"Откройте вкладку «Реклама» для загрузки кампаний.",
+      advertiserKicker:"THRONOS EARN · РЕКЛАМОДАТЕЛИ"
     }
   };
   function apply() {

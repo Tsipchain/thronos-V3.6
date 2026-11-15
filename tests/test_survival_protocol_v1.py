@@ -10,6 +10,7 @@ from survival_protocol_v1 import (
     Lifecycle,
     ReplayGuard,
     sign_envelope,
+    verify_checkpoint,
 )
 
 
@@ -70,6 +71,13 @@ def test_replay_guard_rejects_duplicate_message_and_nonce():
     second = make_envelope(message_id="22222222-2222-4222-8222-222222222222")
     with pytest.raises(EnvelopeError, match="duplicate sender nonce"):
         guard.accept(second, now=1730000001)
+
+
+def test_checkpoint_requires_caller_owned_trust_anchor():
+    envelope = make_envelope()
+    verify_checkpoint(envelope, {630001: "AB" * 32})
+    with pytest.raises(EnvelopeError, match="checkpoint"):
+        verify_checkpoint(envelope, {630001: "CD" * 32})
 
 
 @pytest.mark.parametrize("field,value", [

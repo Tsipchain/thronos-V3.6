@@ -105,6 +105,21 @@ def _address_ok(asset_id: str, address: str) -> bool:
     return bool(address) and len(address) <= 128
 
 
+def verify_checkpoint(
+    envelope: "Envelope",
+    trusted_checkpoints: Mapping[int, str],
+) -> None:
+    """Verify the envelope checkpoint against a caller-owned trust anchor.
+
+    The envelope carries a checkpoint claim; this function is the explicit
+    boundary where a local node or wallet supplies its last-known-good
+    height/hash set. M0 does not invent or fetch trust anchors.
+    """
+    expected = trusted_checkpoints.get(envelope.checkpoint.height)
+    if expected is None or expected.lower() != envelope.checkpoint.block_hash.lower():
+        raise EnvelopeError("checkpoint is not trusted")
+
+
 def _canonical_json(value: Mapping[str, Any]) -> bytes:
     return json.dumps(
         value,
@@ -314,8 +329,16 @@ class ReplayGuard:
         self._message_ids: set[str] = set()
         self._nonces: set[tuple[str, int]] = set()
 
-    def accept(self, envelope: Envelope, *, now: int | None = None) -> None:
+    def accept(
+        self,
+        envelope: Envelope,
+        *,
+        now: int | None = None,
+        trusted_checkpoints: Mapping[int, str] | None = None,
+    ) -> None:
         envelope.verify_signature(now=now)
+        if trusted_checkpoints is not None:
+            verify_checkpoint(envelope, trusted_checkpoints)
         key = (envelope.sender, envelope.nonce)
         if envelope.message_id in self._message_ids:
             raise EnvelopeError("duplicate message_id")

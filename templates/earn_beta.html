@@ -801,7 +801,49 @@
     apply();
     window.dispatchEvent(new CustomEvent('earnLocaleChanged', {detail:{lang}}));
   }
-  window.ThronosEarnLocale = { current: () => lang, change, apply };
+  const dynamic = {
+    en: { loading:'Loading campaigns…', pick:'Select campaign', createFirst:'Create a campaign first',
+      empty:'No campaigns yet. New campaigns await manual review.',status:'Status',unknown:'unknown',
+      bid:'Bid',unavailable:'Campaign list unavailable. Please sign in or try again.',
+      login:'Sign in to your Earn Account first',failed:'Request failed',
+      campaignCreated:'Campaign {id} created. Pending review; not live or charged.',
+      invalidLinks:'Select your campaign and use HTTPS image and destination URLs.',
+      artworkCreated:'Artwork submitted for review. It is not live until approved and funded.' },
+    gr: { loading:'Φόρτωση καμπανιών…', pick:'Επιλογή καμπάνιας', createFirst:'Δημιούργησε πρώτα μια καμπάνια',
+      empty:'Δεν υπάρχουν καμπάνιες. Οι νέες καμπάνιες χρειάζονται έγκριση.',
+      status:'Κατάσταση',unknown:'άγνωστη',bid:'Προσφορά',
+      unavailable:'Η λίστα δεν είναι διαθέσιμη. Συνδέσου στο Earn ή προσπάθησε ξανά.',
+      login:'Συνδέσου πρώτα στον λογαριασμό Earn',failed:'Αποτυχία αιτήματος',
+      campaignCreated:'Η καμπάνια {id} καταχωρίστηκε. Αναμένει έγκριση, δεν προβάλλεται ούτε χρεώθηκε.',
+      invalidLinks:'Επίλεξε καμπάνια και χρησιμοποίησε συνδέσμους HTTPS για εικόνα και προορισμό.',
+      artworkCreated:'Το δημιουργικό υποβλήθηκε για έγκριση. Δεν προβάλλεται μέχρι να εγκριθεί και να χρηματοδοτηθεί.' },
+    es: { loading:'Cargando campañas…',pick:'Seleccionar campaña',createFirst:'Crea primero una campaña',
+      empty:'Aún no hay campañas. Las nuevas necesitan revisión.',status:'Estado',unknown:'desconocido',
+      bid:'Oferta',unavailable:'No se pudo cargar. Inicia sesión o inténtalo de nuevo.',
+      login:'Inicia sesión en Earn',failed:'Solicitud fallida',
+      campaignCreated:'Campaña {id} creada. Pendiente de aprobación, no publicada ni cobrada.',
+      invalidLinks:'Selecciona una campaña e introduce enlaces HTTPS para imagen y destino.',
+      artworkCreated:'Creatividad enviada a revisión. No se publica hasta su aprobación y financiación.' },
+    ja: { loading:'キャンペーンを読み込み中…',pick:'キャンペーンを選択',createFirst:'まずキャンペーンを作成',
+      empty:'キャンペーンはまだありません。新規作成には審査が必要です。',status:'状態',unknown:'不明',
+      bid:'入札額',unavailable:'一覧を取得できません。ログインして再度お試しください。',
+      login:'Earnにログインしてください',failed:'リクエストに失敗しました',
+      campaignCreated:'キャンペーン{id}を作成しました。審査待ちであり、配信・課金されていません。',
+      invalidLinks:'キャンペーンとHTTPSの画像・移動先URLを選択してください。',
+      artworkCreated:'広告素材を審査に送信しました。承認・入金前は配信されません。' },
+    ru: { loading:'Загрузка кампаний…',pick:'Выбрать кампанию',createFirst:'Сначала создайте кампанию',
+      empty:'Кампаний пока нет. Новые проходят проверку.',status:'Статус',unknown:'неизвестно',
+      bid:'Ставка',unavailable:'Список недоступен. Войдите в Earn или попробуйте снова.',
+      login:'Сначала войдите в Earn',failed:'Ошибка запроса',
+      campaignCreated:'Кампания {id} создана. Ожидает проверки, не запущена и не оплачена.',
+      invalidLinks:'Выберите кампанию и укажите HTTPS-ссылки на изображение и сайт.',
+      artworkCreated:'Материал отправлен на проверку. Показ начнётся только после одобрения и оплаты.' }
+  };
+  const message = (key, replacements = {}) => {
+    const text = (dynamic[lang] && dynamic[lang][key]) || dynamic.en[key] || key;
+    return text.replace(/\{([a-z]+)\}/g, (_, token) => String(replacements[token] ?? ''));
+  };
+  window.ThronosEarnLocale = { current: () => lang, change, apply, message };
   document.getElementById('earn-language')?.addEventListener('change', event => {
     const next = event.target.value;
     if (typeof window.setLanguage === 'function') {
@@ -1525,6 +1567,7 @@
   const feedback = $('earn-advertiser-feedback');
   const list = $('earn-advertiser-list');
   const selector = $('earn-ad-creative-campaign');
+  const localized = (key, tokens) => window.ThronosEarnLocale?.message(key, tokens) || key;
   const setFeedback = (message, error = false) => {
     feedback.textContent = message;
     feedback.style.color = error ? '#fda4a4' : '#88dfb7';
@@ -1536,7 +1579,7 @@
       headers: {'Accept': 'application/json', ...(init.headers || {})},
     });
     const data = await response.json().catch(() => null);
-    if (!response.ok || !data?.ok) throw new Error(data?.error || (response.status === 401 ? 'Sign in to your Earn Account first' : 'Request failed'));
+    if (!response.ok || !data?.ok) throw new Error(data?.error || (response.status === 401 ? localized('login') : localized('failed')));
     return data;
   };
   const addText = (element, tag, value) => {
@@ -1546,7 +1589,7 @@
     return child;
   };
   async function loadCampaigns() {
-    list.textContent = 'Loading campaigns…';
+    list.textContent = localized('loading');
     try {
       const data = await readApi('/api/earn/ads/campaign/list');
       const campaigns = Array.isArray(data.campaigns) ? data.campaigns : [];
@@ -1554,10 +1597,10 @@
       selector.replaceChildren();
       const placeholder = document.createElement('option');
       placeholder.value = '';
-      placeholder.textContent = campaigns.length ? 'Select campaign' : 'Create a campaign first';
+      placeholder.textContent = campaigns.length ? localized('pick') : localized('createFirst');
       selector.appendChild(placeholder);
       if (!campaigns.length) {
-        addText(list, 'p', 'No campaigns yet. New campaigns await manual review.');
+        addText(list, 'p', localized('empty'));
         return;
       }
       for (const campaign of campaigns) {
@@ -1565,9 +1608,9 @@
         const row = document.createElement('div');
         row.className = 'earn-advertiser-row';
         addText(row, 'strong', campaign.name || 'Campaign');
-        addText(row, 'span', 'Status: ' + String(campaign.status || 'unknown') +
+        addText(row, 'span', localized('status') + ': ' + String(campaign.status || localized('unknown')) +
           ' · ' + String(campaign.campaign_type || '').toUpperCase() +
-          ' · Bid ' + String(campaign.bid_amount || '—') + ' THC');
+          ' · ' + localized('bid') + ' ' + String(campaign.bid_amount || '—') + ' THC');
         list.appendChild(row);
         if (!id) continue;
         const opt = document.createElement('option');
@@ -1578,7 +1621,7 @@
     } catch (error) {
       list.replaceChildren();
       setFeedback(error.message, true);
-      addText(list, 'p', 'Campaign list unavailable. Please sign in or try again.');
+      addText(list, 'p', localized('unavailable'));
     }
   }
   const post = (url, payload) => readApi(url, {
@@ -1606,7 +1649,7 @@
         total_budget: $('earn-ad-campaign-total').value,
         placement: 'earn',
       });
-      setFeedback('Campaign ' + String(data.campaign_id || '') + ' created. Pending review; not live or charged.');
+      setFeedback(localized('campaignCreated', {id: String(data.campaign_id || '')}));
       form.reset();
       await loadCampaigns();
     } catch (error) { setFeedback(error.message, true); }
@@ -1619,7 +1662,7 @@
     const image = $('earn-ad-creative-image').value.trim();
     const target = $('earn-ad-creative-target').value.trim();
     if (!campaignId || !httpsUrl(image) || !httpsUrl(target)) {
-      setFeedback('Select your campaign and use HTTPS image and destination URLs.', true);
+      setFeedback(localized('invalidLinks'), true);
       return;
     }
     const submit = creative.querySelector('[type="submit"]');
@@ -1630,13 +1673,19 @@
         image_url: image,
         target_url: target,
       });
-      setFeedback('Artwork submitted for review. It is not live until approved and funded.');
+      setFeedback(localized('artworkCreated'));
       creative.reset();
       await loadCampaigns();
     } catch (error) { setFeedback(error.message, true); }
     finally { submit.disabled = false; }
   });
   $('earn-advertiser-refresh').addEventListener('click', loadCampaigns);
+  window.addEventListener('earnLocaleChanged', () => {
+    const tab = $('earn-tab-advertise');
+    // Re-fetch read-only campaign data only if the advertiser panel is visible.
+    if (tab?.getAttribute('aria-selected') === 'true') void loadCampaigns();
+  });
+
   document.querySelector('.earn-section-tabs')?.addEventListener('click', event => {
     if (event.target.closest('[data-earn-section="advertise"]')) void loadCampaigns();
   });

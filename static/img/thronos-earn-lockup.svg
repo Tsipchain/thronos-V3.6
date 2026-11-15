@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 148" role="img" aria-labelledby="earnLogoTitle earnLogoDesc">
+<title id="earnLogoTitle">THRONOS EARN</title>
+<desc id="earnLogoDesc">Powered by ThronosLabs and ENNCOM</desc>
+<defs>
+<linearGradient id="gold" x1="0" x2="1" y1="0" y2="1"><stop stop-color="#fff2c1"/><stop offset=".45" stop-color="#efc45c"/><stop offset="1" stop-color="#bd8533"/></linearGradient>
+<linearGradient id="mint" x1="0" x2="1" y1="0" y2="1"><stop stop-color="#d5ffeb"/><stop offset=".5" stop-color="#77e5bc"/><stop offset="1" stop-color="#1cb48b"/></linearGradient>
+</defs>
+<g transform="translate(4 8)">
+<rect x="3" y="4" width="116" height="116" rx="27" fill="#102d37" stroke="#cba454" stroke-width="3"/>
+<path d="M21 72 55 36 81 63 102 41" stroke="url(#mint)" stroke-width="8" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="m81 40 23-4-5 24" fill="none" stroke="#eac66d" stroke-width="8" stroke-linejoin="round"/>
+<path d="M42 28 53 15 64 28 75 15 86 28 82 34 46 34Z" fill="url(#gold)"/>
+<circle cx="62" cy="62" r="48" fill="none" stroke="#7de0b1" opacity=".32" stroke-width="2"/>
+</g>
+<g font-family="Arial, Helvetica, sans-serif" font-weight="900">
+<text x="145" y="59" fill="#f2f8fa" font-size="48" letter-spacing="3.5">THRONOS</text>
+<text x="145" y="105" fill="url(#gold)" font-size="48" letter-spacing="8">EARN</text>
+</g>
+<path d="M148 117 H598" stroke="url(#mint)" stroke-width="2" opacity=".65"/>
+<text x="148" y="137" fill="#aee8d7" font-family="Arial,Helvetica,sans-serif" font-size="15" letter-spacing="1.3">POWERED BY ThronosLabs &amp; ENNCOM</text>
+</svg>

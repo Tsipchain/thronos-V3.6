@@ -1,6 +1,13 @@
 {% extends "base.html" %}
 {% block title %}Thronos Earn — Powered by Thronos Labs &amp; Encom
 {% endblock %}
+{% block styles %}
+  /* Earn has its own product shell. Only this URL loses global chain navigation. */
+  body:has(.earn-beta) > .top-controls,
+  body:has(.earn-beta) > .navbar { display:none !important; }
+  body:has(.earn-beta) > .container { max-width:none; padding:0; }
+  body:has(.earn-beta) { overflow-x:hidden; }
+{% endblock %}
 {% block content %}
 <style>
   .earn-beta { max-width: 1160px; margin: 32px auto; padding: 0 18px 42px; }
@@ -317,8 +324,46 @@
   .earn-advertiser-row:last-child{border-bottom:0}
   @media(max-width:520px){.earn-advertiser-fields{grid-template-columns:1fr}.earn-advertiser-form .earn-action{max-width:none}}
 
+
+  .earn-product-header{display:flex;align-items:center;justify-content:space-between;gap:16px;
+    padding:14px 18px;margin:0 0 16px;border:1px solid #305970;border-radius:15px;
+    background:linear-gradient(125deg,#0f2b37,#112333)}
+  .earn-product-identity{display:flex;align-items:center;gap:12px;min-width:0}
+  .earn-product-identity strong{display:block;font-size:17px;letter-spacing:.04em;color:#ebf7f4}
+  .earn-product-identity strong span{color:#f3d084}
+  .earn-product-identity small{display:block;font-size:11px;color:#a4c8c6}
+  .earn-product-icon{width:46px;height:46px;border-radius:50%;display:grid;place-items:center;flex:none;
+    background:linear-gradient(135deg,#f4d688,#7fd9bb);border:2px solid #c5a660;
+    color:#10272d;font-size:13px;font-weight:950;box-shadow:0 0 20px #80ead822}
+  .earn-language-field{display:flex;align-items:center;gap:8px;color:#c5d6e2;font-size:12px}
+  #earn-language{background:#0b1c2d;border:1px solid #50847c;border-radius:9px;
+    padding:9px 11px;color:#f0f6f5;font:inherit;font-size:13px;min-height:44px}
+  #earn-language:focus-visible{outline:3px solid #f6d184;outline-offset:2px}
+  .earn-provider-brand--cpx{background:linear-gradient(140deg,#147860,#073e52);color:#fff}
+  .earn-provider-brand--cpx .earn-provider-letter{font-size:12px;letter-spacing:-.025em}
+  @media(max-width:520px){.earn-product-header{padding:12px;gap:8px}
+    .earn-product-identity strong{font-size:14px}
+    .earn-product-identity small{font-size:10px}
+    .earn-language-field>span{display:none}}
 </style>
 <main class="earn-beta">
+    <header class="earn-product-header" aria-label="Thronos Earn">
+      <div class="earn-product-identity">
+        <span class="earn-product-icon" aria-hidden="true">THR</span>
+        <div><strong>THRONOS <span>EARN</span></strong><small>ThronosLabs · ENCOM</small></div>
+      </div>
+      <label class="earn-language-field" for="earn-language">
+        <span data-earn-copy="language">Language / Γλώσσα</span>
+        <select id="earn-language" aria-label="Earn language">
+          <option value="gr">Ελληνικά</option>
+          <option value="en">English</option>
+          <option value="es">Español</option>
+          <option value="ja">日本語</option>
+          <option value="ru">Русский</option>
+        </select>
+      </label>
+    </header>
+
   <section class="earn-card">
     <h1 data-i18n="title">Thronos Earn Project</h1>
     <p style="margin:0;color:#7fb8d8;font-size:12px" data-i18n="powered">Powered by ThronosLabs and ENCOM</p>
@@ -327,16 +372,16 @@
          settlement always determine real reward and payout eligibility. -->
     <section class="earn-journey" aria-label="How Thronos Earn works">
       <div class="earn-journey-heading">
-        <span class="earn-journey-kicker">YOUR EARN JOURNEY / Η ΔΙΑΔΡΟΜΗ ΣΟΥ</span>
-        <h2>Explore. Complete. Earn.</h2>
-        <p>Διάλεξε διαθέσιμες αποστολές, ολοκλήρωσέ τες και παρακολούθησε την επιβεβαίωση των ανταμοιβών σου.</p>
+        <span class="earn-journey-kicker" data-earn-copy="journeyKicker">YOUR EARN JOURNEY</span>
+        <h2 data-earn-copy="journeyHeadline">Explore. Complete. Earn.</h2>
+        <p data-earn-copy="journeyDescription">Choose available missions, complete them and track verified rewards.</p>
       </div>
       <ol class="earn-journey-steps">
-        <li><span class="earn-journey-step-icon" aria-hidden="true">01</span><div><strong>Επίλεξε / Explore</strong><small>Surveys &amp; verified offers</small></div></li>
-        <li><span class="earn-journey-step-icon" aria-hidden="true">02</span><div><strong>Ολοκλήρωσε / Complete</strong><small>Provider verification required</small></div></li>
-        <li><span class="earn-journey-step-icon" aria-hidden="true">03</span><div><strong>Κέρδισε / Earn</strong><small>Pending → cleared THC</small></div></li>
+        <li><span class="earn-journey-step-icon" aria-hidden="true">01</span><div><strong data-earn-copy="explore">Explore</strong><small data-earn-copy="surveys">Surveys &amp; verified offers</small></div></li>
+        <li><span class="earn-journey-step-icon" aria-hidden="true">02</span><div><strong data-earn-copy="complete">Complete</strong><small data-earn-copy="verification">Provider verification required</small></div></li>
+        <li><span class="earn-journey-step-icon" aria-hidden="true">03</span><div><strong data-earn-copy="earn">Earn</strong><small data-earn-copy="clearing">Pending → cleared THC</small></div></li>
       </ol>
-      <p class="earn-journey-disclaimer">Real rewards depend on verified provider receipts, applicable hold periods and available settlement funding. No wallet is required to start.</p>
+      <p class="earn-journey-disclaimer" data-earn-copy="journeyDisclaimer">Real rewards depend on verified provider receipts, applicable hold periods and available settlement funding. No wallet is required to start.</p>
     </section>
     <section class="earn-christmas-banner" aria-labelledby="earn-christmas-title">
       <div class="challenge-copy">
@@ -368,16 +413,16 @@
         </div>
       </div>
       <nav class="earn-section-tabs" aria-label="Earn sections" role="tablist">
-        <button type="button" id="earn-tab-offers" role="tab" aria-selected="true" aria-controls="earn-panel-offers" data-earn-section="offers">Αποστολές / Offers</button>
-        <button type="button" id="earn-tab-rewards" role="tab" aria-selected="false" aria-controls="earn-panel-rewards" data-earn-section="rewards">Ανταμοιβές / Rewards</button>
-        <button type="button" id="earn-tab-community" role="tab" aria-selected="false" aria-controls="earn-panel-community" data-earn-section="community">Κοινότητα / Community</button>
-        <button type="button" id="earn-tab-account" role="tab" aria-selected="false" aria-controls="earn-panel-account" data-earn-section="account">Λογαριασμός / Account</button>
-        <button type="button" id="earn-tab-advertise" role="tab" aria-selected="false" aria-controls="earn-panel-advertise" data-earn-section="advertise">Διαφήμιση / Advertise</button>
+        <button type="button" id="earn-tab-offers" role="tab" aria-selected="true" aria-controls="earn-panel-offers" data-earn-section="offers" data-earn-copy="offersTab">Offers</button>
+        <button type="button" id="earn-tab-rewards" role="tab" aria-selected="false" aria-controls="earn-panel-rewards" data-earn-section="rewards" data-earn-copy="rewardsTab">Rewards</button>
+        <button type="button" id="earn-tab-community" role="tab" aria-selected="false" aria-controls="earn-panel-community" data-earn-section="community" data-earn-copy="communityTab">Community</button>
+        <button type="button" id="earn-tab-account" role="tab" aria-selected="false" aria-controls="earn-panel-account" data-earn-section="account" data-earn-copy="accountTab">Account</button>
+        <button type="button" id="earn-tab-advertise" role="tab" aria-selected="false" aria-controls="earn-panel-advertise" data-earn-section="advertise" data-earn-copy="advertiseTab">Advertise</button>
       </nav>
       <div id="earn-panel-offers" class="earn-section-panel" role="tabpanel" aria-labelledby="earn-tab-offers">
       <div class="earn-provider-grid" aria-label="Earn providers">
         <section class="earn-provider" id="provider-cpx">
-          <div class="earn-provider-heading"><span class="earn-provider-brand earn-provider-brand--cpx" aria-hidden="true"><span class="earn-provider-letter">C</span><img src="https://www.cpx-research.com/favicon.ico" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.hidden=true"></span><h3 data-i18n="cpxTitle">CPX Research</h3></div><p data-i18n="cpxDesc">Surveys selected for your account.</p>
+          <div class="earn-provider-heading"><span class="earn-provider-brand earn-provider-brand--cpx" aria-hidden="true"><span class="earn-provider-letter">CPX</span></span><h3 data-i18n="cpxTitle">CPX Research</h3></div><p data-i18n="cpxDesc">Surveys selected for your account.</p>
           <button id="earn-surveys" class="earn-action" type="button" data-i18n="openSurveys">Open Surveys</button>
         </section>
         <section class="earn-provider is-unavailable" id="provider-bitcotasks">
@@ -397,8 +442,8 @@
         </section>
         <section class="earn-provider earn-gym-preview is-unavailable" id="provider-train2earn" aria-label="Gym challenges preview">
           <div class="earn-provider-heading"><span class="earn-provider-brand earn-provider-brand--gym" aria-hidden="true">T2E</span><h3>Train2Earn · Gym</h3></div>
-          <p>Προπονήσεις και gym challenges με επαληθευμένη συμμετοχή. Αυτόνομη εφαρμογή, υπό προετοιμασία.</p>
-          <div class="earn-provider-status">Δεν δίνει ακόμη THC · Awaiting verified integration</div>
+          <p data-earn-copy="gymDescription">Verified training and gym challenges. Independent application in preparation.</p>
+          <div class="earn-provider-status" data-earn-copy="gymStatus">No THC rewards yet · Verified integration pending</div>
           <button type="button" class="earn-action" disabled>Coming soon</button>
         </section>
       </div>
@@ -458,7 +503,7 @@
       </div>
       </div><!-- /Rewards -->
       <div id="earn-panel-account" class="earn-section-panel" role="tabpanel" aria-labelledby="earn-tab-account" hidden>
-      <p class="earn-tab-help">Your account and verified reward history. A pending provider receipt is not yet spendable.</p>
+      <p class="earn-tab-help" data-earn-copy="accountHelp">Your account and verified reward history. A pending provider receipt is not yet spendable.</p>
       <button id="earn-logout" class="earn-toggle" type="button" data-i18n="signOut">Sign out</button>
       <div class="earn-history" id="earn-history">
         <button id="earn-activity-trigger" class="earn-activity-trigger" type="button" aria-haspopup="dialog" aria-label="Open recent activity">
@@ -469,12 +514,12 @@
       <section id="earn-panel-advertise" class="earn-section-panel" role="tabpanel" aria-labelledby="earn-tab-advertise" hidden>
         <div class="earn-advertiser-intro">
           <span class="earn-panel-kicker">THRONOS EARN · ADVERTISERS</span>
-          <h2>Προώθησε την επιχείρησή σου</h2>
-          <p>Δημιούργησε καμπάνια για το Thronos Earn. Όλες οι καμπάνιες και οι δημιουργικές καταχωρίσεις εξετάζονται πριν προβληθούν. Χρεώσεις και ενεργοποίηση απαιτούν επαληθευμένο escrow και έγκριση.</p>
-          <p class="earn-advertiser-disclosure">Οι διαφημίσεις προβάλλονται μόνο σε επιτρεπόμενες θέσεις του Earn — ποτέ σε home, signing, send ή receive του wallet.</p>
+          <h2 data-earn-copy="advertiseHeadline">Promote your business</h2>
+          <p data-earn-copy="advertiseDescription">Create a Thronos Earn campaign. All campaigns and creatives require review and verified funding before delivery.</p>
+          <p class="earn-advertiser-disclosure" data-earn-copy="advertisePlacement">Ads appear only in approved Earn placements, never in wallet home, signing, send or receive.</p>
         </div>
         <form id="earn-advertiser-form" class="earn-advertiser-form">
-          <h3>Νέα καμπάνια / Create campaign</h3>
+          <h3 data-earn-copy="newCampaign">Create campaign</h3>
           <label>Campaign name <input id="earn-ad-campaign-name" required minlength="3" maxlength="100" placeholder="Business or campaign name" autocomplete="off"></label>
           <div class="earn-advertiser-fields">
             <label>Type <select id="earn-ad-campaign-type"><option value="cpm">CPM · impressions</option><option value="cpc">CPC · clicks</option></select></label>
@@ -483,19 +528,19 @@
             <label>Total cap (THC) <input id="earn-ad-campaign-total" required type="number" min="0" step="0.000001" value="0"></label>
           </div>
           <p class="earn-advertiser-disclosure">Οι τιμές είναι το όριο που προτείνεις, όχι άμεση χρέωση. Μια νέα καμπάνια καταχωρίζεται ως pending review.</p>
-          <button class="earn-action" type="submit">Create draft campaign</button>
+          <button class="earn-action" type="submit" data-earn-copy="createDraft">Create draft campaign</button>
         </form>
         <form id="earn-advertiser-creative-form" class="earn-advertiser-form">
-          <h3>Δημιουργικό / Campaign artwork</h3>
+          <h3 data-earn-copy="creativeHeading">Campaign artwork</h3>
           <label>Campaign <select id="earn-ad-creative-campaign" required><option value="">Select a campaign first</option></select></label>
           <label>Title <input id="earn-ad-creative-title" required maxlength="100" placeholder="Ad headline"></label>
           <label>Image URL (HTTPS) <input id="earn-ad-creative-image" type="url" required placeholder="https://example.com/banner.png"></label>
           <label>Destination URL (HTTPS) <input id="earn-ad-creative-target" type="url" required placeholder="https://example.com"></label>
-          <button class="earn-action" type="submit">Submit creative for review</button>
+          <button class="earn-action" type="submit" data-earn-copy="submitCreative">Submit creative for review</button>
         </form>
         <div id="earn-advertiser-feedback" class="earn-provider-status" role="status" aria-live="polite"></div>
         <div class="earn-advertiser-existing">
-          <div class="earn-advertiser-existing-head"><h3>My campaigns</h3><button type="button" id="earn-advertiser-refresh" class="earn-toggle">Refresh</button></div>
+          <div class="earn-advertiser-existing-head"><h3 data-earn-copy="myCampaigns">My campaigns</h3><button type="button" id="earn-advertiser-refresh" class="earn-toggle" data-earn-copy="refresh">Refresh</button></div>
           <div id="earn-advertiser-list" aria-live="polite"><p class="earn-tab-help">Select Advertise to load your campaigns.</p></div>
         </div>
       </section>

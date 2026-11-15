@@ -1009,6 +1009,10 @@ function wireEvents() {
   });
   document.getElementById('actHistory').addEventListener('click', loadHistory);
   document.getElementById('actNetworks').addEventListener('click', loadNetworks);
+  document.getElementById('actEarnWeb').addEventListener('click', () => {
+    // Dedicated Earn web account; no wallet credentials or signing data sent.
+    chrome.tabs.create({ url: API + '/earn' });
+  });
   document.getElementById('actSettings').addEventListener('click', () => showScreen('settingsScreen'));
 
   // History

@@ -2122,17 +2122,30 @@ async function showEarn(options = {}) {
   _currentSurface = 'earn';
   render(`
     <div class="screen">
-      <div class="header">
-        <button class="btn--icon" id="earnBackBtn" aria-label="Back">←</button>
-        <span class="logo--sm">✨ Thronos Earn</span>
-        <span style="margin-left:auto;font-size:.62rem;color:var(--muted);text-align:right">Powered by<br>ThronosLabs · ENCOM</span>
-      </div>
+      <header class="earn-pwa-product-header">
+        <div class="earn-pwa-toolbar">
+          <button class="btn--icon" id="earnBackBtn" aria-label="Back">←</button>
+          <span class="earn-pwa-toolbar-title">Thronos Earn</span>
+          <label class="earn-pwa-language-label" for="earnPwaLanguage">
+            <span id="earnPwaLanguageLabel">Language</span>
+            <select id="earnPwaLanguage" aria-label="Earn language">
+              <option value="gr">Ελληνικά</option>
+              <option value="en">English</option>
+              <option value="es">Español</option>
+              <option value="ja">日本語</option>
+              <option value="ru">Русский</option>
+            </select>
+          </label>
+        </div>
+        <img class="earn-pwa-brand-image" src="/static/img/THRONOS%20EARN.png"
+             alt="Thronos Earn — Powered by ThronosLabs &amp; ENCOMM" decoding="async">
+      </header>
       <section id="earnChristmasBanner" aria-label="Goblins Wood Christmas challenge" style="position:relative;overflow:hidden;margin-top:12px;padding:18px;border:1px solid #e5b856;border-radius:14px;background:#09252c url('/wallet-pwa/goblins-wood-christmas.webp') center 42% / cover no-repeat;color:#fff">
         <div style="position:absolute;inset:0;background:#071829d9" aria-hidden="true"></div>
         <div style="position:relative">
           <div style="font-size:.66rem;font-weight:800;letter-spacing:.08em;color:#ffd679">THRONOS EARN · CHRISTMAS 2026</div>
           <h2 style="font-size:1.25rem;line-height:1.2;margin:7px 0">Goblins Wood Challenge</h2>
-          <p style="font-size:.76rem;line-height:1.45;margin:0 0 12px">Στόχος: Level 130 · Η πρόκληση ετοιμάζεται.<br>Reach Level 130 · Coming soon.</p>
+          <p id="earnPwaChallengeSummary" style="font-size:.76rem;line-height:1.45;margin:0 0 12px">Reach Level 130 · Challenge coming soon.</p>
           <p id="earnWalletGoblinsProgress" style="font-size:.72rem" hidden></p>
           <button class="btn" id="earnChristmasTimewall" type="button" style="background:#f2c14e;color:#111827;font-weight:800">Δες το TimeWall</button>
         </div>
@@ -2143,6 +2156,49 @@ async function showEarn(options = {}) {
     </div>
   `);
 
+  // Keep Earn-only language separate from wallet signing/navigation.
+  const _earnLangCode = value => {
+    const code = String(value || '').toLowerCase().split(/[-_]/)[0];
+    return code === 'el' ? 'gr' : ['gr', 'en', 'es', 'ja', 'ru'].includes(code) ? code : 'en';
+  };
+  const _earnLangSaved = (() => {
+    try { return localStorage.getItem('thr_lang') || localStorage.getItem('lang'); }
+    catch (_) { return null; }
+  })();
+  let _earnPwaLang = _earnLangCode(_earnLangSaved || navigator.languages?.[0] || navigator.language || 'en');
+  const _earnLabels = {
+    en:{language:'Language',offers:'Offers',activity:'Activity',community:'Community',staking:'Staking',
+      account:'Account',timewall:'Explore TimeWall',challenge:'Reach Level 130 · Challenge coming soon.'},
+    gr:{language:'Γλώσσα',offers:'Αποστολές',activity:'Ιστορικό',community:'Κοινότητα',staking:'Staking',
+      account:'Λογαριασμός',timewall:'Δες το TimeWall',challenge:'Φτάσε στο Level 130 · Η πρόκληση ετοιμάζεται.'},
+    es:{language:'Idioma',offers:'Ofertas',activity:'Actividad',community:'Comunidad',staking:'Staking',
+      account:'Cuenta',timewall:'Explorar TimeWall',challenge:'Alcanza el nivel 130 · Próximamente.'},
+    ja:{language:'言語',offers:'オファー',activity:'履歴',community:'コミュニティ',staking:'ステーキング',
+      account:'アカウント',timewall:'TimeWall を見る',challenge:'レベル130を目指そう · 準備中。'},
+    ru:{language:'Язык',offers:'Задания',activity:'История',community:'Сообщество',staking:'Стейкинг',
+      account:'Аккаунт',timewall:'Открыть TimeWall',challenge:'Достигните уровня 130 · Скоро.'}
+  };
+  const _applyEarnPwaLabels = () => {
+    const labels = _earnLabels[_earnPwaLang] || _earnLabels.en;
+    const select = document.getElementById('earnPwaLanguage');
+    if (select) select.value = _earnPwaLang;
+    const caption = document.getElementById('earnPwaLanguageLabel');
+    if (caption) caption.textContent = labels.language;
+    const timewallButton = document.getElementById('earnChristmasTimewall');
+    if (timewallButton) timewallButton.textContent = labels.timewall;
+    const challenge = document.getElementById('earnPwaChallengeSummary');
+    if (challenge) challenge.textContent = labels.challenge;
+    document.querySelectorAll('#earnPwaBody [data-ew-tab]').forEach(button => {
+      button.textContent = labels[button.dataset.ewTab] || button.textContent;
+    });
+  };
+  document.getElementById('earnPwaLanguage').addEventListener('change', event => {
+    _earnPwaLang = _earnLangCode(event.target.value);
+    try { localStorage.setItem('thr_lang', _earnPwaLang); }
+    catch (_) { /* In-memory selection remains usable. */ }
+    _applyEarnPwaLabels();
+  });
+  _applyEarnPwaLabels();
   document.getElementById('earnBackBtn').addEventListener('click', showWallet);
   document.getElementById('earnChristmasTimewall').addEventListener('click', () => {
     document.getElementById('ew-tab-offers')?.click();
@@ -2312,6 +2368,7 @@ async function showEarn(options = {}) {
       selectEarnWalletTab(earnTabs[next].dataset.ewTab, true);
     });
     selectEarnWalletTab(options.focusLeaderboard ? 'community' : 'offers');
+    _applyEarnPwaLabels();
     window.ThronosEarnLeaderboard.mount(document.getElementById('earnPwaLeaderboard'), { base: earnBase }).then(() => {
       if (options.focusLeaderboard) document.getElementById('earnPwaLeaderboard')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     });

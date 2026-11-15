@@ -13,7 +13,18 @@ import time
 import unittest.mock as mock
 
 os.environ.setdefault("EARN_DB_PATH", ":memory:")
+
+_ORIG_DELIVERY_SECRET = os.environ.get("EARN_DELIVERY_SECRET")
 os.environ["EARN_DELIVERY_SECRET"] = "test-delivery-secret-32chars-ok!"
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _restore_delivery_secret():
+    yield
+    if _ORIG_DELIVERY_SECRET is None:
+        os.environ.pop("EARN_DELIVERY_SECRET", None)
+    else:
+        os.environ["EARN_DELIVERY_SECRET"] = _ORIG_DELIVERY_SECRET
 
 from cryptography.hazmat.primitives.asymmetric import ec, utils as ec_utils
 from cryptography.hazmat.primitives import hashes

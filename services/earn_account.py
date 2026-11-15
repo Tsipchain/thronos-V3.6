@@ -66,6 +66,10 @@ _LEADERBOARD_END = _LEADERBOARD_START + 30 * 86400
 _LEADERBOARD_CAMPAIGN = "earn-beta-2026-11-05"
 _EARN_HOLD_SECONDS = 7 * 86400
 _EARN_HOLD_POLICY = "earn-seven-day-v1"
+_DORMANCY_INACTIVITY_DAYS = 32
+_DORMANCY_REACTIVATION_DAYS = 7
+_DORMANCY_POLICY_VERSION = "dormancy-v1"
+_DORMANCY_EFFECTIVE_AFTER = int(datetime.fromisoformat("2026-12-05T00:00:00+02:00").timestamp())
 _VERIFIED_PROVIDER_RECEIPT_SQL = """(
                        (l.source IN ('cpx_survey', 'cpx') AND EXISTS (
                          SELECT 1 FROM cpx_receipts r WHERE r.trans_id=l.source_ref
@@ -803,6 +807,30 @@ class EarnAccountStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_earn_walletless_intents_nonce
                     ON earn_walletless_intents(nonce);
+
+                CREATE TABLE IF NOT EXISTS earn_activity_checkins (
+                    checkin_id     TEXT PRIMARY KEY,
+                    earn_user_id   TEXT NOT NULL
+                        REFERENCES earn_accounts(earn_user_id),
+                    checkin_type   TEXT NOT NULL DEFAULT 'manual',
+                    utc_date       TEXT NOT NULL,
+                    created_at     INTEGER NOT NULL,
+                    UNIQUE(earn_user_id, utc_date)
+                );
+                CREATE INDEX IF NOT EXISTS idx_earn_activity_checkins_user
+                    ON earn_activity_checkins(earn_user_id, utc_date);
+
+                CREATE TABLE IF NOT EXISTS earn_dormancy_status (
+                    earn_user_id   TEXT PRIMARY KEY
+                        REFERENCES earn_accounts(earn_user_id),
+                    is_dormant     INTEGER NOT NULL DEFAULT 0,
+                    dormant_since  INTEGER,
+                    last_activity  INTEGER,
+                    reactivation_streak INTEGER NOT NULL DEFAULT 0,
+                    reactivated_at INTEGER,
+                    policy_version TEXT NOT NULL DEFAULT 'dormancy-v1',
+                    updated_at     INTEGER NOT NULL
+                );
             """)
             # Existing production Earn databases predate the provider
             # clearance and separate internal hold fields. SQLite lacks ADD COLUMN IF NOT
@@ -4389,6 +4417,147 @@ class EarnAccountStore:
             "credit_amount": str(credit_amount),
         }
 
+    # ── Account Dormancy & Leaderboard Eligibility ─────────────────────
+
+    def record_checkin(self, earn_user_id: str) -> dict[str, Any]:
+        now = int(time.time())
+        utc_date = time.strftime("%Y-%m-%d", time.gmtime(now))
+        checkin_id = "chk_" + secrets.token_hex(8)
+        with self._tx() as con:
+            user = con.execute(
+                "SELECT 1 FROM earn_accounts WHERE earn_user_id = ?",
+                (earn_user_id,),
+            ).fetchone()
+            if not user:
+                raise EarnError("unknown_earn_user")
+            existing = con.execute(
+                "SELECT checkin_id FROM earn_activity_checkins WHERE earn_user_id = ? AND utc_date = ?",
+                (earn_user_id, utc_date),
+            ).fetchone()
+            if existing:
+                return {"checkin_id": existing["checkin_id"], "utc_date": utc_date, "idempotent": True}
+            con.execute(
+                """INSERT INTO earn_activity_checkins
+                   (checkin_id, earn_user_id, checkin_type, utc_date, created_at)
+                   VALUES (?,?,?,?,?)""",
+                (checkin_id, earn_user_id, "manual", utc_date, now),
+            )
+            status = con.execute(
+                "SELECT * FROM earn_dormancy_status WHERE earn_user_id = ?",
+                (earn_user_id,),
+            ).fetchone()
+            if not status:
+                con.execute(
+                    """INSERT INTO earn_dormancy_status
+                       (earn_user_id, is_dormant, last_activity,
+                        reactivation_streak, policy_version, updated_at)
+                       VALUES (?,0,?,0,?,?)""",
+                    (earn_user_id, now, _DORMANCY_POLICY_VERSION, now),
+                )
+            else:
+                new_streak = (status["reactivation_streak"] or 0) + 1 if status["is_dormant"] else 0
+                updates = {"last_activity": now, "updated_at": now, "reactivation_streak": new_streak}
+                if status["is_dormant"] and new_streak >= _DORMANCY_REACTIVATION_DAYS:
+                    updates["is_dormant"] = 0
+                    updates["reactivated_at"] = now
+                    updates["reactivation_streak"] = 0
+                set_clause = ", ".join(f"{k} = ?" for k in updates)
+                con.execute(
+                    f"UPDATE earn_dormancy_status SET {set_clause} WHERE earn_user_id = ?",
+                    list(updates.values()) + [earn_user_id],
+                )
+        return {"checkin_id": checkin_id, "utc_date": utc_date, "idempotent": False}
+
+    def evaluate_dormancy(self, earn_user_id: str, at_time: int | None = None) -> dict[str, Any]:
+        now = int(at_time) if at_time else int(time.time())
+        if now < _DORMANCY_EFFECTIVE_AFTER:
+            return {
+                "is_dormant": False,
+                "eligible_for_leaderboard": True,
+                "policy_not_yet_active": True,
+                "effective_after": _DORMANCY_EFFECTIVE_AFTER,
+            }
+        with self._tx() as con:
+            status = con.execute(
+                "SELECT * FROM earn_dormancy_status WHERE earn_user_id = ?",
+                (earn_user_id,),
+            ).fetchone()
+            if not status:
+                last_checkin = con.execute(
+                    "SELECT MAX(created_at) AS last FROM earn_activity_checkins WHERE earn_user_id = ?",
+                    (earn_user_id,),
+                ).fetchone()
+                last_activity = (last_checkin["last"] or 0) if last_checkin else 0
+                if not last_activity:
+                    acc = con.execute(
+                        "SELECT created_at FROM earn_accounts WHERE earn_user_id = ?",
+                        (earn_user_id,),
+                    ).fetchone()
+                    last_activity = acc["created_at"] if acc else 0
+                days_inactive = (now - last_activity) // 86400 if last_activity else 999
+                is_dormant = days_inactive >= _DORMANCY_INACTIVITY_DAYS
+                con.execute(
+                    """INSERT INTO earn_dormancy_status
+                       (earn_user_id, is_dormant, dormant_since, last_activity,
+                        reactivation_streak, policy_version, updated_at)
+                       VALUES (?,?,?,?,0,?,?)""",
+                    (earn_user_id, int(is_dormant),
+                     now if is_dormant else None, last_activity,
+                     _DORMANCY_POLICY_VERSION, now),
+                )
+                return {
+                    "is_dormant": is_dormant,
+                    "eligible_for_leaderboard": not is_dormant,
+                    "days_inactive": days_inactive,
+                    "reactivation_streak": 0,
+                    "days_to_reactivate": _DORMANCY_REACTIVATION_DAYS if is_dormant else 0,
+                }
+            last_activity = status["last_activity"] or 0
+            days_inactive = (now - last_activity) // 86400 if last_activity else 999
+            is_dormant = bool(status["is_dormant"])
+            if not is_dormant and days_inactive >= _DORMANCY_INACTIVITY_DAYS:
+                is_dormant = True
+                con.execute(
+                    """UPDATE earn_dormancy_status
+                       SET is_dormant = 1, dormant_since = ?, updated_at = ?
+                       WHERE earn_user_id = ?""",
+                    (now, now, earn_user_id),
+                )
+            streak = status["reactivation_streak"] or 0
+            remaining = max(0, _DORMANCY_REACTIVATION_DAYS - streak) if is_dormant else 0
+        return {
+            "is_dormant": is_dormant,
+            "eligible_for_leaderboard": not is_dormant,
+            "days_inactive": days_inactive,
+            "reactivation_streak": streak,
+            "days_to_reactivate": remaining,
+        }
+
+    def dormancy_status(self, earn_user_id: str) -> dict[str, Any]:
+        with self._tx() as con:
+            status = con.execute(
+                "SELECT * FROM earn_dormancy_status WHERE earn_user_id = ?",
+                (earn_user_id,),
+            ).fetchone()
+            if not status:
+                return {
+                    "is_dormant": False,
+                    "eligible_for_leaderboard": True,
+                    "reactivation_streak": 0,
+                    "policy_version": _DORMANCY_POLICY_VERSION,
+                    "effective_after": _DORMANCY_EFFECTIVE_AFTER,
+                }
+            return {
+                "is_dormant": bool(status["is_dormant"]),
+                "eligible_for_leaderboard": not bool(status["is_dormant"]),
+                "dormant_since": status["dormant_since"],
+                "last_activity": status["last_activity"],
+                "reactivation_streak": status["reactivation_streak"] or 0,
+                "reactivated_at": status["reactivated_at"],
+                "policy_version": status["policy_version"],
+                "effective_after": _DORMANCY_EFFECTIVE_AFTER,
+            }
+
     # ── Publisher system (isolated from advertiser and Earn identity) ────
 
     def publisher_register(self, earn_user_id: str, provider: str, label: str = "",
@@ -6323,6 +6492,36 @@ def register_earn_account_routes(
         except EarnError as exc:
             return jsonify(ok=False, error=str(exc)), 400
         return jsonify(ok=True, daily=daily)
+
+    @app.post("/api/earn/checkin")
+    def earn_checkin():
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        try:
+            result = store.record_checkin(user["earn_user_id"])
+        except EarnError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, **result)
+
+    @app.get("/api/earn/dormancy/status")
+    def earn_dormancy_status():
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        status = store.dormancy_status(user["earn_user_id"])
+        return jsonify(ok=True, **status)
+
+    @app.post("/api/earn/dormancy/evaluate")
+    def earn_dormancy_evaluate():
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        try:
+            result = store.evaluate_dormancy(user["earn_user_id"])
+        except EarnError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, **result)
 
     @app.get("/api/earn/referral/code")
     def earn_referral_code():

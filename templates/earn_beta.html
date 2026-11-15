@@ -1,37 +1,5 @@
 {% extends "base.html" %}
 {% block title %}Thronos Earn — Powered by Thronos Labs &amp; Encom
-<script>
-(function () {
-  'use strict';
-  const nav = document.querySelector('.earn-section-tabs');
-  if (!nav) return;
-  const buttons = Array.from(nav.querySelectorAll('[data-earn-section]'));
-  function selectEarnSection(section, focus) {
-    const selected = buttons.find(b => b.dataset.earnSection === section) || buttons[0];
-    buttons.forEach(button => {
-      const active = button === selected;
-      button.setAttribute('aria-selected', String(active));
-      button.tabIndex = active ? 0 : -1;
-      const panel = document.getElementById('earn-panel-' + button.dataset.earnSection);
-      if (panel) panel.hidden = !active;
-    });
-    if (focus) selected.focus();
-  }
-  nav.addEventListener('click', event => {
-    const button = event.target.closest('[data-earn-section]');
-    if (button && nav.contains(button)) selectEarnSection(button.dataset.earnSection, false);
-  });
-  nav.addEventListener('keydown', event => {
-    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-    const active = buttons.findIndex(button => button.getAttribute('aria-selected') === 'true');
-    let next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1
-      : (active + (event.key === 'ArrowRight' ? 1 : -1) + buttons.length) % buttons.length;
-    event.preventDefault();
-    selectEarnSection(buttons[next].dataset.earnSection, true);
-  });
-  selectEarnSection('offers', false);
-})();
-</script>
 {% endblock %}
 {% block content %}
 <style>
@@ -1142,6 +1110,39 @@
       }
     } catch (_) { /* Showing the sign-in form is the safe fallback. */ }
   })();
+})();
+</script>
+
+<script>
+(function () {
+  'use strict';
+  const nav = document.querySelector('.earn-section-tabs');
+  if (!nav) return;
+  const buttons = Array.from(nav.querySelectorAll('[data-earn-section]'));
+  function selectEarnSection(section, focus) {
+    const selected = buttons.find(b => b.dataset.earnSection === section) || buttons[0];
+    buttons.forEach(button => {
+      const active = button === selected;
+      button.setAttribute('aria-selected', String(active));
+      button.tabIndex = active ? 0 : -1;
+      const panel = document.getElementById('earn-panel-' + button.dataset.earnSection);
+      if (panel) panel.hidden = !active;
+    });
+    if (focus) selected.focus();
+  }
+  nav.addEventListener('click', event => {
+    const button = event.target.closest('[data-earn-section]');
+    if (button && nav.contains(button)) selectEarnSection(button.dataset.earnSection, false);
+  });
+  nav.addEventListener('keydown', event => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    const active = buttons.findIndex(button => button.getAttribute('aria-selected') === 'true');
+    let next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1
+      : (active + (event.key === 'ArrowRight' ? 1 : -1) + buttons.length) % buttons.length;
+    event.preventDefault();
+    selectEarnSection(buttons[next].dataset.earnSection, true);
+  });
+  selectEarnSection('offers', false);
 })();
 </script>
 {% endblock %}

@@ -43,6 +43,12 @@
                   window.walletSession.hasRuntimeSigningMaterial(address));
     }
 
+    function isUnlockedFor(address) {
+        return !!(window.walletSession &&
+                  typeof window.walletSession.isUnlockedFor === 'function' &&
+                  window.walletSession.isUnlockedFor(address));
+    }
+
     function hasEncryptedSeed() {
         return !!(window.walletSession &&
                   typeof window.walletSession.hasEncryptedPrivateKey === 'function' &&
@@ -173,12 +179,12 @@
             logAuthDiagnostics(address, source);
 
             // Check if Wallet V1 runtime signing material is already available in this tab.
-            if (hasRuntimeSigningMaterial(address)) {
+            if (isUnlockedFor(address)) {
                 cachedRuntimeSigningAddress = address;
                 return buildAuthResult(address, '', credentialLookupAddress);
             }
 
-            if (cachedRuntimeSigningAddress && cachedRuntimeSigningAddress === address && hasRuntimeSigningMaterial(address)) {
+            if (cachedRuntimeSigningAddress && cachedRuntimeSigningAddress === address && isUnlockedFor(address)) {
                 return buildAuthResult(address, '', credentialLookupAddress);
             }
 
@@ -472,7 +478,7 @@
     function initAutoLock() {
         // On page load: if wallet was unlocked in this tab (session restored), resume the timer.
         // isUnlocked() will return true because cachedAuthSecret was restored from sessionStorage
-        // at module init time, or walletSession restored unlockedPrivateKeyHex from sessionStorage.
+        // at module init time, or walletSession restored runtime signing state.
         if (WalletAuth.isUnlocked()) {
             WalletAuth.startAutoLock();
         }

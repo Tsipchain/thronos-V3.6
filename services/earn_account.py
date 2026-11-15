@@ -849,6 +849,22 @@ class EarnAccountStore:
                     )
         return {"earn_user_id": uid, "email": email, "email_verified": False}
 
+    def user_by_email(self, email: str) -> dict[str, Any] | None:
+        """Return a read-only account projection without credential fields."""
+        email = _validate_email(email)
+        con = sqlite3.connect(self.db_path, timeout=15)
+        con.row_factory = sqlite3.Row
+        try:
+            row = con.execute(
+                """SELECT earn_user_id, email, email_verified, cpx_ext_user_id,
+                          created_at, updated_at
+                   FROM earn_accounts WHERE email = ?""",
+                (email,),
+            ).fetchone()
+            return dict(row) if row else None
+        finally:
+            con.close()
+
     # ── Rate limiting ────────────────────────────────────────────────────
 
     def _check_rate_limit(self, con: sqlite3.Connection, email: str) -> None:

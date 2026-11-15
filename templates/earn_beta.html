@@ -385,11 +385,11 @@
     </section>
     <section class="earn-christmas-banner" aria-labelledby="earn-christmas-title">
       <div class="challenge-copy">
-        <span class="challenge-kicker">Thronos Earn · Christmas 2026</span>
-        <h2 id="earn-christmas-title">Goblins Wood Challenge</h2>
-        <p>Στόχος: Level 130 · Η χριστουγεννιάτικη πρόκληση ετοιμάζεται.<br>Reach Level 130 · Christmas challenge coming soon.</p>
+        <span class="challenge-kicker" data-earn-copy="challengeKicker">Thronos Earn · Christmas 2026</span>
+        <h2 id="earn-christmas-title" data-earn-copy="challengeTitle">Goblins Wood Challenge</h2>
+        <p data-earn-copy="challengeDescription">Reach Level 130 · Christmas challenge coming soon.</p>
         <p id="earn-goblins-progress" aria-live="polite" hidden></p>
-        <button id="earn-christmas-timewall" type="button">Δες το TimeWall / Explore tasks</button>
+        <button id="earn-christmas-timewall" type="button" data-earn-copy="challengeAction">Explore TimeWall tasks</button>
       </div>
     </section>
     <button id="earn-activity-launch" class="earn-activity-launch" type="button" aria-haspopup="dialog" data-i18n="balanceBtn">&#x23F1; Balance &amp; activity</button>
@@ -436,7 +436,7 @@
           <div id="pure-status" class="earn-provider-status" aria-live="polite" data-i18n="purePending">Integration pending</div>
         </section>
         <section class="earn-provider is-unavailable" id="provider-timewall">
-          <div class="earn-provider-heading"><span class="earn-provider-brand earn-provider-brand--timewall" aria-hidden="true"><span class="earn-provider-letter">T</span><img src="https://timewall.io/favicon.ico" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.hidden=true"></span><h3>TimeWall</h3></div><p id="timewall-copy">Surveys, clicks and social tasks.</p>
+          <div class="earn-provider-heading"><span class="earn-provider-brand earn-provider-brand--timewall" aria-hidden="true"><span class="earn-provider-letter">T</span><img src="https://timewall.io/favicon.ico" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.hidden=true"></span><h3>TimeWall</h3></div><p id="timewall-copy" data-earn-copy="timewallDescription">Surveys, clicks and social tasks.</p>
           <button id="earn-timewall" class="earn-action" type="button" disabled>Coming soon</button>
           <div id="timewall-status" class="earn-provider-status" aria-live="polite">Placement setup pending</div>
         </section>
@@ -462,7 +462,7 @@
           <div>Level 2: <span id="ref-level2-count">0</span></div>
         </div>
         <details style="margin-top:12px;border-top:1px solid #2e5874;padding-top:10px">
-          <summary style="cursor:pointer;color:#b8d9ee;font-weight:700;font-size:13px">Invited members &amp; rewards</summary>
+          <summary style="cursor:pointer;color:#b8d9ee;font-weight:700;font-size:13px" data-earn-copy="invitedMembers">Invited members &amp; rewards</summary>
           <div id="ref-members" style="margin-top:10px;font-size:12px;color:#b8d9ee"></div>
           <p style="font-size:11px;color:#94a3b8">Earn: L1 1%, L2 1%. Eligible active Thronos Wallet loyalty: L1 3%, L2 1%. Rates apply only to verified, cleared rewards after the referral ledger is enabled. Membership alone does not credit THC. Pool referrals have separate rules.</p>
         </details>
@@ -628,7 +628,13 @@
       cpcText:"CPC · clicks",
       chooseCampaign:"Select a campaign first",
       loadingCampaigns:"Select Advertise to load your campaigns.",
-      advertiserKicker:"THRONOS EARN · ADVERTISERS"
+      advertiserKicker:"THRONOS EARN · ADVERTISERS",
+      challengeKicker:"THRONOS EARN · CHRISTMAS 2026",
+      challengeTitle:"Goblins Wood Challenge",
+      challengeDescription:"Reach Level 130 · Christmas challenge coming soon.",
+      challengeAction:"Explore TimeWall tasks",
+      invitedMembers:"Invited members & rewards",
+      timewallDescription:"Surveys, clicks and social tasks."
     },
     gr: {
       language:'Γλώσσα',journeyKicker:'Η ΔΙΑΔΡΟΜΗ ΣΟΥ',journeyHeadline:'Εξερεύνησε. Ολοκλήρωσε. Κέρδισε.',
@@ -658,7 +664,13 @@
       cpcText:"CPC · κλικ",
       chooseCampaign:"Επίλεξε πρώτα καμπάνια",
       loadingCampaigns:"Άνοιξε τη Διαφήμιση για να φορτωθούν οι καμπάνιες σου.",
-      advertiserKicker:"THRONOS EARN · ΔΙΑΦΗΜΙΖΟΜΕΝΟΙ"
+      advertiserKicker:"THRONOS EARN · ΔΙΑΦΗΜΙΖΟΜΕΝΟΙ",
+      challengeKicker:"THRONOS EARN · ΧΡΙΣΤΟΥΓΕΝΝΑ 2026",
+      challengeTitle:"Πρόκληση Goblins Wood",
+      challengeDescription:"Φτάσε στο Level 130 · Η χριστουγεννιάτικη πρόκληση ετοιμάζεται.",
+      challengeAction:"Δες τις αποστολές TimeWall",
+      invitedMembers:"Προσκεκλημένα μέλη και ανταμοιβές",
+      timewallDescription:"Έρευνες, clicks και αποστολές κοινωνικών δικτύων."
     },
     es: {
       language:'Idioma',journeyKicker:'TU RECORRIDO',journeyHeadline:'Explora. Completa. Gana.',
@@ -688,7 +700,13 @@
       cpcText:"CPC · clics",
       chooseCampaign:"Selecciona primero una campaña",
       loadingCampaigns:"Abre Publicidad para cargar tus campañas.",
-      advertiserKicker:"THRONOS EARN · ANUNCIANTES"
+      advertiserKicker:"THRONOS EARN · ANUNCIANTES",
+      challengeKicker:"THRONOS EARN · NAVIDAD 2026",
+      challengeTitle:"Desafío Goblins Wood",
+      challengeDescription:"Alcanza el nivel 130 · Desafío navideño próximamente.",
+      challengeAction:"Explorar tareas de TimeWall",
+      invitedMembers:"Invitados y recompensas",
+      timewallDescription:"Encuestas, clics y tareas sociales."
     },
     ja: {
       language:'言語',journeyKicker:'EARN の進め方',journeyHeadline:'探そう。達成しよう。獲得しよう。',
@@ -718,7 +736,13 @@
       cpcText:"CPC · クリック",
       chooseCampaign:"先にキャンペーンを選択",
       loadingCampaigns:"広告タブでキャンペーンを読み込みます。",
-      advertiserKicker:"THRONOS EARN · 広告主"
+      advertiserKicker:"THRONOS EARN · 広告主",
+      challengeKicker:"THRONOS EARN · クリスマス 2026",
+      challengeTitle:"Goblins Wood チャレンジ",
+      challengeDescription:"レベル130を目指そう · クリスマスチャレンジ準備中。",
+      challengeAction:"TimeWall のタスクを見る",
+      invitedMembers:"招待メンバーと報酬",
+      timewallDescription:"アンケート、クリック、ソーシャルタスク。"
     },
     ru: {
       language:'Язык',journeyKicker:'ВАШ ПУТЬ',journeyHeadline:'Выбирайте. Выполняйте. Получайте.',
@@ -748,7 +772,13 @@
       cpcText:"CPC · клики",
       chooseCampaign:"Сначала выберите кампанию",
       loadingCampaigns:"Откройте вкладку «Реклама» для загрузки кампаний.",
-      advertiserKicker:"THRONOS EARN · РЕКЛАМОДАТЕЛИ"
+      advertiserKicker:"THRONOS EARN · РЕКЛАМОДАТЕЛИ",
+      challengeKicker:"THRONOS EARN · РОЖДЕСТВО 2026",
+      challengeTitle:"Испытание Goblins Wood",
+      challengeDescription:"Достигните уровня 130 · Рождественское испытание скоро.",
+      challengeAction:"Открыть задания TimeWall",
+      invitedMembers:"Приглашённые и награды",
+      timewallDescription:"Опросы, клики и социальные задания."
     }
   };
   function apply() {

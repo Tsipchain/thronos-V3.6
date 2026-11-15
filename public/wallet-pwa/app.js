@@ -2222,6 +2222,14 @@ async function showEarn(options = {}) {
           <button id="earnAvailableCard" type="button" style="flex:1;background:#0d0a1a;border:0;border-radius:9px;padding:10px;text-align:left;cursor:pointer"><div style="font-size:.66rem;color:var(--muted)">AVAILABLE</div><div style="font-size:1.1rem;color:var(--accent);font-weight:700">${availableText}</div></button>
           <button id="earnPendingCard" type="button" style="flex:1;background:#0d0a1a;border:0;border-radius:9px;padding:10px;text-align:left;cursor:pointer"><div style="font-size:.66rem;color:var(--muted)">PENDING</div><div style="font-size:1.1rem;color:#e8bf5a;font-weight:700">${pendingText}</div></button>
       </div>
+      <nav id="earnWalletTabs" class="earn-wallet-tabs" role="tablist" aria-label="Earn sections">
+        <button type="button" role="tab" id="ew-tab-offers" aria-controls="ew-panel-offers" aria-selected="true" data-ew-tab="offers">Offers</button>
+        <button type="button" role="tab" id="ew-tab-activity" aria-controls="ew-panel-activity" aria-selected="false" data-ew-tab="activity">Activity</button>
+        <button type="button" role="tab" id="ew-tab-community" aria-controls="ew-panel-community" aria-selected="false" data-ew-tab="community">Community</button>
+        <button type="button" role="tab" id="ew-tab-staking" aria-controls="ew-panel-staking" aria-selected="false" data-ew-tab="staking">Staking</button>
+        <button type="button" role="tab" id="ew-tab-account" aria-controls="ew-panel-account" aria-selected="false" data-ew-tab="account">Account</button>
+      </nav>
+      <section id="ew-panel-offers" class="earn-wallet-panel" role="tabpanel" aria-labelledby="ew-tab-offers">
       <div style="margin-top:4px">
         <div style="font-size:.7rem;color:var(--muted);letter-spacing:.08em;margin-bottom:8px">EARN PROVIDERS</div>
         <div id="earnProviderGrid" style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
@@ -2240,12 +2248,20 @@ async function showEarn(options = {}) {
           </button>
         </div>
       </div>
+      </section>
+      <section id="ew-panel-account" class="earn-wallet-panel" role="tabpanel" aria-labelledby="ew-tab-account" hidden>
       <button class="btn" id="openEarnCenterBtn" style="width:100%;padding:10px;margin-top:10px">Earn history &amp; account</button>
       ${me.wallet_address ? `<p style="font-size:.72rem;color:#55d6a7;line-height:1.45;margin:10px 0 0">✓ Linked wallet: ${escHtml(me.wallet_address.slice(0, 10))}…</p>` : `<button class="btn" id="linkEarnWalletBtn" style="width:100%;padding:10px;margin-top:8px">Link active Thronos wallet</button>`}
+      </section>
+      <section id="ew-panel-activity" class="earn-wallet-panel" role="tabpanel" aria-labelledby="ew-tab-activity" hidden>
       <p id="earnPwaMessage" style="font-size:.72rem;color:var(--muted);line-height:1.45;margin:12px 0 4px">Verified provider receipts stay pending during the seven-day Earn hold. Select a receipt to see its own countdown and status.</p>
       <div style="margin-top:12px"><div style="font-size:.7rem;color:var(--muted);letter-spacing:.08em">RECENT REWARDS</div>${rows}</div>
+      </section>
+      <section id="ew-panel-community" class="earn-wallet-panel" role="tabpanel" aria-labelledby="ew-tab-community" hidden>
       <button class="btn" id="earnReferralsBtn" type="button" style="width:100%;padding:10px;margin-top:12px">Invite friends &amp; referrals →</button>
        <section id="earnPwaLeaderboard" aria-label="30-day Earn leaderboard"></section>
+      </section>
+      <section id="ew-panel-staking" class="earn-wallet-panel" role="tabpanel" aria-labelledby="ew-tab-staking" hidden>
       ${balance.staked && balance.staked !== '0.000000' ? `
       <div style="margin-top:16px;border-top:1px solid #ffffff14;padding-top:14px">
         <div style="font-size:.7rem;color:var(--muted);letter-spacing:.08em;margin-bottom:8px">EARN REWARDS SUMMARY</div>
@@ -2266,7 +2282,34 @@ async function showEarn(options = {}) {
           <div id="earnStakingRewardsList"></div>
         </div>
       </div>
+      </section>
     `;
+    const earnTabs = body.querySelectorAll('#earnWalletTabs [data-ew-tab]');
+    const selectEarnWalletTab = (section, focus = false) => {
+      const target = Array.from(earnTabs).find(button => button.dataset.ewTab === section) || earnTabs[0];
+      earnTabs.forEach(button => {
+        const selected = button === target;
+        button.setAttribute('aria-selected', String(selected));
+        button.tabIndex = selected ? 0 : -1;
+        const panel = body.querySelector('#ew-panel-' + button.dataset.ewTab);
+        if (panel) panel.hidden = !selected;
+      });
+      if (focus) target.focus();
+    };
+    const earnTabNav = body.querySelector('#earnWalletTabs');
+    earnTabNav.addEventListener('click', event => {
+      const button = event.target.closest('[data-ew-tab]');
+      if (button && earnTabNav.contains(button)) selectEarnWalletTab(button.dataset.ewTab);
+    });
+    earnTabNav.addEventListener('keydown', event => {
+      if (!['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(event.key)) return;
+      const active = Array.from(earnTabs).findIndex(b => b.getAttribute('aria-selected') === 'true');
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? earnTabs.length - 1
+        : (active + (event.key === 'ArrowRight' ? 1 : -1) + earnTabs.length) % earnTabs.length;
+      event.preventDefault();
+      selectEarnWalletTab(earnTabs[next].dataset.ewTab, true);
+    });
+    selectEarnWalletTab(options.focusLeaderboard ? 'community' : 'offers');
     window.ThronosEarnLeaderboard.mount(document.getElementById('earnPwaLeaderboard'), { base: earnBase }).then(() => {
       if (options.focusLeaderboard) document.getElementById('earnPwaLeaderboard')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     });

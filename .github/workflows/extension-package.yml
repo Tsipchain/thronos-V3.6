@@ -6,6 +6,7 @@ on:
     paths:
       - "public/extension/**"
       - "tests/test_extension_thr_coin_branding.py"
+      - "tests/test_extension_earn_entry.py"
       - ".github/workflows/extension-package.yml"
   pull_request:
     paths:
@@ -29,7 +30,7 @@ jobs:
       - name: Verify official artwork and wallet JS guards
         run: |
           python -m pip install --disable-pip-version-check pytest
-          python -m pytest tests/test_extension_thr_coin_branding.py -q
+          python -m pytest tests/test_extension_thr_coin_branding.py tests/test_extension_earn_entry.py -q
           node --check public/extension/popup.js
           node --check public/extension/background.js
           node --check public/extension/content.js

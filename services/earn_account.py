@@ -100,6 +100,15 @@ _RATE_MAX_ATTEMPTS = 5
 _RATE_LOCKOUT = 1800
 _WALLET_CHALLENGE_TTL = 300
 _ESCROW_INTENT_TTL = 300
+_WALLETLESS_SPEND_CAP_PER_DAY = Decimal("5000.000000")
+_WALLETLESS_RATE_LIMIT_PER_HOUR = 10
+_VIP_CREDIT_MILESTONE_THC = Decimal("1000.000000")
+_VIP_CREDIT_RATE_BPS = 50  # 0.5% per completed 1000 THC spent
+
+_AD_PRICING_DEFAULTS = {
+    "cpm": {"min_bid": "0.100000", "max_bid": "50.000000", "default_bid": "1.000000"},
+    "cpc": {"min_bid": "0.500000", "max_bid": "100.000000", "default_bid": "2.000000"},
+}
 
 
 def _wallet_unlock_enabled() -> bool:
@@ -741,6 +750,59 @@ class EarnAccountStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_earn_ad_delivery_events_campaign
                     ON earn_ad_delivery_events(campaign_id, recorded_at);
+
+                CREATE TABLE IF NOT EXISTS earn_ad_pricing (
+                    pricing_id     TEXT PRIMARY KEY,
+                    campaign_type  TEXT NOT NULL UNIQUE,
+                    min_bid        TEXT NOT NULL,
+                    max_bid        TEXT NOT NULL,
+                    default_bid    TEXT NOT NULL,
+                    currency       TEXT NOT NULL DEFAULT 'THC',
+                    updated_at     INTEGER NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS earn_ad_treasury (
+                    entry_id       TEXT PRIMARY KEY,
+                    source_type    TEXT NOT NULL,
+                    source_ref     TEXT NOT NULL,
+                    campaign_id    TEXT,
+                    amount         TEXT NOT NULL,
+                    balance_after  TEXT NOT NULL,
+                    note           TEXT,
+                    created_at     INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_earn_ad_treasury_source
+                    ON earn_ad_treasury(source_type, created_at);
+
+                CREATE TABLE IF NOT EXISTS earn_ad_vip_credits (
+                    credit_id      TEXT PRIMARY KEY,
+                    earn_user_id   TEXT NOT NULL
+                        REFERENCES earn_accounts(earn_user_id),
+                    campaign_id    TEXT NOT NULL,
+                    milestone_thc  TEXT NOT NULL,
+                    credit_amount  TEXT NOT NULL,
+                    credited_at    INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_earn_ad_vip_credits_user
+                    ON earn_ad_vip_credits(earn_user_id, campaign_id);
+
+                CREATE TABLE IF NOT EXISTS earn_walletless_intents (
+                    intent_id       TEXT PRIMARY KEY,
+                    earn_user_id    TEXT NOT NULL
+                        REFERENCES earn_accounts(earn_user_id),
+                    campaign_id     TEXT NOT NULL
+                        REFERENCES earn_ad_campaigns(campaign_id),
+                    action          TEXT NOT NULL,
+                    amount          TEXT NOT NULL,
+                    nonce           TEXT NOT NULL UNIQUE,
+                    idempotency_key TEXT NOT NULL,
+                    csrf_token      TEXT NOT NULL,
+                    expires_at      INTEGER NOT NULL,
+                    consumed_at     INTEGER,
+                    created_at      INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_earn_walletless_intents_nonce
+                    ON earn_walletless_intents(nonce);
             """)
             # Existing production Earn databases predate the provider
             # clearance and separate internal hold fields. SQLite lacks ADD COLUMN IF NOT
@@ -793,6 +855,22 @@ class EarnAccountStore:
             if "unlock_at" not in pos_cols:
                 con.execute("ALTER TABLE earn_staking_positions ADD COLUMN unlock_at INTEGER")
                 con.commit()
+            now = int(time.time())
+            for ctype, vals in _AD_PRICING_DEFAULTS.items():
+                existing = con.execute(
+                    "SELECT 1 FROM earn_ad_pricing WHERE campaign_type = ?",
+                    (ctype,),
+                ).fetchone()
+                if not existing:
+                    con.execute(
+                        """INSERT INTO earn_ad_pricing
+                           (pricing_id, campaign_type, min_bid, max_bid,
+                            default_bid, currency, updated_at)
+                           VALUES (?,?,?,?,?,'THC',?)""",
+                        (f"price_{ctype}", ctype, vals["min_bid"],
+                         vals["max_bid"], vals["default_bid"], now),
+                    )
+            con.commit()
         finally:
             con.close()
 
@@ -3765,6 +3843,11 @@ class EarnAccountStore:
                 self._escrow_spend_in_tx(
                     con, proof["campaign_id"], camp["advertiser_id"], cost,
                 )
+                self._treasury_credit_in_tx(
+                    con, cost, "ad_spend", event_id,
+                    campaign_id=proof["campaign_id"],
+                    note=f"verified {event_type} charge",
+                )
 
             new_spent = (Decimal(camp["spent"]) + cost).quantize(_THC_SCALE)
             if event_type == "view":
@@ -3778,6 +3861,13 @@ class EarnAccountStore:
                     (str(new_spent), proof["campaign_id"]),
                 )
 
+            # VIP loyalty credit check
+            vip_credit = None
+            if cost > 0:
+                vip_credit = self._check_vip_loyalty_credit(
+                    con, camp["advertiser_id"], proof["campaign_id"],
+                )
+
             # Auto-complete when budget exhausted
             tb = Decimal(camp["total_budget"])
             if tb > 0 and new_spent >= tb:
@@ -3786,10 +3876,13 @@ class EarnAccountStore:
                     (proof["campaign_id"],),
                 )
 
-        return {
+        result = {
             "event_id": event_id,
             "charged_amount": str(cost),
         }
+        if vip_credit:
+            result["vip_credit"] = vip_credit
+        return result
 
     # ── Ad Marketplace — Reporting ────────────────────────────────────
 
@@ -3810,10 +3903,10 @@ class EarnAccountStore:
             bal = str(self._escrow_balance_in_tx(con, campaign_id))
             cutoff = int(time.time()) - 30 * 86400
             daily_rows = con.execute(
-                """SELECT (created_at / 86400) AS day_bucket,
-                          event_type, cost
-                     FROM earn_ad_events
-                    WHERE campaign_id = ? AND created_at >= ?
+                """SELECT (recorded_at / 86400) AS day_bucket,
+                          event_type, charged_amount
+                     FROM earn_ad_delivery_events
+                    WHERE campaign_id = ? AND recorded_at >= ?
                  ORDER BY day_bucket""",
                 (campaign_id, cutoff),
             ).fetchall()
@@ -3822,11 +3915,11 @@ class EarnAccountStore:
                 b = r["day_bucket"]
                 if b not in day_buckets:
                     day_buckets[b] = {"imps": 0, "clks": 0, "cost": Decimal("0")}
-                if r["event_type"] == "impression":
+                if r["event_type"] == "view":
                     day_buckets[b]["imps"] += 1
                 else:
                     day_buckets[b]["clks"] += 1
-                day_buckets[b]["cost"] += Decimal(r["cost"])
+                day_buckets[b]["cost"] += Decimal(r["charged_amount"])
             events_by_day = [
                 {
                     "date": time.strftime(
@@ -3841,7 +3934,7 @@ class EarnAccountStore:
             country_rows = con.execute(
                 """SELECT COALESCE(NULLIF(country,''), 'unknown') AS cc,
                           COUNT(*) AS cnt
-                     FROM earn_ad_events
+                     FROM earn_ad_delivery_events
                     WHERE campaign_id = ?
                  GROUP BY cc ORDER BY cnt DESC""",
                 (campaign_id,),
@@ -3850,6 +3943,17 @@ class EarnAccountStore:
                 {"country": r["cc"], "events": r["cnt"]}
                 for r in country_rows
             ]
+            vip_credits = con.execute(
+                """SELECT credit_id, milestone_thc, credit_amount, credited_at
+                     FROM earn_ad_vip_credits
+                    WHERE campaign_id = ? AND earn_user_id = ?
+                 ORDER BY credited_at""",
+                (campaign_id, advertiser_id),
+            ).fetchall()
+            treasury_total = con.execute(
+                "SELECT COALESCE(SUM(CAST(amount AS REAL)), 0) AS total FROM earn_ad_treasury WHERE campaign_id = ?",
+                (campaign_id,),
+            ).fetchone()
         return {
             "campaign_id": campaign_id,
             "name": camp_d["name"],
@@ -3861,6 +3965,10 @@ class EarnAccountStore:
             "escrow_balance": bal,
             "events_by_day": events_by_day,
             "events_by_country": events_by_country,
+            "vip_credits": [dict(r) for r in vip_credits],
+            "treasury_contributed": str(
+                Decimal(str(treasury_total["total"] or 0)).quantize(_THC_SCALE),
+            ),
         }
 
     def campaign_report_daily(
@@ -3875,10 +3983,10 @@ class EarnAccountStore:
                 raise EarnError("campaign_not_found")
             cutoff = int(time.time()) - days * 86400
             rows = con.execute(
-                """SELECT (created_at / 86400) AS day_bucket,
-                          event_type, cost
-                     FROM earn_ad_events
-                    WHERE campaign_id = ? AND created_at >= ?
+                """SELECT (recorded_at / 86400) AS day_bucket,
+                          event_type, charged_amount
+                     FROM earn_ad_delivery_events
+                    WHERE campaign_id = ? AND recorded_at >= ?
                  ORDER BY day_bucket""",
                 (campaign_id, cutoff),
             ).fetchall()
@@ -3887,11 +3995,11 @@ class EarnAccountStore:
                 b = r["day_bucket"]
                 if b not in buckets:
                     buckets[b] = {"imps": 0, "clks": 0, "cost": Decimal("0")}
-                if r["event_type"] == "impression":
+                if r["event_type"] == "view":
                     buckets[b]["imps"] += 1
                 else:
                     buckets[b]["clks"] += 1
-                buckets[b]["cost"] += Decimal(r["cost"])
+                buckets[b]["cost"] += Decimal(r["charged_amount"])
             return [
                 {
                     "date": time.strftime(
@@ -3903,6 +4011,383 @@ class EarnAccountStore:
                 }
                 for b, v in sorted(buckets.items())
             ]
+
+    # ── Ad Marketplace — Pricing ────────────────────────────────────────
+
+    def get_ad_pricing(self) -> list[dict[str, Any]]:
+        with self._tx() as con:
+            rows = con.execute(
+                "SELECT * FROM earn_ad_pricing ORDER BY campaign_type",
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    # ── Ad Marketplace — Walletless Escrow ────────────────────────────
+
+    def escrow_create_intent_walletless(
+        self,
+        earn_user_id: str,
+        campaign_id: str,
+        action: str,
+        amount: str,
+        session_token_hash: str,
+    ) -> dict[str, Any]:
+        if action not in ("deposit", "refund"):
+            raise EarnError("invalid_escrow_action")
+        amt = Decimal(amount).quantize(_THC_SCALE)
+        if amt <= 0:
+            raise EarnError("amount_must_be_positive")
+        now = int(time.time())
+        intent_id = "wli_" + secrets.token_urlsafe(18)
+        nonce = secrets.token_urlsafe(24)
+        idem_key = secrets.token_hex(16)
+        csrf_token = secrets.token_urlsafe(32)
+        with self._tx() as con:
+            camp = con.execute(
+                "SELECT advertiser_id FROM earn_ad_campaigns WHERE campaign_id = ? AND advertiser_id = ?",
+                (campaign_id, earn_user_id),
+            ).fetchone()
+            if not camp:
+                raise EarnError("campaign_not_found")
+            if action == "deposit":
+                available = self._available_thc_for_staking(con, earn_user_id)
+                if available < amt:
+                    raise EarnError("insufficient_thc_balance")
+                day_start = now - (now % 86400)
+                day_intents = con.execute(
+                    """SELECT SUM(CAST(amount AS REAL)) AS total FROM earn_walletless_intents
+                       WHERE earn_user_id = ? AND action = 'deposit'
+                         AND created_at >= ? AND consumed_at IS NOT NULL""",
+                    (earn_user_id, day_start),
+                ).fetchone()
+                day_total = Decimal(str(day_intents["total"] or 0)).quantize(_THC_SCALE)
+                if day_total + amt > _WALLETLESS_SPEND_CAP_PER_DAY:
+                    raise EarnError("walletless_daily_cap_exceeded")
+                hour_start = now - 3600
+                hour_count = con.execute(
+                    """SELECT COUNT(*) AS cnt FROM earn_walletless_intents
+                       WHERE earn_user_id = ? AND created_at >= ?""",
+                    (earn_user_id, hour_start),
+                ).fetchone()
+                if (hour_count["cnt"] or 0) >= _WALLETLESS_RATE_LIMIT_PER_HOUR:
+                    raise EarnError("walletless_rate_limited")
+            elif action == "refund":
+                bal = self._escrow_balance_in_tx(con, campaign_id)
+                if amt > bal:
+                    raise EarnError("insufficient_escrow_balance")
+            con.execute(
+                "DELETE FROM earn_walletless_intents WHERE expires_at < ?",
+                (now,),
+            )
+            con.execute(
+                """INSERT INTO earn_walletless_intents
+                   (intent_id, earn_user_id, campaign_id, action, amount,
+                    nonce, idempotency_key, csrf_token,
+                    expires_at, consumed_at, created_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,NULL,?)""",
+                (intent_id, earn_user_id, campaign_id, action,
+                 str(amt), nonce, idem_key, csrf_token,
+                 now + _ESCROW_INTENT_TTL, now),
+            )
+        return {
+            "intent_id": intent_id,
+            "action": action,
+            "campaign_id": campaign_id,
+            "amount": str(amt),
+            "nonce": nonce,
+            "idempotency_key": idem_key,
+            "csrf_token": csrf_token,
+            "requires_wallet_sig": False,
+            "approval": "session_reauth",
+            "expires_at": now + _ESCROW_INTENT_TTL,
+        }
+
+    def escrow_execute_walletless(
+        self,
+        intent_id: str,
+        earn_user_id: str,
+        nonce: str,
+        csrf_token: str,
+        session_token_hash: str,
+    ) -> dict[str, Any]:
+        now = int(time.time())
+        with self._tx() as con:
+            intent = con.execute(
+                """SELECT * FROM earn_walletless_intents
+                   WHERE intent_id = ? AND earn_user_id = ?
+                     AND consumed_at IS NULL AND expires_at >= ?""",
+                (intent_id, earn_user_id, now),
+            ).fetchone()
+            if not intent:
+                raise EarnError("invalid_or_expired_intent")
+            if intent["nonce"] != nonce:
+                raise EarnError("nonce_mismatch")
+            if not hmac.compare_digest(intent["csrf_token"], csrf_token):
+                raise EarnError("csrf_token_mismatch")
+            sess = con.execute(
+                "SELECT 1 FROM earn_sessions WHERE token_hash = ? AND earn_user_id = ?",
+                (session_token_hash, earn_user_id),
+            ).fetchone()
+            if not sess:
+                raise EarnError("session_reauth_required")
+            existing = con.execute(
+                "SELECT escrow_id FROM earn_ad_escrow WHERE idempotency_key = ?",
+                (intent["idempotency_key"],),
+            ).fetchone()
+            if existing:
+                raise EarnError("duplicate_intent")
+            con.execute(
+                "UPDATE earn_walletless_intents SET consumed_at = ? WHERE intent_id = ?",
+                (now, intent_id),
+            )
+            campaign_id = intent["campaign_id"]
+            action = intent["action"]
+            amt = Decimal(intent["amount"]).quantize(_THC_SCALE)
+            escrow_id = "esc_" + secrets.token_hex(8)
+            bal = self._escrow_balance_in_tx(con, campaign_id)
+            if action == "deposit":
+                available = self._available_thc_for_staking(con, earn_user_id)
+                if available < amt:
+                    raise EarnError("insufficient_thc_balance")
+                reservation = None
+                try:
+                    res_idem = f"wl_escrow_{intent['idempotency_key']}"
+                    reservation = self._reserve_thc_in_tx(
+                        con, earn_user_id, amt, "ad_escrow", campaign_id, res_idem, now,
+                    )
+                except EarnError:
+                    raise EarnError("insufficient_thc_balance")
+                new_bal = (bal + amt).quantize(_THC_SCALE)
+            elif action == "refund":
+                if amt > bal:
+                    raise EarnError("insufficient_escrow_balance")
+                new_bal = (bal - amt).quantize(_THC_SCALE)
+            else:
+                raise EarnError("invalid_escrow_action")
+            payload_hash = hashlib.sha256(
+                json.dumps({
+                    "action": action, "amount": str(amt),
+                    "campaign_id": campaign_id, "intent_id": intent_id,
+                    "nonce": nonce,
+                }, sort_keys=True, separators=(",", ":")).encode(),
+            ).hexdigest()
+            con.execute(
+                """INSERT INTO earn_ad_escrow
+                   (escrow_id, campaign_id, advertiser_id, action,
+                    amount, balance_after, note, idempotency_key,
+                    intent_id, payload_hash, settlement_status, created_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (escrow_id, campaign_id, earn_user_id, action,
+                 str(amt), str(new_bal),
+                 f"walletless escrow {action}",
+                 intent["idempotency_key"], intent_id,
+                 payload_hash, "settled", now),
+            )
+        return {
+            "escrow_id": escrow_id,
+            "action": action,
+            "amount": str(amt),
+            "balance_after": str(new_bal),
+            "idempotency_key": intent["idempotency_key"],
+            "payload_hash": payload_hash,
+            "settlement_status": "settled",
+        }
+
+    def _reserve_thc_in_tx(
+        self, con: sqlite3.Connection, earn_user_id: str,
+        amount: Decimal, reservation_type: str, source_ref: str,
+        idempotency_key: str, now: int,
+    ) -> dict[str, Any]:
+        existing = con.execute(
+            """SELECT * FROM earn_thc_reservations
+               WHERE earn_user_id=? AND reservation_type=?
+                 AND idempotency_key=?""",
+            (earn_user_id, reservation_type, idempotency_key),
+        ).fetchone()
+        if existing:
+            return dict(existing)
+        reservation_id = "thcr_" + secrets.token_urlsafe(18)
+        con.execute(
+            """INSERT INTO earn_thc_reservations
+               (reservation_id, earn_user_id, reservation_type, amount,
+                state, source_ref, idempotency_key, created_at, updated_at)
+               VALUES (?,?,?,?, 'reserved', ?,?,?,?)""",
+            (reservation_id, earn_user_id, reservation_type, str(amount),
+             source_ref or None, idempotency_key, now, now),
+        )
+        return {"reservation_id": reservation_id}
+
+    # ── Ad Marketplace — Campaign Activation ──────────────────────────
+
+    def activate_campaign(
+        self, campaign_id: str, advertiser_id: str,
+    ) -> dict[str, Any]:
+        now = int(time.time())
+        with self._tx() as con:
+            camp = con.execute(
+                "SELECT * FROM earn_ad_campaigns WHERE campaign_id = ? AND advertiser_id = ?",
+                (campaign_id, advertiser_id),
+            ).fetchone()
+            if not camp:
+                raise EarnError("campaign_not_found")
+            if camp["status"] != "approved":
+                raise EarnError("campaign_must_be_approved")
+            creatives = con.execute(
+                "SELECT 1 FROM earn_ad_creatives WHERE campaign_id = ? AND status = 'approved'",
+                (campaign_id,),
+            ).fetchone()
+            if not creatives:
+                raise EarnError("no_approved_creatives")
+            bal = self._escrow_balance_in_tx(con, campaign_id)
+            bid = Decimal(camp["bid_amount"])
+            min_cost = (bid / 1000 if camp["campaign_type"] == "cpm"
+                        else bid).quantize(_THC_SCALE)
+            if bal < min_cost:
+                raise EarnError("insufficient_escrow_for_activation")
+            con.execute(
+                "UPDATE earn_ad_campaigns SET status = 'active', updated_at = ? WHERE campaign_id = ?",
+                (now, campaign_id),
+            )
+        return {"campaign_id": campaign_id, "status": "active"}
+
+    # ── Ad Marketplace — Refunds ─────────────────────────────────────
+
+    def process_campaign_refund(
+        self, campaign_id: str, advertiser_id: str,
+    ) -> dict[str, Any]:
+        now = int(time.time())
+        with self._tx() as con:
+            camp = con.execute(
+                "SELECT * FROM earn_ad_campaigns WHERE campaign_id = ? AND advertiser_id = ?",
+                (campaign_id, advertiser_id),
+            ).fetchone()
+            if not camp:
+                raise EarnError("campaign_not_found")
+            if camp["status"] not in ("completed", "cancelled", "paused"):
+                raise EarnError("campaign_not_refundable")
+            bal = self._escrow_balance_in_tx(con, campaign_id)
+            if bal <= 0:
+                return {"campaign_id": campaign_id, "refunded": "0.000000", "status": "no_balance"}
+            escrow_id = "esc_" + secrets.token_hex(8)
+            con.execute(
+                """INSERT INTO earn_ad_escrow
+                   (escrow_id, campaign_id, advertiser_id, action,
+                    amount, balance_after, note, settlement_status, created_at)
+                   VALUES (?,?,?,'refund',?,'0.000000',?,?,?)""",
+                (escrow_id, campaign_id, advertiser_id,
+                 str(bal), "campaign refund of unused budget",
+                 "settled", now),
+            )
+            res_rows = con.execute(
+                """SELECT reservation_id FROM earn_thc_reservations
+                   WHERE source_ref = ? AND reservation_type = 'ad_escrow'
+                     AND state IN ('reserved', 'settling')""",
+                (campaign_id,),
+            ).fetchall()
+            for rr in res_rows:
+                con.execute(
+                    "UPDATE earn_thc_reservations SET state = 'released', updated_at = ?, released_at = ? WHERE reservation_id = ?",
+                    (now, now, rr["reservation_id"]),
+                )
+            if camp["status"] != "cancelled":
+                con.execute(
+                    "UPDATE earn_ad_campaigns SET status = 'refunded', updated_at = ? WHERE campaign_id = ?",
+                    (now, campaign_id),
+                )
+        return {
+            "campaign_id": campaign_id,
+            "refunded": str(bal),
+            "status": "refunded",
+        }
+
+    # ── Ad Marketplace — Pythia Treasury ─────────────────────────────
+
+    def _treasury_credit_in_tx(
+        self, con: sqlite3.Connection, amount: Decimal,
+        source_type: str, source_ref: str,
+        campaign_id: str | None = None, note: str = "",
+    ) -> str:
+        rows = con.execute(
+            "SELECT amount FROM earn_ad_treasury",
+        ).fetchall()
+        current = sum((Decimal(r["amount"]) for r in rows), Decimal("0"))
+        new_bal = (current + amount).quantize(_THC_SCALE)
+        entry_id = "trs_" + secrets.token_hex(8)
+        now = int(time.time())
+        con.execute(
+            """INSERT INTO earn_ad_treasury
+               (entry_id, source_type, source_ref, campaign_id,
+                amount, balance_after, note, created_at)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (entry_id, source_type, source_ref, campaign_id,
+             str(amount.quantize(_THC_SCALE)), str(new_bal),
+             note, now),
+        )
+        return entry_id
+
+    def treasury_summary(self) -> dict[str, Any]:
+        with self._tx() as con:
+            rows = con.execute(
+                "SELECT source_type, amount FROM earn_ad_treasury",
+            ).fetchall()
+            total = Decimal("0")
+            by_source: dict[str, Decimal] = {}
+            for r in rows:
+                amt = Decimal(r["amount"])
+                total += amt
+                st = r["source_type"]
+                by_source[st] = by_source.get(st, Decimal("0")) + amt
+            return {
+                "total_balance": str(total.quantize(_THC_SCALE)),
+                "by_source": {
+                    k: str(v.quantize(_THC_SCALE)) for k, v in by_source.items()
+                },
+            }
+
+    # ── Ad Marketplace — VIP Loyalty Credits ─────────────────────────
+
+    def _check_vip_loyalty_credit(
+        self, con: sqlite3.Connection,
+        earn_user_id: str, campaign_id: str,
+    ) -> dict[str, Any] | None:
+        link = con.execute(
+            "SELECT 1 FROM earn_wallet_links WHERE earn_user_id = ?",
+            (earn_user_id,),
+        ).fetchone()
+        if not link:
+            return None
+        camp = con.execute(
+            "SELECT spent FROM earn_ad_campaigns WHERE campaign_id = ?",
+            (campaign_id,),
+        ).fetchone()
+        if not camp:
+            return None
+        total_spent = Decimal(camp["spent"])
+        already_credited = con.execute(
+            """SELECT COALESCE(MAX(CAST(milestone_thc AS REAL)), 0) AS max_milestone
+               FROM earn_ad_vip_credits
+               WHERE earn_user_id = ? AND campaign_id = ?""",
+            (earn_user_id, campaign_id),
+        ).fetchone()
+        max_milestone = Decimal(str(already_credited["max_milestone"] or 0))
+        next_milestone = (max_milestone + _VIP_CREDIT_MILESTONE_THC).quantize(_THC_SCALE)
+        if total_spent < next_milestone:
+            return None
+        credit_amount = (_VIP_CREDIT_MILESTONE_THC * _VIP_CREDIT_RATE_BPS / Decimal("10000")).quantize(_THC_SCALE)
+        credit_id = "vipc_" + secrets.token_hex(8)
+        now = int(time.time())
+        con.execute(
+            """INSERT INTO earn_ad_vip_credits
+               (credit_id, earn_user_id, campaign_id, milestone_thc,
+                credit_amount, credited_at)
+               VALUES (?,?,?,?,?,?)""",
+            (credit_id, earn_user_id, campaign_id,
+             str(next_milestone), str(credit_amount), now),
+        )
+        return {
+            "credit_id": credit_id,
+            "milestone_thc": str(next_milestone),
+            "credit_amount": str(credit_amount),
+        }
 
     # ── Publisher system (isolated from advertiser and Earn identity) ────
 
@@ -5676,6 +6161,87 @@ def register_earn_account_routes(
             return jsonify(ok=False, error="campaign_not_found"), 404
         balance = store.escrow_balance(campaign_id)
         return jsonify(ok=True, balance=balance)
+
+    @app.get("/api/earn/ads/pricing")
+    def earn_ad_pricing():
+        pricing = store.get_ad_pricing()
+        return jsonify(ok=True, pricing=pricing)
+
+    @app.post("/api/earn/ads/escrow/walletless/intent")
+    def earn_walletless_escrow_intent():
+        user, raw_token = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        token_hash = hashlib.sha256(raw_token.encode()).hexdigest() if raw_token else ""
+        data = request.get_json(silent=True) or {}
+        campaign_id = str(data.get("campaign_id", "")).strip()
+        action = str(data.get("action", "")).strip()
+        amount = str(data.get("amount", "")).strip()
+        if not campaign_id or not action or not amount:
+            return jsonify(ok=False, error="missing_fields"), 400
+        try:
+            result = store.escrow_create_intent_walletless(
+                user["earn_user_id"], campaign_id, action, amount,
+                session_token_hash=token_hash,
+            )
+        except (EarnError, InvalidOperation, ValueError) as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, **result)
+
+    @app.post("/api/earn/ads/escrow/walletless/execute")
+    def earn_walletless_escrow_execute():
+        user, raw_token = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        token_hash = hashlib.sha256(raw_token.encode()).hexdigest() if raw_token else ""
+        data = request.get_json(silent=True) or {}
+        intent_id = str(data.get("intent_id", "")).strip()
+        nonce = str(data.get("nonce", "")).strip()
+        csrf_token = str(data.get("csrf_token", "")).strip()
+        if not intent_id or not nonce or not csrf_token:
+            return jsonify(ok=False, error="missing_fields"), 400
+        try:
+            result = store.escrow_execute_walletless(
+                intent_id, user["earn_user_id"], nonce,
+                csrf_token, session_token_hash=token_hash,
+            )
+        except (EarnError, InvalidOperation, ValueError) as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, **result)
+
+    @app.post("/api/earn/ads/campaign/<campaign_id>/activate")
+    def earn_campaign_activate(campaign_id):
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        try:
+            result = store.activate_campaign(
+                campaign_id, user["earn_user_id"],
+            )
+        except EarnError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, **result)
+
+    @app.post("/api/earn/ads/campaign/<campaign_id>/refund")
+    def earn_campaign_refund(campaign_id):
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        try:
+            result = store.process_campaign_refund(
+                campaign_id, user["earn_user_id"],
+            )
+        except EarnError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, **result)
+
+    @app.get("/api/earn/ads/treasury/summary")
+    def earn_treasury_summary():
+        mgmt_token = request.headers.get("X-Admin-Key", "").strip()
+        if not mgmt_token or mgmt_token != os.getenv("EARN_MGMT_TOKEN", "").strip():
+            return jsonify(ok=False, error="unauthorized"), 403
+        summary = store.treasury_summary()
+        return jsonify(ok=True, **summary)
 
     @app.get("/api/earn/ads/serve")
     def earn_ads_serve():

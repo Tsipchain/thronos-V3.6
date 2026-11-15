@@ -1,5 +1,6 @@
 {% extends "base.html" %}
-{% block title %}Thronos Earn — Powered by Thronos Labs &amp; Encom{% endblock %}
+{% block title %}Thronos Earn — Powered by Thronos Labs &amp; Encom
+{% endblock %}
 {% block content %}
 <style>
   .earn-beta { max-width: 1160px; margin: 32px auto; padding: 0 18px 42px; }
@@ -264,6 +265,21 @@
   @media(max-width:760px){.earn-journey-steps {grid-template-columns:1fr;gap:8px;}
     .earn-journey {border-radius:18px;margin:18px 0;padding:17px;}
     .earn-journey-steps li {align-items:center;padding:10px 12px;}}
+
+  /* Isolated presentation-only Earn sections. Existing DOM IDs and handlers remain. */
+  .earn-section-tabs { display:flex;gap:7px;overflow-x:auto;margin:20px 0 14px;
+    padding:3px 2px 9px;scrollbar-width:thin;scroll-snap-type:x proximity; }
+  .earn-section-tabs [role="tab"] {white-space:nowrap;scroll-snap-align:start;flex:0 0 auto;
+    min-height:44px;padding:10px 14px;border-radius:12px;
+    border:1px solid rgba(146,188,206,.26);background:#122437;
+    color:#d0dfe9;font:inherit;font-size:13px;font-weight:700;cursor:pointer;}
+  .earn-section-tabs [role="tab"][aria-selected="true"] {color:#09221c;
+    border-color:#6fe3be;background:linear-gradient(120deg,#83f0cc,#f3cf7e);}
+  .earn-section-tabs [role="tab"]:focus-visible {outline:3px solid #f4c96b;outline-offset:2px;}
+  .earn-section-panel[hidden] {display:none !important;}
+  .earn-tab-help {font-size:13px;color:#b9d2df;line-height:1.6;}
+  @media(max-width:700px){.earn-section-tabs{margin-top:16px}
+    .earn-section-tabs [role="tab"]{padding:9px 12px;font-size:12px;}}
 </style>
 <main class="earn-beta">
   <section class="earn-card">
@@ -314,6 +330,13 @@
           <button id="earn-pending-trigger" class="earn-balance-cell" type="button" aria-haspopup="dialog"><div class="label" data-i18n="pendThc">PENDING THC</div><div class="value pending" id="earn-pending-value">—</div></button>
         </div>
       </div>
+      <nav class="earn-section-tabs" aria-label="Earn sections" role="tablist">
+        <button type="button" id="earn-tab-offers" role="tab" aria-selected="true" aria-controls="earn-panel-offers" data-earn-section="offers">Αποστολές / Offers</button>
+        <button type="button" id="earn-tab-rewards" role="tab" aria-selected="false" aria-controls="earn-panel-rewards" data-earn-section="rewards">Ανταμοιβές / Rewards</button>
+        <button type="button" id="earn-tab-community" role="tab" aria-selected="false" aria-controls="earn-panel-community" data-earn-section="community">Κοινότητα / Community</button>
+        <button type="button" id="earn-tab-account" role="tab" aria-selected="false" aria-controls="earn-panel-account" data-earn-section="account">Λογαριασμός / Account</button>
+      </nav>
+      <div id="earn-panel-offers" class="earn-section-panel" role="tabpanel" aria-labelledby="earn-tab-offers">
       <div class="earn-provider-grid" aria-label="Earn providers">
         <section class="earn-provider" id="provider-cpx">
           <h3 data-i18n="cpxTitle">CPX Research</h3><p data-i18n="cpxDesc">Surveys selected for your account.</p>
@@ -336,6 +359,8 @@
         </section>
       </div>
       <div id="earn-ad-banner" class="earn-ad-banner" style="display:none;margin-top:14px"></div>
+      </div><!-- /Earn offers -->
+      <div id="earn-panel-community" class="earn-section-panel" role="tabpanel" aria-labelledby="earn-tab-community" hidden>
       <div id="earn-referral" class="earn-referral" style="display:none">
         <h4 data-i18n="referralTitle">Invite Friends</h4>
         <p style="color:#94a3b8;font-size:12px;margin:0 0 8px" data-i18n="referralDesc">Share your link and grow the Thronos Earn community.</p>
@@ -353,6 +378,8 @@
           <p style="font-size:11px;color:#94a3b8">Earn: L1 1%, L2 1%. Eligible active Thronos Wallet loyalty: L1 3%, L2 1%. Rates apply only to verified, cleared rewards after the referral ledger is enabled. Membership alone does not credit THC. Pool referrals have separate rules.</p>
         </details>
       </div>
+      </div><!-- /Community -->
+      <div id="earn-panel-rewards" class="earn-section-panel" role="tabpanel" aria-labelledby="earn-tab-rewards" hidden>
       <div id="t2e-section" class="earn-provider" style="margin-top:14px;display:none">
         <h3 style="margin-bottom:8px" data-i18n="t2eTitle">Train-to-Earn</h3>
         <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px">
@@ -385,12 +412,16 @@
           <p style="color:#fbbf24;font-size:12px;display:flex;align-items:center;gap:6px">&#x1F512; <span data-i18n="stakingNeedWallet">THC staking is available without a Wallet. Link a THR Wallet for THR staking.</span></p>
         </div>
       </div>
+      </div><!-- /Rewards -->
+      <div id="earn-panel-account" class="earn-section-panel" role="tabpanel" aria-labelledby="earn-tab-account" hidden>
+      <p class="earn-tab-help">Your account and verified reward history. A pending provider receipt is not yet spendable.</p>
       <button id="earn-logout" class="earn-toggle" type="button" data-i18n="signOut">Sign out</button>
       <div class="earn-history" id="earn-history">
         <button id="earn-activity-trigger" class="earn-activity-trigger" type="button" aria-haspopup="dialog" aria-label="Open recent activity">
           <span data-i18n="recentActivity">Recent activity</span> <span class="earn-activity-count" id="earn-activity-count">0</span>
         </button>
       </div>
+      </div><!-- /Account -->
     </div>
 
     <div id="earn-status" class="earn-status" role="status"></div>
@@ -1079,6 +1110,39 @@
       }
     } catch (_) { /* Showing the sign-in form is the safe fallback. */ }
   })();
+})();
+</script>
+
+<script>
+(function () {
+  'use strict';
+  const nav = document.querySelector('.earn-section-tabs');
+  if (!nav) return;
+  const buttons = Array.from(nav.querySelectorAll('[data-earn-section]'));
+  function selectEarnSection(section, focus) {
+    const selected = buttons.find(b => b.dataset.earnSection === section) || buttons[0];
+    buttons.forEach(button => {
+      const active = button === selected;
+      button.setAttribute('aria-selected', String(active));
+      button.tabIndex = active ? 0 : -1;
+      const panel = document.getElementById('earn-panel-' + button.dataset.earnSection);
+      if (panel) panel.hidden = !active;
+    });
+    if (focus) selected.focus();
+  }
+  nav.addEventListener('click', event => {
+    const button = event.target.closest('[data-earn-section]');
+    if (button && nav.contains(button)) selectEarnSection(button.dataset.earnSection, false);
+  });
+  nav.addEventListener('keydown', event => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    const active = buttons.findIndex(button => button.getAttribute('aria-selected') === 'true');
+    let next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1
+      : (active + (event.key === 'ArrowRight' ? 1 : -1) + buttons.length) % buttons.length;
+    event.preventDefault();
+    selectEarnSection(buttons[next].dataset.earnSection, true);
+  });
+  selectEarnSection('offers', false);
 })();
 </script>
 {% endblock %}

@@ -2145,6 +2145,7 @@ async function showEarn(options = {}) {
 
   document.getElementById('earnBackBtn').addEventListener('click', showWallet);
   document.getElementById('earnChristmasTimewall').addEventListener('click', () => {
+    document.getElementById('ew-tab-offers')?.click();
     const timewall = document.querySelector('#earnPwaBody [data-earn-provider="timewall"]');
     if (timewall) {
       timewall.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -2222,6 +2223,7 @@ async function showEarn(options = {}) {
           <button id="earnAvailableCard" type="button" style="flex:1;background:#0d0a1a;border:0;border-radius:9px;padding:10px;text-align:left;cursor:pointer"><div style="font-size:.66rem;color:var(--muted)">AVAILABLE</div><div style="font-size:1.1rem;color:var(--accent);font-weight:700">${availableText}</div></button>
           <button id="earnPendingCard" type="button" style="flex:1;background:#0d0a1a;border:0;border-radius:9px;padding:10px;text-align:left;cursor:pointer"><div style="font-size:.66rem;color:var(--muted)">PENDING</div><div style="font-size:1.1rem;color:#e8bf5a;font-weight:700">${pendingText}</div></button>
       </div>
+      <p id="earnPwaMessage" style="font-size:.72rem;color:var(--muted);line-height:1.45;margin:12px 0 4px">Verified provider receipts stay pending during the seven-day Earn hold. Select a receipt to see its own countdown and status.</p>
       <nav id="earnWalletTabs" class="earn-wallet-tabs" role="tablist" aria-label="Earn sections">
         <button type="button" role="tab" id="ew-tab-offers" aria-controls="ew-panel-offers" aria-selected="true" data-ew-tab="offers">Offers</button>
         <button type="button" role="tab" id="ew-tab-activity" aria-controls="ew-panel-activity" aria-selected="false" data-ew-tab="activity">Activity</button>
@@ -2254,7 +2256,7 @@ async function showEarn(options = {}) {
       ${me.wallet_address ? `<p style="font-size:.72rem;color:#55d6a7;line-height:1.45;margin:10px 0 0">✓ Linked wallet: ${escHtml(me.wallet_address.slice(0, 10))}…</p>` : `<button class="btn" id="linkEarnWalletBtn" style="width:100%;padding:10px;margin-top:8px">Link active Thronos wallet</button>`}
       </section>
       <section id="ew-panel-activity" class="earn-wallet-panel" role="tabpanel" aria-labelledby="ew-tab-activity" hidden>
-      <p id="earnPwaMessage" style="font-size:.72rem;color:var(--muted);line-height:1.45;margin:12px 0 4px">Verified provider receipts stay pending during the seven-day Earn hold. Select a receipt to see its own countdown and status.</p>
+
       <div style="margin-top:12px"><div style="font-size:.7rem;color:var(--muted);letter-spacing:.08em">RECENT REWARDS</div>${rows}</div>
       </section>
       <section id="ew-panel-community" class="earn-wallet-panel" role="tabpanel" aria-labelledby="ew-tab-community" hidden>

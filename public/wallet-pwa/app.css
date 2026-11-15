@@ -508,3 +508,24 @@ body {
 @media (max-width:380px) {
   .thr-brand--small {gap:.24em;}
 }
+
+
+/* Earn-only progressive section navigation; Wallet home/send/signing untouched. */
+#earnPwaBody .earn-wallet-tabs {
+  display:flex;overflow-x:auto;gap:7px;padding:0 1px 10px;margin:10px 0 14px;
+  scroll-snap-type:x proximity;scrollbar-width:thin;
+}
+#earnPwaBody .earn-wallet-tabs [role="tab"] {
+  flex:0 0 auto;scroll-snap-align:start;min-height:44px;padding:9px 12px;
+  border-radius:12px;border:1px solid rgba(148,197,204,.22);
+  color:#d2e6e8;background:#182c43;font-size:12px;font-weight:700;cursor:pointer;
+}
+#earnPwaBody .earn-wallet-tabs [role="tab"][aria-selected="true"] {
+  color:#09241e;background:linear-gradient(120deg,#75ebc7,#f6ce7e);
+  border-color:#75ebc7;
+}
+#earnPwaBody .earn-wallet-tabs [role="tab"]:focus-visible {
+  outline:3px solid #f4c96b;outline-offset:2px;
+}
+#earnPwaBody .earn-wallet-panel[hidden] {display:none !important;}
+#earnPwaBody .earn-wallet-panel {min-width:0;}

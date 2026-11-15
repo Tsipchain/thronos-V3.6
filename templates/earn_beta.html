@@ -315,6 +315,14 @@
   .earn-advertiser-intro h2{font-size:24px;color:#f5d88f;margin:10px 0 7px}
   .earn-advertiser-intro p{color:#c5d8e5;font-size:13px;line-height:1.55}
   .earn-advertiser-disclosure{font-size:12px!important;color:#b6c9d4!important;line-height:1.55}
+  .earn-ad-preview{border:1px solid #5a8974;background:linear-gradient(125deg,#142d39,#1c2635);
+    border-radius:15px;padding:14px;display:grid;gap:10px;overflow:hidden}
+  .earn-ad-preview[hidden]{display:none!important}
+  .earn-ad-preview-disclosure{font-size:10px;font-weight:850;letter-spacing:.09em;color:#edcb83}
+  .earn-ad-preview img{display:block;width:100%;max-height:230px;object-fit:contain;border-radius:10px}
+  .earn-ad-preview img[hidden]{display:none}
+  .earn-ad-preview strong{font-size:16px;color:#f1f7fa}
+  .earn-ad-preview small{color:#b6d6dc;font-size:12px}
   .earn-advertiser-form{display:grid;gap:12px;margin-top:14px;padding:16px;border:1px solid #355971;border-radius:15px;background:#0b1829}
   .earn-advertiser-form h3{font-size:16px;color:#e4eaf3;margin:0}
   .earn-advertiser-form label{font-size:12px;font-weight:750;color:#caddea;display:grid;gap:6px;min-width:0}
@@ -544,6 +552,13 @@
           <label><span data-earn-copy="creativeTitle">Title</span><input id="earn-ad-creative-title" required maxlength="100" placeholder="Ad headline"></label>
           <label><span data-earn-copy="creativeImage">Image URL (HTTPS)</span><input id="earn-ad-creative-image" type="url" required placeholder="https://example.com/banner.png"></label>
           <label><span data-earn-copy="creativeTarget">Destination URL (HTTPS)</span><input id="earn-ad-creative-target" type="url" required placeholder="https://example.com"></label>
+          <button class="earn-toggle" id="earn-ad-preview-button" type="button" data-earn-copy="previewCreative">Preview creative — no charge</button>
+          <aside id="earn-ad-preview" class="earn-ad-preview" role="region" aria-label="Ad preview" hidden>
+            <span class="earn-ad-preview-disclosure" data-earn-copy="previewDisclosure">AD PREVIEW · Not live · No THC charge</span>
+            <img id="earn-ad-preview-image" alt="" loading="lazy" referrerpolicy="no-referrer" hidden>
+            <strong id="earn-ad-preview-headline"></strong>
+            <small id="earn-ad-preview-domain"></small>
+          </aside>
           <button class="earn-action" type="submit" data-earn-copy="submitCreative">Submit creative for review</button>
         </form>
         <div id="earn-advertiser-feedback" class="earn-provider-status" role="status" aria-live="polite"></div>
@@ -642,7 +657,8 @@
       challengeDescription:"Reach Level 130 · Christmas challenge coming soon.",
       challengeAction:"Explore TimeWall tasks",
       invitedMembers:"Invited members & rewards",
-      timewallDescription:"Surveys, clicks and social tasks."
+      timewallDescription:"Surveys, clicks and social tasks.",
+      previewCreative:"Preview creative — no charge",previewDisclosure:"AD PREVIEW · Not live · No THC charge"
     },
     gr: {
       language:'Γλώσσα',journeyKicker:'Η ΔΙΑΔΡΟΜΗ ΣΟΥ',journeyHeadline:'Εξερεύνησε. Ολοκλήρωσε. Κέρδισε.',
@@ -678,7 +694,8 @@
       challengeDescription:"Φτάσε στο Level 130 · Η χριστουγεννιάτικη πρόκληση ετοιμάζεται.",
       challengeAction:"Δες τις αποστολές TimeWall",
       invitedMembers:"Προσκεκλημένα μέλη και ανταμοιβές",
-      timewallDescription:"Έρευνες, clicks και αποστολές κοινωνικών δικτύων."
+      timewallDescription:"Έρευνες, clicks και αποστολές κοινωνικών δικτύων.",
+      previewCreative:"Προεπισκόπηση · Χωρίς χρέωση",previewDisclosure:"ΠΡΟΕΠΙΣΚΟΠΗΣΗ · Δεν προβάλλεται · Χωρίς χρέωση THC"
     },
     es: {
       language:'Idioma',journeyKicker:'TU RECORRIDO',journeyHeadline:'Explora. Completa. Gana.',
@@ -714,7 +731,8 @@
       challengeDescription:"Alcanza el nivel 130 · Desafío navideño próximamente.",
       challengeAction:"Explorar tareas de TimeWall",
       invitedMembers:"Invitados y recompensas",
-      timewallDescription:"Encuestas, clics y tareas sociales."
+      timewallDescription:"Encuestas, clics y tareas sociales.",
+      previewCreative:"Vista previa · Sin cargo",previewDisclosure:"VISTA PREVIA · No publicada · Sin cargos THC"
     },
     ja: {
       language:'言語',journeyKicker:'EARN の進め方',journeyHeadline:'探そう。達成しよう。獲得しよう。',
@@ -750,7 +768,8 @@
       challengeDescription:"レベル130を目指そう · クリスマスチャレンジ準備中。",
       challengeAction:"TimeWall のタスクを見る",
       invitedMembers:"招待メンバーと報酬",
-      timewallDescription:"アンケート、クリック、ソーシャルタスク。"
+      timewallDescription:"アンケート、クリック、ソーシャルタスク。",
+      previewCreative:"プレビュー · 課金なし",previewDisclosure:"広告プレビュー · 未公開 · THCの課金なし"
     },
     ru: {
       language:'Язык',journeyKicker:'ВАШ ПУТЬ',journeyHeadline:'Выбирайте. Выполняйте. Получайте.',
@@ -786,7 +805,8 @@
       challengeDescription:"Достигните уровня 130 · Рождественское испытание скоро.",
       challengeAction:"Открыть задания TimeWall",
       invitedMembers:"Приглашённые и награды",
-      timewallDescription:"Опросы, клики и социальные задания."
+      timewallDescription:"Опросы, клики и социальные задания.",
+      previewCreative:"Предпросмотр · Без оплаты",previewDisclosure:"ПРЕДПРОСМОТР · Не опубликовано · Без списания THC"
     }
   };
   function apply() {
@@ -816,6 +836,7 @@
       login:'Sign in to your Earn Account first',failed:'Request failed',
       campaignCreated:'Campaign {id} created. Pending review; not live or charged.',
       invalidLinks:'Select your campaign and use HTTPS image and destination URLs.',
+      previewNeedTitle:'Enter an ad headline before previewing.',
       artworkCreated:'Artwork submitted for review. It is not live until approved and funded.' },
     gr: { loading:'Φόρτωση καμπανιών…', pick:'Επιλογή καμπάνιας', createFirst:'Δημιούργησε πρώτα μια καμπάνια',
       empty:'Δεν υπάρχουν καμπάνιες. Οι νέες καμπάνιες χρειάζονται έγκριση.',
@@ -823,28 +844,28 @@
       unavailable:'Η λίστα δεν είναι διαθέσιμη. Συνδέσου στο Earn ή προσπάθησε ξανά.',
       login:'Συνδέσου πρώτα στον λογαριασμό Earn',failed:'Αποτυχία αιτήματος',
       campaignCreated:'Η καμπάνια {id} καταχωρίστηκε. Αναμένει έγκριση, δεν προβάλλεται ούτε χρεώθηκε.',
-      invalidLinks:'Επίλεξε καμπάνια και χρησιμοποίησε συνδέσμους HTTPS για εικόνα και προορισμό.',
+      invalidLinks:'Επίλεξε καμπάνια και χρησιμοποίησε συνδέσμους HTTPS για εικόνα και προορισμό.',previewNeedTitle:'Πληκτρολόγησε τίτλο για την προεπισκόπηση.',
       artworkCreated:'Το δημιουργικό υποβλήθηκε για έγκριση. Δεν προβάλλεται μέχρι να εγκριθεί και να χρηματοδοτηθεί.' },
     es: { loading:'Cargando campañas…',pick:'Seleccionar campaña',createFirst:'Crea primero una campaña',
       empty:'Aún no hay campañas. Las nuevas necesitan revisión.',status:'Estado',unknown:'desconocido',
       bid:'Oferta',unavailable:'No se pudo cargar. Inicia sesión o inténtalo de nuevo.',
       login:'Inicia sesión en Earn',failed:'Solicitud fallida',
       campaignCreated:'Campaña {id} creada. Pendiente de aprobación, no publicada ni cobrada.',
-      invalidLinks:'Selecciona una campaña e introduce enlaces HTTPS para imagen y destino.',
+      invalidLinks:'Selecciona una campaña e introduce enlaces HTTPS para imagen y destino.',previewNeedTitle:'Introduce un título antes de la vista previa.',
       artworkCreated:'Creatividad enviada a revisión. No se publica hasta su aprobación y financiación.' },
     ja: { loading:'キャンペーンを読み込み中…',pick:'キャンペーンを選択',createFirst:'まずキャンペーンを作成',
       empty:'キャンペーンはまだありません。新規作成には審査が必要です。',status:'状態',unknown:'不明',
       bid:'入札額',unavailable:'一覧を取得できません。ログインして再度お試しください。',
       login:'Earnにログインしてください',failed:'リクエストに失敗しました',
       campaignCreated:'キャンペーン{id}を作成しました。審査待ちであり、配信・課金されていません。',
-      invalidLinks:'キャンペーンとHTTPSの画像・移動先URLを選択してください。',
+      invalidLinks:'キャンペーンとHTTPSの画像・移動先URLを選択してください。',previewNeedTitle:'プレビューの前にタイトルを入力してください。',
       artworkCreated:'広告素材を審査に送信しました。承認・入金前は配信されません。' },
     ru: { loading:'Загрузка кампаний…',pick:'Выбрать кампанию',createFirst:'Сначала создайте кампанию',
       empty:'Кампаний пока нет. Новые проходят проверку.',status:'Статус',unknown:'неизвестно',
       bid:'Ставка',unavailable:'Список недоступен. Войдите в Earn или попробуйте снова.',
       login:'Сначала войдите в Earn',failed:'Ошибка запроса',
       campaignCreated:'Кампания {id} создана. Ожидает проверки, не запущена и не оплачена.',
-      invalidLinks:'Выберите кампанию и укажите HTTPS-ссылки на изображение и сайт.',
+      invalidLinks:'Выберите кампанию и укажите HTTPS-ссылки на изображение и сайт.',previewNeedTitle:'Введите заголовок перед просмотром.',
       artworkCreated:'Материал отправлен на проверку. Показ начнётся только после одобрения и оплаты.' }
   };
   const message = (key, replacements = {}) => {
@@ -1575,6 +1596,36 @@
   const feedback = $('earn-advertiser-feedback');
   const list = $('earn-advertiser-list');
   const selector = $('earn-ad-creative-campaign');
+  // Preview is local-only: never calls serve/impression/click, escrow or campaign API.
+  $('earn-ad-preview-button').addEventListener('click', () => {
+    const title = $('earn-ad-creative-title').value.trim();
+    const image = $('earn-ad-creative-image').value.trim();
+    const target = $('earn-ad-creative-target').value.trim();
+    const card = $('earn-ad-preview');
+    const img = $('earn-ad-preview-image');
+    let destination;
+    try {
+      destination = new URL(target);
+      if (destination.protocol !== 'https:' || destination.username || destination.password) throw Error('invalid');
+      const picture = new URL(image);
+      if (picture.protocol !== 'https:' || picture.username || picture.password) throw Error('invalid');
+    } catch (_) {
+      card.hidden = true;
+      setFeedback(localized('invalidLinks'), true);
+      return;
+    }
+    if (!title) {
+      card.hidden = true;
+      setFeedback(localized('previewNeedTitle'), true);
+      return;
+    }
+    $('earn-ad-preview-headline').textContent = title;
+    $('earn-ad-preview-domain').textContent = destination.hostname;
+    img.src = image;
+    img.hidden = false;
+    img.onerror = () => { img.hidden = true; };
+    card.hidden = false;
+  });
   const localized = (key, tokens) => window.ThronosEarnLocale?.message(key, tokens) || key;
   const setFeedback = (message, error = false) => {
     feedback.textContent = message;

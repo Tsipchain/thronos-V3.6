@@ -16,6 +16,8 @@ on:
       - "tests/test_earn_advertiser_locale_feedback.py"
       - "tests/test_earn_standalone_manifest.py"
       - "tests/test_earn_cpx_local_mark.py"
+      - "tests/test_earn_brand_lockup.py"
+      - "static/img/thronos-earn-lockup.svg"
       - "static/img/cpx-research-mark.svg"
       - "static/earn.webmanifest"
       - "templates/base.html"
@@ -73,4 +75,4 @@ jobs:
           TIMEWALL_ENABLED: "0"
           TIMEWALL_POSTBACK_LIVE: "0"
         run: |
-          python -m pytest tests/test_earn_account.py tests/test_earn_ad_marketplace.py tests/test_earn_wallet_link.py tests/test_timewall_earn_adapter.py tests/test_earn_receipt_details.py tests/test_earn_leaderboard.py tests/test_earn_internal_hold.py tests/test_earn_loyalty.py tests/test_bitcotasks_earn_adapter.py tests/test_pythia_wallet_settlement_quote.py tests/test_pythia_btc_reserve.py tests/test_earn_thr_receipt_gate.py tests/test_earn_thr_linked_wallet_preflight.py tests/test_earn_web_section_tabs.py tests/test_wallet_pwa_earn_tabs.py tests/test_earn_provider_brand_advertiser_ui.py tests/test_earn_gym_eligibility_proof.py tests/test_earn_shell_i18n.py tests/test_earn_advertiser_locale_feedback.py tests/test_earn_standalone_manifest.py tests/test_earn_cpx_local_mark.py -v
+          python -m pytest tests/test_earn_account.py tests/test_earn_ad_marketplace.py tests/test_earn_wallet_link.py tests/test_timewall_earn_adapter.py tests/test_earn_receipt_details.py tests/test_earn_leaderboard.py tests/test_earn_internal_hold.py tests/test_earn_loyalty.py tests/test_bitcotasks_earn_adapter.py tests/test_pythia_wallet_settlement_quote.py tests/test_pythia_btc_reserve.py tests/test_earn_thr_receipt_gate.py tests/test_earn_thr_linked_wallet_preflight.py tests/test_earn_web_section_tabs.py tests/test_wallet_pwa_earn_tabs.py tests/test_earn_provider_brand_advertiser_ui.py tests/test_earn_gym_eligibility_proof.py tests/test_earn_shell_i18n.py tests/test_earn_advertiser_locale_feedback.py tests/test_earn_standalone_manifest.py tests/test_earn_cpx_local_mark.py tests/test_earn_brand_lockup.py -v

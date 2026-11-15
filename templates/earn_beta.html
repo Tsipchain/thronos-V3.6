@@ -1,6 +1,13 @@
 {% extends "base.html" %}
 {% block title %}Thronos Earn — Powered by Thronos Labs &amp; Encom
 {% endblock %}
+{% block styles %}
+  /* Earn has its own product shell. Only this URL loses global chain navigation. */
+  body:has(.earn-beta) > .top-controls,
+  body:has(.earn-beta) > .navbar { display:none !important; }
+  body:has(.earn-beta) > .container { max-width:none; padding:0; }
+  body:has(.earn-beta) { overflow-x:hidden; }
+{% endblock %}
 {% block content %}
 <style>
   .earn-beta { max-width: 1160px; margin: 32px auto; padding: 0 18px 42px; }
@@ -317,8 +324,46 @@
   .earn-advertiser-row:last-child{border-bottom:0}
   @media(max-width:520px){.earn-advertiser-fields{grid-template-columns:1fr}.earn-advertiser-form .earn-action{max-width:none}}
 
+
+  .earn-product-header{display:flex;align-items:center;justify-content:space-between;gap:16px;
+    padding:14px 18px;margin:0 0 16px;border:1px solid #305970;border-radius:15px;
+    background:linear-gradient(125deg,#0f2b37,#112333)}
+  .earn-product-identity{display:flex;align-items:center;gap:12px;min-width:0}
+  .earn-product-identity strong{display:block;font-size:17px;letter-spacing:.04em;color:#ebf7f4}
+  .earn-product-identity strong span{color:#f3d084}
+  .earn-product-identity small{display:block;font-size:11px;color:#a4c8c6}
+  .earn-product-icon{width:46px;height:46px;border-radius:50%;display:grid;place-items:center;flex:none;
+    background:linear-gradient(135deg,#f4d688,#7fd9bb);border:2px solid #c5a660;
+    color:#10272d;font-size:13px;font-weight:950;box-shadow:0 0 20px #80ead822}
+  .earn-language-field{display:flex;align-items:center;gap:8px;color:#c5d6e2;font-size:12px}
+  #earn-language{background:#0b1c2d;border:1px solid #50847c;border-radius:9px;
+    padding:9px 11px;color:#f0f6f5;font:inherit;font-size:13px;min-height:44px}
+  #earn-language:focus-visible{outline:3px solid #f6d184;outline-offset:2px}
+  .earn-provider-brand--cpx{background:linear-gradient(140deg,#147860,#073e52);color:#fff}
+  .earn-provider-brand--cpx .earn-provider-letter{font-size:12px;letter-spacing:-.025em}
+  @media(max-width:520px){.earn-product-header{padding:12px;gap:8px}
+    .earn-product-identity strong{font-size:14px}
+    .earn-product-identity small{font-size:10px}
+    .earn-language-field>span{display:none}}
 </style>
 <main class="earn-beta">
+    <header class="earn-product-header" aria-label="Thronos Earn">
+      <div class="earn-product-identity">
+        <span class="earn-product-icon" aria-hidden="true">THR</span>
+        <div><strong>THRONOS <span>EARN</span></strong><small>ThronosLabs · ENCOM</small></div>
+      </div>
+      <label class="earn-language-field" for="earn-language">
+        <span data-earn-copy="language">Language / Γλώσσα</span>
+        <select id="earn-language" aria-label="Earn language">
+          <option value="gr">Ελληνικά</option>
+          <option value="en">English</option>
+          <option value="es">Español</option>
+          <option value="ja">日本語</option>
+          <option value="ru">Русский</option>
+        </select>
+      </label>
+    </header>
+
   <section class="earn-card">
     <h1 data-i18n="title">Thronos Earn Project</h1>
     <p style="margin:0;color:#7fb8d8;font-size:12px" data-i18n="powered">Powered by ThronosLabs and ENCOM</p>
@@ -327,24 +372,24 @@
          settlement always determine real reward and payout eligibility. -->
     <section class="earn-journey" aria-label="How Thronos Earn works">
       <div class="earn-journey-heading">
-        <span class="earn-journey-kicker">YOUR EARN JOURNEY / Η ΔΙΑΔΡΟΜΗ ΣΟΥ</span>
-        <h2>Explore. Complete. Earn.</h2>
-        <p>Διάλεξε διαθέσιμες αποστολές, ολοκλήρωσέ τες και παρακολούθησε την επιβεβαίωση των ανταμοιβών σου.</p>
+        <span class="earn-journey-kicker" data-earn-copy="journeyKicker">YOUR EARN JOURNEY</span>
+        <h2 data-earn-copy="journeyHeadline">Explore. Complete. Earn.</h2>
+        <p data-earn-copy="journeyDescription">Choose available missions, complete them and track verified rewards.</p>
       </div>
       <ol class="earn-journey-steps">
-        <li><span class="earn-journey-step-icon" aria-hidden="true">01</span><div><strong>Επίλεξε / Explore</strong><small>Surveys &amp; verified offers</small></div></li>
-        <li><span class="earn-journey-step-icon" aria-hidden="true">02</span><div><strong>Ολοκλήρωσε / Complete</strong><small>Provider verification required</small></div></li>
-        <li><span class="earn-journey-step-icon" aria-hidden="true">03</span><div><strong>Κέρδισε / Earn</strong><small>Pending → cleared THC</small></div></li>
+        <li><span class="earn-journey-step-icon" aria-hidden="true">01</span><div><strong data-earn-copy="explore">Explore</strong><small data-earn-copy="surveys">Surveys &amp; verified offers</small></div></li>
+        <li><span class="earn-journey-step-icon" aria-hidden="true">02</span><div><strong data-earn-copy="complete">Complete</strong><small data-earn-copy="verification">Provider verification required</small></div></li>
+        <li><span class="earn-journey-step-icon" aria-hidden="true">03</span><div><strong data-earn-copy="earn">Earn</strong><small data-earn-copy="clearing">Pending → cleared THC</small></div></li>
       </ol>
-      <p class="earn-journey-disclaimer">Real rewards depend on verified provider receipts, applicable hold periods and available settlement funding. No wallet is required to start.</p>
+      <p class="earn-journey-disclaimer" data-earn-copy="journeyDisclaimer">Real rewards depend on verified provider receipts, applicable hold periods and available settlement funding. No wallet is required to start.</p>
     </section>
     <section class="earn-christmas-banner" aria-labelledby="earn-christmas-title">
       <div class="challenge-copy">
-        <span class="challenge-kicker">Thronos Earn · Christmas 2026</span>
-        <h2 id="earn-christmas-title">Goblins Wood Challenge</h2>
-        <p>Στόχος: Level 130 · Η χριστουγεννιάτικη πρόκληση ετοιμάζεται.<br>Reach Level 130 · Christmas challenge coming soon.</p>
+        <span class="challenge-kicker" data-earn-copy="challengeKicker">Thronos Earn · Christmas 2026</span>
+        <h2 id="earn-christmas-title" data-earn-copy="challengeTitle">Goblins Wood Challenge</h2>
+        <p data-earn-copy="challengeDescription">Reach Level 130 · Christmas challenge coming soon.</p>
         <p id="earn-goblins-progress" aria-live="polite" hidden></p>
-        <button id="earn-christmas-timewall" type="button">Δες το TimeWall / Explore tasks</button>
+        <button id="earn-christmas-timewall" type="button" data-earn-copy="challengeAction">Explore TimeWall tasks</button>
       </div>
     </section>
     <button id="earn-activity-launch" class="earn-activity-launch" type="button" aria-haspopup="dialog" data-i18n="balanceBtn">&#x23F1; Balance &amp; activity</button>
@@ -368,16 +413,16 @@
         </div>
       </div>
       <nav class="earn-section-tabs" aria-label="Earn sections" role="tablist">
-        <button type="button" id="earn-tab-offers" role="tab" aria-selected="true" aria-controls="earn-panel-offers" data-earn-section="offers">Αποστολές / Offers</button>
-        <button type="button" id="earn-tab-rewards" role="tab" aria-selected="false" aria-controls="earn-panel-rewards" data-earn-section="rewards">Ανταμοιβές / Rewards</button>
-        <button type="button" id="earn-tab-community" role="tab" aria-selected="false" aria-controls="earn-panel-community" data-earn-section="community">Κοινότητα / Community</button>
-        <button type="button" id="earn-tab-account" role="tab" aria-selected="false" aria-controls="earn-panel-account" data-earn-section="account">Λογαριασμός / Account</button>
-        <button type="button" id="earn-tab-advertise" role="tab" aria-selected="false" aria-controls="earn-panel-advertise" data-earn-section="advertise">Διαφήμιση / Advertise</button>
+        <button type="button" id="earn-tab-offers" role="tab" aria-selected="true" aria-controls="earn-panel-offers" data-earn-section="offers" data-earn-copy="offersTab">Offers</button>
+        <button type="button" id="earn-tab-rewards" role="tab" aria-selected="false" aria-controls="earn-panel-rewards" data-earn-section="rewards" data-earn-copy="rewardsTab">Rewards</button>
+        <button type="button" id="earn-tab-community" role="tab" aria-selected="false" aria-controls="earn-panel-community" data-earn-section="community" data-earn-copy="communityTab">Community</button>
+        <button type="button" id="earn-tab-account" role="tab" aria-selected="false" aria-controls="earn-panel-account" data-earn-section="account" data-earn-copy="accountTab">Account</button>
+        <button type="button" id="earn-tab-advertise" role="tab" aria-selected="false" aria-controls="earn-panel-advertise" data-earn-section="advertise" data-earn-copy="advertiseTab">Advertise</button>
       </nav>
       <div id="earn-panel-offers" class="earn-section-panel" role="tabpanel" aria-labelledby="earn-tab-offers">
       <div class="earn-provider-grid" aria-label="Earn providers">
         <section class="earn-provider" id="provider-cpx">
-          <div class="earn-provider-heading"><span class="earn-provider-brand earn-provider-brand--cpx" aria-hidden="true"><span class="earn-provider-letter">C</span><img src="https://www.cpx-research.com/favicon.ico" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.hidden=true"></span><h3 data-i18n="cpxTitle">CPX Research</h3></div><p data-i18n="cpxDesc">Surveys selected for your account.</p>
+          <div class="earn-provider-heading"><span class="earn-provider-brand earn-provider-brand--cpx" aria-hidden="true"><span class="earn-provider-letter">CPX</span></span><h3 data-i18n="cpxTitle">CPX Research</h3></div><p data-i18n="cpxDesc">Surveys selected for your account.</p>
           <button id="earn-surveys" class="earn-action" type="button" data-i18n="openSurveys">Open Surveys</button>
         </section>
         <section class="earn-provider is-unavailable" id="provider-bitcotasks">
@@ -391,14 +436,14 @@
           <div id="pure-status" class="earn-provider-status" aria-live="polite" data-i18n="purePending">Integration pending</div>
         </section>
         <section class="earn-provider is-unavailable" id="provider-timewall">
-          <div class="earn-provider-heading"><span class="earn-provider-brand earn-provider-brand--timewall" aria-hidden="true"><span class="earn-provider-letter">T</span><img src="https://timewall.io/favicon.ico" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.hidden=true"></span><h3>TimeWall</h3></div><p id="timewall-copy">Surveys, clicks and social tasks.</p>
+          <div class="earn-provider-heading"><span class="earn-provider-brand earn-provider-brand--timewall" aria-hidden="true"><span class="earn-provider-letter">T</span><img src="https://timewall.io/favicon.ico" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.hidden=true"></span><h3>TimeWall</h3></div><p id="timewall-copy" data-earn-copy="timewallDescription">Surveys, clicks and social tasks.</p>
           <button id="earn-timewall" class="earn-action" type="button" disabled>Coming soon</button>
           <div id="timewall-status" class="earn-provider-status" aria-live="polite">Placement setup pending</div>
         </section>
         <section class="earn-provider earn-gym-preview is-unavailable" id="provider-train2earn" aria-label="Gym challenges preview">
           <div class="earn-provider-heading"><span class="earn-provider-brand earn-provider-brand--gym" aria-hidden="true">T2E</span><h3>Train2Earn · Gym</h3></div>
-          <p>Προπονήσεις και gym challenges με επαληθευμένη συμμετοχή. Αυτόνομη εφαρμογή, υπό προετοιμασία.</p>
-          <div class="earn-provider-status">Δεν δίνει ακόμη THC · Awaiting verified integration</div>
+          <p data-earn-copy="gymDescription">Verified training and gym challenges. Independent application in preparation.</p>
+          <div class="earn-provider-status" data-earn-copy="gymStatus">No THC rewards yet · Verified integration pending</div>
           <button type="button" class="earn-action" disabled>Coming soon</button>
         </section>
       </div>
@@ -417,7 +462,7 @@
           <div>Level 2: <span id="ref-level2-count">0</span></div>
         </div>
         <details style="margin-top:12px;border-top:1px solid #2e5874;padding-top:10px">
-          <summary style="cursor:pointer;color:#b8d9ee;font-weight:700;font-size:13px">Invited members &amp; rewards</summary>
+          <summary style="cursor:pointer;color:#b8d9ee;font-weight:700;font-size:13px" data-earn-copy="invitedMembers">Invited members &amp; rewards</summary>
           <div id="ref-members" style="margin-top:10px;font-size:12px;color:#b8d9ee"></div>
           <p style="font-size:11px;color:#94a3b8">Earn: L1 1%, L2 1%. Eligible active Thronos Wallet loyalty: L1 3%, L2 1%. Rates apply only to verified, cleared rewards after the referral ledger is enabled. Membership alone does not credit THC. Pool referrals have separate rules.</p>
         </details>
@@ -458,7 +503,7 @@
       </div>
       </div><!-- /Rewards -->
       <div id="earn-panel-account" class="earn-section-panel" role="tabpanel" aria-labelledby="earn-tab-account" hidden>
-      <p class="earn-tab-help">Your account and verified reward history. A pending provider receipt is not yet spendable.</p>
+      <p class="earn-tab-help" data-earn-copy="accountHelp">Your account and verified reward history. A pending provider receipt is not yet spendable.</p>
       <button id="earn-logout" class="earn-toggle" type="button" data-i18n="signOut">Sign out</button>
       <div class="earn-history" id="earn-history">
         <button id="earn-activity-trigger" class="earn-activity-trigger" type="button" aria-haspopup="dialog" aria-label="Open recent activity">
@@ -468,35 +513,35 @@
       </div><!-- /Account -->
       <section id="earn-panel-advertise" class="earn-section-panel" role="tabpanel" aria-labelledby="earn-tab-advertise" hidden>
         <div class="earn-advertiser-intro">
-          <span class="earn-panel-kicker">THRONOS EARN · ADVERTISERS</span>
-          <h2>Προώθησε την επιχείρησή σου</h2>
-          <p>Δημιούργησε καμπάνια για το Thronos Earn. Όλες οι καμπάνιες και οι δημιουργικές καταχωρίσεις εξετάζονται πριν προβληθούν. Χρεώσεις και ενεργοποίηση απαιτούν επαληθευμένο escrow και έγκριση.</p>
-          <p class="earn-advertiser-disclosure">Οι διαφημίσεις προβάλλονται μόνο σε επιτρεπόμενες θέσεις του Earn — ποτέ σε home, signing, send ή receive του wallet.</p>
+          <span class="earn-panel-kicker" data-earn-copy="advertiserKicker">THRONOS EARN · ADVERTISERS</span>
+          <h2 data-earn-copy="advertiseHeadline">Promote your business</h2>
+          <p data-earn-copy="advertiseDescription">Create a Thronos Earn campaign. All campaigns and creatives require review and verified funding before delivery.</p>
+          <p class="earn-advertiser-disclosure" data-earn-copy="advertisePlacement">Ads appear only in approved Earn placements, never in wallet home, signing, send or receive.</p>
         </div>
         <form id="earn-advertiser-form" class="earn-advertiser-form">
-          <h3>Νέα καμπάνια / Create campaign</h3>
-          <label>Campaign name <input id="earn-ad-campaign-name" required minlength="3" maxlength="100" placeholder="Business or campaign name" autocomplete="off"></label>
+          <h3 data-earn-copy="newCampaign">Create campaign</h3>
+          <label><span data-earn-copy="campaignLabel">Campaign name</span><input id="earn-ad-campaign-name" required minlength="3" maxlength="100" placeholder="Business or campaign name" autocomplete="off"></label>
           <div class="earn-advertiser-fields">
-            <label>Type <select id="earn-ad-campaign-type"><option value="cpm">CPM · impressions</option><option value="cpc">CPC · clicks</option></select></label>
-            <label>Bid (THC) <input id="earn-ad-campaign-bid" required type="number" min="0.000001" step="0.000001" value="1.000000"></label>
-            <label>Daily cap (THC) <input id="earn-ad-campaign-daily" required type="number" min="0" step="0.000001" value="0"></label>
-            <label>Total cap (THC) <input id="earn-ad-campaign-total" required type="number" min="0" step="0.000001" value="0"></label>
+            <label><span data-earn-copy="typeLabel">Type</span><select id="earn-ad-campaign-type"><option value="cpm" data-earn-copy="cpmText">CPM · impressions</option><option value="cpc" data-earn-copy="cpcText">CPC · clicks</option></select></label>
+            <label><span data-earn-copy="bidLabel">Bid (THC)</span><input id="earn-ad-campaign-bid" required type="number" min="0.000001" step="0.000001" value="1.000000"></label>
+            <label><span data-earn-copy="dailyLabel">Daily cap (THC)</span><input id="earn-ad-campaign-daily" required type="number" min="0" step="0.000001" value="0"></label>
+            <label><span data-earn-copy="totalLabel">Total cap (THC)</span><input id="earn-ad-campaign-total" required type="number" min="0" step="0.000001" value="0"></label>
           </div>
-          <p class="earn-advertiser-disclosure">Οι τιμές είναι το όριο που προτείνεις, όχι άμεση χρέωση. Μια νέα καμπάνια καταχωρίζεται ως pending review.</p>
-          <button class="earn-action" type="submit">Create draft campaign</button>
+          <p class="earn-advertiser-disclosure" data-earn-copy="capsInfo">These are proposed budget limits, not an immediate charge. New campaigns require review.</p>
+          <button class="earn-action" type="submit" data-earn-copy="createDraft">Create draft campaign</button>
         </form>
         <form id="earn-advertiser-creative-form" class="earn-advertiser-form">
-          <h3>Δημιουργικό / Campaign artwork</h3>
-          <label>Campaign <select id="earn-ad-creative-campaign" required><option value="">Select a campaign first</option></select></label>
-          <label>Title <input id="earn-ad-creative-title" required maxlength="100" placeholder="Ad headline"></label>
-          <label>Image URL (HTTPS) <input id="earn-ad-creative-image" type="url" required placeholder="https://example.com/banner.png"></label>
-          <label>Destination URL (HTTPS) <input id="earn-ad-creative-target" type="url" required placeholder="https://example.com"></label>
-          <button class="earn-action" type="submit">Submit creative for review</button>
+          <h3 data-earn-copy="creativeHeading">Campaign artwork</h3>
+          <label><span data-earn-copy="campaignSelect">Campaign</span><select id="earn-ad-creative-campaign" required><option value="" data-earn-copy="chooseCampaign">Select a campaign first</option></select></label>
+          <label><span data-earn-copy="creativeTitle">Title</span><input id="earn-ad-creative-title" required maxlength="100" placeholder="Ad headline"></label>
+          <label><span data-earn-copy="creativeImage">Image URL (HTTPS)</span><input id="earn-ad-creative-image" type="url" required placeholder="https://example.com/banner.png"></label>
+          <label><span data-earn-copy="creativeTarget">Destination URL (HTTPS)</span><input id="earn-ad-creative-target" type="url" required placeholder="https://example.com"></label>
+          <button class="earn-action" type="submit" data-earn-copy="submitCreative">Submit creative for review</button>
         </form>
         <div id="earn-advertiser-feedback" class="earn-provider-status" role="status" aria-live="polite"></div>
         <div class="earn-advertiser-existing">
-          <div class="earn-advertiser-existing-head"><h3>My campaigns</h3><button type="button" id="earn-advertiser-refresh" class="earn-toggle">Refresh</button></div>
-          <div id="earn-advertiser-list" aria-live="polite"><p class="earn-tab-help">Select Advertise to load your campaigns.</p></div>
+          <div class="earn-advertiser-existing-head"><h3 data-earn-copy="myCampaigns">My campaigns</h3><button type="button" id="earn-advertiser-refresh" class="earn-toggle" data-earn-copy="refresh">Refresh</button></div>
+          <div id="earn-advertiser-list" aria-live="polite"><p class="earn-tab-help" data-earn-copy="loadingCampaigns">Select Advertise to load your campaigns.</p></div>
         </div>
       </section>
     </div>
@@ -531,6 +576,246 @@
     <button class="promo-skip" id="promo-skip" type="button" data-i18n="skip">Skip</button>
   </div>
 </div>
+
+<script>
+/* Earn-specific localized copy. Explicit user preference wins over device
+   locale; no IP geolocation or automatic network calls are performed. */
+(() => {
+  'use strict';
+  const supported = new Set(['gr', 'en', 'es', 'ja', 'ru']);
+  const normalize = value => {
+    const code = String(value || '').toLowerCase().split(/[-_]/)[0];
+    return code === 'el' ? 'gr' : supported.has(code) ? code : 'en';
+  };
+  const stored = () => {
+    try { return localStorage.getItem('thr_lang') || localStorage.getItem('lang'); }
+    catch (_) { return null; }
+  };
+  const candidates = navigator.languages?.length ? navigator.languages : [navigator.language || 'en'];
+  let lang = stored() ? normalize(stored()) : normalize(candidates[0]);
+  // Seed the shared preference only on the first visit. Otherwise the
+  // inherited core initializer would overwrite the browser-locale default.
+  if (!stored()) {
+    try { localStorage.setItem('thr_lang', lang); }
+    catch (_) { /* Continue with in-memory language when storage is blocked. */ }
+  }
+  const copy = {
+    en: {
+      language:'Language',journeyKicker:'YOUR EARN JOURNEY',journeyHeadline:'Explore. Complete. Earn.',
+      journeyDescription:'Choose available missions, complete them and track verified rewards.',
+      explore:'Explore',complete:'Complete',earn:'Earn',surveys:'Surveys & verified offers',
+      verification:'Provider verification required',clearing:'Pending → cleared THC',
+      journeyDisclaimer:'Rewards require verified provider receipts, applicable hold periods and funded settlement. No wallet is required to start.',
+      offersTab:'Offers',rewardsTab:'Rewards',communityTab:'Community',accountTab:'Account',advertiseTab:'Advertise',
+      accountHelp:'Your account and verified reward history. Pending provider receipts are not yet spendable.',
+      advertiseHeadline:'Promote your business',advertiseDescription:'Create Thronos Earn campaigns. Ads and creatives require approval and verified funding before display.',
+      advertisePlacement:'Ads appear only in Earn, never in wallet home, signing, send or receive.',
+      newCampaign:'Create campaign',creativeHeading:'Campaign artwork',createDraft:'Create draft campaign',
+      submitCreative:'Submit creative for review',myCampaigns:'My campaigns',refresh:'Refresh',
+      gymDescription:'Training and gym challenges with verified participation. Independent app in preparation.',
+      gymStatus:'No THC rewards yet · Verified integration pending',
+      campaignLabel:"Campaign name",
+      typeLabel:"Type",
+      bidLabel:"Bid (THC)",
+      dailyLabel:"Daily cap (THC)",
+      totalLabel:"Total cap (THC)",
+      capsInfo:"These are proposed budget limits, not an immediate charge. New campaigns require review.",
+      campaignSelect:"Campaign",
+      creativeTitle:"Title",
+      creativeImage:"Image URL (HTTPS)",
+      creativeTarget:"Destination URL (HTTPS)",
+      cpmText:"CPM · impressions",
+      cpcText:"CPC · clicks",
+      chooseCampaign:"Select a campaign first",
+      loadingCampaigns:"Select Advertise to load your campaigns.",
+      advertiserKicker:"THRONOS EARN · ADVERTISERS",
+      challengeKicker:"THRONOS EARN · CHRISTMAS 2026",
+      challengeTitle:"Goblins Wood Challenge",
+      challengeDescription:"Reach Level 130 · Christmas challenge coming soon.",
+      challengeAction:"Explore TimeWall tasks",
+      invitedMembers:"Invited members & rewards",
+      timewallDescription:"Surveys, clicks and social tasks."
+    },
+    gr: {
+      language:'Γλώσσα',journeyKicker:'Η ΔΙΑΔΡΟΜΗ ΣΟΥ',journeyHeadline:'Εξερεύνησε. Ολοκλήρωσε. Κέρδισε.',
+      journeyDescription:'Διάλεξε διαθέσιμες αποστολές, ολοκλήρωσέ τες και παρακολούθησε τις επαληθευμένες ανταμοιβές.',
+      explore:'Εξερεύνησε',complete:'Ολοκλήρωσε',earn:'Κέρδισε',surveys:'Έρευνες και επιβεβαιωμένες προσφορές',
+      verification:'Απαιτείται επαλήθευση παρόχου',clearing:'Σε αναμονή → διαθέσιμα THC',
+      journeyDisclaimer:'Οι ανταμοιβές απαιτούν επιβεβαίωση παρόχου, περίοδο αναμονής και επαρκή χρηματοδότηση. Δεν απαιτείται wallet για να ξεκινήσεις.',
+      offersTab:'Αποστολές',rewardsTab:'Ανταμοιβές',communityTab:'Κοινότητα',accountTab:'Λογαριασμός',advertiseTab:'Διαφήμιση',
+      accountHelp:'Ο λογαριασμός και το ιστορικό σου. Οι εκκρεμείς ανταμοιβές δεν είναι ακόμη διαθέσιμες.',
+      advertiseHeadline:'Προώθησε την επιχείρησή σου',advertiseDescription:'Δημιούργησε καμπάνιες στο Thronos Earn. Η προβολή απαιτεί έγκριση και επιβεβαιωμένη χρηματοδότηση.',
+      advertisePlacement:'Οι διαφημίσεις προβάλλονται μόνο στο Earn, ποτέ σε αρχική, υπογραφές ή μεταφορές wallet.',
+      newCampaign:'Νέα καμπάνια',creativeHeading:'Εικόνα και δημιουργικό',createDraft:'Δημιουργία πρόχειρης καμπάνιας',
+      submitCreative:'Υποβολή δημιουργικού για έγκριση',myCampaigns:'Οι καμπάνιες μου',refresh:'Ανανέωση',
+      gymDescription:'Προπονήσεις και προκλήσεις με επιβεβαιωμένη συμμετοχή από γυμναστήριο. Η εφαρμογή ετοιμάζεται.',
+      gymStatus:'Χωρίς THC ακόμη · Αναμονή επαληθευμένης σύνδεσης',
+      campaignLabel:"Όνομα καμπάνιας",
+      typeLabel:"Τύπος",
+      bidLabel:"Προσφορά (THC)",
+      dailyLabel:"Ημερήσιο όριο (THC)",
+      totalLabel:"Συνολικό όριο (THC)",
+      capsInfo:"Τα ποσά είναι προτεινόμενα όρια, όχι άμεση χρέωση. Οι νέες καμπάνιες χρειάζονται έγκριση.",
+      campaignSelect:"Καμπάνια",
+      creativeTitle:"Τίτλος",
+      creativeImage:"Σύνδεσμος εικόνας (HTTPS)",
+      creativeTarget:"Σύνδεσμος προορισμού (HTTPS)",
+      cpmText:"CPM · εμφανίσεις",
+      cpcText:"CPC · κλικ",
+      chooseCampaign:"Επίλεξε πρώτα καμπάνια",
+      loadingCampaigns:"Άνοιξε τη Διαφήμιση για να φορτωθούν οι καμπάνιες σου.",
+      advertiserKicker:"THRONOS EARN · ΔΙΑΦΗΜΙΖΟΜΕΝΟΙ",
+      challengeKicker:"THRONOS EARN · ΧΡΙΣΤΟΥΓΕΝΝΑ 2026",
+      challengeTitle:"Πρόκληση Goblins Wood",
+      challengeDescription:"Φτάσε στο Level 130 · Η χριστουγεννιάτικη πρόκληση ετοιμάζεται.",
+      challengeAction:"Δες τις αποστολές TimeWall",
+      invitedMembers:"Προσκεκλημένα μέλη και ανταμοιβές",
+      timewallDescription:"Έρευνες, clicks και αποστολές κοινωνικών δικτύων."
+    },
+    es: {
+      language:'Idioma',journeyKicker:'TU RECORRIDO',journeyHeadline:'Explora. Completa. Gana.',
+      journeyDescription:'Elige misiones disponibles, complétalas y sigue tus recompensas verificadas.',
+      explore:'Explora',complete:'Completa',earn:'Gana',surveys:'Encuestas y ofertas verificadas',
+      verification:'Requiere verificación del proveedor',clearing:'Pendiente → THC liberado',
+      journeyDisclaimer:'Las recompensas requieren recibos verificados, plazos de espera y fondos disponibles. No necesitas wallet para empezar.',
+      offersTab:'Ofertas',rewardsTab:'Recompensas',communityTab:'Comunidad',accountTab:'Cuenta',advertiseTab:'Publicidad',
+      accountHelp:'Cuenta e historial de recompensas. Las recompensas pendientes todavía no se pueden gastar.',
+      advertiseHeadline:'Promociona tu negocio',advertiseDescription:'Crea campañas en Thronos Earn. Se requiere aprobación y financiación verificada.',
+      advertisePlacement:'Los anuncios solo aparecen en Earn, nunca en las pantallas de firma o envío de wallet.',
+      newCampaign:'Crear campaña',creativeHeading:'Creatividad del anuncio',createDraft:'Crear campaña pendiente',
+      submitCreative:'Enviar creatividad para revisión',myCampaigns:'Mis campañas',refresh:'Actualizar',
+      gymDescription:'Entrenamientos y retos verificados por gimnasios. Aplicación en preparación.',
+      gymStatus:'Todavía sin THC · Integración pendiente',
+      campaignLabel:"Nombre de campaña",
+      typeLabel:"Tipo",
+      bidLabel:"Oferta (THC)",
+      dailyLabel:"Límite diario (THC)",
+      totalLabel:"Límite total (THC)",
+      capsInfo:"Son límites propuestos, no cargos inmediatos. Las campañas requieren revisión.",
+      campaignSelect:"Campaña",
+      creativeTitle:"Título",
+      creativeImage:"URL de imagen (HTTPS)",
+      creativeTarget:"URL de destino (HTTPS)",
+      cpmText:"CPM · impresiones",
+      cpcText:"CPC · clics",
+      chooseCampaign:"Selecciona primero una campaña",
+      loadingCampaigns:"Abre Publicidad para cargar tus campañas.",
+      advertiserKicker:"THRONOS EARN · ANUNCIANTES",
+      challengeKicker:"THRONOS EARN · NAVIDAD 2026",
+      challengeTitle:"Desafío Goblins Wood",
+      challengeDescription:"Alcanza el nivel 130 · Desafío navideño próximamente.",
+      challengeAction:"Explorar tareas de TimeWall",
+      invitedMembers:"Invitados y recompensas",
+      timewallDescription:"Encuestas, clics y tareas sociales."
+    },
+    ja: {
+      language:'言語',journeyKicker:'EARN の進め方',journeyHeadline:'探そう。達成しよう。獲得しよう。',
+      journeyDescription:'利用可能なミッションに参加し、認証済みの報酬を確認できます。',
+      explore:'探す',complete:'達成',earn:'獲得',surveys:'アンケートと認証済みオファー',
+      verification:'提供元による確認が必要',clearing:'保留中 → 確定THC',
+      journeyDisclaimer:'報酬には提供元の検証、保留期間、決済資金の確認が必要です。開始時にウォレットは不要です。',
+      offersTab:'オファー',rewardsTab:'報酬',communityTab:'コミュニティ',accountTab:'アカウント',advertiseTab:'広告',
+      accountHelp:'アカウントと報酬履歴。保留中の報酬は使用できません。',
+      advertiseHeadline:'事業を宣伝する',advertiseDescription:'広告キャンペーンの掲載には審査と資金確認が必要です。',
+      advertisePlacement:'広告はEarn内のみ表示され、ウォレットの送金・署名画面には表示されません。',
+      newCampaign:'キャンペーン作成',creativeHeading:'広告素材',createDraft:'下書きキャンペーン作成',
+      submitCreative:'広告素材を審査に送信',myCampaigns:'キャンペーン一覧',refresh:'更新',
+      gymDescription:'ジム認証済みトレーニングチャレンジ。アプリ準備中。',
+      gymStatus:'THC報酬は未提供 · 認証連携待ち',
+      campaignLabel:"キャンペーン名",
+      typeLabel:"種類",
+      bidLabel:"入札額 (THC)",
+      dailyLabel:"1日上限 (THC)",
+      totalLabel:"合計上限 (THC)",
+      capsInfo:"これは予算上限で、即時請求ではありません。審査が必要です。",
+      campaignSelect:"キャンペーン",
+      creativeTitle:"タイトル",
+      creativeImage:"画像URL (HTTPS)",
+      creativeTarget:"移動先URL (HTTPS)",
+      cpmText:"CPM · 表示",
+      cpcText:"CPC · クリック",
+      chooseCampaign:"先にキャンペーンを選択",
+      loadingCampaigns:"広告タブでキャンペーンを読み込みます。",
+      advertiserKicker:"THRONOS EARN · 広告主",
+      challengeKicker:"THRONOS EARN · クリスマス 2026",
+      challengeTitle:"Goblins Wood チャレンジ",
+      challengeDescription:"レベル130を目指そう · クリスマスチャレンジ準備中。",
+      challengeAction:"TimeWall のタスクを見る",
+      invitedMembers:"招待メンバーと報酬",
+      timewallDescription:"アンケート、クリック、ソーシャルタスク。"
+    },
+    ru: {
+      language:'Язык',journeyKicker:'ВАШ ПУТЬ',journeyHeadline:'Выбирайте. Выполняйте. Получайте.',
+      journeyDescription:'Выбирайте задания, выполняйте их и отслеживайте подтверждённые награды.',
+      explore:'Выбирайте',complete:'Выполняйте',earn:'Получайте',surveys:'Опросы и подтверждённые предложения',
+      verification:'Требуется проверка провайдера',clearing:'Ожидает → подтверждённые THC',
+      journeyDisclaimer:'Награды требуют подтверждения провайдера, периода ожидания и финансирования. Кошелёк для старта не нужен.',
+      offersTab:'Задания',rewardsTab:'Награды',communityTab:'Сообщество',accountTab:'Аккаунт',advertiseTab:'Реклама',
+      accountHelp:'Аккаунт и история наград. Ожидающие награды пока недоступны.',
+      advertiseHeadline:'Продвигайте свой бизнес',advertiseDescription:'Создавайте кампании. Показы требуют одобрения и подтверждённого финансирования.',
+      advertisePlacement:'Реклама отображается только в Earn, не при отправке и подписании транзакций.',
+      newCampaign:'Создать кампанию',creativeHeading:'Рекламные материалы',createDraft:'Создать черновик',
+      submitCreative:'Отправить материалы на проверку',myCampaigns:'Мои кампании',refresh:'Обновить',
+      gymDescription:'Проверенные тренировки и задания от спортивных залов. Приложение готовится.',
+      gymStatus:'THC пока не начисляются · Ожидается проверенная интеграция',
+      campaignLabel:"Название кампании",
+      typeLabel:"Тип",
+      bidLabel:"Ставка (THC)",
+      dailyLabel:"Дневной лимит (THC)",
+      totalLabel:"Общий лимит (THC)",
+      capsInfo:"Это предлагаемые лимиты, не немедленное списание. Требуется проверка.",
+      campaignSelect:"Кампания",
+      creativeTitle:"Название",
+      creativeImage:"URL изображения (HTTPS)",
+      creativeTarget:"Целевой URL (HTTPS)",
+      cpmText:"CPM · показы",
+      cpcText:"CPC · клики",
+      chooseCampaign:"Сначала выберите кампанию",
+      loadingCampaigns:"Откройте вкладку «Реклама» для загрузки кампаний.",
+      advertiserKicker:"THRONOS EARN · РЕКЛАМОДАТЕЛИ",
+      challengeKicker:"THRONOS EARN · РОЖДЕСТВО 2026",
+      challengeTitle:"Испытание Goblins Wood",
+      challengeDescription:"Достигните уровня 130 · Рождественское испытание скоро.",
+      challengeAction:"Открыть задания TimeWall",
+      invitedMembers:"Приглашённые и награды",
+      timewallDescription:"Опросы, клики и социальные задания."
+    }
+  };
+  function apply() {
+    document.documentElement.lang = lang === 'gr' ? 'el' : lang;
+    const select = document.getElementById('earn-language');
+    if (select && select.value !== lang) select.value = lang;
+    document.querySelectorAll('.earn-beta [data-earn-copy]').forEach(element => {
+      const key = element.dataset.earnCopy;
+      const value = copy[lang]?.[key] || copy.en[key];
+      if (value) element.textContent = value;
+    });
+  }
+  function change(next, save) {
+    const normalized = normalize(next);
+    if (save) {
+      try { localStorage.setItem('thr_lang', normalized); }
+      catch (_) { /* Language can still change for this session. */ }
+    }
+    lang = normalized;
+    apply();
+    window.dispatchEvent(new CustomEvent('earnLocaleChanged', {detail:{lang}}));
+  }
+  window.ThronosEarnLocale = { current: () => lang, change, apply };
+  document.getElementById('earn-language')?.addEventListener('change', event => {
+    const next = event.target.value;
+    if (typeof window.setLanguage === 'function') {
+      window.setLanguage(next); // Shares explicit user preference with core.
+    } else {
+      change(next, true);
+    }
+  });
+  window.addEventListener('langChanged', event => {
+    change(event.detail?.lang || lang, false);
+  });
+  apply();
+})();
+</script>
 <script src="/wallet-pwa/earn-provider-tabs.js"></script>
 <script src="/wallet-pwa/earn-receipt-details.js"></script>
 <script src="/wallet-pwa/earn-leaderboard.js"></script>
@@ -553,8 +838,13 @@
     ko: { title:'Thronos Earn 프로젝트', subtitle:'Earn 계정을 만들거나 로그인하세요. 지갑 불필요.', signIn:'로그인', createAcct:'계정 만들기', signOut:'로그아웃', openSurveys:'설문조사 열기', recentActivity:'최근 활동', skip:'건너뛰기', signInView:'잔액과 활동을 보려면 로그인하세요', lbTitle:'월간 리더보드', lbEmpty:'이번 달 수익이 아직 없습니다. 첫 번째가 되세요!', lbYou:'당신', lbUnranked:'아직 순위 없음', lbStakingTitle:'로열티 스테이킹 풀', lbStakingBadge:'곧 출시', lbStake1:'연결된 지갑에서 THC 스테이킹' },
   };
 
-  const _userLang = (navigator.language || 'en').split('-')[0].toLowerCase();
-  const _lang = _i18n[_userLang] ? _userLang : 'en';
+  const _preferred = window.ThronosEarnLocale?.current() || (navigator.language || 'en');
+  let _lang = _preferred === 'gr' ? 'el' : (_i18n[_preferred] ? _preferred : 'en');
+  window.addEventListener('earnLocaleChanged', event => {
+    const requested = event.detail?.lang === 'gr' ? 'el' : event.detail?.lang;
+    _lang = _i18n[requested] ? requested : 'en';
+    applyI18n();
+  });
   function t(key) { return (_i18n[_lang] && _i18n[_lang][key]) || _i18n.en[key] || key; }
 
   function applyI18n() {

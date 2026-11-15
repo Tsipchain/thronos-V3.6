@@ -18,7 +18,12 @@ def test_provider_names_and_official_domain_icons_with_text_fallback():
     for provider, (name, origin) in expected.items():
         assert 'earn-provider-brand--' + provider in PAGE
         assert name in PAGE
-        assert origin + '/favicon.ico' in PAGE
+        if provider == "cpx":
+            # An unavailable upstream favicon should not leave a broken image.
+            assert '<span class="earn-provider-letter">CPX</span>' in PAGE
+            assert origin + '/favicon.ico' not in PAGE
+        else:
+            assert origin + '/favicon.ico' in PAGE
     assert 'onerror="this.hidden=true"' in PAGE
     assert 'loading="lazy"' in PAGE
 
@@ -36,7 +41,8 @@ def test_existing_provider_open_ids_and_ad_impression_flow_retained():
     # Gym reward and real ad funding must stay closed until verified.
     assert 'id="provider-train2earn"' in PAGE
     assert 'Coming soon</button>' in PAGE
-    assert 'Δεν δίνει ακόμη THC' in PAGE
+    assert 'data-earn-copy="gymStatus"' in PAGE
+    assert 'thc_credit_enabled' not in PAGE
 
 
 def test_advertiser_console_uses_existing_authenticated_campaign_endpoints():

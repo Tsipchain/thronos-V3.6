@@ -1,0 +1,21 @@
+{
+  "id": "/earn",
+  "name": "Thronos Earn — ThronosLabs · ENCOM",
+  "short_name": "Thronos Earn",
+  "description": "Earn verified THC rewards from surveys, offers and approved activities. No wallet required to start.",
+  "start_url": "/earn",
+  "scope": "/earn",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0b1829",
+  "theme_color": "#112d3b",
+  "lang": "en",
+  "icons": [
+    {
+      "src": "/static/img/thronos-coin.png",
+      "sizes": "any",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

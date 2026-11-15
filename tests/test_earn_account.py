@@ -2346,10 +2346,14 @@ class TestAdPlacementRegression:
         assert "showPromo" not in src, "Extension must not have promo functions"
         assert "showEarnPromo" not in src
 
-    def test_extension_has_no_earn_surface(self):
+    def test_extension_earn_launch_does_not_embed_ads_or_wallet_earn(self):
+        # The extension can link to the separate Earn web page, but it must
+        # never render Earn providers, paid ads or leaderboard in its popup.
         src = self._read("public/extension/popup.html")
+        assert 'id="actEarnWeb"' in src
         assert "leaderboard" not in src.lower()
-        assert "earn" not in src.lower() or "earn" not in src[src.find("<body"):].lower()
+        assert "earn-provider" not in src.lower()
+        assert "sponsored" not in src.lower()
 
     # -- Tab dedup --
 
@@ -2582,7 +2586,7 @@ def test_earn_sponsor_visit_uses_native_link_without_blank_popup():
 def test_wallet_pwa_shell_cache_advanced_for_earn_release():
     from pathlib import Path
     sw = (Path(__file__).parent.parent / "public/wallet-pwa/sw.js").read_text()
-    assert "thr-wallet-pwa-v24" in sw
+    assert "thr-wallet-pwa-v25" in sw
     assert "'/wallet-pwa/app.js'" in sw
     assert "'/wallet-pwa/goblins-wood-christmas.webp'" in sw
 

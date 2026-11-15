@@ -632,6 +632,41 @@ class TestServeRouteGating:
         assert result["reason"] == "excluded_placement"
 
 
+# ── Integer-Weight Campaign Selection ────────────────────────────────
+
+class TestIntegerWeightSelection:
+
+    def test_higher_bid_gets_higher_weight(self):
+        from services.earn_account import _THC_SCALE
+        high_bid = Decimal("10.000000")
+        low_bid = Decimal("1.000000")
+        high_w = max(int(high_bid / _THC_SCALE), 1)
+        low_w = max(int(low_bid / _THC_SCALE), 1)
+        assert high_w == 10_000_000
+        assert low_w == 1_000_000
+        assert high_w > low_w
+
+    def test_very_small_bid_has_minimum_weight(self):
+        from services.earn_account import _THC_SCALE
+        tiny_bid = Decimal("0.000001")
+        w = max(int(tiny_bid / _THC_SCALE), 1)
+        assert w >= 1
+        zero_bid = Decimal("0.000000")
+        w0 = max(int(zero_bid / _THC_SCALE), 1)
+        assert w0 >= 1
+
+    def test_no_float_in_service_source(self):
+        from pathlib import Path
+        source = (Path(__file__).parent.parent / "services" / "earn_account.py").read_text()
+        for i, line in enumerate(source.split("\n"), 1):
+            stripped = line.strip()
+            if stripped.startswith("#") or stripped.startswith('"') or stripped.startswith("'"):
+                continue
+            assert "float(" not in line, f"float() at line {i}: {stripped}"
+            assert "AS REAL" not in line.upper() or stripped.startswith("#"), \
+                f"CAST AS REAL at line {i}: {stripped}"
+
+
 # ── End-to-end Walletless Flow ───────────────────────────────────────
 
 class TestEndToEndWalletless:

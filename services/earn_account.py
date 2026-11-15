@@ -3694,10 +3694,18 @@ class EarnAccountStore:
                     }
                 return {"ad": None, "reason": "no_eligible_campaigns"}
 
-            # Weighted random selection using bid_amount as weight
-            import random
-            weights = [max(float(Decimal(c["bid_amount"])), 0.001) for c in candidates]
-            selected = random.choices(candidates, weights=weights, k=1)[0]
+            # Weighted random selection using integer smallest-units
+            int_weights = [max(int(Decimal(c["bid_amount"]) / _THC_SCALE), 1)
+                           for c in candidates]
+            total_w = sum(int_weights)
+            pick = secrets.randbelow(total_w)
+            cumulative = 0
+            selected = candidates[-1]
+            for i, w in enumerate(int_weights):
+                cumulative += w
+                if pick < cumulative:
+                    selected = candidates[i]
+                    break
 
             # Issue delivery proof token
             proof_id = "dprf_" + secrets.token_urlsafe(18)
@@ -3978,10 +3986,13 @@ class EarnAccountStore:
                  ORDER BY credited_at""",
                 (campaign_id, advertiser_id),
             ).fetchall()
-            treasury_total = con.execute(
-                "SELECT COALESCE(SUM(CAST(amount AS REAL)), 0) AS total FROM earn_ad_treasury WHERE campaign_id = ?",
+            treasury_rows = con.execute(
+                "SELECT amount FROM earn_ad_treasury WHERE campaign_id = ?",
                 (campaign_id,),
-            ).fetchone()
+            ).fetchall()
+            treasury_contributed = sum(
+                (Decimal(r["amount"]) for r in treasury_rows), Decimal("0"),
+            ).quantize(_THC_SCALE)
         return {
             "campaign_id": campaign_id,
             "name": camp_d["name"],
@@ -3994,9 +4005,7 @@ class EarnAccountStore:
             "events_by_day": events_by_day,
             "events_by_country": events_by_country,
             "vip_credits": [dict(r) for r in vip_credits],
-            "treasury_contributed": str(
-                Decimal(str(treasury_total["total"] or 0)).quantize(_THC_SCALE),
-            ),
+            "treasury_contributed": str(treasury_contributed),
         }
 
     def campaign_report_daily(
@@ -4081,13 +4090,15 @@ class EarnAccountStore:
                 if available < amt:
                     raise EarnError("insufficient_thc_balance")
                 day_start = now - (now % 86400)
-                day_intents = con.execute(
-                    """SELECT SUM(CAST(amount AS REAL)) AS total FROM earn_walletless_intents
+                day_intent_rows = con.execute(
+                    """SELECT amount FROM earn_walletless_intents
                        WHERE earn_user_id = ? AND action = 'deposit'
                          AND created_at >= ? AND consumed_at IS NOT NULL""",
                     (earn_user_id, day_start),
-                ).fetchone()
-                day_total = Decimal(str(day_intents["total"] or 0)).quantize(_THC_SCALE)
+                ).fetchall()
+                day_total = sum(
+                    (Decimal(r["amount"]) for r in day_intent_rows), Decimal("0"),
+                ).quantize(_THC_SCALE)
                 if day_total + amt > _WALLETLESS_SPEND_CAP_PER_DAY:
                     raise EarnError("walletless_daily_cap_exceeded")
                 hour_start = now - 3600
@@ -4390,13 +4401,15 @@ class EarnAccountStore:
         if not camp:
             return None
         total_spent = Decimal(camp["spent"])
-        already_credited = con.execute(
-            """SELECT COALESCE(MAX(CAST(milestone_thc AS REAL)), 0) AS max_milestone
-               FROM earn_ad_vip_credits
+        milestone_rows = con.execute(
+            """SELECT milestone_thc FROM earn_ad_vip_credits
                WHERE earn_user_id = ? AND campaign_id = ?""",
             (earn_user_id, campaign_id),
-        ).fetchone()
-        max_milestone = Decimal(str(already_credited["max_milestone"] or 0))
+        ).fetchall()
+        max_milestone = max(
+            (Decimal(r["milestone_thc"]) for r in milestone_rows),
+            default=Decimal("0"),
+        )
         next_milestone = (max_milestone + _VIP_CREDIT_MILESTONE_THC).quantize(_THC_SCALE)
         if total_spent < next_milestone:
             return None

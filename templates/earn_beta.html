@@ -550,7 +550,7 @@
         <div class="earn-advertiser-intro">
           <span class="earn-panel-kicker" data-earn-copy="advertiserKicker">THRONOS EARN · ADVERTISERS</span>
           <h2 data-earn-copy="advertiseHeadline">Promote your business</h2>
-          <p data-earn-copy="advertiseDescription">Create a Thronos Earn campaign. All campaigns and creatives require review and verified funding before delivery.</p>
+          <p data-earn-copy="advertiseDescription">Create a campaign, pass deterministic policy checks, then explicitly fund it with reserved THC. Manual review is used only when policy cannot decide.</p>
           <p class="earn-advertiser-disclosure" data-earn-copy="advertisePlacement">Ads appear only in approved Earn placements, never in wallet home, signing, send or receive.</p>
         </div>
         <form id="earn-advertiser-form" class="earn-advertiser-form">
@@ -560,10 +560,10 @@
             <label><span data-earn-copy="typeLabel">Type</span><select id="earn-ad-campaign-type"><option value="cpm" data-earn-copy="cpmText">CPM · impressions</option><option value="cpc" data-earn-copy="cpcText">CPC · clicks</option></select></label>
             <label><span data-earn-copy="bidLabel">Bid (THC)</span><input id="earn-ad-campaign-bid" required type="number" min="0.000001" step="0.000001" value="1.000000"></label>
             <label><span data-earn-copy="dailyLabel">Daily cap (THC)</span><input id="earn-ad-campaign-daily" required type="number" min="0" step="0.000001" value="0"></label>
-            <label><span data-earn-copy="totalLabel">Total cap (THC)</span><input id="earn-ad-campaign-total" required type="number" min="0" step="0.000001" value="0"></label>
+            <label><span data-earn-copy="totalLabel">Total cap (THC)</span><input id="earn-ad-campaign-total" required type="number" min="0.000001" step="0.000001" value="10.000000"></label>
           </div>
-          <p class="earn-advertiser-disclosure" data-earn-copy="capsInfo">These are proposed budget limits, not an immediate charge. New campaigns require review.</p>
-          <button class="earn-action" type="submit" data-earn-copy="createDraft">Create draft campaign</button>
+          <p class="earn-advertiser-disclosure" data-earn-copy="capsInfo">Creating a campaign does not debit THC. After policy approval, use Create &amp; Fund to explicitly reserve the exact budget.</p>
+          <button class="earn-action" type="submit" data-earn-copy="createDraft">Create campaign</button>
         </form>
         <form id="earn-advertiser-creative-form" class="earn-advertiser-form">
           <h3 data-earn-copy="creativeHeading">Campaign artwork</h3>
@@ -578,7 +578,7 @@
             <strong id="earn-ad-preview-headline"></strong>
             <small id="earn-ad-preview-domain"></small>
           </aside>
-          <button class="earn-action" type="submit" data-earn-copy="submitCreative">Submit creative for review</button>
+          <button class="earn-action" type="submit" data-earn-copy="submitCreative">Run creative policy check</button>
         </form>
         <div id="earn-advertiser-feedback" class="earn-provider-status" role="status" aria-live="polite"></div>
         <div class="earn-advertiser-existing">
@@ -650,10 +650,10 @@
       journeyDisclaimer:'Rewards require verified provider receipts, applicable hold periods and funded settlement. No wallet is required to start.',
       offersTab:'Offers',rewardsTab:'Rewards',communityTab:'Community',accountTab:'Account',advertiseTab:'Advertise',
       accountHelp:'Your account and verified reward history. Pending provider receipts are not yet spendable.',
-      advertiseHeadline:'Promote your business',advertiseDescription:'Create Thronos Earn campaigns. Ads and creatives require approval and verified funding before display.',
+      advertiseHeadline:'Promote your business',advertiseDescription:'Create campaigns, pass deterministic policy checks, then explicitly reserve THC funding before delivery.',
       advertisePlacement:'Ads appear only in Earn, never in wallet home, signing, send or receive.',
-      newCampaign:'Create campaign',creativeHeading:'Campaign artwork',createDraft:'Create draft campaign',
-      submitCreative:'Submit creative for review',myCampaigns:'My campaigns',refresh:'Refresh',
+      newCampaign:'Create campaign',creativeHeading:'Campaign artwork',createDraft:'Create campaign',
+      submitCreative:'Run creative policy check',myCampaigns:'My campaigns',refresh:'Refresh',
       gymDescription:'Training and gym challenges with verified participation. Independent app in preparation.',
       gymStatus:'No THC rewards yet · Verified integration pending',
       campaignLabel:"Campaign name",
@@ -661,7 +661,7 @@
       bidLabel:"Bid (THC)",
       dailyLabel:"Daily cap (THC)",
       totalLabel:"Total cap (THC)",
-      capsInfo:"These are proposed budget limits, not an immediate charge. New campaigns require review.",
+      capsInfo:"Creating does not debit THC. After policy approval, explicitly reserve the exact budget with Create & Fund.",
       campaignSelect:"Campaign",
       creativeTitle:"Title",
       creativeImage:"Image URL (HTTPS)",
@@ -688,10 +688,10 @@
       journeyDisclaimer:'Οι ανταμοιβές απαιτούν επιβεβαίωση παρόχου, περίοδο αναμονής και επαρκή χρηματοδότηση. Δεν απαιτείται wallet για να ξεκινήσεις.',
       offersTab:'Αποστολές',rewardsTab:'Ανταμοιβές',communityTab:'Κοινότητα',accountTab:'Λογαριασμός',advertiseTab:'Διαφήμιση',
       accountHelp:'Ο λογαριασμός και το ιστορικό σου. Οι εκκρεμείς ανταμοιβές δεν είναι ακόμη διαθέσιμες.',
-      advertiseHeadline:'Προώθησε την επιχείρησή σου',advertiseDescription:'Δημιούργησε καμπάνιες στο Thronos Earn. Η προβολή απαιτεί έγκριση και επιβεβαιωμένη χρηματοδότηση.',
+      advertiseHeadline:'Προώθησε την επιχείρησή σου',advertiseDescription:'Δημιούργησε καμπάνια, πέρασε τους ντετερμινιστικούς ελέγχους πολιτικής και δέσμευσε ρητά THC πριν από την προβολή.',
       advertisePlacement:'Οι διαφημίσεις προβάλλονται μόνο στο Earn, ποτέ σε αρχική, υπογραφές ή μεταφορές wallet.',
-      newCampaign:'Νέα καμπάνια',creativeHeading:'Εικόνα και δημιουργικό',createDraft:'Δημιουργία πρόχειρης καμπάνιας',
-      submitCreative:'Υποβολή δημιουργικού για έγκριση',myCampaigns:'Οι καμπάνιες μου',refresh:'Ανανέωση',
+      newCampaign:'Νέα καμπάνια',creativeHeading:'Εικόνα και δημιουργικό',createDraft:'Δημιουργία καμπάνιας',
+      submitCreative:'Έλεγχος πολιτικής δημιουργικού',myCampaigns:'Οι καμπάνιες μου',refresh:'Ανανέωση',
       gymDescription:'Προπονήσεις και προκλήσεις με επιβεβαιωμένη συμμετοχή από γυμναστήριο. Η εφαρμογή ετοιμάζεται.',
       gymStatus:'Χωρίς THC ακόμη · Αναμονή επαληθευμένης σύνδεσης',
       campaignLabel:"Όνομα καμπάνιας",
@@ -699,7 +699,7 @@
       bidLabel:"Προσφορά (THC)",
       dailyLabel:"Ημερήσιο όριο (THC)",
       totalLabel:"Συνολικό όριο (THC)",
-      capsInfo:"Τα ποσά είναι προτεινόμενα όρια, όχι άμεση χρέωση. Οι νέες καμπάνιες χρειάζονται έγκριση.",
+      capsInfo:"Η δημιουργία δεν χρεώνει THC. Μετά τον έλεγχο πολιτικής, δέσμευσε ρητά το ακριβές budget.",
       campaignSelect:"Καμπάνια",
       creativeTitle:"Τίτλος",
       creativeImage:"Σύνδεσμος εικόνας (HTTPS)",
@@ -852,18 +852,20 @@
   }
   const dynamic = {
     en: { loading:'Loading campaigns…', pick:'Select campaign', createFirst:'Create a campaign first',
-      empty:'No campaigns yet. New campaigns await manual review.',status:'Status',unknown:'unknown',
+      empty:'No campaigns yet.',status:'Status',unknown:'unknown',
       bid:'Bid',unavailable:'Campaign list unavailable. Please sign in or try again.',
       login:'Sign in to your Earn Account first',failed:'Request failed',
-      campaignCreated:'Campaign {id} created. Pending review; not live or charged.',
+      campaignCreated:'Campaign {id} created and policy checked. Add a creative and explicitly fund it before delivery.',
       invalidLinks:'Select your campaign and use HTTPS image and destination URLs.',
       previewNeedTitle:'Enter an ad headline before previewing.',
-      artworkCreated:'Artwork submitted for review. It is not live until approved and funded.',
-      fundBtn:'Fund',activateBtn:'Activate',pauseBtn:'Pause',resumeBtn:'Resume',refundBtn:'Refund',reportBtn:'Report',
+      artworkCreated:'Creative policy check completed. It is not live until the campaign is fully funded.',
+      fundBtn:'Create & Fund',activateBtn:'Activate',pauseBtn:'Pause',resumeBtn:'Resume',refundBtn:'Refund',cancelBtn:'Cancel',reportBtn:'Report',
       escrowBal:'Escrow',pricingCpmMin:'CPM min bid',pricingCpmMax:'CPM max bid',pricingCpcMin:'CPC min bid',pricingCpcMax:'CPC max bid',
       fundAmount:'Amount (THC)',fundConfirm:'Confirm deposit',funding:'Processing…',funded:'Deposited {amount} THC',
       activating:'Activating…',activated:'Campaign activated',pausing:'Pausing…',paused:'Campaign paused',
       resuming:'Resuming…',resumed:'Campaign resumed',refunding:'Processing refund…',refunded:'Refunded {amount} THC',
+      cancelling:'Cancelling…',cancelled:'Campaign cancelled; residual reservation released.',
+      cancelConfirm:'Cancel this campaign and release its remaining reserved THC?',
       refundConfirm:'Refund remaining escrow? This cannot be undone.',reportLoading:'Loading report…',
       impressions:'Impressions',clicks:'Clicks',ctr:'CTR',spent:'Spent',vipCredits:'VIP credits',
       treasuryContrib:'Treasury',dailyBreakdown:'Daily breakdown',date:'Date',cost:'Cost',
@@ -874,14 +876,16 @@
       status:'Κατάσταση',unknown:'άγνωστη',bid:'Προσφορά',
       unavailable:'Η λίστα δεν είναι διαθέσιμη. Συνδέσου στο Earn ή προσπάθησε ξανά.',
       login:'Συνδέσου πρώτα στον λογαριασμό Earn',failed:'Αποτυχία αιτήματος',
-      campaignCreated:'Η καμπάνια {id} καταχωρίστηκε. Αναμένει έγκριση, δεν προβάλλεται ούτε χρεώθηκε.',
+      campaignCreated:'Η καμπάνια {id} δημιουργήθηκε και ελέγχθηκε από την πολιτική. Πρόσθεσε δημιουργικό και χρηματοδότησέ την ρητά.',
       invalidLinks:'Επίλεξε καμπάνια και χρησιμοποίησε συνδέσμους HTTPS για εικόνα και προορισμό.',previewNeedTitle:'Πληκτρολόγησε τίτλο για την προεπισκόπηση.',
-      artworkCreated:'Το δημιουργικό υποβλήθηκε για έγκριση. Δεν προβάλλεται μέχρι να εγκριθεί και να χρηματοδοτηθεί.',
-      fundBtn:'Χρηματοδότηση',activateBtn:'Ενεργοποίηση',pauseBtn:'Παύση',resumeBtn:'Συνέχεια',refundBtn:'Επιστροφή',reportBtn:'Αναφορά',
+      artworkCreated:'Ο έλεγχος πολιτικής του δημιουργικού ολοκληρώθηκε. Δεν προβάλλεται πριν από την πλήρη χρηματοδότηση.',
+      fundBtn:'Δημιουργία & Χρηματοδότηση',activateBtn:'Ενεργοποίηση',pauseBtn:'Παύση',resumeBtn:'Συνέχεια',refundBtn:'Επιστροφή',cancelBtn:'Ακύρωση',reportBtn:'Αναφορά',
       escrowBal:'Εγγύηση',pricingCpmMin:'CPM ελάχ.',pricingCpmMax:'CPM μέγ.',pricingCpcMin:'CPC ελάχ.',pricingCpcMax:'CPC μέγ.',
       fundAmount:'Ποσό (THC)',fundConfirm:'Επιβεβαίωση κατάθεσης',funding:'Επεξεργασία…',funded:'Κατατέθηκαν {amount} THC',
       activating:'Ενεργοποίηση…',activated:'Η καμπάνια ενεργοποιήθηκε',pausing:'Παύση…',paused:'Η καμπάνια σε παύση',
       resuming:'Συνέχεια…',resumed:'Η καμπάνια συνεχίστηκε',refunding:'Επεξεργασία επιστροφής…',refunded:'Επιστράφηκαν {amount} THC',
+      cancelling:'Ακύρωση…',cancelled:'Η καμπάνια ακυρώθηκε και αποδεσμεύτηκε το υπόλοιπο THC.',
+      cancelConfirm:'Ακύρωση καμπάνιας και αποδέσμευση του υπόλοιπου THC;',
       refundConfirm:'Επιστροφή υπολοίπου; Η ενέργεια δεν αναιρείται.',reportLoading:'Φόρτωση αναφοράς…',
       impressions:'Εμφανίσεις',clicks:'Κλικ',ctr:'CTR',spent:'Δαπάνη',vipCredits:'VIP πόντοι',
       treasuryContrib:'Ταμείο',dailyBreakdown:'Ημερήσια ανάλυση',date:'Ημερομηνία',cost:'Κόστος',
@@ -1656,7 +1660,7 @@
 
 <script>
 /* Advertiser dashboard UI. Existing provider/interstitial/receipt scripts are untouched.
-   All campaign writes stay in pending_review and require backend approval/funding. */
+   Campaigns activate only after deterministic policy checks and explicit funding. */
 (() => {
   'use strict';
   const $ = id => document.getElementById(id);
@@ -1892,12 +1896,8 @@
           }).catch(() => { escrowSpan.textContent = localized('escrowBal') + ': —'; });
           const actions = document.createElement('div');
           actions.className = 'earn-campaign-actions';
-          if (status === 'approved' || status === 'active') {
+          if (status === 'funding_required') {
             actions.appendChild(makeBtn('act-fund', localized('fundBtn'), () => fundCampaign(id, detail)));
-          }
-          if (status === 'approved') {
-            actions.appendChild(makeBtn('act-activate', localized('activateBtn'),
-              () => campaignAction(id, 'activate', null, 'activating', 'activated')));
           }
           if (status === 'active') {
             actions.appendChild(makeBtn('act-pause', localized('pauseBtn'),
@@ -1907,11 +1907,15 @@
             actions.appendChild(makeBtn('act-resume', localized('resumeBtn'),
               () => campaignAction(id, 'resume', null, 'resuming', 'resumed')));
           }
-          if (status === 'paused' || status === 'completed' || status === 'cancelled') {
+          if (['funding_required', 'manual_review', 'active', 'paused'].includes(status)) {
+            actions.appendChild(makeBtn('act-cancel', localized('cancelBtn'),
+              () => campaignAction(id, 'cancel', 'cancelConfirm', 'cancelling', 'cancelled')));
+          }
+          if (status === 'paused' || status === 'completed' || status === 'exhausted') {
             actions.appendChild(makeBtn('act-refund', localized('refundBtn'),
               () => campaignAction(id, 'refund', 'refundConfirm', 'refunding', 'refunded')));
           }
-          if (status !== 'pending_review') {
+          if (status !== 'draft' && status !== 'policy_check') {
             actions.appendChild(makeBtn('act-report', localized('reportBtn'),
               () => showReport(id, detail)));
           }

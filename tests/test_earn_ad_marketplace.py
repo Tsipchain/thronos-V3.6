@@ -115,7 +115,7 @@ class TestCampaignCRUD:
             placement="earn",
         )
         assert result["campaign_id"].startswith("camp_")
-        assert result["status"] == "pending_review"
+        assert result["status"] == "funding_required"
         assert result["name"] == "My First Ad"
 
     def test_create_campaign_cpc(self, store, advertiser):
@@ -201,10 +201,10 @@ class TestCampaignCRUD:
             campaign["campaign_id"], advertiser["earn_user_id"],
         )
         assert result["status"] == "paused"
-        result = store.resume_campaign(
-            campaign["campaign_id"], advertiser["earn_user_id"],
-        )
-        assert result["status"] == "active"
+        with pytest.raises(EarnError, match="campaign_not_eligible_to_resume"):
+            store.resume_campaign(
+                campaign["campaign_id"], advertiser["earn_user_id"],
+            )
 
     def test_pause_non_active_fails(self, store, advertiser, campaign):
         with pytest.raises(EarnError, match="only_active_campaigns_can_pause"):
@@ -227,7 +227,7 @@ class TestCreativeManagement:
             "https://example.com",
         )
         assert result["creative_id"].startswith("crtv_")
-        assert result["status"] == "pending_review"
+        assert result["status"] == "approved"
 
     def test_add_creative_wrong_owner(self, store, advertiser, campaign):
         other = store.register("other@test.com", "SecurePass456!")
@@ -262,7 +262,7 @@ class TestCreativeManagement:
 class TestModeration:
     def test_approve_campaign(self, store, advertiser, campaign):
         result = store.moderate_campaign(campaign["campaign_id"], "approve")
-        assert result["status"] == "approved"
+        assert result["status"] == "funding_required"
 
     def test_reject_campaign(self, store, advertiser, campaign):
         result = store.moderate_campaign(
@@ -686,11 +686,10 @@ class TestAdServing:
             store, advertiser["earn_user_id"],
             camp["campaign_id"], "deposit", "100.000000",
         )
-        store.record_campaign_event(
-            camp["campaign_id"], crtv["creative_id"], "click",
-        )
-        ads = store.serve_campaign_ads()
-        assert len(ads) == 0
+        with pytest.raises(EarnError, match="verified_delivery_required"):
+            store.record_campaign_event(
+                camp["campaign_id"], crtv["creative_id"], "click",
+            )
 
     def test_serve_unapproved_creative_hidden(self, store, advertiser):
         camp = store.create_campaign(
@@ -771,64 +770,60 @@ class TestEventRecording:
         camp, crtv = self._make_active_campaign(
             store, advertiser, campaign_type="cpm", bid_amount="2.000000",
         )
-        result = store.record_campaign_event(
-            camp["campaign_id"], crtv["creative_id"], "impression",
-        )
-        assert Decimal(result["cost"]) == Decimal("0.002000")
+        with pytest.raises(EarnError, match="verified_delivery_required"):
+            store.record_campaign_event(
+                camp["campaign_id"], crtv["creative_id"], "impression",
+            )
 
     def test_cpc_click_cost(self, store, advertiser):
         camp, crtv = self._make_active_campaign(
             store, advertiser, campaign_type="cpc", bid_amount="0.500000",
         )
-        result = store.record_campaign_event(
-            camp["campaign_id"], crtv["creative_id"], "click",
-        )
-        assert Decimal(result["cost"]) == Decimal("0.500000")
+        with pytest.raises(EarnError, match="verified_delivery_required"):
+            store.record_campaign_event(
+                camp["campaign_id"], crtv["creative_id"], "click",
+            )
 
     def test_cpc_impression_zero_cost(self, store, advertiser):
         camp, crtv = self._make_active_campaign(
             store, advertiser, campaign_type="cpc", bid_amount="0.500000",
         )
-        result = store.record_campaign_event(
-            camp["campaign_id"], crtv["creative_id"], "impression",
-        )
-        assert Decimal(result["cost"]) == Decimal("0")
+        with pytest.raises(EarnError, match="verified_delivery_required"):
+            store.record_campaign_event(
+                camp["campaign_id"], crtv["creative_id"], "impression",
+            )
 
     def test_cpm_click_zero_cost(self, store, advertiser):
         camp, crtv = self._make_active_campaign(
             store, advertiser, campaign_type="cpm", bid_amount="2.000000",
         )
-        result = store.record_campaign_event(
-            camp["campaign_id"], crtv["creative_id"], "click",
-        )
-        assert Decimal(result["cost"]) == Decimal("0")
+        with pytest.raises(EarnError, match="verified_delivery_required"):
+            store.record_campaign_event(
+                camp["campaign_id"], crtv["creative_id"], "click",
+            )
 
     def test_event_updates_campaign_counters(self, store, advertiser):
         camp, crtv = self._make_active_campaign(
             store, advertiser, campaign_type="cpm", bid_amount="2.000000",
         )
-        store.record_campaign_event(
-            camp["campaign_id"], crtv["creative_id"], "impression",
-        )
-        store.record_campaign_event(
-            camp["campaign_id"], crtv["creative_id"], "impression",
-        )
-        store.record_campaign_event(
-            camp["campaign_id"], crtv["creative_id"], "click",
-        )
+        with pytest.raises(EarnError, match="verified_delivery_required"):
+            store.record_campaign_event(
+                camp["campaign_id"], crtv["creative_id"], "impression",
+            )
         c = store.get_campaign(camp["campaign_id"])
-        assert c["impressions"] == 2
-        assert c["clicks"] == 1
+        assert c["impressions"] == 0
+        assert c["clicks"] == 0
 
     def test_event_deducts_escrow(self, store, advertiser):
         camp, crtv = self._make_active_campaign(
             store, advertiser, campaign_type="cpc", bid_amount="10.000000",
         )
-        store.record_campaign_event(
-            camp["campaign_id"], crtv["creative_id"], "click",
-        )
+        with pytest.raises(EarnError, match="verified_delivery_required"):
+            store.record_campaign_event(
+                camp["campaign_id"], crtv["creative_id"], "click",
+            )
         bal = store.escrow_balance(camp["campaign_id"])
-        assert Decimal(bal) == Decimal("90.000000")
+        assert Decimal(bal) == Decimal("100.000000")
 
     def test_campaign_completes_on_budget(self, store, advertiser):
         camp, crtv = self._make_active_campaign(
@@ -836,14 +831,12 @@ class TestEventRecording:
             campaign_type="cpc", bid_amount="50.000000",
             total_budget="100.000000",
         )
-        store.record_campaign_event(
-            camp["campaign_id"], crtv["creative_id"], "click",
-        )
-        store.record_campaign_event(
-            camp["campaign_id"], crtv["creative_id"], "click",
-        )
+        with pytest.raises(EarnError, match="verified_delivery_required"):
+            store.record_campaign_event(
+                camp["campaign_id"], crtv["creative_id"], "click",
+            )
         c = store.get_campaign(camp["campaign_id"])
-        assert c["status"] == "completed"
+        assert c["status"] == "active"
 
     def test_invalid_event_type(self, store, advertiser, campaign):
         with pytest.raises(EarnError, match="invalid_event_type"):
@@ -874,15 +867,12 @@ class TestReporting:
             store, advertiser["earn_user_id"],
             camp["campaign_id"], "deposit", "100.000000",
         )
-        for _ in range(5):
-            store.record_campaign_event(
-                camp["campaign_id"], crtv["creative_id"],
-                "impression", country="US",
+        with store._tx() as con:
+            con.execute(
+                """UPDATE earn_ad_campaigns
+                   SET impressions=5, clicks=1 WHERE campaign_id=?""",
+                (camp["campaign_id"],),
             )
-        store.record_campaign_event(
-            camp["campaign_id"], crtv["creative_id"],
-            "click", country="GR",
-        )
         return camp
 
     def test_campaign_report(self, store, advertiser):
@@ -911,20 +901,15 @@ class TestReporting:
                 "UPDATE earn_publishers SET status='active' WHERE publisher_id=?",
                 (pub["publisher_id"],),
             )
-        import hashlib as _hl
-        viewer_hash = _hl.sha256(b"rpt_viewer").hexdigest()
-        with mock.patch.dict(os.environ, {"EARN_DELIVERY_SECRET": "test-secret-for-report-daily!"}):
-            serve = store.verified_serve(
-                placement="earn",
-                publisher_id=pub["publisher_id"],
-                viewer_hash=viewer_hash,
+            now = int(time.time())
+            con.execute(
+                """INSERT INTO earn_ad_delivery_events
+                   (event_id, proof_id, campaign_id, creative_id, event_type,
+                    charged_amount, viewer_hash, country, recorded_at)
+                   VALUES (?,?,?,?,?,'0.002000',?,?,?)""",
+                ("report_evt", "report_proof", camp["campaign_id"],
+                 "report_creative", "view", "aggregate-only", "US", now),
             )
-            if serve.get("ad") and not serve.get("is_house"):
-                store.verified_record_event(
-                    proof_id=serve["proof"]["proof_id"],
-                    event_type="view",
-                    proof_token=serve["proof"]["proof_token"],
-                )
         daily = store.campaign_report_daily(
             camp["campaign_id"], uid,
         )
@@ -1108,7 +1093,7 @@ class TestMarketplaceAPI:
             headers={"X-Admin-Key": "test-mgmt-token-mkt"},
         )
         assert r.status_code == 200
-        assert r.get_json()["status"] == "approved"
+        assert r.get_json()["status"] == "funding_required"
 
     def test_moderate_campaign_no_admin(self, store):
         c, uid, tok = self._auth_client(store)

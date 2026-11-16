@@ -54,8 +54,9 @@ def test_advertiser_console_uses_existing_authenticated_campaign_endpoints():
         "'/creative/add'", "placement: 'earn'", "credentials: 'same-origin'",
     ):
         assert marker in PAGE
-    assert "pending_review" in PAGE.lower() or "pending review" in PAGE.lower()
-    assert "not live until approved and funded" in PAGE.lower()
+    assert "funding_required" in PAGE.lower()
+    assert "deterministic policy" in PAGE.lower()
+    assert "not live until the campaign is fully funded" in PAGE.lower()
 
 
 def test_advertiser_user_content_is_rendered_as_text_not_html():

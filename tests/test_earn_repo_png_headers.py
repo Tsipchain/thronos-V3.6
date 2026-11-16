@@ -51,7 +51,7 @@ def test_wallet_earn_language_menu_is_above_logo_and_scoped_to_earn():
 
 
 def test_wallet_install_cache_refresh_only_updates_shell_and_logo():
-    assert "thr-wallet-pwa-v26" in WALLET_SW
+    assert "thr-wallet-pwa-v27" in WALLET_SW
     assert "'/static/img/THRONOS%20EARN.png'" in WALLET_SW
     assert "if (url.pathname.startsWith('/pwa-api/') || url.pathname.startsWith('/api/')) return;" in WALLET_SW
 

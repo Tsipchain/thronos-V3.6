@@ -1877,7 +1877,7 @@
         meta.className = 'earn-campaign-meta';
         const badge = document.createElement('span');
         badge.className = 'earn-campaign-status st-' + status;
-        badge.textContent = status.replace(/_/g, ' ');
+        badge.textContent = localized('status') + ': ' + status.replace(/_/g, ' ');
         meta.appendChild(badge);
         addText(meta, 'span', String(campaign.campaign_type || '').toUpperCase()
           + ' · ' + localized('bid') + ' ' + String(campaign.bid_amount || '—') + ' THC');

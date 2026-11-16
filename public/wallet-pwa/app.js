@@ -2168,15 +2168,30 @@ async function showEarn(options = {}) {
   let _earnPwaLang = _earnLangCode(_earnLangSaved || navigator.languages?.[0] || navigator.language || 'en');
   const _earnLabels = {
     en:{language:'Language',offers:'Offers',activity:'Activity',community:'Community',staking:'Staking',
-      account:'Account',timewall:'Explore TimeWall',challenge:'Reach Level 130 · Challenge coming soon.'},
+      account:'Account',timewall:'Explore TimeWall',challenge:'Reach Level 130 · Challenge coming soon.',
+      checkinTitle:'Daily check-in',checkinButton:'Check in',checkinReady:'Ready for today',
+      checkinDormant:'Dormant account · reactivation',checkinAlready:'Already checked in today',
+      checkinSuccess:'Check-in recorded',checkinError:'Check-in unavailable'},
     gr:{language:'Γλώσσα',offers:'Αποστολές',activity:'Ιστορικό',community:'Κοινότητα',staking:'Staking',
-      account:'Λογαριασμός',timewall:'Δες το TimeWall',challenge:'Φτάσε στο Level 130 · Η πρόκληση ετοιμάζεται.'},
+      account:'Λογαριασμός',timewall:'Δες το TimeWall',challenge:'Φτάσε στο Level 130 · Η πρόκληση ετοιμάζεται.',
+      checkinTitle:'Καθημερινό check-in',checkinButton:'Check-in',checkinReady:'Έτοιμο για σήμερα',
+      checkinDormant:'Ανενεργός λογαριασμός · επανενεργοποίηση',checkinAlready:'Έχεις ήδη κάνει check-in σήμερα',
+      checkinSuccess:'Το check-in καταγράφηκε',checkinError:'Το check-in δεν είναι διαθέσιμο'},
     es:{language:'Idioma',offers:'Ofertas',activity:'Actividad',community:'Comunidad',staking:'Staking',
-      account:'Cuenta',timewall:'Explorar TimeWall',challenge:'Alcanza el nivel 130 · Próximamente.'},
+      account:'Cuenta',timewall:'Explorar TimeWall',challenge:'Alcanza el nivel 130 · Próximamente.',
+      checkinTitle:'Registro diario',checkinButton:'Registrar',checkinReady:'Disponible hoy',
+      checkinDormant:'Cuenta inactiva · reactivación',checkinAlready:'Ya registraste hoy',
+      checkinSuccess:'Registro guardado',checkinError:'Registro no disponible'},
     ja:{language:'言語',offers:'オファー',activity:'履歴',community:'コミュニティ',staking:'ステーキング',
-      account:'アカウント',timewall:'TimeWall を見る',challenge:'レベル130を目指そう · 準備中。'},
+      account:'アカウント',timewall:'TimeWall を見る',challenge:'レベル130を目指そう · 準備中。',
+      checkinTitle:'デイリーチェックイン',checkinButton:'チェックイン',checkinReady:'本日チェックイン可能',
+      checkinDormant:'休眠アカウント · 再有効化',checkinAlready:'本日はチェックイン済みです',
+      checkinSuccess:'チェックインを記録しました',checkinError:'チェックインを利用できません'},
     ru:{language:'Язык',offers:'Задания',activity:'История',community:'Сообщество',staking:'Стейкинг',
-      account:'Аккаунт',timewall:'Открыть TimeWall',challenge:'Достигните уровня 130 · Скоро.'}
+      account:'Аккаунт',timewall:'Открыть TimeWall',challenge:'Достигните уровня 130 · Скоро.',
+      checkinTitle:'Ежедневная отметка',checkinButton:'Отметиться',checkinReady:'Доступно сегодня',
+      checkinDormant:'Неактивный аккаунт · восстановление',checkinAlready:'Сегодня уже отмечено',
+      checkinSuccess:'Отметка сохранена',checkinError:'Отметка недоступна'}
   };
   const _applyEarnPwaLabels = () => {
     const labels = _earnLabels[_earnPwaLang] || _earnLabels.en;
@@ -2188,6 +2203,20 @@ async function showEarn(options = {}) {
     if (timewallButton) timewallButton.textContent = labels.timewall;
     const challenge = document.getElementById('earnPwaChallengeSummary');
     if (challenge) challenge.textContent = labels.challenge;
+    const checkinTitle = document.getElementById('earnPwaCheckinTitle');
+    if (checkinTitle) checkinTitle.textContent = labels.checkinTitle;
+    const checkinButton = document.getElementById('earnPwaCheckinBtn');
+    if (checkinButton) checkinButton.textContent = labels.checkinButton;
+    const checkinStatus = document.getElementById('earnPwaCheckinStatus');
+    if (checkinStatus) {
+      const state = checkinStatus.dataset.state || 'ready';
+      const key = {
+        loading: 'checkinReady', ready: 'checkinReady', dormant: 'checkinDormant',
+        already: 'checkinAlready', success: 'checkinSuccess', error: 'checkinError',
+      }[state] || 'checkinReady';
+      const detail = checkinStatus.dataset.detail || '';
+      checkinStatus.textContent = labels[key] + (detail ? ` · ${detail}` : '');
+    }
     document.querySelectorAll('#earnPwaBody [data-ew-tab]').forEach(button => {
       button.textContent = labels[button.dataset.ewTab] || button.textContent;
     });
@@ -2279,6 +2308,13 @@ async function showEarn(options = {}) {
           <button id="earnAvailableCard" type="button" style="flex:1;background:#0d0a1a;border:0;border-radius:9px;padding:10px;text-align:left;cursor:pointer"><div style="font-size:.66rem;color:var(--muted)">AVAILABLE</div><div style="font-size:1.1rem;color:var(--accent);font-weight:700">${availableText}</div></button>
           <button id="earnPendingCard" type="button" style="flex:1;background:#0d0a1a;border:0;border-radius:9px;padding:10px;text-align:left;cursor:pointer"><div style="font-size:.66rem;color:var(--muted)">PENDING</div><div style="font-size:1.1rem;color:#e8bf5a;font-weight:700">${pendingText}</div></button>
       </div>
+      <section id="earnPwaCheckin" style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin:12px 0;padding:10px 12px;background:#1a3148;border:1px solid #2e5874;border-radius:10px">
+        <div style="min-width:0">
+          <div id="earnPwaCheckinTitle" style="font-size:.72rem;font-weight:800;color:#f2c14e">Daily check-in</div>
+          <div id="earnPwaCheckinStatus" data-state="loading" style="font-size:.68rem;color:var(--muted);margin-top:3px">Ready for today</div>
+        </div>
+        <button class="btn" id="earnPwaCheckinBtn" type="button" style="flex:0 0 auto;padding:8px 12px">Check in</button>
+      </section>
       <p id="earnPwaMessage" style="font-size:.72rem;color:var(--muted);line-height:1.45;margin:12px 0 4px">Verified provider receipts stay pending during the seven-day Earn hold. Select a receipt to see its own countdown and status.</p>
       <nav id="earnWalletTabs" class="earn-wallet-tabs" role="tablist" aria-label="Earn sections">
         <button type="button" role="tab" id="ew-tab-offers" aria-controls="ew-panel-offers" aria-selected="true" data-ew-tab="offers">Offers</button>
@@ -2342,6 +2378,53 @@ async function showEarn(options = {}) {
       </div>
       </section>
     `;
+    const earnCheckinStatus = document.getElementById('earnPwaCheckinStatus');
+    const earnCheckinButton = document.getElementById('earnPwaCheckinBtn');
+    const setEarnCheckinState = (state, detail = '') => {
+      if (!earnCheckinStatus) return;
+      earnCheckinStatus.dataset.state = state;
+      earnCheckinStatus.dataset.detail = detail;
+      _applyEarnPwaLabels();
+    };
+    const loadEarnDormancy = async () => {
+      try {
+        const response = await fetch(`${earnBase}/api/earn/dormancy/status`, { credentials: 'include' });
+        const data = await response.json().catch(() => null);
+        if (!response.ok || !data?.ok) return;
+        if (data.is_dormant) {
+          const streak = Number.isFinite(Number(data.reactivation_streak))
+            ? `${Number(data.reactivation_streak)}/7`
+            : '';
+          setEarnCheckinState('dormant', streak);
+        } else if (earnCheckinStatus?.dataset.state === 'loading') {
+          setEarnCheckinState('ready');
+        }
+      } catch (_) { /* Daily status is non-critical to wallet use. */ }
+    };
+    earnCheckinButton?.addEventListener('click', async () => {
+      earnCheckinButton.disabled = true;
+      try {
+        const response = await fetch(`${earnBase}/api/earn/checkin`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+          body: '{}',
+        });
+        const data = await response.json().catch(() => null);
+        if (!response.ok || !data?.ok) {
+          setEarnCheckinState('error', data?.error || '');
+          earnCheckinButton.disabled = false;
+          return;
+        }
+        setEarnCheckinState(data.idempotent ? 'already' : 'success', String(data.utc_date || ''));
+        void loadEarnDormancy();
+      } catch (_) {
+        setEarnCheckinState('error');
+        earnCheckinButton.disabled = false;
+      }
+    });
+    void loadEarnDormancy();
+
     const earnTabs = body.querySelectorAll('#earnWalletTabs [data-ew-tab]');
     const selectEarnWalletTab = (section, focus = false) => {
       const target = Array.from(earnTabs).find(button => button.dataset.ewTab === section) || earnTabs[0];

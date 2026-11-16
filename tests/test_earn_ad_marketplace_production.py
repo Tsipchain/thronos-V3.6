@@ -5,8 +5,13 @@ import tempfile
 import time
 
 import pytest
+from flask import Flask
 
-from services.earn_account import EarnAccountStore, EarnError
+from services.earn_account import (
+    EarnAccountStore,
+    EarnError,
+    register_earn_account_routes,
+)
 
 
 @pytest.fixture()
@@ -147,6 +152,86 @@ def test_policy_publisher_binding_and_legacy_paid_guard(store, monkeypatch):
     with pytest.raises(EarnError, match="campaign_not_found"):
         store.cancel_campaign(campaign_id, "wrong-owner")
     assert campaign["status"] == "active"
+
+
+def test_basketball_bootstrap_is_idempotent_and_preflight_is_secret_safe(
+    store, monkeypatch,
+):
+    monkeypatch.setenv("EARN_DELIVERY_SECRET", "delivery-secret")
+    account = store.register("publisher@example.com", "SecurePass123!")
+    user_id = account["earn_user_id"]
+    secret = "publisher-secret-with-at-least-32-characters"
+
+    first = store.bootstrap_basketball_publisher(user_id, secret)
+    second = store.bootstrap_basketball_publisher(user_id, secret)
+    assert second["publisher_id"] == first["publisher_id"]
+
+    with store._tx() as con:
+        placements = con.execute(
+            """SELECT placement_type, status
+               FROM earn_publisher_placements WHERE publisher_id = ?""",
+            (first["publisher_id"],),
+        ).fetchall()
+    assert {(row["placement_type"], row["status"]) for row in placements} == {
+        ("basketball_sidebar", "active"),
+        ("basketball_header_interstitial", "active"),
+    }
+
+    ready = store.publisher_delivery_preflight(first["publisher_id"], secret)
+    assert ready == {
+        "delivery_secret_configured": True,
+        "publisher_active": True,
+        "sidebar_placement_active": True,
+        "header_interstitial_placement_active": True,
+    }
+    assert store.publisher_delivery_preflight(
+        first["publisher_id"], "wrong-secret"
+    ) == {
+        "delivery_secret_configured": True,
+        "publisher_active": False,
+        "sidebar_placement_active": False,
+        "header_interstitial_placement_active": False,
+    }
+
+
+def test_preflight_route_returns_flags_only(store, monkeypatch):
+    monkeypatch.setenv("EARN_DELIVERY_SECRET", "delivery-secret")
+    account = store.register("route-publisher@example.com", "SecurePass123!")
+    secret = "publisher-secret-with-at-least-32-characters"
+    provisioned = store.bootstrap_basketball_publisher(
+        account["earn_user_id"], secret
+    )
+    app = Flask(__name__)
+    app.config["TESTING"] = True
+    register_earn_account_routes(app, store)
+
+    response = app.test_client().get(
+        "/api/earn/ads/publisher/preflight",
+        query_string={"publisher_id": provisioned["publisher_id"]},
+        headers={"X-Publisher-Key": secret},
+    )
+    assert response.status_code == 200
+    assert response.get_json() == {
+        "delivery_secret_configured": True,
+        "publisher_active": True,
+        "sidebar_placement_active": True,
+        "header_interstitial_placement_active": True,
+    }
+
+
+def test_empty_stored_publisher_secret_fails_closed(store, monkeypatch):
+    monkeypatch.setenv("EARN_DELIVERY_SECRET", "delivery-secret")
+    user_id, publisher_id, _, _ = _active_campaign(store)
+    with store._tx() as con:
+        con.execute(
+            "UPDATE earn_publishers SET postback_secret = NULL WHERE publisher_id = ?",
+            (publisher_id,),
+        )
+    with pytest.raises(EarnError, match="publisher_auth_required"):
+        store.verified_serve(
+            "basketball_sidebar", publisher_id,
+            "viewer_hash_1234567890", "GR", "",
+        )
 
 
 def test_creative_policy_rejects_private_script_and_unsafe_images(store):

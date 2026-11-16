@@ -4103,8 +4103,9 @@ class EarnAccountStore:
             if not pub or pub["status"] != "active":
                 raise EarnError("publisher_not_active")
             expected_secret = str(pub["postback_secret"] or "")
-            if expected_secret and not hmac.compare_digest(
-                expected_secret, str(publisher_secret or ""),
+            supplied_secret = str(publisher_secret or "")
+            if not expected_secret or not supplied_secret or not hmac.compare_digest(
+                expected_secret, supplied_secret,
             ):
                 raise EarnError("publisher_auth_required")
             registered = con.execute(
@@ -5264,6 +5265,139 @@ class EarnAccountStore:
                 (publisher_id,),
             ).fetchall()
         return [dict(r) for r in rows]
+
+    def bootstrap_basketball_publisher(
+        self,
+        earn_user_id: str,
+        publisher_secret: str,
+        site_url: str = "https://basketball.thronoschain.org",
+    ) -> dict[str, Any]:
+        """Idempotently provision the canonical Basketball publisher."""
+        earn_user_id = str(earn_user_id or "").strip()
+        publisher_secret = str(publisher_secret or "")
+        if len(publisher_secret) < 32:
+            raise EarnError("publisher_secret_too_short")
+
+        placements = (
+            "basketball_sidebar",
+            "basketball_header_interstitial",
+        )
+        now = int(time.time())
+        with self._tx() as con:
+            account = con.execute(
+                "SELECT 1 FROM earn_accounts WHERE earn_user_id = ?",
+                (earn_user_id,),
+            ).fetchone()
+            if not account:
+                raise EarnError("earn_user_not_found")
+
+            publisher = con.execute(
+                """SELECT publisher_id FROM earn_publishers
+                   WHERE earn_user_id = ? AND provider = 'basketball'""",
+                (earn_user_id,),
+            ).fetchone()
+            if publisher:
+                publisher_id = str(publisher["publisher_id"])
+                con.execute(
+                    """UPDATE earn_publishers
+                       SET label = ?, postback_secret = ?, status = 'active',
+                           approved_at = ?, reject_reason = NULL
+                       WHERE publisher_id = ?""",
+                    ("Basketball", publisher_secret, now, publisher_id),
+                )
+            else:
+                publisher_id = "pub_" + secrets.token_urlsafe(18)
+                con.execute(
+                    """INSERT INTO earn_publishers
+                       (publisher_id, earn_user_id, provider, label,
+                        postback_secret, status, approved_at, created_at)
+                       VALUES (?,?,'basketball','Basketball',?,'active',?,?)""",
+                    (publisher_id, earn_user_id, publisher_secret, now, now),
+                )
+
+            for placement in placements:
+                rows = con.execute(
+                    """SELECT placement_id FROM earn_publisher_placements
+                       WHERE publisher_id = ? AND placement_type = ?
+                       ORDER BY created_at, placement_id""",
+                    (publisher_id, placement),
+                ).fetchall()
+                if rows:
+                    con.execute(
+                        """UPDATE earn_publisher_placements
+                           SET status = 'active', site_url = ?
+                           WHERE placement_id = ?""",
+                        (site_url, rows[0]["placement_id"]),
+                    )
+                    for duplicate in rows[1:]:
+                        con.execute(
+                            """UPDATE earn_publisher_placements
+                               SET status = 'inactive'
+                               WHERE placement_id = ?""",
+                            (duplicate["placement_id"],),
+                        )
+                else:
+                    con.execute(
+                        """INSERT INTO earn_publisher_placements
+                           (placement_id, publisher_id, placement_type, site_url,
+                            status, created_at)
+                           VALUES (?,?,?,?, 'active', ?)""",
+                        ("plc_" + secrets.token_urlsafe(18), publisher_id,
+                         placement, site_url, now),
+                    )
+
+        return {
+            "publisher_id": publisher_id,
+            "publisher_active": True,
+            "sidebar_placement_active": True,
+            "header_interstitial_placement_active": True,
+        }
+
+    def publisher_delivery_preflight(
+        self,
+        publisher_id: str,
+        publisher_secret: str,
+    ) -> dict[str, bool]:
+        """Return secret-safe readiness flags for one publisher."""
+        publisher_id = str(publisher_id or "").strip()
+        supplied_secret = str(publisher_secret or "")
+        with self._tx() as con:
+            publisher = con.execute(
+                """SELECT status, postback_secret FROM earn_publishers
+                   WHERE publisher_id = ?""",
+                (publisher_id,),
+            ).fetchone()
+            authenticated = bool(
+                publisher
+                and publisher["postback_secret"]
+                and supplied_secret
+                and hmac.compare_digest(
+                    str(publisher["postback_secret"]), supplied_secret,
+                )
+            )
+            active = bool(authenticated and publisher["status"] == "active")
+
+            def placement_active(placement: str) -> bool:
+                if not active:
+                    return False
+                row = con.execute(
+                    """SELECT 1 FROM earn_publisher_placements
+                       WHERE publisher_id = ? AND placement_type = ?
+                         AND status = 'active'""",
+                    (publisher_id, placement),
+                ).fetchone()
+                return bool(row)
+
+            return {
+                "delivery_secret_configured": bool(self._delivery_secret()),
+                "publisher_active": active,
+                "sidebar_placement_active": placement_active(
+                    "basketball_sidebar"
+                ),
+                "header_interstitial_placement_active": placement_active(
+                    "basketball_header_interstitial"
+                ),
+            }
 
     def publisher_report(self, publisher_id: str, earn_user_id: str) -> dict[str, Any]:
         with self._tx() as con:
@@ -7061,6 +7195,14 @@ def register_earn_account_routes(
             return jsonify(ok=True, **result)
         except EarnError as exc:
             return jsonify(ok=False, error=str(exc)), 400
+
+    @app.get("/api/earn/ads/publisher/preflight")
+    def earn_ads_publisher_preflight():
+        result = store.publisher_delivery_preflight(
+            request.args.get("publisher_id", ""),
+            request.headers.get("X-Publisher-Key", ""),
+        )
+        return jsonify(**result)
 
     @app.post("/api/earn/ads/serve/event")
     def earn_ads_serve_event():

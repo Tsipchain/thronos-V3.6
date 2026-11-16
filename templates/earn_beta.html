@@ -449,9 +449,10 @@
       </nav>
       <div id="earn-panel-offers" class="earn-section-panel" role="tabpanel" aria-labelledby="earn-tab-offers">
       <div class="earn-provider-grid" aria-label="Earn providers">
-        <section class="earn-provider" id="provider-cpx">
-          <div class="earn-provider-heading"><span class="earn-provider-brand earn-provider-brand--cpx" aria-hidden="true"><img src="/static/img/cpx-research-mark.svg" alt="" loading="lazy"><span class="earn-provider-letter">CPX</span></span><h3 data-i18n="cpxTitle">CPX Research</h3></div><p data-i18n="cpxDesc">Surveys selected for your account.</p>
-          <button id="earn-surveys" class="earn-action" type="button" data-i18n="openSurveys">Open Surveys</button>
+        <section class="earn-provider is-unavailable" id="provider-cpx">
+          <div class="earn-provider-heading"><span class="earn-provider-brand earn-provider-brand--cpx" aria-hidden="true"><img src="/static/img/cpx-research-mark.svg" alt="" loading="lazy"><span class="earn-provider-letter">CPX</span></span><h3 data-i18n="cpxTitle">CPX Research</h3></div><p id="cpx-copy" data-i18n="cpxDesc">Surveys selected for your account.</p>
+          <button id="earn-surveys" class="earn-action" type="button" disabled data-i18n="cpxPending">Surveys selected for your account.</button>
+          <div id="cpx-status" class="earn-provider-status" aria-live="polite" data-earn-copy="cpxPending">Checking availability…</div>
         </section>
         <section class="earn-provider is-unavailable" id="provider-bitcotasks">
           <div class="earn-provider-heading"><span class="earn-provider-brand earn-provider-brand--bitcotasks" aria-hidden="true"><span class="earn-provider-letter">B</span><img src="https://bitcotasks.com/favicon.ico" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.hidden=true"></span><h3 data-i18n="bitcoTitle">BitcoTasks</h3></div><p id="bitcotasks-copy" data-i18n="bitcoDesc">More tasks and offers are being prepared.</p>
@@ -465,8 +466,8 @@
         </section>
         <section class="earn-provider is-unavailable" id="provider-timewall">
           <div class="earn-provider-heading"><span class="earn-provider-brand earn-provider-brand--timewall" aria-hidden="true"><span class="earn-provider-letter">T</span><img src="https://timewall.io/favicon.ico" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.hidden=true"></span><h3>TimeWall</h3></div><p id="timewall-copy" data-earn-copy="timewallDescription">Surveys, clicks and social tasks.</p>
-          <button id="earn-timewall" class="earn-action" type="button" disabled>Coming soon</button>
-          <div id="timewall-status" class="earn-provider-status" aria-live="polite">Placement setup pending</div>
+          <button id="earn-timewall" class="earn-action" type="button" disabled data-earn-copy="cpxPending">Checking availability…</button>
+          <div id="timewall-status" class="earn-provider-status" aria-live="polite" data-earn-copy="cpxPending">Checking availability…</div>
         </section>
         <section class="earn-provider earn-gym-preview is-unavailable" id="provider-train2earn" aria-label="Gym challenges preview">
           <div class="earn-provider-heading"><span class="earn-provider-brand earn-provider-brand--gym" aria-hidden="true">T2E</span><h3>Train2Earn · Gym</h3></div>
@@ -474,6 +475,12 @@
           <div class="earn-provider-status" data-earn-copy="gymStatus">No THC rewards yet · Verified integration pending</div>
           <button type="button" class="earn-action" disabled>Coming soon</button>
         </section>
+      </div>
+      <div id="earn-checkin-bar" class="earn-checkin-bar" style="display:none;margin-top:14px;padding:10px 12px;background:#1a3148;border-radius:8px;display:none">
+        <div style="display:flex;align-items:center;gap:10px">
+          <button id="earn-checkin-btn" class="earn-action" type="button" style="flex:0 0 auto" data-i18n-dynamic="dailyCheckin">Daily Check-in</button>
+          <span id="earn-checkin-status" class="checkin-status" style="font-size:12px;color:#b8d9ee"></span>
+        </div>
       </div>
       <div id="earn-ad-banner" class="earn-ad-banner" style="display:none;margin-top:14px"></div>
       </div><!-- /Earn offers -->
@@ -670,6 +677,7 @@
       challengeAction:"Explore TimeWall tasks",
       invitedMembers:"Invited members & rewards",
       timewallDescription:"Surveys, clicks and social tasks.",
+      cpxPending:"Checking availability…",
       previewCreative:"Preview creative — no charge",previewDisclosure:"AD PREVIEW · Not live · No THC charge"
     },
     gr: {
@@ -707,6 +715,7 @@
       challengeAction:"Δες τις αποστολές TimeWall",
       invitedMembers:"Προσκεκλημένα μέλη και ανταμοιβές",
       timewallDescription:"Έρευνες, clicks και αποστολές κοινωνικών δικτύων.",
+      cpxPending:"Έλεγχος διαθεσιμότητας…",
       previewCreative:"Προεπισκόπηση · Χωρίς χρέωση",previewDisclosure:"ΠΡΟΕΠΙΣΚΟΠΗΣΗ · Δεν προβάλλεται · Χωρίς χρέωση THC"
     },
     es: {
@@ -849,7 +858,17 @@
       campaignCreated:'Campaign {id} created. Pending review; not live or charged.',
       invalidLinks:'Select your campaign and use HTTPS image and destination URLs.',
       previewNeedTitle:'Enter an ad headline before previewing.',
-      artworkCreated:'Artwork submitted for review. It is not live until approved and funded.' },
+      artworkCreated:'Artwork submitted for review. It is not live until approved and funded.',
+      fundBtn:'Fund',activateBtn:'Activate',pauseBtn:'Pause',resumeBtn:'Resume',refundBtn:'Refund',reportBtn:'Report',
+      escrowBal:'Escrow',pricingCpmMin:'CPM min bid',pricingCpmMax:'CPM max bid',pricingCpcMin:'CPC min bid',pricingCpcMax:'CPC max bid',
+      fundAmount:'Amount (THC)',fundConfirm:'Confirm deposit',funding:'Processing…',funded:'Deposited {amount} THC',
+      activating:'Activating…',activated:'Campaign activated',pausing:'Pausing…',paused:'Campaign paused',
+      resuming:'Resuming…',resumed:'Campaign resumed',refunding:'Processing refund…',refunded:'Refunded {amount} THC',
+      refundConfirm:'Refund remaining escrow? This cannot be undone.',reportLoading:'Loading report…',
+      impressions:'Impressions',clicks:'Clicks',ctr:'CTR',spent:'Spent',vipCredits:'VIP credits',
+      treasuryContrib:'Treasury',dailyBreakdown:'Daily breakdown',date:'Date',cost:'Cost',
+      checkinSuccess:'Checked in for {date}',checkinAlready:'Already checked in today',checkinBtn:'Daily check-in',
+      checkinDone:'Checked in today',dormantWarning:'Account dormant — check in daily to reactivate',noReport:'No report data' },
     gr: { loading:'Φόρτωση καμπανιών…', pick:'Επιλογή καμπάνιας', createFirst:'Δημιούργησε πρώτα μια καμπάνια',
       empty:'Δεν υπάρχουν καμπάνιες. Οι νέες καμπάνιες χρειάζονται έγκριση.',
       status:'Κατάσταση',unknown:'άγνωστη',bid:'Προσφορά',
@@ -857,7 +876,17 @@
       login:'Συνδέσου πρώτα στον λογαριασμό Earn',failed:'Αποτυχία αιτήματος',
       campaignCreated:'Η καμπάνια {id} καταχωρίστηκε. Αναμένει έγκριση, δεν προβάλλεται ούτε χρεώθηκε.',
       invalidLinks:'Επίλεξε καμπάνια και χρησιμοποίησε συνδέσμους HTTPS για εικόνα και προορισμό.',previewNeedTitle:'Πληκτρολόγησε τίτλο για την προεπισκόπηση.',
-      artworkCreated:'Το δημιουργικό υποβλήθηκε για έγκριση. Δεν προβάλλεται μέχρι να εγκριθεί και να χρηματοδοτηθεί.' },
+      artworkCreated:'Το δημιουργικό υποβλήθηκε για έγκριση. Δεν προβάλλεται μέχρι να εγκριθεί και να χρηματοδοτηθεί.',
+      fundBtn:'Χρηματοδότηση',activateBtn:'Ενεργοποίηση',pauseBtn:'Παύση',resumeBtn:'Συνέχεια',refundBtn:'Επιστροφή',reportBtn:'Αναφορά',
+      escrowBal:'Εγγύηση',pricingCpmMin:'CPM ελάχ.',pricingCpmMax:'CPM μέγ.',pricingCpcMin:'CPC ελάχ.',pricingCpcMax:'CPC μέγ.',
+      fundAmount:'Ποσό (THC)',fundConfirm:'Επιβεβαίωση κατάθεσης',funding:'Επεξεργασία…',funded:'Κατατέθηκαν {amount} THC',
+      activating:'Ενεργοποίηση…',activated:'Η καμπάνια ενεργοποιήθηκε',pausing:'Παύση…',paused:'Η καμπάνια σε παύση',
+      resuming:'Συνέχεια…',resumed:'Η καμπάνια συνεχίστηκε',refunding:'Επεξεργασία επιστροφής…',refunded:'Επιστράφηκαν {amount} THC',
+      refundConfirm:'Επιστροφή υπολοίπου; Η ενέργεια δεν αναιρείται.',reportLoading:'Φόρτωση αναφοράς…',
+      impressions:'Εμφανίσεις',clicks:'Κλικ',ctr:'CTR',spent:'Δαπάνη',vipCredits:'VIP πόντοι',
+      treasuryContrib:'Ταμείο',dailyBreakdown:'Ημερήσια ανάλυση',date:'Ημερομηνία',cost:'Κόστος',
+      checkinBtn:'Ημερήσιο check-in',checkinDone:'Ολοκληρώθηκε σήμερα',dormantWarning:'Αδρανής λογαριασμός — κάντε check-in για επανενεργοποίηση',
+      checkinSuccess:'Check-in για {date}',checkinAlready:'Ήδη check-in σήμερα',noReport:'Χωρίς δεδομένα' },
     es: { loading:'Cargando campañas…',pick:'Seleccionar campaña',createFirst:'Crea primero una campaña',
       empty:'Aún no hay campañas. Las nuevas necesitan revisión.',status:'Estado',unknown:'desconocido',
       bid:'Oferta',unavailable:'No se pudo cargar. Inicia sesión o inténtalo de nuevo.',
@@ -907,15 +936,15 @@
   const $ = id => document.getElementById(id);
 
   const _i18n = {
-    en: { title:'Thronos Earn Project', powered:'Powered by ThronosLabs and ENCOMM', subtitle:'Create an Earn Account or sign in. No wallet required.', balanceBtn:'Balance & activity', email:'Email', pw:'Password (8+ characters)', pwNew:'Choose a password (8+ characters)', signIn:'Sign In', createAcct:'Create Account', needAcct:'Need an account? Register', haveAcct:'Already have an account? Sign In', signOut:'Sign out', availThc:'AVAILABLE THC', pendThc:'PENDING THC', cpxTitle:'CPX Research', cpxDesc:'Surveys selected for your account.', openSurveys:'Open Surveys', bitcoTitle:'BitcoTasks', bitcoDesc:'More tasks and offers are being prepared.', bitcoSoon:'Coming soon', bitcoPending:'Provider approval pending', bitcoReady:'Tasks and offers selected for your account.', bitcoAvail:'Available now', openBitco:'Open BitcoTasks', pureTitle:'PureSpectrum', pureDesc:'Additional surveys coming soon.', pureSoon:'Coming soon', purePending:'Integration pending', pureReady:'Variety surveys for your account.', pureAvail:'Available now', openPure:'Open Surveys', t2eTitle:'Train-to-Earn', t2eStreak:'Streak', t2eToday:'Today', t2eTotal:'Total earned', logWorkout:'Log Workout', recentActivity:'Recent activity', backToEarn:'Back to Earn', earnAcct:'Earn account', thronosWallet:'Thronos wallet', rewardClearance:'Reward clearance', cashOut:'Cash-out', notLinked:'Not linked', notLinkedFull:'Not linked — link from Wallet PWA or APK', notEnabled:'Not enabled yet.', noReceipts:'No verified Earn receipts yet.', rewardsNote:'Rewards are credited only from verified provider receipts. Pending THC is not spendable or payable until clearance.', terms:'Terms of Use', privacy:'Privacy Policy', contact:'Contact', pendingNote:'Verified receipts remain pending during their separate seven-day Earn hold.', skip:'Skip', countdown:'Continuing in {s}s…', receiptUnavail:'Receipt date unavailable', reversedBy:'Reversed by provider', reversed:'Reversed: {r}', clearanceNotRecv:'Clearance date not yet received from provider.', estClearance:'Estimated clearance: {d} ({n} day remaining)', estClearancePlural:'Estimated clearance: {d} ({n} days remaining)', enterCreds:'Enter email and password.', preparing:'Preparing your account…', creating:'Creating account…', signingIn:'Signing in…', signedOut:'Signed out.', loadingSurveys:'Loading surveys…', surveysUnavail:'Surveys unavailable.', connectedSurvey:'Connected. Complete a survey to earn THC.', couldNotSurvey:'Could not load surveys.', bitcoUnavail:'BitcoTasks is unavailable.', connectedBitco:'Connected to BitcoTasks.', couldNotBitco:'Could not load BitcoTasks.', pureUnavail:'PureSpectrum is unavailable.', connectedPure:'Connected to PureSpectrum surveys.', couldNotPure:'Could not load PureSpectrum.', returnedEarn:'Returned to Earn.', unavailable:'Unavailable', balanceError:'Could not load your Earn balance. Retry this page; no zero balance is assumed.', activityError:'Activity could not be loaded. Retry this page; no empty history is assumed.', amtUnavail:'Amount unavailable', amtPending:'Provider amount pending', daysClearance:'{n} day until earliest clearance ({d}-day period)', daysClearancePlural:'{n} days until earliest clearance ({d}-day period)', readyClearance:'Earliest pending reward ready for clearance', noPending:'No pending rewards.', workoutPrompt:'Workout duration in minutes (minimum 15):', workoutMin:'Minimum workout duration is 15 minutes.', workoutLogged:'Workout logged! Earned {v} THC', workoutFailed:'Could not log workout.', signInView:'Sign in to view your Earn balance and activity.', days:' days', lbTitle:'Monthly Leaderboard', lbEmpty:'No earnings this month yet. Be the first!', lbYourRank:'Your rank', lbActiveEarners:'Active earners', lbRewardsTitle:'Monthly Rewards', lbReward1:'1st — 1 THR to your THR Wallet; a Wallet is created if needed (after funding and eligibility verification)', lbReward1Wallet:'Already have a THR Wallet? Loyalty bonus: priority staking pool access + extra THC', lbReward2:'2nd–3rd — 5,000 THC each from the funded monthly pool', lbRewardScale:'At 1,000+ eligible earners, top 50 share 10,000 THC proportionally', lbYou:'You', lbThc:'{v} THC', lbUnranked:'Not ranked yet', lbStakingTitle:'Loyalty Staking Pool', lbStakingBadge:'COMING SOON', lbStakingDesc:'Stake cleared THC with your Earn account. THR staking requires a linked wallet.', lbStake1:'Stake THC from your linked wallet', lbStake2:'Earn APY — boosted rates for top monthly earners', lbStake3:'Pool funded by Thronos THC rewards allocation', lbStake4:'Requires linked THR Wallet and leaderboard activity', stakingEnterAmount:'Enter a valid amount', stakingNoPoolsAvail:'No staking pools available at this time.', poolRewardsTitle:'Pool Rewards', poolRewardsConfirmed:'Confirmed rewards', poolRewardsPending:'Pending rewards' },
-    el: { title:'Έργο Thronos Earn', powered:'Από ThronosLabs και ENCOMM', subtitle:'Δημιούργησε λογαριασμό Earn ή σύνδεσου. Δεν χρειάζεται πορτοφόλι.', balanceBtn:'Υπόλοιπο & δραστηριότητα', email:'Email', pw:'Κωδικός (8+ χαρακτήρες)', pwNew:'Διάλεξε κωδικό (8+ χαρακτήρες)', signIn:'Σύνδεση', createAcct:'Δημιουργία λογαριασμού', needAcct:'Δεν έχεις λογαριασμό; Εγγραφή', haveAcct:'Έχεις ήδη λογαριασμό; Σύνδεση', signOut:'Αποσύνδεση', availThc:'ΔΙΑΘΈΣΙΜΑ THC', pendThc:'ΕΚΚΡΕΜΆ THC', cpxDesc:'Έρευνες επιλεγμένες για τον λογαριασμό σου.', openSurveys:'Άνοιγμα ερευνών', bitcoDesc:'Περισσότερες εργασίες ετοιμάζονται.', bitcoSoon:'Έρχεται σύντομα', bitcoPending:'Εκκρεμής έγκριση παρόχου', bitcoReady:'Εργασίες και προσφορές για τον λογαριασμό σου.', bitcoAvail:'Διαθέσιμο τώρα', openBitco:'Άνοιγμα BitcoTasks', pureDesc:'Επιπλέον έρευνες έρχονται σύντομα.', pureSoon:'Έρχεται σύντομα', purePending:'Εκκρεμής ενσωμάτωση', pureReady:'Διάφορες έρευνες για τον λογαριασμό σου.', pureAvail:'Διαθέσιμο τώρα', openPure:'Άνοιγμα ερευνών', t2eTitle:'Train-to-Earn', t2eStreak:'Σειρά', t2eToday:'Σήμερα', t2eTotal:'Συνολικά κέρδη', logWorkout:'Καταγραφή προπόνησης', recentActivity:'Πρόσφατη δραστηριότητα', backToEarn:'Πίσω στο Earn', earnAcct:'Λογαριασμός Earn', thronosWallet:'Πορτοφόλι Thronos', rewardClearance:'Εκκαθάριση αμοιβών', cashOut:'Ανάληψη', notLinked:'Μη συνδεδεμένο', notLinkedFull:'Μη συνδεδεμένο — σύνδεσε από Wallet PWA ή APK', notEnabled:'Δεν είναι ακόμα διαθέσιμο.', noReceipts:'Καμία επαληθευμένη απόδειξη Earn ακόμα.', rewardsNote:'Οι αμοιβές πιστώνονται μόνο από επαληθευμένες αποδείξεις παρόχων. Τα εκκρεμή THC δεν είναι διαθέσιμα μέχρι την εκκαθάριση.', terms:'Όροι χρήσης', privacy:'Πολιτική απορρήτου', contact:'Επικοινωνία', pendingNote:'Κάθε επαληθευμένη αμοιβή παραμένει σε ξεχωριστή αναμονή 7 ημερών στο Earn.', skip:'Παράλειψη', countdown:'Συνέχεια σε {s}δ…', receiptUnavail:'Ημερομηνία απόδειξης μη διαθέσιμη', reversedBy:'Αντιστράφηκε από πάροχο', reversed:'Αντιστροφή: {r}', clearanceNotRecv:'Ημερομηνία εκκαθάρισης δεν έχει ληφθεί ακόμα.', estClearance:'Εκτιμώμενη εκκαθάριση: {d} ({n} ημέρα απομένει)', estClearancePlural:'Εκτιμώμενη εκκαθάριση: {d} ({n} ημέρες απομένουν)', enterCreds:'Εισάγετε email και κωδικό.', preparing:'Προετοιμασία λογαριασμού…', creating:'Δημιουργία λογαριασμού…', signingIn:'Σύνδεση…', signedOut:'Αποσυνδεθήκατε.', loadingSurveys:'Φόρτωση ερευνών…', surveysUnavail:'Οι έρευνες δεν είναι διαθέσιμες.', connectedSurvey:'Συνδέθηκε. Ολοκλήρωσε μια έρευνα για να κερδίσεις THC.', couldNotSurvey:'Δεν ήταν δυνατή η φόρτωση ερευνών.', bitcoUnavail:'Το BitcoTasks δεν είναι διαθέσιμο.', connectedBitco:'Συνδέθηκε στο BitcoTasks.', couldNotBitco:'Δεν ήταν δυνατή η φόρτωση BitcoTasks.', pureUnavail:'Το PureSpectrum δεν είναι διαθέσιμο.', connectedPure:'Συνδέθηκε στο PureSpectrum.', couldNotPure:'Δεν ήταν δυνατή η φόρτωση PureSpectrum.', returnedEarn:'Επιστροφή στο Earn.', unavailable:'Μη διαθέσιμο', balanceError:'Δεν ήταν δυνατή η φόρτωση υπολοίπου. Δοκιμάστε ξανά.', activityError:'Δεν ήταν δυνατή η φόρτωση δραστηριότητας. Δοκιμάστε ξανά.', amtUnavail:'Ποσό μη διαθέσιμο', amtPending:'Ποσό παρόχου εκκρεμές', daysClearance:'{n} ημέρα μέχρι την εκκαθάριση (περίοδος {d} ημερών)', daysClearancePlural:'{n} ημέρες μέχρι την εκκαθάριση (περίοδος {d} ημερών)', readyClearance:'Η πρώτη εκκρεμής αμοιβή είναι έτοιμη για εκκαθάριση', noPending:'Καμία εκκρεμής αμοιβή.', workoutPrompt:'Διάρκεια προπόνησης σε λεπτά (ελάχιστο 15):', workoutMin:'Ελάχιστη διάρκεια προπόνησης 15 λεπτά.', workoutLogged:'Προπόνηση καταγράφηκε! Κέρδισες {v} THC', workoutFailed:'Δεν ήταν δυνατή η καταγραφή προπόνησης.', signInView:'Συνδεθείτε για να δείτε το υπόλοιπο και τη δραστηριότητα Earn.', lbTitle:'Μηνιαία κατάταξη', lbEmpty:'Κανένα κέρδος αυτόν τον μήνα ακόμα. Γίνε ο πρώτος!', lbYourRank:'Η θέση σου', lbActiveEarners:'Ενεργοί χρήστες', lbRewardsTitle:'Μηνιαίες ανταμοιβές', lbReward1:'1ος — 1 THR στο THR Wallet· αν δεν έχεις, δημιουργείται Wallet (μετά από χρηματοδότηση και έλεγχο δικαιώματος)', lbReward1Wallet:'Έχεις ήδη THR Wallet; Μπόνους πιστότητας: προτεραιότητα στο staking pool + extra THC', lbReward2:'2ος–3ος — 5.000 THC ο καθένας από το χρηματοδοτημένο pool', lbRewardScale:'Στους 1.000+ δικαιούχους, οι 50 πρώτοι μοιράζονται αναλογικά 10.000 THC', lbYou:'Εσύ', lbUnranked:'Χωρίς κατάταξη ακόμα', lbStakingTitle:'Pool Πιστότητας Staking', lbStakingBadge:'ΕΡΧΕΤΑΙ ΣΥΝΤΟΜΑ', lbStakingDesc:'Stake cleared THC with your Earn account. THR staking requires a linked wallet.', lbStake1:'Κάνε stake THC από το συνδεδεμένο σου wallet', lbStake2:'Κέρδισε APY — αυξημένα ποσοστά για τους κορυφαίους', lbStake3:'Pool χρηματοδοτημένο από τα THC ανταμοιβών Thronos', lbStake4:'Απαιτεί συνδεδεμένο THR Wallet και δραστηριότητα leaderboard', stakingEnterAmount:'Εισάγετε έγκυρο ποσό', stakingNoPoolsAvail:'Δεν υπάρχουν διαθέσιμα staking pools αυτή τη στιγμή.', poolRewardsTitle:'Ανταμοιβές Pool', poolRewardsConfirmed:'Επιβεβαιωμένες ανταμοιβές', poolRewardsPending:'Εκκρεμείς ανταμοιβές' },
-    de: { title:'Thronos Earn Projekt', powered:'Betrieben von ThronosLabs und ENCOMM', subtitle:'Erstelle ein Earn-Konto oder melde dich an. Kein Wallet erforderlich.', balanceBtn:'Guthaben & Aktivität', pw:'Passwort (8+ Zeichen)', pwNew:'Passwort wählen (8+ Zeichen)', signIn:'Anmelden', createAcct:'Konto erstellen', needAcct:'Kein Konto? Registrieren', haveAcct:'Bereits ein Konto? Anmelden', signOut:'Abmelden', availThc:'VERFÜGBARE THC', pendThc:'AUSSTEHENDE THC', cpxDesc:'Umfragen ausgewählt für dein Konto.', openSurveys:'Umfragen öffnen', bitcoDesc:'Weitere Aufgaben und Angebote werden vorbereitet.', bitcoSoon:'Kommt bald', bitcoPending:'Anbieter-Genehmigung ausstehend', bitcoReady:'Aufgaben und Angebote für dein Konto.', bitcoAvail:'Jetzt verfügbar', openBitco:'BitcoTasks öffnen', pureDesc:'Weitere Umfragen kommen bald.', pureSoon:'Kommt bald', purePending:'Integration ausstehend', pureReady:'Verschiedene Umfragen für dein Konto.', pureAvail:'Jetzt verfügbar', openPure:'Umfragen öffnen', t2eStreak:'Serie', t2eToday:'Heute', t2eTotal:'Gesamt verdient', logWorkout:'Training erfassen', recentActivity:'Letzte Aktivität', backToEarn:'Zurück zu Earn', earnAcct:'Earn-Konto', thronosWallet:'Thronos Wallet', rewardClearance:'Freigabe der Belohnungen', cashOut:'Auszahlung', notLinked:'Nicht verbunden', notLinkedFull:'Nicht verbunden — verbinde über Wallet PWA oder APK', notEnabled:'Noch nicht verfügbar.', noReceipts:'Noch keine verifizierten Earn-Belege.', rewardsNote:'Belohnungen werden nur aus verifizierten Anbieterbelegen gutgeschrieben. Ausstehende THC sind bis zur Freigabe nicht verfügbar.', terms:'Nutzungsbedingungen', privacy:'Datenschutz', pendingNote:'Ausstehende Belege sind bis zur Anbieterfreigabe nicht verfügbar.', skip:'Überspringen', countdown:'Weiter in {s}s…', receiptUnavail:'Belegdatum nicht verfügbar', reversedBy:'Vom Anbieter storniert', reversed:'Storniert: {r}', clearanceNotRecv:'Freigabedatum noch nicht vom Anbieter erhalten.', enterCreds:'E-Mail und Passwort eingeben.', preparing:'Konto wird vorbereitet…', creating:'Konto wird erstellt…', signingIn:'Anmeldung…', signedOut:'Abgemeldet.', loadingSurveys:'Umfragen werden geladen…', surveysUnavail:'Umfragen nicht verfügbar.', connectedSurvey:'Verbunden. Schließe eine Umfrage ab, um THC zu verdienen.', couldNotSurvey:'Umfragen konnten nicht geladen werden.', bitcoUnavail:'BitcoTasks ist nicht verfügbar.', connectedBitco:'Mit BitcoTasks verbunden.', couldNotBitco:'BitcoTasks konnte nicht geladen werden.', pureUnavail:'PureSpectrum ist nicht verfügbar.', connectedPure:'Mit PureSpectrum verbunden.', couldNotPure:'PureSpectrum konnte nicht geladen werden.', returnedEarn:'Zurück zu Earn.', unavailable:'Nicht verfügbar', balanceError:'Guthaben konnte nicht geladen werden. Seite neu laden.', activityError:'Aktivität konnte nicht geladen werden. Seite neu laden.', amtUnavail:'Betrag nicht verfügbar', amtPending:'Anbieterbetrag ausstehend', readyClearance:'Früheste ausstehende Belohnung bereit zur Freigabe', noPending:'Keine ausstehenden Belohnungen.', workoutPrompt:'Trainingsdauer in Minuten (mindestens 15):', workoutMin:'Mindesttrainingsdauer beträgt 15 Minuten.', workoutLogged:'Training erfasst! {v} THC verdient', workoutFailed:'Training konnte nicht erfasst werden.', signInView:'Anmelden, um Guthaben und Aktivität zu sehen.', lbTitle:'Monats-Rangliste', lbEmpty:'Noch keine Verdienste diesen Monat. Sei der Erste!', lbYourRank:'Dein Rang', lbActiveEarners:'Aktive Verdiener', lbRewardsTitle:'Monatliche Belohnungen', lbReward1:'1st — 1 THR to your THR Wallet; a Wallet is created if needed (after funding and eligibility verification)', lbReward1Wallet:'Bereits ein THR Wallet? Treuebonus: Vorrang beim Staking-Pool + extra THC', lbReward2:'2nd–3rd — 5,000 THC each from the funded monthly pool', lbRewardScale:'At 1,000+ eligible earners, top 50 share 10,000 THC proportionally', lbYou:'Du', lbUnranked:'Noch nicht platziert', lbStakingTitle:'Treue-Staking-Pool', lbStakingBadge:'KOMMT BALD', lbStakingDesc:'Stake cleared THC with your Earn account. THR staking requires a linked wallet.', lbStake1:'Stake THC aus deinem verknüpften Wallet', lbStake2:'Verdiene APY — erhöhte Raten für Top-Verdiener', lbStake3:'Pool finanziert aus Thronos THC-Belohnungen', lbStake4:'Erfordert verknüpftes THR Wallet und Leaderboard-Aktivität' },
-    fr: { title:'Projet Thronos Earn', powered:'Par ThronosLabs et ENCOMM', subtitle:'Créez un compte Earn ou connectez-vous. Aucun portefeuille requis.', balanceBtn:'Solde & activité', pw:'Mot de passe (8+ caractères)', pwNew:'Choisissez un mot de passe (8+ caractères)', signIn:'Connexion', createAcct:'Créer un compte', needAcct:'Pas de compte ? Inscription', haveAcct:'Déjà un compte ? Connexion', signOut:'Déconnexion', availThc:'THC DISPONIBLES', pendThc:'THC EN ATTENTE', cpxDesc:'Sondages sélectionnés pour votre compte.', openSurveys:'Ouvrir les sondages', bitcoDesc:'D’autres tâches et offres arrivent bientôt.', bitcoSoon:'Bientôt', bitcoPending:'Approbation du fournisseur en attente', bitcoReady:'Tâches et offres pour votre compte.', bitcoAvail:'Disponible maintenant', openBitco:'Ouvrir BitcoTasks', pureDesc:'D’autres sondages arrivent bientôt.', pureSoon:'Bientôt', purePending:'Intégration en attente', pureReady:'Sondages variés pour votre compte.', pureAvail:'Disponible maintenant', openPure:'Ouvrir les sondages', t2eStreak:'Série', t2eToday:'Aujourd’hui', t2eTotal:'Total gagné', logWorkout:'Enregistrer l’entraînement', recentActivity:'Activité récente', backToEarn:'Retour à Earn', earnAcct:'Compte Earn', thronosWallet:'Portefeuille Thronos', rewardClearance:'Compensation des récompenses', cashOut:'Retrait', notLinked:'Non lié', notLinkedFull:'Non lié — liez via Wallet PWA ou APK', notEnabled:'Pas encore disponible.', noReceipts:'Aucun reçu Earn vérifié.', rewardsNote:'Les récompenses sont créditées uniquement à partir de reçus vérifiés. Les THC en attente ne sont pas disponibles avant la compensation.', terms:'Conditions', privacy:'Confidentialité', skip:'Passer', countdown:'Suite dans {s}s…', enterCreds:'Entrez email et mot de passe.', preparing:'Préparation du compte…', creating:'Création du compte…', signingIn:'Connexion…', signedOut:'Déconnecté.', loadingSurveys:'Chargement des sondages…', connectedSurvey:'Connecté. Complétez un sondage pour gagner des THC.', returnedEarn:'Retour à Earn.', unavailable:'Indisponible', signInView:'Connectez-vous pour voir votre solde et activité Earn.', lbTitle:'Classement mensuel', lbEmpty:'Aucun gain ce mois-ci. Soyez le premier !', lbYourRank:'Votre rang', lbActiveEarners:'Gagnants actifs', lbRewardsTitle:'Récompenses mensuelles', lbReward1:'1st — 1 THR to your THR Wallet; a Wallet is created if needed (after funding and eligibility verification)', lbReward1Wallet:'Vous avez déjà un THR Wallet ? Bonus fidélité : accès prioritaire au pool de staking + THC supplémentaires', lbReward2:'2nd–3rd — 5,000 THC each from the funded monthly pool', lbRewardScale:'At 1,000+ eligible earners, top 50 share 10,000 THC proportionally', lbYou:'Vous', lbUnranked:'Pas encore classé', lbStakingTitle:'Pool de Staking Fidélité', lbStakingBadge:'BIENTÔT', lbStakingDesc:'Stake cleared THC with your Earn account. THR staking requires a linked wallet.', lbStake1:'Stakez des THC depuis votre wallet lié', lbStake2:'Gagnez des APY — taux augmentés pour les meilleurs', lbStake3:'Pool financé par l\'allocation THC de Thronos', lbStake4:'Nécessite un THR Wallet lié et une activité au classement' },
-    es: { title:'Proyecto Thronos Earn', powered:'Por ThronosLabs y ENCOMM', subtitle:'Crea una cuenta Earn o inicia sesión. No se necesita billetera.', balanceBtn:'Saldo y actividad', pw:'Contraseña (8+ caracteres)', pwNew:'Elige una contraseña (8+ caracteres)', signIn:'Iniciar sesión', createAcct:'Crear cuenta', needAcct:'¿No tienes cuenta? Regístrate', haveAcct:'¿Ya tienes cuenta? Inicia sesión', signOut:'Cerrar sesión', availThc:'THC DISPONIBLES', pendThc:'THC PENDIENTES', cpxDesc:'Encuestas seleccionadas para tu cuenta.', openSurveys:'Abrir encuestas', bitcoDesc:'Más tareas y ofertas en preparación.', bitcoSoon:'Próximamente', bitcoReady:'Tareas y ofertas para tu cuenta.', bitcoAvail:'Disponible ahora', openBitco:'Abrir BitcoTasks', pureDesc:'Más encuestas próximamente.', pureSoon:'Próximamente', pureReady:'Encuestas variadas para tu cuenta.', pureAvail:'Disponible ahora', openPure:'Abrir encuestas', t2eStreak:'Racha', t2eToday:'Hoy', t2eTotal:'Total ganado', logWorkout:'Registrar entrenamiento', recentActivity:'Actividad reciente', backToEarn:'Volver a Earn', earnAcct:'Cuenta Earn', thronosWallet:'Billetera Thronos', rewardClearance:'Compensación de recompensas', cashOut:'Retiro', notLinked:'No vinculada', notLinkedFull:'No vinculada — vincula desde Wallet PWA o APK', notEnabled:'Aún no disponible.', noReceipts:'Aún no hay recibos Earn verificados.', rewardsNote:'Las recompensas se acreditan solo a partir de recibos verificados. Los THC pendientes no están disponibles hasta la compensación.', terms:'Términos', privacy:'Privacidad', skip:'Omitir', countdown:'Continúa en {s}s…', enterCreds:'Ingresa email y contraseña.', preparing:'Preparando tu cuenta…', creating:'Creando cuenta…', signingIn:'Iniciando sesión…', signedOut:'Sesión cerrada.', loadingSurveys:'Cargando encuestas…', connectedSurvey:'Conectado. Completa una encuesta para ganar THC.', returnedEarn:'Vuelto a Earn.', unavailable:'No disponible', signInView:'Inicia sesión para ver tu saldo y actividad Earn.', lbTitle:'Clasificación mensual', lbEmpty:'Sin ganancias este mes aún. ¡Sé el primero!', lbYourRank:'Tu posición', lbActiveEarners:'Participantes activos', lbRewardsTitle:'Recompensas mensuales', lbReward1:'1st — 1 THR to your THR Wallet; a Wallet is created if needed (after funding and eligibility verification)', lbReward1Wallet:'¿Ya tienes THR Wallet? Bono de lealtad: acceso prioritario al pool de staking + THC extra', lbReward2:'2nd–3rd — 5,000 THC each from the funded monthly pool', lbRewardScale:'At 1,000+ eligible earners, top 50 share 10,000 THC proportionally', lbYou:'Tú', lbUnranked:'Sin clasificar aún', lbStakingTitle:'Pool de Staking de Lealtad', lbStakingBadge:'PRÓXIMAMENTE', lbStakingDesc:'Stake cleared THC with your Earn account. THR staking requires a linked wallet.', lbStake1:'Haz stake de THC desde tu wallet vinculado', lbStake2:'Gana APY — tasas aumentadas para los mejores', lbStake3:'Pool financiado por la asignación THC de Thronos', lbStake4:'Requiere THR Wallet vinculado y actividad en el ranking' },
-    pt: { title:'Projeto Thronos Earn', powered:'Por ThronosLabs e ENCOMM', subtitle:'Crie uma conta Earn ou faça login. Sem necessidade de carteira.', balanceBtn:'Saldo e atividade', pw:'Senha (8+ caracteres)', pwNew:'Escolha uma senha (8+ caracteres)', signIn:'Entrar', createAcct:'Criar conta', needAcct:'Não tem conta? Registre-se', haveAcct:'Já tem conta? Entre', signOut:'Sair', availThc:'THC DISPONÍVEIS', pendThc:'THC PENDENTES', cpxDesc:'Pesquisas selecionadas para sua conta.', openSurveys:'Abrir pesquisas', bitcoDesc:'Mais tarefas e ofertas em preparação.', bitcoSoon:'Em breve', bitcoReady:'Tarefas e ofertas para sua conta.', bitcoAvail:'Disponível agora', openBitco:'Abrir BitcoTasks', pureDesc:'Mais pesquisas em breve.', pureSoon:'Em breve', pureReady:'Pesquisas variadas para sua conta.', pureAvail:'Disponível agora', openPure:'Abrir pesquisas', recentActivity:'Atividade recente', backToEarn:'Voltar ao Earn', signIn:'Entrar', signOut:'Sair', skip:'Pular', enterCreds:'Insira email e senha.', signingIn:'Entrando…', signedOut:'Desconectado.', unavailable:'Indisponível', signInView:'Entre para ver seu saldo e atividade Earn.', lbTitle:'Classificação mensal', lbEmpty:'Nenhum ganho este mês ainda. Seja o primeiro!', lbYourRank:'Sua posição', lbActiveEarners:'Participantes ativos', lbRewardsTitle:'Recompensas mensais', lbReward1:'1st — 1 THR to your THR Wallet; a Wallet is created if needed (after funding and eligibility verification)', lbReward1Wallet:'Já tem THR Wallet? Bônus de fidelidade: acesso prioritário ao pool de staking + THC extra', lbReward2:'2nd–3rd — 5,000 THC each from the funded monthly pool', lbRewardScale:'At 1,000+ eligible earners, top 50 share 10,000 THC proportionally', lbYou:'Você', lbUnranked:'Ainda sem classificação', lbStakingTitle:'Pool de Staking de Fidelidade', lbStakingBadge:'EM BREVE', lbStakingDesc:'Stake cleared THC with your Earn account. THR staking requires a linked wallet.', lbStake1:'Faça stake de THC da sua wallet vinculada', lbStake2:'Ganhe APY — taxas aumentadas para os melhores', lbStake3:'Pool financiado pela alocação THC da Thronos', lbStake4:'Requer THR Wallet vinculado e atividade no ranking' },
-    it: { title:'Progetto Thronos Earn', powered:'Da ThronosLabs e ENCOMM', subtitle:'Crea un account Earn o accedi. Nessun portafoglio richiesto.', balanceBtn:'Saldo e attività', pw:'Password (8+ caratteri)', pwNew:'Scegli una password (8+ caratteri)', signIn:'Accedi', createAcct:'Crea account', needAcct:'Non hai un account? Registrati', haveAcct:'Hai già un account? Accedi', signOut:'Esci', availThc:'THC DISPONIBILI', pendThc:'THC IN ATTESA', cpxDesc:'Sondaggi selezionati per il tuo account.', openSurveys:'Apri sondaggi', bitcoDesc:'Altre attività e offerte in arrivo.', bitcoSoon:'In arrivo', bitcoReady:'Attività e offerte per il tuo account.', bitcoAvail:'Disponibile ora', openBitco:'Apri BitcoTasks', pureDesc:'Altri sondaggi in arrivo.', pureSoon:'In arrivo', pureReady:'Sondaggi vari per il tuo account.', pureAvail:'Disponibile ora', openPure:'Apri sondaggi', recentActivity:'Attività recente', backToEarn:'Torna a Earn', skip:'Salta', enterCreds:'Inserisci email e password.', signingIn:'Accesso…', signedOut:'Disconnesso.', unavailable:'Non disponibile', signInView:'Accedi per vedere il tuo saldo e attività Earn.', lbTitle:'Classifica mensile', lbEmpty:'Nessun guadagno questo mese. Sii il primo!', lbYourRank:'La tua posizione', lbActiveEarners:'Partecipanti attivi', lbRewardsTitle:'Premi mensili', lbReward1:'1st — 1 THR to your THR Wallet; a Wallet is created if needed (after funding and eligibility verification)', lbReward1Wallet:'Hai già un THR Wallet? Bonus fedeltà: accesso prioritario al pool di staking + THC extra', lbReward2:'2nd–3rd — 5,000 THC each from the funded monthly pool', lbRewardScale:'At 1,000+ eligible earners, top 50 share 10,000 THC proportionally', lbYou:'Tu', lbUnranked:'Non ancora classificato', lbStakingTitle:'Pool di Staking Fedeltà', lbStakingBadge:'IN ARRIVO', lbStakingDesc:'Stake cleared THC with your Earn account. THR staking requires a linked wallet.', lbStake1:'Fai stake di THC dal tuo wallet collegato', lbStake2:'Guadagna APY — tassi aumentati per i migliori', lbStake3:'Pool finanziato dall\'allocazione THC di Thronos', lbStake4:'Richiede THR Wallet collegato e attività in classifica' },
-    tr: { title:'Thronos Earn Projesi', powered:'ThronosLabs ve ENCOMM tarafından', subtitle:'Earn hesabı oluştur veya giriş yap. Cüzdan gerekmez.', balanceBtn:'Bakiye ve aktivite', pw:'Şifre (8+ karakter)', pwNew:'Şifre seç (8+ karakter)', signIn:'Giriş yap', createAcct:'Hesap oluştur', needAcct:'Hesabın yok mu? Kayıt ol', haveAcct:'Hesabın var mı? Giriş yap', signOut:'Çıkış', availThc:'MEVCUT THC', pendThc:'BEKLEYEN THC', cpxDesc:'Hesabın için seçilmiş anketler.', openSurveys:'Anketleri aç', bitcoDesc:'Daha fazla görev ve teklif hazırlanıyor.', bitcoSoon:'Yakında', bitcoReady:'Hesabın için görevler ve teklifler.', bitcoAvail:'Şimdi mevcut', openBitco:'BitcoTasks aç', pureDesc:'Ek anketler yakında.', pureSoon:'Yakında', pureReady:'Hesabın için çeşitli anketler.', pureAvail:'Şimdi mevcut', openPure:'Anketleri aç', recentActivity:'Son aktivite', backToEarn:'Earn’e dön', skip:'Atla', enterCreds:'Email ve şifre gir.', signingIn:'Giriş yapılıyor…', signedOut:'Çıkış yapıldı.', unavailable:'Mevcut değil', signInView:'Earn bakiyeni ve aktiviteni görmek için giriş yap.', lbTitle:'Aylık Sıralama', lbEmpty:'Bu ay henüz kazanç yok. İlk sen ol!', lbYourRank:'Sıralamanız', lbActiveEarners:'Aktif kazananlar', lbRewardsTitle:'Aylık Ödüller', lbReward1:'1st — 1 THR to your THR Wallet; a Wallet is created if needed (after funding and eligibility verification)', lbReward1Wallet:'Zaten THR Cüzdanın var mı? Sadakat bonusu: öncelikli staking havuzu erişimi + ekstra THC', lbReward2:'2nd–3rd — 5,000 THC each from the funded monthly pool', lbRewardScale:'At 1,000+ eligible earners, top 50 share 10,000 THC proportionally', lbYou:'Sen', lbUnranked:'Henüz sıralanmadı', lbStakingTitle:'Sadakat Staking Havuzu', lbStakingBadge:'YAKINDA', lbStakingDesc:'Stake cleared THC with your Earn account. THR staking requires a linked wallet.', lbStake1:'Bağlı cüzdanından THC stake et', lbStake2:'APY kazan — en iyiler için artırılmış oranlar', lbStake3:'Havuz Thronos THC ödül tahsisinden finanse edilir', lbStake4:'Bağlı THR Cüzdan ve sıralama aktivitesi gerektirir' },
-    ru: { title:'Проект Thronos Earn', powered:'От ThronosLabs и ENCOMM', subtitle:'Создайте аккаунт Earn или войдите. Кошелёк не требуется.', balanceBtn:'Баланс и активность', pw:'Пароль (8+ символов)', pwNew:'Выберите пароль (8+ символов)', signIn:'Войти', createAcct:'Создать аккаунт', needAcct:'Нет аккаунта? Регистрация', haveAcct:'Есть аккаунт? Войти', signOut:'Выйти', availThc:'ДОСТУПНЫЕ THC', pendThc:'ОЖИДАЮЩИЕ THC', cpxDesc:'Опросы подобраны для вашего аккаунта.', openSurveys:'Открыть опросы', bitcoDesc:'Ещё больше заданий готовится.', bitcoSoon:'Скоро', bitcoReady:'Задания и предложения для вашего аккаунта.', bitcoAvail:'Доступно сейчас', openBitco:'Открыть BitcoTasks', pureDesc:'Дополнительные опросы скоро.', pureSoon:'Скоро', pureReady:'Разнообразные опросы для вашего аккаунта.', pureAvail:'Доступно сейчас', openPure:'Открыть опросы', recentActivity:'Недавняя активность', backToEarn:'Назад в Earn', skip:'Пропустить', enterCreds:'Введите email и пароль.', signingIn:'Вход…', signedOut:'Вы вышли.', unavailable:'Недоступно', signInView:'Войдите, чтобы увидеть баланс и активность Earn.', lbTitle:'Ежемесячный рейтинг', lbEmpty:'Ещё нет заработков в этом месяце. Будьте первым!', lbYourRank:'Ваш ранг', lbActiveEarners:'Активные участники', lbRewardsTitle:'Ежемесячные награды', lbReward1:'1st — 1 THR to your THR Wallet; a Wallet is created if needed (after funding and eligibility verification)', lbReward1Wallet:'Уже есть THR Wallet? Бонус лояльности: приоритет в стейкинг-пуле + доп. THC', lbReward2:'2nd–3rd — 5,000 THC each from the funded monthly pool', lbRewardScale:'At 1,000+ eligible earners, top 50 share 10,000 THC proportionally', lbYou:'Вы', lbUnranked:'Ещё без рейтинга', lbStakingTitle:'Пул стейкинга лояльности', lbStakingBadge:'СКОРО', lbStakingDesc:'Stake cleared THC with your Earn account. THR staking requires a linked wallet.', lbStake1:'Стейкайте THC из привязанного кошелька', lbStake2:'Зарабатывайте APY — повышенные ставки для лучших', lbStake3:'Пул финансируется из THC-наград Thronos', lbStake4:'Требуется привязанный THR кошелёк и активность в рейтинге' },
+    en: { title:'Thronos Earn Project', powered:'Powered by ThronosLabs and ENCOMM', subtitle:'Create an Earn Account or sign in. No wallet required.', balanceBtn:'Balance & activity', email:'Email', pw:'Password (8+ characters)', pwNew:'Choose a password (8+ characters)', signIn:'Sign In', createAcct:'Create Account', needAcct:'Need an account? Register', haveAcct:'Already have an account? Sign In', signOut:'Sign out', availThc:'AVAILABLE THC', pendThc:'PENDING THC', cpxTitle:'CPX Research', cpxDesc:'Surveys selected for your account.', openSurveys:'Open Surveys', bitcoTitle:'BitcoTasks', bitcoDesc:'More tasks and offers are being prepared.', bitcoSoon:'Coming soon', bitcoPending:'Provider approval pending', bitcoReady:'Tasks and offers selected for your account.', bitcoAvail:'Available now', openBitco:'Open BitcoTasks', pureTitle:'PureSpectrum', pureDesc:'Additional surveys coming soon.', pureSoon:'Coming soon', purePending:'Integration pending', pureReady:'Variety surveys for your account.', pureAvail:'Available now', openPure:'Open Surveys', t2eTitle:'Train-to-Earn', t2eStreak:'Streak', t2eToday:'Today', t2eTotal:'Total earned', logWorkout:'Log Workout', recentActivity:'Recent activity', backToEarn:'Back to Earn', earnAcct:'Earn account', thronosWallet:'Thronos wallet', rewardClearance:'Reward clearance', cashOut:'Cash-out', notLinked:'Not linked', notLinkedFull:'Not linked — link from Wallet PWA or APK', notEnabled:'Not enabled yet.', noReceipts:'No verified Earn receipts yet.', rewardsNote:'Rewards are credited only from verified provider receipts. Pending THC is not spendable or payable until clearance.', terms:'Terms of Use', privacy:'Privacy Policy', contact:'Contact', pendingNote:'Verified receipts remain pending during their separate seven-day Earn hold.', skip:'Skip', countdown:'Continuing in {s}s…', receiptUnavail:'Receipt date unavailable', reversedBy:'Reversed by provider', reversed:'Reversed: {r}', clearanceNotRecv:'Clearance date not yet received from provider.', estClearance:'Estimated clearance: {d} ({n} day remaining)', estClearancePlural:'Estimated clearance: {d} ({n} days remaining)', enterCreds:'Enter email and password.', preparing:'Preparing your account…', creating:'Creating account…', signingIn:'Signing in…', signedOut:'Signed out.', loadingSurveys:'Loading surveys…', surveysUnavail:'Surveys unavailable.', connectedSurvey:'Connected. Complete a survey to earn THC.', couldNotSurvey:'Could not load surveys.', bitcoUnavail:'BitcoTasks is unavailable.', connectedBitco:'Connected to BitcoTasks.', couldNotBitco:'Could not load BitcoTasks.', pureUnavail:'PureSpectrum is unavailable.', connectedPure:'Connected to PureSpectrum surveys.', couldNotPure:'Could not load PureSpectrum.', returnedEarn:'Returned to Earn.', unavailable:'Unavailable', balanceError:'Could not load your Earn balance. Retry this page; no zero balance is assumed.', activityError:'Activity could not be loaded. Retry this page; no empty history is assumed.', amtUnavail:'Amount unavailable', amtPending:'Provider amount pending', daysClearance:'{n} day until earliest clearance ({d}-day period)', daysClearancePlural:'{n} days until earliest clearance ({d}-day period)', readyClearance:'Earliest pending reward ready for clearance', noPending:'No pending rewards.', workoutPrompt:'Workout duration in minutes (minimum 15):', workoutMin:'Minimum workout duration is 15 minutes.', workoutLogged:'Workout logged! Earned {v} THC', workoutFailed:'Could not log workout.', signInView:'Sign in to view your Earn balance and activity.', days:' days', lbTitle:'Monthly Leaderboard', lbEmpty:'No earnings this month yet. Be the first!', lbYourRank:'Your rank', lbActiveEarners:'Active earners', lbRewardsTitle:'Monthly Rewards', lbReward1:'1st — 1 THR to your THR Wallet; a Wallet is created if needed (after funding and eligibility verification)', lbReward1Wallet:'Already have a THR Wallet? Loyalty bonus: priority staking pool access + extra THC', lbReward2:'2nd–3rd — 5,000 THC each from the funded monthly pool', lbRewardScale:'At 1,000+ eligible earners, top 50 share 10,000 THC proportionally', lbYou:'You', lbThc:'{v} THC', lbUnranked:'Not ranked yet', lbStakingTitle:'Loyalty Staking Pool', lbStakingBadge:'COMING SOON', lbStakingDesc:'Stake cleared THC with your Earn account. THR staking requires a linked wallet.', lbStake1:'Stake THC from your linked wallet', lbStake2:'Earn APY — boosted rates for top monthly earners', lbStake3:'Pool funded by Thronos THC rewards allocation', lbStake4:'Requires linked THR Wallet and leaderboard activity', stakingEnterAmount:'Enter a valid amount', stakingNoPoolsAvail:'No staking pools available at this time.', poolRewardsTitle:'Pool Rewards', poolRewardsConfirmed:'Confirmed rewards', poolRewardsPending:'Pending rewards', twUnavail:'TimeWall is unavailable.', openTimewall:'Open TimeWall', twReady:'Surveys, clicks and social tasks for your account.', twAvail:'Available now', twPending:'Placement setup pending', cpxReady:'Surveys ready for your account.', cpxAvail:'Available now', openCpx:'Open Surveys', cpxPending:'Surveys selected for your account.' },
+    el: { title:'Έργο Thronos Earn', powered:'Από ThronosLabs και ENCOMM', subtitle:'Δημιούργησε λογαριασμό Earn ή σύνδεσου. Δεν χρειάζεται πορτοφόλι.', balanceBtn:'Υπόλοιπο & δραστηριότητα', email:'Email', pw:'Κωδικός (8+ χαρακτήρες)', pwNew:'Διάλεξε κωδικό (8+ χαρακτήρες)', signIn:'Σύνδεση', createAcct:'Δημιουργία λογαριασμού', needAcct:'Δεν έχεις λογαριασμό; Εγγραφή', haveAcct:'Έχεις ήδη λογαριασμό; Σύνδεση', signOut:'Αποσύνδεση', availThc:'ΔΙΑΘΈΣΙΜΑ THC', pendThc:'ΕΚΚΡΕΜΆ THC', cpxDesc:'Έρευνες επιλεγμένες για τον λογαριασμό σου.', openSurveys:'Άνοιγμα ερευνών', bitcoDesc:'Περισσότερες εργασίες ετοιμάζονται.', bitcoSoon:'Έρχεται σύντομα', bitcoPending:'Εκκρεμής έγκριση παρόχου', bitcoReady:'Εργασίες και προσφορές για τον λογαριασμό σου.', bitcoAvail:'Διαθέσιμο τώρα', openBitco:'Άνοιγμα BitcoTasks', pureDesc:'Επιπλέον έρευνες έρχονται σύντομα.', pureSoon:'Έρχεται σύντομα', purePending:'Εκκρεμής ενσωμάτωση', pureReady:'Διάφορες έρευνες για τον λογαριασμό σου.', pureAvail:'Διαθέσιμο τώρα', openPure:'Άνοιγμα ερευνών', t2eTitle:'Train-to-Earn', t2eStreak:'Σειρά', t2eToday:'Σήμερα', t2eTotal:'Συνολικά κέρδη', logWorkout:'Καταγραφή προπόνησης', recentActivity:'Πρόσφατη δραστηριότητα', backToEarn:'Πίσω στο Earn', earnAcct:'Λογαριασμός Earn', thronosWallet:'Πορτοφόλι Thronos', rewardClearance:'Εκκαθάριση αμοιβών', cashOut:'Ανάληψη', notLinked:'Μη συνδεδεμένο', notLinkedFull:'Μη συνδεδεμένο — σύνδεσε από Wallet PWA ή APK', notEnabled:'Δεν είναι ακόμα διαθέσιμο.', noReceipts:'Καμία επαληθευμένη απόδειξη Earn ακόμα.', rewardsNote:'Οι αμοιβές πιστώνονται μόνο από επαληθευμένες αποδείξεις παρόχων. Τα εκκρεμή THC δεν είναι διαθέσιμα μέχρι την εκκαθάριση.', terms:'Όροι χρήσης', privacy:'Πολιτική απορρήτου', contact:'Επικοινωνία', pendingNote:'Κάθε επαληθευμένη αμοιβή παραμένει σε ξεχωριστή αναμονή 7 ημερών στο Earn.', skip:'Παράλειψη', countdown:'Συνέχεια σε {s}δ…', receiptUnavail:'Ημερομηνία απόδειξης μη διαθέσιμη', reversedBy:'Αντιστράφηκε από πάροχο', reversed:'Αντιστροφή: {r}', clearanceNotRecv:'Ημερομηνία εκκαθάρισης δεν έχει ληφθεί ακόμα.', estClearance:'Εκτιμώμενη εκκαθάριση: {d} ({n} ημέρα απομένει)', estClearancePlural:'Εκτιμώμενη εκκαθάριση: {d} ({n} ημέρες απομένουν)', enterCreds:'Εισάγετε email και κωδικό.', preparing:'Προετοιμασία λογαριασμού…', creating:'Δημιουργία λογαριασμού…', signingIn:'Σύνδεση…', signedOut:'Αποσυνδεθήκατε.', loadingSurveys:'Φόρτωση ερευνών…', surveysUnavail:'Οι έρευνες δεν είναι διαθέσιμες.', connectedSurvey:'Συνδέθηκε. Ολοκλήρωσε μια έρευνα για να κερδίσεις THC.', couldNotSurvey:'Δεν ήταν δυνατή η φόρτωση ερευνών.', bitcoUnavail:'Το BitcoTasks δεν είναι διαθέσιμο.', connectedBitco:'Συνδέθηκε στο BitcoTasks.', couldNotBitco:'Δεν ήταν δυνατή η φόρτωση BitcoTasks.', pureUnavail:'Το PureSpectrum δεν είναι διαθέσιμο.', connectedPure:'Συνδέθηκε στο PureSpectrum.', couldNotPure:'Δεν ήταν δυνατή η φόρτωση PureSpectrum.', returnedEarn:'Επιστροφή στο Earn.', unavailable:'Μη διαθέσιμο', balanceError:'Δεν ήταν δυνατή η φόρτωση υπολοίπου. Δοκιμάστε ξανά.', activityError:'Δεν ήταν δυνατή η φόρτωση δραστηριότητας. Δοκιμάστε ξανά.', amtUnavail:'Ποσό μη διαθέσιμο', amtPending:'Ποσό παρόχου εκκρεμές', daysClearance:'{n} ημέρα μέχρι την εκκαθάριση (περίοδος {d} ημερών)', daysClearancePlural:'{n} ημέρες μέχρι την εκκαθάριση (περίοδος {d} ημερών)', readyClearance:'Η πρώτη εκκρεμής αμοιβή είναι έτοιμη για εκκαθάριση', noPending:'Καμία εκκρεμής αμοιβή.', workoutPrompt:'Διάρκεια προπόνησης σε λεπτά (ελάχιστο 15):', workoutMin:'Ελάχιστη διάρκεια προπόνησης 15 λεπτά.', workoutLogged:'Προπόνηση καταγράφηκε! Κέρδισες {v} THC', workoutFailed:'Δεν ήταν δυνατή η καταγραφή προπόνησης.', signInView:'Συνδεθείτε για να δείτε το υπόλοιπο και τη δραστηριότητα Earn.', lbTitle:'Μηνιαία κατάταξη', lbEmpty:'Κανένα κέρδος αυτόν τον μήνα ακόμα. Γίνε ο πρώτος!', lbYourRank:'Η θέση σου', lbActiveEarners:'Ενεργοί χρήστες', lbRewardsTitle:'Μηνιαίες ανταμοιβές', lbReward1:'1ος — 1 THR στο THR Wallet· αν δεν έχεις, δημιουργείται Wallet (μετά από χρηματοδότηση και έλεγχο δικαιώματος)', lbReward1Wallet:'Έχεις ήδη THR Wallet; Μπόνους πιστότητας: προτεραιότητα στο staking pool + extra THC', lbReward2:'2ος–3ος — 5.000 THC ο καθένας από το χρηματοδοτημένο pool', lbRewardScale:'Στους 1.000+ δικαιούχους, οι 50 πρώτοι μοιράζονται αναλογικά 10.000 THC', lbYou:'Εσύ', lbUnranked:'Χωρίς κατάταξη ακόμα', lbStakingTitle:'Pool Πιστότητας Staking', lbStakingBadge:'ΕΡΧΕΤΑΙ ΣΥΝΤΟΜΑ', lbStakingDesc:'Stake cleared THC with your Earn account. THR staking requires a linked wallet.', lbStake1:'Κάνε stake THC από το συνδεδεμένο σου wallet', lbStake2:'Κέρδισε APY — αυξημένα ποσοστά για τους κορυφαίους', lbStake3:'Pool χρηματοδοτημένο από τα THC ανταμοιβών Thronos', lbStake4:'Απαιτεί συνδεδεμένο THR Wallet και δραστηριότητα leaderboard', stakingEnterAmount:'Εισάγετε έγκυρο ποσό', stakingNoPoolsAvail:'Δεν υπάρχουν διαθέσιμα staking pools αυτή τη στιγμή.', poolRewardsTitle:'Ανταμοιβές Pool', poolRewardsConfirmed:'Επιβεβαιωμένες ανταμοιβές', poolRewardsPending:'Εκκρεμείς ανταμοιβές', twUnavail:'Το TimeWall δεν είναι διαθέσιμο.', openTimewall:'Άνοιγμα TimeWall', twReady:'Έρευνες, κλικ και κοινωνικές εργασίες για τον λογαριασμό σου.', twAvail:'Διαθέσιμο τώρα', twPending:'Εκκρεμής ρύθμιση τοποθέτησης', cpxReady:'Έρευνες έτοιμες για τον λογαριασμό σου.', cpxAvail:'Διαθέσιμο τώρα', openCpx:'Άνοιγμα ερευνών', cpxPending:'Έρευνες επιλεγμένες για τον λογαριασμό σου.' },
+    de: { title:'Thronos Earn Projekt', powered:'Betrieben von ThronosLabs und ENCOMM', subtitle:'Erstelle ein Earn-Konto oder melde dich an. Kein Wallet erforderlich.', balanceBtn:'Guthaben & Aktivität', pw:'Passwort (8+ Zeichen)', pwNew:'Passwort wählen (8+ Zeichen)', signIn:'Anmelden', createAcct:'Konto erstellen', needAcct:'Kein Konto? Registrieren', haveAcct:'Bereits ein Konto? Anmelden', signOut:'Abmelden', availThc:'VERFÜGBARE THC', pendThc:'AUSSTEHENDE THC', cpxDesc:'Umfragen ausgewählt für dein Konto.', openSurveys:'Umfragen öffnen', bitcoDesc:'Weitere Aufgaben und Angebote werden vorbereitet.', bitcoSoon:'Kommt bald', bitcoPending:'Anbieter-Genehmigung ausstehend', bitcoReady:'Aufgaben und Angebote für dein Konto.', bitcoAvail:'Jetzt verfügbar', openBitco:'BitcoTasks öffnen', pureDesc:'Weitere Umfragen kommen bald.', pureSoon:'Kommt bald', purePending:'Integration ausstehend', pureReady:'Verschiedene Umfragen für dein Konto.', pureAvail:'Jetzt verfügbar', openPure:'Umfragen öffnen', t2eStreak:'Serie', t2eToday:'Heute', t2eTotal:'Gesamt verdient', logWorkout:'Training erfassen', recentActivity:'Letzte Aktivität', backToEarn:'Zurück zu Earn', earnAcct:'Earn-Konto', thronosWallet:'Thronos Wallet', rewardClearance:'Freigabe der Belohnungen', cashOut:'Auszahlung', notLinked:'Nicht verbunden', notLinkedFull:'Nicht verbunden — verbinde über Wallet PWA oder APK', notEnabled:'Noch nicht verfügbar.', noReceipts:'Noch keine verifizierten Earn-Belege.', rewardsNote:'Belohnungen werden nur aus verifizierten Anbieterbelegen gutgeschrieben. Ausstehende THC sind bis zur Freigabe nicht verfügbar.', terms:'Nutzungsbedingungen', privacy:'Datenschutz', pendingNote:'Ausstehende Belege sind bis zur Anbieterfreigabe nicht verfügbar.', skip:'Überspringen', countdown:'Weiter in {s}s…', receiptUnavail:'Belegdatum nicht verfügbar', reversedBy:'Vom Anbieter storniert', reversed:'Storniert: {r}', clearanceNotRecv:'Freigabedatum noch nicht vom Anbieter erhalten.', enterCreds:'E-Mail und Passwort eingeben.', preparing:'Konto wird vorbereitet…', creating:'Konto wird erstellt…', signingIn:'Anmeldung…', signedOut:'Abgemeldet.', loadingSurveys:'Umfragen werden geladen…', surveysUnavail:'Umfragen nicht verfügbar.', connectedSurvey:'Verbunden. Schließe eine Umfrage ab, um THC zu verdienen.', couldNotSurvey:'Umfragen konnten nicht geladen werden.', bitcoUnavail:'BitcoTasks ist nicht verfügbar.', connectedBitco:'Mit BitcoTasks verbunden.', couldNotBitco:'BitcoTasks konnte nicht geladen werden.', pureUnavail:'PureSpectrum ist nicht verfügbar.', connectedPure:'Mit PureSpectrum verbunden.', couldNotPure:'PureSpectrum konnte nicht geladen werden.', returnedEarn:'Zurück zu Earn.', unavailable:'Nicht verfügbar', balanceError:'Guthaben konnte nicht geladen werden. Seite neu laden.', activityError:'Aktivität konnte nicht geladen werden. Seite neu laden.', amtUnavail:'Betrag nicht verfügbar', amtPending:'Anbieterbetrag ausstehend', readyClearance:'Früheste ausstehende Belohnung bereit zur Freigabe', noPending:'Keine ausstehenden Belohnungen.', workoutPrompt:'Trainingsdauer in Minuten (mindestens 15):', workoutMin:'Mindesttrainingsdauer beträgt 15 Minuten.', workoutLogged:'Training erfasst! {v} THC verdient', workoutFailed:'Training konnte nicht erfasst werden.', signInView:'Anmelden, um Guthaben und Aktivität zu sehen.', lbTitle:'Monats-Rangliste', lbEmpty:'Noch keine Verdienste diesen Monat. Sei der Erste!', lbYourRank:'Dein Rang', lbActiveEarners:'Aktive Verdiener', lbRewardsTitle:'Monatliche Belohnungen', lbReward1:'1st — 1 THR to your THR Wallet; a Wallet is created if needed (after funding and eligibility verification)', lbReward1Wallet:'Bereits ein THR Wallet? Treuebonus: Vorrang beim Staking-Pool + extra THC', lbReward2:'2nd–3rd — 5,000 THC each from the funded monthly pool', lbRewardScale:'At 1,000+ eligible earners, top 50 share 10,000 THC proportionally', lbYou:'Du', lbUnranked:'Noch nicht platziert', lbStakingTitle:'Treue-Staking-Pool', lbStakingBadge:'KOMMT BALD', lbStakingDesc:'Stake cleared THC with your Earn account. THR staking requires a linked wallet.', lbStake1:'Stake THC aus deinem verknüpften Wallet', lbStake2:'Verdiene APY — erhöhte Raten für Top-Verdiener', lbStake3:'Pool finanziert aus Thronos THC-Belohnungen', lbStake4:'Erfordert verknüpftes THR Wallet und Leaderboard-Aktivität', twUnavail:'TimeWall ist nicht verfügbar.', openTimewall:'TimeWall öffnen', twReady:'Umfragen, Klicks und Social-Aufgaben für dein Konto.', twAvail:'Jetzt verfügbar', cpxReady:'Umfragen bereit für dein Konto.', cpxAvail:'Jetzt verfügbar', openCpx:'Umfragen öffnen' },
+    fr: { title:'Projet Thronos Earn', powered:'Par ThronosLabs et ENCOMM', subtitle:'Créez un compte Earn ou connectez-vous. Aucun portefeuille requis.', balanceBtn:'Solde & activité', pw:'Mot de passe (8+ caractères)', pwNew:'Choisissez un mot de passe (8+ caractères)', signIn:'Connexion', createAcct:'Créer un compte', needAcct:'Pas de compte ? Inscription', haveAcct:'Déjà un compte ? Connexion', signOut:'Déconnexion', availThc:'THC DISPONIBLES', pendThc:'THC EN ATTENTE', cpxDesc:'Sondages sélectionnés pour votre compte.', openSurveys:'Ouvrir les sondages', bitcoDesc:'D’autres tâches et offres arrivent bientôt.', bitcoSoon:'Bientôt', bitcoPending:'Approbation du fournisseur en attente', bitcoReady:'Tâches et offres pour votre compte.', bitcoAvail:'Disponible maintenant', openBitco:'Ouvrir BitcoTasks', pureDesc:'D’autres sondages arrivent bientôt.', pureSoon:'Bientôt', purePending:'Intégration en attente', pureReady:'Sondages variés pour votre compte.', pureAvail:'Disponible maintenant', openPure:'Ouvrir les sondages', t2eStreak:'Série', t2eToday:'Aujourd’hui', t2eTotal:'Total gagné', logWorkout:'Enregistrer l’entraînement', recentActivity:'Activité récente', backToEarn:'Retour à Earn', earnAcct:'Compte Earn', thronosWallet:'Portefeuille Thronos', rewardClearance:'Compensation des récompenses', cashOut:'Retrait', notLinked:'Non lié', notLinkedFull:'Non lié — liez via Wallet PWA ou APK', notEnabled:'Pas encore disponible.', noReceipts:'Aucun reçu Earn vérifié.', rewardsNote:'Les récompenses sont créditées uniquement à partir de reçus vérifiés. Les THC en attente ne sont pas disponibles avant la compensation.', terms:'Conditions', privacy:'Confidentialité', skip:'Passer', countdown:'Suite dans {s}s…', enterCreds:'Entrez email et mot de passe.', preparing:'Préparation du compte…', creating:'Création du compte…', signingIn:'Connexion…', signedOut:'Déconnecté.', loadingSurveys:'Chargement des sondages…', connectedSurvey:'Connecté. Complétez un sondage pour gagner des THC.', returnedEarn:'Retour à Earn.', unavailable:'Indisponible', signInView:'Connectez-vous pour voir votre solde et activité Earn.', lbTitle:'Classement mensuel', lbEmpty:'Aucun gain ce mois-ci. Soyez le premier !', lbYourRank:'Votre rang', lbActiveEarners:'Gagnants actifs', lbRewardsTitle:'Récompenses mensuelles', lbReward1:'1st — 1 THR to your THR Wallet; a Wallet is created if needed (after funding and eligibility verification)', lbReward1Wallet:'Vous avez déjà un THR Wallet ? Bonus fidélité : accès prioritaire au pool de staking + THC supplémentaires', lbReward2:'2nd–3rd — 5,000 THC each from the funded monthly pool', lbRewardScale:'At 1,000+ eligible earners, top 50 share 10,000 THC proportionally', lbYou:'Vous', lbUnranked:'Pas encore classé', lbStakingTitle:'Pool de Staking Fidélité', lbStakingBadge:'BIENTÔT', lbStakingDesc:'Stake cleared THC with your Earn account. THR staking requires a linked wallet.', lbStake1:'Stakez des THC depuis votre wallet lié', lbStake2:'Gagnez des APY — taux augmentés pour les meilleurs', lbStake3:'Pool financé par l\'allocation THC de Thronos', lbStake4:'Nécessite un THR Wallet lié et une activité au classement', twUnavail:'TimeWall n\'est pas disponible.', openTimewall:'Ouvrir TimeWall', twReady:'Sondages, clics et tâches sociales pour votre compte.', twAvail:'Disponible maintenant', cpxReady:'Sondages prêts pour votre compte.', cpxAvail:'Disponible maintenant', openCpx:'Ouvrir les sondages' },
+    es: { title:'Proyecto Thronos Earn', powered:'Por ThronosLabs y ENCOMM', subtitle:'Crea una cuenta Earn o inicia sesión. No se necesita billetera.', balanceBtn:'Saldo y actividad', pw:'Contraseña (8+ caracteres)', pwNew:'Elige una contraseña (8+ caracteres)', signIn:'Iniciar sesión', createAcct:'Crear cuenta', needAcct:'¿No tienes cuenta? Regístrate', haveAcct:'¿Ya tienes cuenta? Inicia sesión', signOut:'Cerrar sesión', availThc:'THC DISPONIBLES', pendThc:'THC PENDIENTES', cpxDesc:'Encuestas seleccionadas para tu cuenta.', openSurveys:'Abrir encuestas', bitcoDesc:'Más tareas y ofertas en preparación.', bitcoSoon:'Próximamente', bitcoReady:'Tareas y ofertas para tu cuenta.', bitcoAvail:'Disponible ahora', openBitco:'Abrir BitcoTasks', pureDesc:'Más encuestas próximamente.', pureSoon:'Próximamente', pureReady:'Encuestas variadas para tu cuenta.', pureAvail:'Disponible ahora', openPure:'Abrir encuestas', t2eStreak:'Racha', t2eToday:'Hoy', t2eTotal:'Total ganado', logWorkout:'Registrar entrenamiento', recentActivity:'Actividad reciente', backToEarn:'Volver a Earn', earnAcct:'Cuenta Earn', thronosWallet:'Billetera Thronos', rewardClearance:'Compensación de recompensas', cashOut:'Retiro', notLinked:'No vinculada', notLinkedFull:'No vinculada — vincula desde Wallet PWA o APK', notEnabled:'Aún no disponible.', noReceipts:'Aún no hay recibos Earn verificados.', rewardsNote:'Las recompensas se acreditan solo a partir de recibos verificados. Los THC pendientes no están disponibles hasta la compensación.', terms:'Términos', privacy:'Privacidad', skip:'Omitir', countdown:'Continúa en {s}s…', enterCreds:'Ingresa email y contraseña.', preparing:'Preparando tu cuenta…', creating:'Creando cuenta…', signingIn:'Iniciando sesión…', signedOut:'Sesión cerrada.', loadingSurveys:'Cargando encuestas…', connectedSurvey:'Conectado. Completa una encuesta para ganar THC.', returnedEarn:'Vuelto a Earn.', unavailable:'No disponible', signInView:'Inicia sesión para ver tu saldo y actividad Earn.', lbTitle:'Clasificación mensual', lbEmpty:'Sin ganancias este mes aún. ¡Sé el primero!', lbYourRank:'Tu posición', lbActiveEarners:'Participantes activos', lbRewardsTitle:'Recompensas mensuales', lbReward1:'1st — 1 THR to your THR Wallet; a Wallet is created if needed (after funding and eligibility verification)', lbReward1Wallet:'¿Ya tienes THR Wallet? Bono de lealtad: acceso prioritario al pool de staking + THC extra', lbReward2:'2nd–3rd — 5,000 THC each from the funded monthly pool', lbRewardScale:'At 1,000+ eligible earners, top 50 share 10,000 THC proportionally', lbYou:'Tú', lbUnranked:'Sin clasificar aún', lbStakingTitle:'Pool de Staking de Lealtad', lbStakingBadge:'PRÓXIMAMENTE', lbStakingDesc:'Stake cleared THC with your Earn account. THR staking requires a linked wallet.', lbStake1:'Haz stake de THC desde tu wallet vinculado', lbStake2:'Gana APY — tasas aumentadas para los mejores', lbStake3:'Pool financiado por la asignación THC de Thronos', lbStake4:'Requiere THR Wallet vinculado y actividad en el ranking', twUnavail:'TimeWall no está disponible.', openTimewall:'Abrir TimeWall', twReady:'Encuestas, clics y tareas sociales para tu cuenta.', twAvail:'Disponible ahora', cpxReady:'Encuestas listas para tu cuenta.', cpxAvail:'Disponible ahora', openCpx:'Abrir encuestas' },
+    pt: { title:'Projeto Thronos Earn', powered:'Por ThronosLabs e ENCOMM', subtitle:'Crie uma conta Earn ou faça login. Sem necessidade de carteira.', balanceBtn:'Saldo e atividade', pw:'Senha (8+ caracteres)', pwNew:'Escolha uma senha (8+ caracteres)', signIn:'Entrar', createAcct:'Criar conta', needAcct:'Não tem conta? Registre-se', haveAcct:'Já tem conta? Entre', signOut:'Sair', availThc:'THC DISPONÍVEIS', pendThc:'THC PENDENTES', cpxDesc:'Pesquisas selecionadas para sua conta.', openSurveys:'Abrir pesquisas', bitcoDesc:'Mais tarefas e ofertas em preparação.', bitcoSoon:'Em breve', bitcoReady:'Tarefas e ofertas para sua conta.', bitcoAvail:'Disponível agora', openBitco:'Abrir BitcoTasks', pureDesc:'Mais pesquisas em breve.', pureSoon:'Em breve', pureReady:'Pesquisas variadas para sua conta.', pureAvail:'Disponível agora', openPure:'Abrir pesquisas', recentActivity:'Atividade recente', backToEarn:'Voltar ao Earn', signIn:'Entrar', signOut:'Sair', skip:'Pular', enterCreds:'Insira email e senha.', signingIn:'Entrando…', signedOut:'Desconectado.', unavailable:'Indisponível', signInView:'Entre para ver seu saldo e atividade Earn.', lbTitle:'Classificação mensal', lbEmpty:'Nenhum ganho este mês ainda. Seja o primeiro!', lbYourRank:'Sua posição', lbActiveEarners:'Participantes ativos', lbRewardsTitle:'Recompensas mensais', lbReward1:'1st — 1 THR to your THR Wallet; a Wallet is created if needed (after funding and eligibility verification)', lbReward1Wallet:'Já tem THR Wallet? Bônus de fidelidade: acesso prioritário ao pool de staking + THC extra', lbReward2:'2nd–3rd — 5,000 THC each from the funded monthly pool', lbRewardScale:'At 1,000+ eligible earners, top 50 share 10,000 THC proportionally', lbYou:'Você', lbUnranked:'Ainda sem classificação', lbStakingTitle:'Pool de Staking de Fidelidade', lbStakingBadge:'EM BREVE', lbStakingDesc:'Stake cleared THC with your Earn account. THR staking requires a linked wallet.', lbStake1:'Faça stake de THC da sua wallet vinculada', lbStake2:'Ganhe APY — taxas aumentadas para os melhores', lbStake3:'Pool financiado pela alocação THC da Thronos', lbStake4:'Requer THR Wallet vinculado e atividade no ranking', twUnavail:'TimeWall não está disponível.', openTimewall:'Abrir TimeWall', twReady:'Pesquisas, cliques e tarefas sociais para sua conta.', twAvail:'Disponível agora', cpxReady:'Pesquisas prontas para sua conta.', cpxAvail:'Disponível agora', openCpx:'Abrir pesquisas' },
+    it: { title:'Progetto Thronos Earn', powered:'Da ThronosLabs e ENCOMM', subtitle:'Crea un account Earn o accedi. Nessun portafoglio richiesto.', balanceBtn:'Saldo e attività', pw:'Password (8+ caratteri)', pwNew:'Scegli una password (8+ caratteri)', signIn:'Accedi', createAcct:'Crea account', needAcct:'Non hai un account? Registrati', haveAcct:'Hai già un account? Accedi', signOut:'Esci', availThc:'THC DISPONIBILI', pendThc:'THC IN ATTESA', cpxDesc:'Sondaggi selezionati per il tuo account.', openSurveys:'Apri sondaggi', bitcoDesc:'Altre attività e offerte in arrivo.', bitcoSoon:'In arrivo', bitcoReady:'Attività e offerte per il tuo account.', bitcoAvail:'Disponibile ora', openBitco:'Apri BitcoTasks', pureDesc:'Altri sondaggi in arrivo.', pureSoon:'In arrivo', pureReady:'Sondaggi vari per il tuo account.', pureAvail:'Disponibile ora', openPure:'Apri sondaggi', recentActivity:'Attività recente', backToEarn:'Torna a Earn', skip:'Salta', enterCreds:'Inserisci email e password.', signingIn:'Accesso…', signedOut:'Disconnesso.', unavailable:'Non disponibile', signInView:'Accedi per vedere il tuo saldo e attività Earn.', lbTitle:'Classifica mensile', lbEmpty:'Nessun guadagno questo mese. Sii il primo!', lbYourRank:'La tua posizione', lbActiveEarners:'Partecipanti attivi', lbRewardsTitle:'Premi mensili', lbReward1:'1st — 1 THR to your THR Wallet; a Wallet is created if needed (after funding and eligibility verification)', lbReward1Wallet:'Hai già un THR Wallet? Bonus fedeltà: accesso prioritario al pool di staking + THC extra', lbReward2:'2nd–3rd — 5,000 THC each from the funded monthly pool', lbRewardScale:'At 1,000+ eligible earners, top 50 share 10,000 THC proportionally', lbYou:'Tu', lbUnranked:'Non ancora classificato', lbStakingTitle:'Pool di Staking Fedeltà', lbStakingBadge:'IN ARRIVO', lbStakingDesc:'Stake cleared THC with your Earn account. THR staking requires a linked wallet.', lbStake1:'Fai stake di THC dal tuo wallet collegato', lbStake2:'Guadagna APY — tassi aumentati per i migliori', lbStake3:'Pool finanziato dall\'allocazione THC di Thronos', lbStake4:'Richiede THR Wallet collegato e attività in classifica', twUnavail:'TimeWall non è disponibile.', openTimewall:'Apri TimeWall', twReady:'Sondaggi, clic e attività social per il tuo account.', twAvail:'Disponibile ora', cpxReady:'Sondaggi pronti per il tuo account.', cpxAvail:'Disponibile ora', openCpx:'Apri sondaggi' },
+    tr: { title:'Thronos Earn Projesi', powered:'ThronosLabs ve ENCOMM tarafından', subtitle:'Earn hesabı oluştur veya giriş yap. Cüzdan gerekmez.', balanceBtn:'Bakiye ve aktivite', pw:'Şifre (8+ karakter)', pwNew:'Şifre seç (8+ karakter)', signIn:'Giriş yap', createAcct:'Hesap oluştur', needAcct:'Hesabın yok mu? Kayıt ol', haveAcct:'Hesabın var mı? Giriş yap', signOut:'Çıkış', availThc:'MEVCUT THC', pendThc:'BEKLEYEN THC', cpxDesc:'Hesabın için seçilmiş anketler.', openSurveys:'Anketleri aç', bitcoDesc:'Daha fazla görev ve teklif hazırlanıyor.', bitcoSoon:'Yakında', bitcoReady:'Hesabın için görevler ve teklifler.', bitcoAvail:'Şimdi mevcut', openBitco:'BitcoTasks aç', pureDesc:'Ek anketler yakında.', pureSoon:'Yakında', pureReady:'Hesabın için çeşitli anketler.', pureAvail:'Şimdi mevcut', openPure:'Anketleri aç', recentActivity:'Son aktivite', backToEarn:'Earn’e dön', skip:'Atla', enterCreds:'Email ve şifre gir.', signingIn:'Giriş yapılıyor…', signedOut:'Çıkış yapıldı.', unavailable:'Mevcut değil', signInView:'Earn bakiyeni ve aktiviteni görmek için giriş yap.', lbTitle:'Aylık Sıralama', lbEmpty:'Bu ay henüz kazanç yok. İlk sen ol!', lbYourRank:'Sıralamanız', lbActiveEarners:'Aktif kazananlar', lbRewardsTitle:'Aylık Ödüller', lbReward1:'1st — 1 THR to your THR Wallet; a Wallet is created if needed (after funding and eligibility verification)', lbReward1Wallet:'Zaten THR Cüzdanın var mı? Sadakat bonusu: öncelikli staking havuzu erişimi + ekstra THC', lbReward2:'2nd–3rd — 5,000 THC each from the funded monthly pool', lbRewardScale:'At 1,000+ eligible earners, top 50 share 10,000 THC proportionally', lbYou:'Sen', lbUnranked:'Henüz sıralanmadı', lbStakingTitle:'Sadakat Staking Havuzu', lbStakingBadge:'YAKINDA', lbStakingDesc:'Stake cleared THC with your Earn account. THR staking requires a linked wallet.', lbStake1:'Bağlı cüzdanından THC stake et', lbStake2:'APY kazan — en iyiler için artırılmış oranlar', lbStake3:'Havuz Thronos THC ödül tahsisinden finanse edilir', lbStake4:'Bağlı THR Cüzdan ve sıralama aktivitesi gerektirir', twUnavail:'TimeWall mevcut değil.', openTimewall:'TimeWall aç', twReady:'Hesabın için anketler, tıklamalar ve sosyal görevler.', twAvail:'Şimdi mevcut', cpxReady:'Hesabın için anketler hazır.', cpxAvail:'Şimdi mevcut', openCpx:'Anketleri aç' },
+    ru: { title:'Проект Thronos Earn', powered:'От ThronosLabs и ENCOMM', subtitle:'Создайте аккаунт Earn или войдите. Кошелёк не требуется.', balanceBtn:'Баланс и активность', pw:'Пароль (8+ символов)', pwNew:'Выберите пароль (8+ символов)', signIn:'Войти', createAcct:'Создать аккаунт', needAcct:'Нет аккаунта? Регистрация', haveAcct:'Есть аккаунт? Войти', signOut:'Выйти', availThc:'ДОСТУПНЫЕ THC', pendThc:'ОЖИДАЮЩИЕ THC', cpxDesc:'Опросы подобраны для вашего аккаунта.', openSurveys:'Открыть опросы', bitcoDesc:'Ещё больше заданий готовится.', bitcoSoon:'Скоро', bitcoReady:'Задания и предложения для вашего аккаунта.', bitcoAvail:'Доступно сейчас', openBitco:'Открыть BitcoTasks', pureDesc:'Дополнительные опросы скоро.', pureSoon:'Скоро', pureReady:'Разнообразные опросы для вашего аккаунта.', pureAvail:'Доступно сейчас', openPure:'Открыть опросы', recentActivity:'Недавняя активность', backToEarn:'Назад в Earn', skip:'Пропустить', enterCreds:'Введите email и пароль.', signingIn:'Вход…', signedOut:'Вы вышли.', unavailable:'Недоступно', signInView:'Войдите, чтобы увидеть баланс и активность Earn.', lbTitle:'Ежемесячный рейтинг', lbEmpty:'Ещё нет заработков в этом месяце. Будьте первым!', lbYourRank:'Ваш ранг', lbActiveEarners:'Активные участники', lbRewardsTitle:'Ежемесячные награды', lbReward1:'1st — 1 THR to your THR Wallet; a Wallet is created if needed (after funding and eligibility verification)', lbReward1Wallet:'Уже есть THR Wallet? Бонус лояльности: приоритет в стейкинг-пуле + доп. THC', lbReward2:'2nd–3rd — 5,000 THC each from the funded monthly pool', lbRewardScale:'At 1,000+ eligible earners, top 50 share 10,000 THC proportionally', lbYou:'Вы', lbUnranked:'Ещё без рейтинга', lbStakingTitle:'Пул стейкинга лояльности', lbStakingBadge:'СКОРО', lbStakingDesc:'Stake cleared THC with your Earn account. THR staking requires a linked wallet.', lbStake1:'Стейкайте THC из привязанного кошелька', lbStake2:'Зарабатывайте APY — повышенные ставки для лучших', lbStake3:'Пул финансируется из THC-наград Thronos', lbStake4:'Требуется привязанный THR кошелёк и активность в рейтинге', twUnavail:'TimeWall недоступен.', openTimewall:'Открыть TimeWall', twReady:'Опросы, клики и социальные задания для вашего аккаунта.', twAvail:'Доступно сейчас', cpxReady:'Опросы готовы для вашего аккаунта.', cpxAvail:'Доступно сейчас', openCpx:'Открыть опросы' },
     ja: { title:'Thronos Earnプロジェクト', subtitle:'Earnアカウントを作成またはログイン。ウォレット不要。', signIn:'ログイン', createAcct:'アカウント作成', signOut:'ログアウト', openSurveys:'アンケートを開く', recentActivity:'最近のアクティビティ', skip:'スキップ', signInView:'ログインして残高とアクティビティを確認', lbTitle:'月間ランキング', lbEmpty:'今月はまだ収益がありません。最初の一人に！', lbYou:'あなた', lbUnranked:'まだランク外', lbStakingTitle:'ロイヤリティステーキングプール', lbStakingBadge:'近日公開', lbStake1:'リンクされたウォレットからTHCをステーキング' },
     zh: { title:'Thronos Earn项目', subtitle:'创建Earn账户或登录。无需钱包。', signIn:'登录', createAcct:'创建账户', signOut:'退出', openSurveys:'打开问卷', recentActivity:'最近活动', skip:'跳过', signInView:'登录查看余额和活动', lbTitle:'月度排行榜', lbEmpty:'本月暂无收益。成为第一人！', lbYou:'你', lbUnranked:'暂无排名', lbStakingTitle:'忠诚质押池', lbStakingBadge:'即将推出', lbStake1:'从关联钱包质押THC' },
     ko: { title:'Thronos Earn 프로젝트', subtitle:'Earn 계정을 만들거나 로그인하세요. 지갑 불필요.', signIn:'로그인', createAcct:'계정 만들기', signOut:'로그아웃', openSurveys:'설문조사 열기', recentActivity:'최근 활동', skip:'건너뛰기', signInView:'잔액과 활동을 보려면 로그인하세요', lbTitle:'월간 리더보드', lbEmpty:'이번 달 수익이 아직 없습니다. 첫 번째가 되세요!', lbYou:'당신', lbUnranked:'아직 순위 없음', lbStakingTitle:'로열티 스테이킹 풀', lbStakingBadge:'곧 출시', lbStake1:'연결된 지갑에서 THC 스테이킹' },
@@ -1184,7 +1213,7 @@
     openProvider('pure', '/api/earn/pure/offerwall', t('connectedPure'), t('pureUnavail'));
   });
   timewallButton.addEventListener('click', () => {
-    openProviderWithPromo('timewall', '/api/earn/timewall/offerwall', 'TimeWall is unavailable.');
+    openProviderWithPromo('timewall', '/api/earn/timewall/offerwall', t('twUnavail'));
   });
 
   function closeSurvey() {
@@ -1304,23 +1333,52 @@
     try {
       const pRes = await fetch('/api/earn/providers', { headers: earnAuthHeaders() });
       const pData = await pRes.json().catch(() => ({}));
-      const bitco = pData.providers && pData.providers.find(p => p.id === 'bitcotasks');
-      if (pRes.ok && pData.ok && bitco && bitco.enabled) {
-        bitcoButton.disabled = false; bitcoButton.textContent = t('openBitco');
-        $('bitcotasks-copy').textContent = t('bitcoReady');
-        $('bitcotasks-status').textContent = t('bitcoAvail'); bitcoProvider.classList.remove('is-unavailable');
+      function applyProviderStatus(providers) {
+        const map = {};
+        (providers || []).forEach(p => { map[p.id] = p; });
+        // CPX
+        const cpx = map['cpx'];
+        if (cpx && cpx.enabled) {
+          $('earn-surveys').disabled = false; $('earn-surveys').textContent = t('openCpx');
+          $('cpx-copy').textContent = t('cpxReady');
+          $('cpx-status').textContent = t('cpxAvail'); $('provider-cpx').classList.remove('is-unavailable');
+        } else {
+          $('earn-surveys').disabled = true; $('earn-surveys').textContent = t('cpxPending');
+          $('cpx-status').textContent = t('cpxPending'); $('provider-cpx').classList.add('is-unavailable');
+        }
+        // BitcoTasks
+        const bitco = map['bitcotasks'];
+        if (bitco && bitco.enabled) {
+          bitcoButton.disabled = false; bitcoButton.textContent = t('openBitco');
+          $('bitcotasks-copy').textContent = t('bitcoReady');
+          $('bitcotasks-status').textContent = t('bitcoAvail'); bitcoProvider.classList.remove('is-unavailable');
+        } else {
+          bitcoButton.disabled = true; bitcoButton.textContent = t('bitcoSoon');
+          $('bitcotasks-status').textContent = t('bitcoPending'); bitcoProvider.classList.add('is-unavailable');
+        }
+        // PureSpectrum
+        const pure = map['pure'];
+        if (pure && pure.enabled) {
+          pureButton.disabled = false; pureButton.textContent = t('openPure');
+          $('pure-copy').textContent = t('pureReady');
+          $('pure-status').textContent = t('pureAvail'); pureProvider.classList.remove('is-unavailable');
+        } else {
+          pureButton.disabled = true; pureButton.textContent = t('pureSoon');
+          $('pure-status').textContent = t('purePending'); pureProvider.classList.add('is-unavailable');
+        }
+        // TimeWall
+        const tw = map['timewall'];
+        if (tw && tw.enabled) {
+          timewallButton.disabled = false; timewallButton.textContent = t('openTimewall');
+          $('timewall-copy').textContent = t('twReady');
+          $('timewall-status').textContent = t('twAvail'); timewallProvider.classList.remove('is-unavailable');
+        } else {
+          timewallButton.disabled = true; timewallButton.textContent = t('twPending');
+          $('timewall-status').textContent = t('twPending'); timewallProvider.classList.add('is-unavailable');
+        }
       }
-      const pure = pData.providers && pData.providers.find(p => p.id === 'pure');
-      if (pRes.ok && pData.ok && pure && pure.enabled) {
-        pureButton.disabled = false; pureButton.textContent = t('openPure');
-        $('pure-copy').textContent = t('pureReady');
-        $('pure-status').textContent = t('pureAvail'); pureProvider.classList.remove('is-unavailable');
-      }
-      const timewall = pData.providers && pData.providers.find(p => p.id === 'timewall');
-      if (pRes.ok && pData.ok && timewall && timewall.enabled) {
-        timewallButton.disabled = false; timewallButton.textContent = 'Open TimeWall';
-        $('timewall-copy').textContent = 'Surveys, clicks and social tasks for your account.';
-        $('timewall-status').textContent = 'Available now'; timewallProvider.classList.remove('is-unavailable');
+      if (pRes.ok && pData.ok) {
+        applyProviderStatus(pData.providers);
       }
     } catch (_) {}
     try {
@@ -1608,7 +1666,6 @@
   const feedback = $('earn-advertiser-feedback');
   const list = $('earn-advertiser-list');
   const selector = $('earn-ad-creative-campaign');
-  // Preview is local-only: never calls serve/impression/click, escrow or campaign API.
   $('earn-ad-preview-button').addEventListener('click', () => {
     const title = $('earn-ad-creative-title').value.trim();
     const image = $('earn-ad-creative-image').value.trim();
@@ -1653,12 +1710,148 @@
     if (!response.ok || !data?.ok) throw new Error(data?.error || (response.status === 401 ? localized('login') : localized('failed')));
     return data;
   };
+  const post = (url, payload) => readApi(url, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload),
+  });
   const addText = (element, tag, value) => {
     const child = document.createElement(tag);
     child.textContent = String(value ?? '');
     element.appendChild(child);
     return child;
   };
+  const httpsUrl = value => {
+    try {
+      const url = new URL(value);
+      return url.protocol === 'https:' && !!url.hostname;
+    } catch (_) { return false; }
+  };
+
+  function makeBtn(cls, label, handler) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = cls;
+    btn.textContent = label;
+    btn.addEventListener('click', handler);
+    return btn;
+  }
+
+  async function fundCampaign(campaignId, detailEl) {
+    const existing = detailEl.querySelector('.earn-fund-inline');
+    if (existing) { existing.remove(); return; }
+    const wrap = document.createElement('div');
+    wrap.className = 'earn-fund-inline';
+    const inp = document.createElement('input');
+    inp.type = 'number'; inp.min = '0.000001'; inp.step = '0.000001';
+    inp.placeholder = localized('fundAmount'); inp.required = true;
+    const btn = document.createElement('button');
+    btn.type = 'button'; btn.textContent = localized('fundConfirm');
+    wrap.appendChild(inp); wrap.appendChild(btn);
+    detailEl.appendChild(wrap);
+    inp.focus();
+    btn.addEventListener('click', async () => {
+      const amount = inp.value.trim();
+      if (!amount || Number(amount) <= 0) return;
+      btn.disabled = true; btn.textContent = localized('funding');
+      try {
+        const intent = await post('/api/earn/ads/escrow/walletless/intent', {
+          campaign_id: campaignId, action: 'deposit', amount,
+        });
+        const result = await post('/api/earn/ads/escrow/walletless/execute', {
+          intent_id: intent.intent_id,
+          nonce: intent.nonce,
+          csrf_token: intent.csrf_token,
+        });
+        setFeedback(localized('funded', {amount: String(result.amount || amount)}));
+        wrap.remove();
+        await loadCampaigns();
+      } catch (error) {
+        setFeedback(error.message, true);
+        btn.disabled = false; btn.textContent = localized('fundConfirm');
+      }
+    });
+  }
+
+  async function campaignAction(campaignId, action, confirmKey, loadingKey, doneKey) {
+    if (confirmKey) {
+      if (!window.confirm(localized(confirmKey))) return;
+    }
+    setFeedback(localized(loadingKey));
+    try {
+      const result = await post('/api/earn/ads/campaign/' + encodeURIComponent(campaignId) + '/' + action, {});
+      const msg = result.refunded
+        ? localized(doneKey, {amount: String(result.refunded)})
+        : localized(doneKey);
+      setFeedback(msg);
+      await loadCampaigns();
+    } catch (error) { setFeedback(error.message, true); }
+  }
+
+  async function showReport(campaignId, detailEl) {
+    const existing = detailEl.querySelector('.earn-campaign-report');
+    if (existing) { existing.remove(); return; }
+    const wrap = document.createElement('div');
+    wrap.className = 'earn-campaign-report';
+    addText(wrap, 'span', localized('reportLoading')).style.color = '#7fb8d8';
+    detailEl.appendChild(wrap);
+    try {
+      const r = await readApi('/api/earn/ads/campaign/' + encodeURIComponent(campaignId) + '/report');
+      wrap.replaceChildren();
+      const grid = document.createElement('div');
+      grid.className = 'earn-report-grid';
+      const cells = [
+        [localized('impressions'), String(r.impressions ?? 0)],
+        [localized('clicks'), String(r.clicks ?? 0)],
+        [localized('ctr'), String(r.ctr ?? 0) + '%'],
+        [localized('spent'), String(r.spent ?? '0.000000') + ' THC'],
+        [localized('escrowBal'), String(r.escrow_balance ?? '0.000000') + ' THC'],
+        [localized('treasuryContrib'), String(r.treasury_contributed ?? '0.000000') + ' THC'],
+      ];
+      for (const [label, val] of cells) {
+        const cell = document.createElement('div');
+        cell.className = 'earn-report-cell';
+        addText(cell, 'div', label).className = 'rl';
+        addText(cell, 'div', val).className = 'rv';
+        grid.appendChild(cell);
+      }
+      wrap.appendChild(grid);
+      if (r.vip_credits && r.vip_credits.length > 0) {
+        const vcDiv = document.createElement('div');
+        vcDiv.style.cssText = 'font-size:12px;color:#a78bfa;margin-top:6px';
+        vcDiv.textContent = localized('vipCredits') + ': ' + r.vip_credits.length + ' milestone(s)';
+        wrap.appendChild(vcDiv);
+      }
+      if (r.events_by_day && r.events_by_day.length > 0) {
+        const details = document.createElement('details');
+        details.className = 'earn-report-daily';
+        const summary = document.createElement('summary');
+        summary.textContent = localized('dailyBreakdown');
+        details.appendChild(summary);
+        const table = document.createElement('table');
+        const thead = document.createElement('thead');
+        const hr = document.createElement('tr');
+        for (const h of [localized('date'), localized('impressions'), localized('clicks'), localized('cost')]) {
+          addText(hr, 'th', h);
+        }
+        thead.appendChild(hr); table.appendChild(thead);
+        const tbody = document.createElement('tbody');
+        for (const day of r.events_by_day) {
+          const tr = document.createElement('tr');
+          addText(tr, 'td', day.date);
+          addText(tr, 'td', String(day.impressions));
+          addText(tr, 'td', String(day.clicks));
+          addText(tr, 'td', String(day.cost) + ' THC');
+          tbody.appendChild(tr);
+        }
+        table.appendChild(tbody); details.appendChild(table); wrap.appendChild(details);
+      }
+    } catch (error) {
+      wrap.replaceChildren();
+      addText(wrap, 'span', error.message).style.color = '#f87171';
+    }
+  }
+
   async function loadCampaigns() {
     list.textContent = localized('loading');
     try {
@@ -1676,18 +1869,60 @@
       }
       for (const campaign of campaigns) {
         const id = String(campaign.campaign_id || '');
+        const status = String(campaign.status || 'unknown');
         const row = document.createElement('div');
         row.className = 'earn-advertiser-row';
         addText(row, 'strong', campaign.name || 'Campaign');
-        addText(row, 'span', localized('status') + ': ' + String(campaign.status || localized('unknown')) +
-          ' · ' + String(campaign.campaign_type || '').toUpperCase() +
-          ' · ' + localized('bid') + ' ' + String(campaign.bid_amount || '—') + ' THC');
+        const meta = document.createElement('div');
+        meta.className = 'earn-campaign-meta';
+        const badge = document.createElement('span');
+        badge.className = 'earn-campaign-status st-' + status;
+        badge.textContent = localized('status') + ': ' + status.replace(/_/g, ' ');
+        meta.appendChild(badge);
+        addText(meta, 'span', String(campaign.campaign_type || '').toUpperCase()
+          + ' · ' + localized('bid') + ' ' + String(campaign.bid_amount || '—') + ' THC');
+        row.appendChild(meta);
+        if (id) {
+          const detail = document.createElement('div');
+          detail.className = 'earn-campaign-detail';
+          const escrowSpan = addText(detail, 'span', localized('escrowBal') + ': …');
+          escrowSpan.style.cssText = 'color:#f2c14e;font-size:13px;font-weight:700';
+          readApi('/api/earn/ads/escrow/balance/' + encodeURIComponent(id)).then(d => {
+            escrowSpan.textContent = localized('escrowBal') + ': ' + String(d.balance || '0.000000') + ' THC';
+          }).catch(() => { escrowSpan.textContent = localized('escrowBal') + ': —'; });
+          const actions = document.createElement('div');
+          actions.className = 'earn-campaign-actions';
+          if (status === 'approved' || status === 'active') {
+            actions.appendChild(makeBtn('act-fund', localized('fundBtn'), () => fundCampaign(id, detail)));
+          }
+          if (status === 'approved') {
+            actions.appendChild(makeBtn('act-activate', localized('activateBtn'),
+              () => campaignAction(id, 'activate', null, 'activating', 'activated')));
+          }
+          if (status === 'active') {
+            actions.appendChild(makeBtn('act-pause', localized('pauseBtn'),
+              () => campaignAction(id, 'pause', null, 'pausing', 'paused')));
+          }
+          if (status === 'paused') {
+            actions.appendChild(makeBtn('act-resume', localized('resumeBtn'),
+              () => campaignAction(id, 'resume', null, 'resuming', 'resumed')));
+          }
+          if (status === 'paused' || status === 'completed' || status === 'cancelled') {
+            actions.appendChild(makeBtn('act-refund', localized('refundBtn'),
+              () => campaignAction(id, 'refund', 'refundConfirm', 'refunding', 'refunded')));
+          }
+          if (status !== 'pending_review') {
+            actions.appendChild(makeBtn('act-report', localized('reportBtn'),
+              () => showReport(id, detail)));
+          }
+          detail.appendChild(actions);
+          row.appendChild(detail);
+          const opt = document.createElement('option');
+          opt.value = id;
+          opt.textContent = String(campaign.name || id);
+          selector.appendChild(opt);
+        }
         list.appendChild(row);
-        if (!id) continue;
-        const opt = document.createElement('option');
-        opt.value = id;
-        opt.textContent = String(campaign.name || id);
-        selector.appendChild(opt);
       }
     } catch (error) {
       list.replaceChildren();
@@ -1695,17 +1930,7 @@
       addText(list, 'p', localized('unavailable'));
     }
   }
-  const post = (url, payload) => readApi(url, {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(payload),
-  });
-  const httpsUrl = value => {
-    try {
-      const url = new URL(value);
-      return url.protocol === 'https:' && !!url.hostname;
-    } catch (_) { return false; }
-  };
+
   form.addEventListener('submit', async event => {
     event.preventDefault();
     if (!form.reportValidity()) return;
@@ -1753,13 +1978,105 @@
   $('earn-advertiser-refresh').addEventListener('click', loadCampaigns);
   window.addEventListener('earnLocaleChanged', () => {
     const tab = $('earn-tab-advertise');
-    // Re-fetch read-only campaign data only if the advertiser panel is visible.
     if (tab?.getAttribute('aria-selected') === 'true') void loadCampaigns();
   });
 
+  async function loadPricing() {
+    const box = $('earn-ad-pricing-info');
+    if (!box) return;
+    try {
+      const data = await readApi('/api/earn/ads/pricing');
+      const p = data.pricing || {};
+      box.replaceChildren();
+      const fields = [
+        [localized('pricingCpmMin'), String(p.cpm_min_bid || '—') + ' THC'],
+        [localized('pricingCpmMax'), String(p.cpm_max_bid || '—') + ' THC'],
+        [localized('pricingCpcMin'), String(p.cpc_min_bid || '—') + ' THC'],
+        [localized('pricingCpcMax'), String(p.cpc_max_bid || '—') + ' THC'],
+      ];
+      for (const [label, val] of fields) {
+        const cell = document.createElement('div');
+        cell.className = 'pi-cell';
+        addText(cell, 'div', label).className = 'pi-label';
+        addText(cell, 'div', val).className = 'pi-value';
+        box.appendChild(cell);
+      }
+      box.style.display = '';
+    } catch (_) { box.style.display = 'none'; }
+  }
+
   document.querySelector('.earn-section-tabs')?.addEventListener('click', event => {
-    if (event.target.closest('[data-earn-section="advertise"]')) void loadCampaigns();
+    if (event.target.closest('[data-earn-section="advertise"]')) {
+      void loadCampaigns();
+      void loadPricing();
+    }
   });
+})();
+</script>
+
+<script>
+/* Daily check-in and dormancy status */
+(() => {
+  'use strict';
+  const $ = id => document.getElementById(id);
+  const bar = $('earn-checkin-bar');
+  const btn = $('earn-checkin-btn');
+  const status = $('earn-checkin-status');
+  if (!bar || !btn) return;
+  const localized = (key, tokens) => window.ThronosEarnLocale?.message(key, tokens) || key;
+  const apiFetch = async (path, init = {}) => {
+    const response = await fetch(path, {
+      credentials: 'same-origin', ...init,
+      headers: {'Accept': 'application/json', ...(init.headers || {})},
+    });
+    return response.json().catch(() => null);
+  };
+
+  async function loadDormancy() {
+    try {
+      const data = await apiFetch('/api/earn/dormancy/status');
+      if (!data?.ok) return;
+      if (data.is_dormant) {
+        status.textContent = localized('dormantWarning');
+        status.className = 'checkin-status dormant';
+      }
+    } catch (_) { /* non-critical */ }
+  }
+
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    try {
+      const response = await fetch('/api/earn/checkin', {
+        method: 'POST', credentials: 'same-origin',
+        headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+        body: '{}',
+      });
+      const data = await response.json().catch(() => null);
+      if (data?.ok) {
+        if (data.idempotent) {
+          status.textContent = localized('checkinAlready');
+        } else {
+          status.textContent = localized('checkinSuccess', {date: String(data.utc_date || '')});
+        }
+        status.className = 'checkin-status';
+        void loadDormancy();
+      } else {
+        status.textContent = data?.error || 'Error';
+        status.className = 'checkin-status dormant';
+        btn.disabled = false;
+      }
+    } catch (_) { btn.disabled = false; }
+  });
+
+  const observer = new MutationObserver(() => {
+    const main = $('earn-main');
+    if (main && main.style.display !== 'none') {
+      bar.style.display = '';
+      void loadDormancy();
+      observer.disconnect();
+    }
+  });
+  observer.observe(document.body, {subtree: true, attributes: true, attributeFilter: ['style']});
 })();
 </script>
 {% endblock %}

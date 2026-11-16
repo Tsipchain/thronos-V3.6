@@ -904,8 +904,29 @@ class TestReporting:
 
     def test_campaign_report_daily(self, store, advertiser):
         camp = self._make_campaign_with_events(store, advertiser)
+        uid = advertiser["earn_user_id"]
+        pub = store.publisher_register(uid, "test_provider", "Rpt Pub")
+        with store._tx() as con:
+            con.execute(
+                "UPDATE earn_publishers SET status='active' WHERE publisher_id=?",
+                (pub["publisher_id"],),
+            )
+        import hashlib as _hl
+        viewer_hash = _hl.sha256(b"rpt_viewer").hexdigest()
+        with mock.patch.dict(os.environ, {"EARN_DELIVERY_SECRET": "test-secret-for-report-daily!"}):
+            serve = store.verified_serve(
+                placement="earn",
+                publisher_id=pub["publisher_id"],
+                viewer_hash=viewer_hash,
+            )
+            if serve.get("ad") and not serve.get("is_house"):
+                store.verified_record_event(
+                    proof_id=serve["proof"]["proof_id"],
+                    event_type="view",
+                    proof_token=serve["proof"]["proof_token"],
+                )
         daily = store.campaign_report_daily(
-            camp["campaign_id"], advertiser["earn_user_id"],
+            camp["campaign_id"], uid,
         )
         assert len(daily) >= 1
         assert "date" in daily[0]
@@ -1195,7 +1216,8 @@ class TestMarketplaceAPI:
 
     def test_serve_api(self, store):
         c, uid, tok = self._auth_client(store)
-        r = c.get("/api/earn/ads/serve?placement=earn&country=US")
+        with mock.patch.dict(os.environ, {"EARN_DELIVERY_SECRET": ""}, clear=False):
+            r = c.get("/api/earn/ads/serve?placement=earn&country=US")
         assert r.status_code == 503
         assert r.get_json() == {
             "ok": False, "error": "verified_ad_delivery_required",
@@ -1229,7 +1251,8 @@ class TestMarketplaceAPI:
         )
         self._escrow_intent_api(c, tok, cid, "deposit", "100.000000")
         before = store.campaign_report(cid, uid)
-        r = c.get("/api/earn/ads/serve?placement=earn&country=US")
+        with mock.patch.dict(os.environ, {"EARN_DELIVERY_SECRET": ""}, clear=False):
+            r = c.get("/api/earn/ads/serve?placement=earn&country=US")
         assert r.status_code == 503
         assert cid not in str(r.get_json())
         after = store.campaign_report(cid, uid)
@@ -1267,15 +1290,16 @@ class TestMarketplaceAPI:
         )
         self._escrow_intent_api(c, tok, cid, "deposit", "100.000000")
         before = store.campaign_report(cid, uid)
-        r = c.post(
-            "/api/earn/ads/serve/event",
-            json={
-                "campaign_id": cid,
-                "creative_id": crtv_id,
-                "event_type": "impression",
-                "country": "GR",
-            },
-        )
+        with mock.patch.dict(os.environ, {"EARN_DELIVERY_SECRET": ""}, clear=False):
+            r = c.post(
+                "/api/earn/ads/serve/event",
+                json={
+                    "campaign_id": cid,
+                    "creative_id": crtv_id,
+                    "event_type": "impression",
+                    "country": "GR",
+                },
+            )
         assert r.status_code == 503
         assert r.get_json()["error"] == "verified_ad_event_required"
         after = store.campaign_report(cid, uid)

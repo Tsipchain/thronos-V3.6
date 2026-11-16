@@ -849,7 +849,17 @@
       campaignCreated:'Campaign {id} created. Pending review; not live or charged.',
       invalidLinks:'Select your campaign and use HTTPS image and destination URLs.',
       previewNeedTitle:'Enter an ad headline before previewing.',
-      artworkCreated:'Artwork submitted for review. It is not live until approved and funded.' },
+      artworkCreated:'Artwork submitted for review. It is not live until approved and funded.',
+      fundBtn:'Fund',activateBtn:'Activate',pauseBtn:'Pause',resumeBtn:'Resume',refundBtn:'Refund',reportBtn:'Report',
+      escrowBal:'Escrow',pricingCpmMin:'CPM min bid',pricingCpmMax:'CPM max bid',pricingCpcMin:'CPC min bid',pricingCpcMax:'CPC max bid',
+      fundAmount:'Amount (THC)',fundConfirm:'Confirm deposit',funding:'Processing…',funded:'Deposited {amount} THC',
+      activating:'Activating…',activated:'Campaign activated',pausing:'Pausing…',paused:'Campaign paused',
+      resuming:'Resuming…',resumed:'Campaign resumed',refunding:'Processing refund…',refunded:'Refunded {amount} THC',
+      refundConfirm:'Refund remaining escrow? This cannot be undone.',reportLoading:'Loading report…',
+      impressions:'Impressions',clicks:'Clicks',ctr:'CTR',spent:'Spent',vipCredits:'VIP credits',
+      treasuryContrib:'Treasury',dailyBreakdown:'Daily breakdown',date:'Date',cost:'Cost',
+      checkinSuccess:'Checked in for {date}',checkinAlready:'Already checked in today',checkinBtn:'Daily check-in',
+      checkinDone:'Checked in today',dormantWarning:'Account dormant — check in daily to reactivate',noReport:'No report data' },
     gr: { loading:'Φόρτωση καμπανιών…', pick:'Επιλογή καμπάνιας', createFirst:'Δημιούργησε πρώτα μια καμπάνια',
       empty:'Δεν υπάρχουν καμπάνιες. Οι νέες καμπάνιες χρειάζονται έγκριση.',
       status:'Κατάσταση',unknown:'άγνωστη',bid:'Προσφορά',
@@ -857,7 +867,17 @@
       login:'Συνδέσου πρώτα στον λογαριασμό Earn',failed:'Αποτυχία αιτήματος',
       campaignCreated:'Η καμπάνια {id} καταχωρίστηκε. Αναμένει έγκριση, δεν προβάλλεται ούτε χρεώθηκε.',
       invalidLinks:'Επίλεξε καμπάνια και χρησιμοποίησε συνδέσμους HTTPS για εικόνα και προορισμό.',previewNeedTitle:'Πληκτρολόγησε τίτλο για την προεπισκόπηση.',
-      artworkCreated:'Το δημιουργικό υποβλήθηκε για έγκριση. Δεν προβάλλεται μέχρι να εγκριθεί και να χρηματοδοτηθεί.' },
+      artworkCreated:'Το δημιουργικό υποβλήθηκε για έγκριση. Δεν προβάλλεται μέχρι να εγκριθεί και να χρηματοδοτηθεί.',
+      fundBtn:'Χρηματοδότηση',activateBtn:'Ενεργοποίηση',pauseBtn:'Παύση',resumeBtn:'Συνέχεια',refundBtn:'Επιστροφή',reportBtn:'Αναφορά',
+      escrowBal:'Εγγύηση',pricingCpmMin:'CPM ελάχ.',pricingCpmMax:'CPM μέγ.',pricingCpcMin:'CPC ελάχ.',pricingCpcMax:'CPC μέγ.',
+      fundAmount:'Ποσό (THC)',fundConfirm:'Επιβεβαίωση κατάθεσης',funding:'Επεξεργασία…',funded:'Κατατέθηκαν {amount} THC',
+      activating:'Ενεργοποίηση…',activated:'Η καμπάνια ενεργοποιήθηκε',pausing:'Παύση…',paused:'Η καμπάνια σε παύση',
+      resuming:'Συνέχεια…',resumed:'Η καμπάνια συνεχίστηκε',refunding:'Επεξεργασία επιστροφής…',refunded:'Επιστράφηκαν {amount} THC',
+      refundConfirm:'Επιστροφή υπολοίπου; Η ενέργεια δεν αναιρείται.',reportLoading:'Φόρτωση αναφοράς…',
+      impressions:'Εμφανίσεις',clicks:'Κλικ',ctr:'CTR',spent:'Δαπάνη',vipCredits:'VIP πόντοι',
+      treasuryContrib:'Ταμείο',dailyBreakdown:'Ημερήσια ανάλυση',date:'Ημερομηνία',cost:'Κόστος',
+      checkinBtn:'Ημερήσιο check-in',checkinDone:'Ολοκληρώθηκε σήμερα',dormantWarning:'Αδρανής λογαριασμός — κάντε check-in για επανενεργοποίηση',
+      checkinSuccess:'Check-in για {date}',checkinAlready:'Ήδη check-in σήμερα',noReport:'Χωρίς δεδομένα' },
     es: { loading:'Cargando campañas…',pick:'Seleccionar campaña',createFirst:'Crea primero una campaña',
       empty:'Aún no hay campañas. Las nuevas necesitan revisión.',status:'Estado',unknown:'desconocido',
       bid:'Oferta',unavailable:'No se pudo cargar. Inicia sesión o inténtalo de nuevo.',
@@ -1608,7 +1628,6 @@
   const feedback = $('earn-advertiser-feedback');
   const list = $('earn-advertiser-list');
   const selector = $('earn-ad-creative-campaign');
-  // Preview is local-only: never calls serve/impression/click, escrow or campaign API.
   $('earn-ad-preview-button').addEventListener('click', () => {
     const title = $('earn-ad-creative-title').value.trim();
     const image = $('earn-ad-creative-image').value.trim();
@@ -1653,12 +1672,148 @@
     if (!response.ok || !data?.ok) throw new Error(data?.error || (response.status === 401 ? localized('login') : localized('failed')));
     return data;
   };
+  const post = (url, payload) => readApi(url, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload),
+  });
   const addText = (element, tag, value) => {
     const child = document.createElement(tag);
     child.textContent = String(value ?? '');
     element.appendChild(child);
     return child;
   };
+  const httpsUrl = value => {
+    try {
+      const url = new URL(value);
+      return url.protocol === 'https:' && !!url.hostname;
+    } catch (_) { return false; }
+  };
+
+  function makeBtn(cls, label, handler) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = cls;
+    btn.textContent = label;
+    btn.addEventListener('click', handler);
+    return btn;
+  }
+
+  async function fundCampaign(campaignId, detailEl) {
+    const existing = detailEl.querySelector('.earn-fund-inline');
+    if (existing) { existing.remove(); return; }
+    const wrap = document.createElement('div');
+    wrap.className = 'earn-fund-inline';
+    const inp = document.createElement('input');
+    inp.type = 'number'; inp.min = '0.000001'; inp.step = '0.000001';
+    inp.placeholder = localized('fundAmount'); inp.required = true;
+    const btn = document.createElement('button');
+    btn.type = 'button'; btn.textContent = localized('fundConfirm');
+    wrap.appendChild(inp); wrap.appendChild(btn);
+    detailEl.appendChild(wrap);
+    inp.focus();
+    btn.addEventListener('click', async () => {
+      const amount = inp.value.trim();
+      if (!amount || Number(amount) <= 0) return;
+      btn.disabled = true; btn.textContent = localized('funding');
+      try {
+        const intent = await post('/api/earn/ads/escrow/walletless/intent', {
+          campaign_id: campaignId, action: 'deposit', amount,
+        });
+        const result = await post('/api/earn/ads/escrow/walletless/execute', {
+          intent_id: intent.intent_id,
+          nonce: intent.nonce,
+          csrf_token: intent.csrf_token,
+        });
+        setFeedback(localized('funded', {amount: String(result.amount || amount)}));
+        wrap.remove();
+        await loadCampaigns();
+      } catch (error) {
+        setFeedback(error.message, true);
+        btn.disabled = false; btn.textContent = localized('fundConfirm');
+      }
+    });
+  }
+
+  async function campaignAction(campaignId, action, confirmKey, loadingKey, doneKey) {
+    if (confirmKey) {
+      if (!window.confirm(localized(confirmKey))) return;
+    }
+    setFeedback(localized(loadingKey));
+    try {
+      const result = await post('/api/earn/ads/campaign/' + encodeURIComponent(campaignId) + '/' + action, {});
+      const msg = result.refunded
+        ? localized(doneKey, {amount: String(result.refunded)})
+        : localized(doneKey);
+      setFeedback(msg);
+      await loadCampaigns();
+    } catch (error) { setFeedback(error.message, true); }
+  }
+
+  async function showReport(campaignId, detailEl) {
+    const existing = detailEl.querySelector('.earn-campaign-report');
+    if (existing) { existing.remove(); return; }
+    const wrap = document.createElement('div');
+    wrap.className = 'earn-campaign-report';
+    addText(wrap, 'span', localized('reportLoading')).style.color = '#7fb8d8';
+    detailEl.appendChild(wrap);
+    try {
+      const r = await readApi('/api/earn/ads/campaign/' + encodeURIComponent(campaignId) + '/report');
+      wrap.replaceChildren();
+      const grid = document.createElement('div');
+      grid.className = 'earn-report-grid';
+      const cells = [
+        [localized('impressions'), String(r.impressions ?? 0)],
+        [localized('clicks'), String(r.clicks ?? 0)],
+        [localized('ctr'), String(r.ctr ?? 0) + '%'],
+        [localized('spent'), String(r.spent ?? '0.000000') + ' THC'],
+        [localized('escrowBal'), String(r.escrow_balance ?? '0.000000') + ' THC'],
+        [localized('treasuryContrib'), String(r.treasury_contributed ?? '0.000000') + ' THC'],
+      ];
+      for (const [label, val] of cells) {
+        const cell = document.createElement('div');
+        cell.className = 'earn-report-cell';
+        addText(cell, 'div', label).className = 'rl';
+        addText(cell, 'div', val).className = 'rv';
+        grid.appendChild(cell);
+      }
+      wrap.appendChild(grid);
+      if (r.vip_credits && r.vip_credits.length > 0) {
+        const vcDiv = document.createElement('div');
+        vcDiv.style.cssText = 'font-size:12px;color:#a78bfa;margin-top:6px';
+        vcDiv.textContent = localized('vipCredits') + ': ' + r.vip_credits.length + ' milestone(s)';
+        wrap.appendChild(vcDiv);
+      }
+      if (r.events_by_day && r.events_by_day.length > 0) {
+        const details = document.createElement('details');
+        details.className = 'earn-report-daily';
+        const summary = document.createElement('summary');
+        summary.textContent = localized('dailyBreakdown');
+        details.appendChild(summary);
+        const table = document.createElement('table');
+        const thead = document.createElement('thead');
+        const hr = document.createElement('tr');
+        for (const h of [localized('date'), localized('impressions'), localized('clicks'), localized('cost')]) {
+          addText(hr, 'th', h);
+        }
+        thead.appendChild(hr); table.appendChild(thead);
+        const tbody = document.createElement('tbody');
+        for (const day of r.events_by_day) {
+          const tr = document.createElement('tr');
+          addText(tr, 'td', day.date);
+          addText(tr, 'td', String(day.impressions));
+          addText(tr, 'td', String(day.clicks));
+          addText(tr, 'td', String(day.cost) + ' THC');
+          tbody.appendChild(tr);
+        }
+        table.appendChild(tbody); details.appendChild(table); wrap.appendChild(details);
+      }
+    } catch (error) {
+      wrap.replaceChildren();
+      addText(wrap, 'span', error.message).style.color = '#f87171';
+    }
+  }
+
   async function loadCampaigns() {
     list.textContent = localized('loading');
     try {
@@ -1676,18 +1831,60 @@
       }
       for (const campaign of campaigns) {
         const id = String(campaign.campaign_id || '');
+        const status = String(campaign.status || 'unknown');
         const row = document.createElement('div');
         row.className = 'earn-advertiser-row';
         addText(row, 'strong', campaign.name || 'Campaign');
-        addText(row, 'span', localized('status') + ': ' + String(campaign.status || localized('unknown')) +
-          ' · ' + String(campaign.campaign_type || '').toUpperCase() +
-          ' · ' + localized('bid') + ' ' + String(campaign.bid_amount || '—') + ' THC');
+        const meta = document.createElement('div');
+        meta.className = 'earn-campaign-meta';
+        const badge = document.createElement('span');
+        badge.className = 'earn-campaign-status st-' + status;
+        badge.textContent = status.replace(/_/g, ' ');
+        meta.appendChild(badge);
+        addText(meta, 'span', String(campaign.campaign_type || '').toUpperCase()
+          + ' · ' + localized('bid') + ' ' + String(campaign.bid_amount || '—') + ' THC');
+        row.appendChild(meta);
+        if (id) {
+          const detail = document.createElement('div');
+          detail.className = 'earn-campaign-detail';
+          const escrowSpan = addText(detail, 'span', localized('escrowBal') + ': …');
+          escrowSpan.style.cssText = 'color:#f2c14e;font-size:13px;font-weight:700';
+          readApi('/api/earn/ads/escrow/balance/' + encodeURIComponent(id)).then(d => {
+            escrowSpan.textContent = localized('escrowBal') + ': ' + String(d.balance || '0.000000') + ' THC';
+          }).catch(() => { escrowSpan.textContent = localized('escrowBal') + ': —'; });
+          const actions = document.createElement('div');
+          actions.className = 'earn-campaign-actions';
+          if (status === 'approved' || status === 'active') {
+            actions.appendChild(makeBtn('act-fund', localized('fundBtn'), () => fundCampaign(id, detail)));
+          }
+          if (status === 'approved') {
+            actions.appendChild(makeBtn('act-activate', localized('activateBtn'),
+              () => campaignAction(id, 'activate', null, 'activating', 'activated')));
+          }
+          if (status === 'active') {
+            actions.appendChild(makeBtn('act-pause', localized('pauseBtn'),
+              () => campaignAction(id, 'pause', null, 'pausing', 'paused')));
+          }
+          if (status === 'paused') {
+            actions.appendChild(makeBtn('act-resume', localized('resumeBtn'),
+              () => campaignAction(id, 'resume', null, 'resuming', 'resumed')));
+          }
+          if (status === 'paused' || status === 'completed' || status === 'cancelled') {
+            actions.appendChild(makeBtn('act-refund', localized('refundBtn'),
+              () => campaignAction(id, 'refund', 'refundConfirm', 'refunding', 'refunded')));
+          }
+          if (status !== 'pending_review') {
+            actions.appendChild(makeBtn('act-report', localized('reportBtn'),
+              () => showReport(id, detail)));
+          }
+          detail.appendChild(actions);
+          row.appendChild(detail);
+          const opt = document.createElement('option');
+          opt.value = id;
+          opt.textContent = String(campaign.name || id);
+          selector.appendChild(opt);
+        }
         list.appendChild(row);
-        if (!id) continue;
-        const opt = document.createElement('option');
-        opt.value = id;
-        opt.textContent = String(campaign.name || id);
-        selector.appendChild(opt);
       }
     } catch (error) {
       list.replaceChildren();
@@ -1695,17 +1892,7 @@
       addText(list, 'p', localized('unavailable'));
     }
   }
-  const post = (url, payload) => readApi(url, {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(payload),
-  });
-  const httpsUrl = value => {
-    try {
-      const url = new URL(value);
-      return url.protocol === 'https:' && !!url.hostname;
-    } catch (_) { return false; }
-  };
+
   form.addEventListener('submit', async event => {
     event.preventDefault();
     if (!form.reportValidity()) return;
@@ -1753,13 +1940,105 @@
   $('earn-advertiser-refresh').addEventListener('click', loadCampaigns);
   window.addEventListener('earnLocaleChanged', () => {
     const tab = $('earn-tab-advertise');
-    // Re-fetch read-only campaign data only if the advertiser panel is visible.
     if (tab?.getAttribute('aria-selected') === 'true') void loadCampaigns();
   });
 
+  async function loadPricing() {
+    const box = $('earn-ad-pricing-info');
+    if (!box) return;
+    try {
+      const data = await readApi('/api/earn/ads/pricing');
+      const p = data.pricing || {};
+      box.replaceChildren();
+      const fields = [
+        [localized('pricingCpmMin'), String(p.cpm_min_bid || '—') + ' THC'],
+        [localized('pricingCpmMax'), String(p.cpm_max_bid || '—') + ' THC'],
+        [localized('pricingCpcMin'), String(p.cpc_min_bid || '—') + ' THC'],
+        [localized('pricingCpcMax'), String(p.cpc_max_bid || '—') + ' THC'],
+      ];
+      for (const [label, val] of fields) {
+        const cell = document.createElement('div');
+        cell.className = 'pi-cell';
+        addText(cell, 'div', label).className = 'pi-label';
+        addText(cell, 'div', val).className = 'pi-value';
+        box.appendChild(cell);
+      }
+      box.style.display = '';
+    } catch (_) { box.style.display = 'none'; }
+  }
+
   document.querySelector('.earn-section-tabs')?.addEventListener('click', event => {
-    if (event.target.closest('[data-earn-section="advertise"]')) void loadCampaigns();
+    if (event.target.closest('[data-earn-section="advertise"]')) {
+      void loadCampaigns();
+      void loadPricing();
+    }
   });
+})();
+</script>
+
+<script>
+/* Daily check-in and dormancy status */
+(() => {
+  'use strict';
+  const $ = id => document.getElementById(id);
+  const bar = $('earn-checkin-bar');
+  const btn = $('earn-checkin-btn');
+  const status = $('earn-checkin-status');
+  if (!bar || !btn) return;
+  const localized = (key, tokens) => window.ThronosEarnLocale?.message(key, tokens) || key;
+  const apiFetch = async (path, init = {}) => {
+    const response = await fetch(path, {
+      credentials: 'same-origin', ...init,
+      headers: {'Accept': 'application/json', ...(init.headers || {})},
+    });
+    return response.json().catch(() => null);
+  };
+
+  async function loadDormancy() {
+    try {
+      const data = await apiFetch('/api/earn/dormancy/status');
+      if (!data?.ok) return;
+      if (data.is_dormant) {
+        status.textContent = localized('dormantWarning');
+        status.className = 'checkin-status dormant';
+      }
+    } catch (_) { /* non-critical */ }
+  }
+
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    try {
+      const response = await fetch('/api/earn/checkin', {
+        method: 'POST', credentials: 'same-origin',
+        headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+        body: '{}',
+      });
+      const data = await response.json().catch(() => null);
+      if (data?.ok) {
+        if (data.idempotent) {
+          status.textContent = localized('checkinAlready');
+        } else {
+          status.textContent = localized('checkinSuccess', {date: String(data.utc_date || '')});
+        }
+        status.className = 'checkin-status';
+        void loadDormancy();
+      } else {
+        status.textContent = data?.error || 'Error';
+        status.className = 'checkin-status dormant';
+        btn.disabled = false;
+      }
+    } catch (_) { btn.disabled = false; }
+  });
+
+  const observer = new MutationObserver(() => {
+    const main = $('earn-main');
+    if (main && main.style.display !== 'none') {
+      bar.style.display = '';
+      void loadDormancy();
+      observer.disconnect();
+    }
+  });
+  observer.observe(document.body, {subtree: true, attributes: true, attributeFilter: ['style']});
 })();
 </script>
 {% endblock %}

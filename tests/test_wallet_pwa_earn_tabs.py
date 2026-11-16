@@ -54,7 +54,7 @@ def test_wallet_pwa_daily_checkin_parity():
         '/api/earn/dormancy/status',
         '/api/earn/checkin',
         "credentials: 'include'",
-        "data-state="loading"",
+        'data-state="loading"',
     ):
         assert marker in JS
 

@@ -48778,7 +48778,9 @@ def api_wallet_v1_music_capability():
     """
     address = (request.args.get("address") or "").strip().upper()
 
-    if not address or not validate_thr_address(address):
+    if not address:
+        return jsonify(ok=False, error="no_canonical_address"), 400
+    if not address.startswith("THR") or not validate_thr_address(address):
         return jsonify(ok=False, error="invalid_address"), 400
 
     try:

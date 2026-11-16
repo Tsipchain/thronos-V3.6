@@ -31,6 +31,7 @@ def unlock_function() -> str:
 def test_successful_unlock_reads_thr_address_field():
     body = unlock_function()
     assert "document.getElementById('walletWidgetThrAddress')" in body
+    assert "/^THR[A-F0-9]{40}$/" in body
 
 
 def test_successful_unlock_persists_wallet_v1_address():
@@ -91,7 +92,26 @@ def test_thr5df_system_wallet_remains_blocked():
 def test_no_decrypted_private_key_stored_in_browser_storage():
     for path in ["templates/base.html", "static/wallet_session.js", "public/static/wallet_session.js"]:
         content = read(path)
-        assert not re.search(r"(?:localStorage|sessionStorage)\.setItem\([^\)]*(?:unlockedPrivateKeyHex|privateKeyHex|private_key|privateKey)", content)
+        storage_writes = re.findall(
+            r"(?:localStorage|sessionStorage)\.setItem\([^\)]*\)", content,
+        )
+        for write in storage_writes:
+            lowered = write.lower()
+            mentions_private_key = any(token in lowered for token in (
+                "unlockedprivatekeyhex", "decryptedprivkeyhex", "privatekeyhex",
+                "private_key", "privatekey",
+            ))
+            assert not mentions_private_key or (
+                write.startswith("localStorage.setItem") and "encrypted" in lowered
+            ), write
+
+    for path in ["static/wallet_session.js", "public/static/wallet_session.js"]:
+        content = read(path)
+        assert "_saveSessionUnlock" not in content
+        assert not re.search(
+            r"sessionStorage\.setItem\([^\)]*(?:SESSION_UNLOCK|privHex|decryptedPrivKeyHex|unlockedPrivateKeyHex)",
+            content,
+        )
 
 
 def test_diagnostics_include_expected_success_fields():

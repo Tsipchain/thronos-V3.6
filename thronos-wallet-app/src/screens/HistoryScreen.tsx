@@ -54,6 +54,7 @@ const TX_CATEGORIES: CategoryDef[] = [
   { key: 'liquidity', label: 'Liquidity', icon: 'water', color: '#06B6D4', core: true, description: 'Pool operations' },
   { key: 'gateway', label: 'Gateway', icon: 'git-network', color: '#8B5CF6', core: true, description: 'Gateway operations' },
   { key: 'l2e', label: 'L2E', icon: 'school', color: '#F59E0B', core: true, description: 'Learn-to-Earn' },
+  { key: 't2e', label: 'T2E', icon: 'fitness', color: '#EF4444', core: false, description: 'Train-to-Earn' },
   { key: 'ai_credits', label: 'AI Credits', icon: 'sparkles', color: '#EC4899', core: true, description: 'Pytheia AI credits' },
   { key: 'bridge', label: 'Bridge', icon: 'link', color: '#14B8A6', core: false, description: 'Cross-chain bridge' },
   { key: 'music', label: 'Music', icon: 'musical-notes', color: '#A855F7', core: false, description: 'Music tips & royalties' },
@@ -110,9 +111,12 @@ const CATEGORY_MAP: Record<string, string> = {
   ai_reward: 'ai_credits',
   architect: 'ai_credits',
   architect_job: 'ai_credits',
-  t2e: 'l2e',
-  t2e_reward_thr: 'l2e',
+  t2e: 't2e',
+  t2e_reward_thr: 't2e',
+  t2e_reward: 't2e',
+  train_reward: 't2e',
   l2e: 'l2e',
+  l2e_reward: 'l2e',
   iot: 'iot',
   iot_telemetry: 'iot',
   iot_reward: 'iot',
@@ -252,7 +256,8 @@ function describeTransaction(tx: any, walletAddr: string): string {
   if (cat === 'iot' || kind.includes('iot') || kind.includes('gps')) return 'IoT Telemetry';
   if (cat === 'pledge' || kind === 'pledge') return 'Pledge';
   if (cat === 'nft' || kind.includes('nft')) return 'NFT Transfer';
-  if (cat === 'l2e' || cat === 't2e' || kind.includes('t2e')) return 'Learn-to-Earn Reward';
+  if (cat === 'l2e') return 'Learn-to-Earn Reward';
+  if (cat === 't2e' || kind.includes('t2e')) return 'Train-to-Earn Reward';
   if (kind === 'token_transfer' || cat === 'token_transfer') {
     const sym = tx.symbol || tx.token_symbol || tx.asset_symbol || 'Token';
     return dir === 'received' ? `Received ${sym}` : `Sent ${sym}`;
@@ -274,9 +279,10 @@ function normalizeTx(raw: any, walletAddr: string): Transaction {
   const eventType = (raw.event_type || '').toLowerCase();
   const kind = (raw.kind || raw.type || eventType).toLowerCase();
   const rawCategory = (raw.category || raw.source || eventType || kind).toLowerCase();
-  const category = CATEGORY_MAP[rawCategory] || CATEGORY_MAP[eventType] || CATEGORY_MAP[kind] || 'thr';
+  const category = CATEGORY_MAP[rawCategory] || CATEGORY_MAP[eventType] || CATEGORY_MAP[kind] || 'gateway';
 
-  const symbol = (raw.symbol || raw.asset_symbol || raw.token_symbol || raw.token || 'THR').toUpperCase();
+  const rawSymbol = (raw.symbol || raw.asset_symbol || raw.token_symbol || raw.token || '').toUpperCase();
+  const symbol = rawSymbol || (category === 'thr' ? 'THR' : '');
   const amount = safeFloat(raw.display_amount ?? raw.amount);
   const fee = safeFloat(raw.fee_burned ?? raw.fee ?? raw.meta?.fee ?? raw.meta?.fee_burned);
   const hash = raw.tx_hash || raw.hash || raw.tx_id || raw.id || raw.bridge_id || '';
@@ -298,10 +304,11 @@ function normalizeTx(raw: any, walletAddr: string): Transaction {
   else if (rawCategory.includes('iot') || rawCategory.includes('gps')) service = 'IoT';
   else if (rawCategory.includes('nft')) service = 'NFT Market';
   else if (rawCategory.includes('pledge') || rawCategory.includes('staking')) service = 'Staking';
-  else if (rawCategory.includes('l2e') || rawCategory.includes('t2e')) service = 'Learn2Earn';
+  else if (rawCategory.includes('l2e')) service = 'Learn2Earn';
+  else if (rawCategory.includes('t2e')) service = 'Train2Earn';
   else if (rawCategory.includes('gateway') || rawCategory.includes('fiat')) service = 'Fiat Gateway';
   else if (rawCategory === 'token_transfer' || rawCategory === 'tokens') service = 'Tokens';
-  else service = 'THR';
+  else service = category === 'thr' ? 'THR' : '';
 
   return {
     id: hash || `${from}-${to}-${tsMs}`,
@@ -359,13 +366,13 @@ function normalizedEventForWallet(raw: any): any {
   const domain = String(raw.domain || '').toLowerCase();
   const domainCategory: Record<string, string> = {
     thr: 'thr', token: 'tokens', music: 'music', ai: 'ai_credits',
-    iot: 'iot', l2e: 'l2e', t2e: 'l2e', parking: 'gateway',
+    iot: 'iot', l2e: 'l2e', t2e: 't2e', parking: 'gateway',
     nft: 'nft', liquidity: 'liquidity', gateway: 'gateway',
     swap: 'swaps', pledge: 'staking', vault: 'liquidity',
-    migration: 'gateway', unknown: 'thr',
+    migration: 'gateway', unknown: 'gateway',
   };
   const isBridgeLifecycle = /^(bridge_|crosschain_|cross_chain_|withdrawal_)/.test(eventType.toLowerCase());
-  const category = isBridgeLifecycle ? 'bridge' : (domainCategory[domain] || raw.category || 'thr');
+  const category = isBridgeLifecycle ? 'bridge' : (domainCategory[domain] || raw.category || 'gateway');
   const chain = canonicalHistoryChain(raw.chain);
   const direction = raw.direction === 'in' ? 'received'
     : raw.direction === 'out' ? 'sent' : 'related';
@@ -378,8 +385,8 @@ function normalizedEventForWallet(raw: any): any {
     type: eventType,
     category,
     chain,
-    asset: raw.asset || raw.token || 'THR',
-    symbol: raw.asset || raw.symbol || 'THR',
+    asset: raw.asset || raw.token || '',
+    symbol: raw.asset || raw.symbol || '',
     token_symbol: raw.asset || raw.token_symbol || '',
     tx_hash: chainHash,
     tx_id: chainHash,

@@ -80,9 +80,12 @@ CATEGORY_MAP = {
     "ai_reward": "ai_credits",
     "architect": "ai_credits",
     "architect_job": "ai_credits",
-    "t2e": "l2e",
-    "t2e_reward_thr": "l2e",
+    "t2e": "t2e",
+    "t2e_reward_thr": "t2e",
+    "t2e_reward": "t2e",
+    "train_reward": "t2e",
     "l2e": "l2e",
+    "l2e_reward": "l2e",
     "iot": "iot",
     "iot_telemetry": "iot",
     "iot_reward": "iot",
@@ -194,7 +197,7 @@ class TestCategoryMapping:
         assert CATEGORY_MAP["other"] == "gateway"
 
     def test_unknown_category_fallback(self):
-        # In the TS code: CATEGORY_MAP[rawCategory] || ... || 'thr'
+        # In the TS code: CATEGORY_MAP[rawCategory] || ... || 'gateway'
         # Unknown categories should NOT silently map to thr in the map itself
         for key, value in CATEGORY_MAP.items():
             if key in ("thr", "transfer"):
@@ -205,7 +208,7 @@ class TestCategoryMapping:
     def test_earn_categories_present(self):
         assert CATEGORY_MAP.get("staking") == "staking"
         assert CATEGORY_MAP.get("l2e") == "l2e"
-        assert CATEGORY_MAP.get("t2e") == "l2e"
+        assert CATEGORY_MAP.get("t2e") == "t2e"
         assert CATEGORY_MAP.get("ai_credits") == "ai_credits"
 
     def test_bridge_lifecycle_categories(self):
@@ -254,3 +257,106 @@ class TestSafeFloat:
 
     def test_nan(self):
         assert self.safe_float(float("nan")) is None
+
+
+class TestT2eL2eSeparation:
+    """T2E (Train-to-Earn) and L2E (Learn-to-Earn) are distinct systems."""
+
+    def test_t2e_never_maps_to_l2e(self):
+        for key in ("t2e", "t2e_reward_thr", "t2e_reward", "train_reward"):
+            assert CATEGORY_MAP[key] == "t2e", f"'{key}' maps to '{CATEGORY_MAP[key]}', expected 't2e'"
+
+    def test_l2e_remains_l2e(self):
+        for key in ("l2e", "l2e_reward"):
+            assert CATEGORY_MAP[key] == "l2e", f"'{key}' maps to '{CATEGORY_MAP[key]}', expected 'l2e'"
+
+    def test_t2e_and_l2e_are_distinct_categories(self):
+        t2e_values = {CATEGORY_MAP[k] for k in ("t2e", "t2e_reward_thr", "t2e_reward", "train_reward")}
+        l2e_values = {CATEGORY_MAP[k] for k in ("l2e", "l2e_reward")}
+        assert t2e_values == {"t2e"}
+        assert l2e_values == {"l2e"}
+        assert t2e_values.isdisjoint(l2e_values)
+
+
+class TestUnknownEventClassification:
+    """Unknown events must never silently map to THR."""
+
+    def test_unknown_event_not_mapped_to_thr(self):
+        # The TS fallback is now 'gateway', not 'thr'
+        # Any key not in CATEGORY_MAP falls through to 'gateway'
+        # Verify no non-THR key maps to 'thr'
+        for key, value in CATEGORY_MAP.items():
+            if key not in ("thr", "transfer"):
+                assert value != "thr", f"'{key}' silently maps to 'thr'"
+
+    def test_unknown_domain_maps_to_gateway(self):
+        # Mirrors normalizedEventForWallet's domainCategory: unknown → 'gateway'
+        domain_category = {
+            "thr": "thr", "token": "tokens", "music": "music", "ai": "ai_credits",
+            "iot": "iot", "l2e": "l2e", "t2e": "t2e", "parking": "gateway",
+            "nft": "nft", "liquidity": "liquidity", "gateway": "gateway",
+            "swap": "swaps", "pledge": "staking", "vault": "liquidity",
+            "migration": "gateway", "unknown": "gateway",
+        }
+        assert domain_category["unknown"] == "gateway"
+        assert domain_category["t2e"] == "t2e"
+        assert domain_category["l2e"] == "l2e"
+
+    def test_unknown_asset_not_fabricated_as_thr(self):
+        # The TS code: rawSymbol || (category === 'thr' ? 'THR' : '')
+        # Only THR-category events default to THR symbol
+        def resolve_symbol(raw_symbol, category):
+            return raw_symbol or ("THR" if category == "thr" else "")
+        assert resolve_symbol("", "thr") == "THR"
+        assert resolve_symbol("", "gateway") == ""
+        assert resolve_symbol("", "bridge") == ""
+        assert resolve_symbol("", "t2e") == ""
+        assert resolve_symbol("USDT", "tokens") == "USDT"
+
+
+class TestNativeThrTransfer:
+    """Native THR transfers still map correctly."""
+
+    def test_thr_category_is_thr(self):
+        assert CATEGORY_MAP["thr"] == "thr"
+
+    def test_transfer_category_is_thr(self):
+        assert CATEGORY_MAP["transfer"] == "thr"
+
+
+class TestCrossChainLifecycle:
+    """Cross-chain lifecycle events retain chain/direction/provenance."""
+
+    def test_bridge_events_all_map_to_bridge(self):
+        bridge_keys = [
+            "bridge", "bridge_deposit_detected",
+            "crosschain_deposit_detected",
+            "crosschain_transfer_received",
+            "crosschain_transfer_sent",
+        ]
+        for key in bridge_keys:
+            assert CATEGORY_MAP[key] == "bridge", f"'{key}' maps to '{CATEGORY_MAP[key]}', expected 'bridge'"
+
+    def test_bridge_lifecycle_regex_pattern(self):
+        # Mirrors: /^(bridge_|crosschain_|cross_chain_|withdrawal_)/.test(eventType)
+        import re
+        pattern = re.compile(r"^(bridge_|crosschain_|cross_chain_|withdrawal_)")
+        lifecycle_events = [
+            "bridge_deposit_detected", "crosschain_transfer_received",
+            "crosschain_transfer_sent", "cross_chain_confirm",
+            "withdrawal_requested", "withdrawal_signed",
+            "withdrawal_broadcasted", "withdrawal_confirmed",
+            "withdrawal_failed",
+        ]
+        for evt in lifecycle_events:
+            assert pattern.match(evt), f"'{evt}' not recognized as bridge lifecycle"
+
+    def test_pool_lifecycle_still_maps_to_liquidity(self):
+        pool_keys = [
+            "pool_seed", "pool_withdraw", "pool_add_liquidity",
+            "pool_add_liquidity_intent_created",
+            "pool_add_liquidity_external_tx_confirmed",
+            "pool_add_liquidity_lp_minted",
+        ]
+        for key in pool_keys:
+            assert CATEGORY_MAP[key] == "liquidity"

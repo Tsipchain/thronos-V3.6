@@ -44,8 +44,12 @@ const CATEGORY_MAP = {
   bridge: 'bridge',
   music_tip: 'music',
   ai_credits: 'ai_credits',
-  t2e: 'l2e',
+  t2e: 't2e',
+  t2e_reward_thr: 't2e',
+  t2e_reward: 't2e',
+  train_reward: 't2e',
   l2e: 'l2e',
+  l2e_reward: 'l2e',
   other: 'gateway',
 };
 
@@ -119,7 +123,24 @@ assert.notEqual(CATEGORY_MAP['other'], 'thr',
 assert.equal(CATEGORY_MAP['mining_reward'], 'mining');
 assert.equal(CATEGORY_MAP['swap'], 'swaps');
 assert.equal(CATEGORY_MAP['bridge'], 'bridge');
-assert.equal(CATEGORY_MAP['t2e'], 'l2e');
+assert.equal(CATEGORY_MAP['t2e'], 't2e', 't2e maps to t2e, not l2e');
+assert.equal(CATEGORY_MAP['l2e'], 'l2e', 'l2e remains l2e');
+assert.notEqual(CATEGORY_MAP['t2e'], CATEGORY_MAP['l2e'],
+  't2e and l2e must be distinct categories');
+
+// T2E aliases all map to t2e
+for (const k of ['t2e', 't2e_reward_thr', 't2e_reward', 'train_reward']) {
+  assert.equal(CATEGORY_MAP[k], 't2e', `${k} should map to t2e`);
+}
+
+// L2E aliases all map to l2e
+for (const k of ['l2e', 'l2e_reward']) {
+  assert.equal(CATEGORY_MAP[k], 'l2e', `${k} should map to l2e`);
+}
+
+// Unknown fallback: the TS code now falls back to 'gateway', not 'thr'
+const unknownFallback = CATEGORY_MAP['totally_unknown_event'] || 'gateway';
+assert.equal(unknownFallback, 'gateway', 'unknown events fall back to gateway, not thr');
 
 console.log('  category mapping: all pass');
 

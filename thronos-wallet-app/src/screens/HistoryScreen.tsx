@@ -21,12 +21,12 @@ interface Transaction {
   category: string;
   from: string;
   to: string;
-  amount: number;
+  amount: number | null;
   token: string;
-  fee: number;
+  fee: number | null;
   timestamp: string;       // ISO 8601 string
   timestampMs: number;     // Unix ms for sorting/formatting
-  status: 'confirmed' | 'pending' | 'failed';
+  status: 'confirmed' | 'pending' | 'failed' | 'reverted';
   chain: string;
   service: string;
   description: string;
@@ -84,7 +84,7 @@ const CATEGORY_MAP: Record<string, string> = {
   thr: 'thr',
   transfer: 'thr',
   token_transfer: 'tokens',
-  token_receive: 'thr',
+  token_receive: 'tokens',
   tokens: 'tokens',
   mining: 'mining',
   mining_reward: 'mining',
@@ -129,15 +129,15 @@ const CATEGORY_MAP: Record<string, string> = {
   gateway: 'gateway',
   fiat_buy: 'gateway',
   fiat_deposit: 'gateway',
-  other: 'thr',
+  other: 'gateway',
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-function safeFloat(v: any): number {
-  if (v === null || v === undefined || v === '') return 0;
+function safeFloat(v: any): number | null {
+  if (v === null || v === undefined || v === '') return null;
   const n = typeof v === 'number' ? v : parseFloat(String(v));
-  return isNaN(n) ? 0 : n;
+  return isNaN(n) ? null : n;
 }
 
 function parseTimestamp(ts: any): number {
@@ -182,12 +182,25 @@ function formatFullDate(ms: number): string {
   });
 }
 
-function formatAmount(amount: number): string {
+function formatAmount(amount: number | null): string {
+  if (amount === null) return '—';
   if (amount === 0) return '0';
-  if (Math.abs(amount) >= 1000) return amount.toLocaleString('en-US', { maximumFractionDigits: 2 });
-  if (Math.abs(amount) >= 1) return amount.toFixed(2);
-  if (Math.abs(amount) >= 0.01) return amount.toFixed(4);
-  return amount.toFixed(6);
+  const abs = Math.abs(amount);
+  if (abs >= 1000) return amount.toLocaleString('en-US', { maximumFractionDigits: 2 });
+  if (abs >= 1) return amount.toFixed(2);
+  if (abs >= 0.01) return amount.toFixed(4);
+  if (abs >= 0.000001) return amount.toFixed(6);
+  return amount < 0 ? '< -0.000001' : '< 0.000001';
+}
+
+function formatAmountExact(amount: number | null): string {
+  if (amount === null) return '—';
+  if (amount === 0) return '0';
+  const abs = Math.abs(amount);
+  if (abs >= 0.000001) return formatAmount(amount);
+  const digits = Math.max(6, Math.min(18, -Math.floor(Math.log10(abs)) + 2));
+  const fixed = amount.toFixed(digits);
+  return fixed.replace(/0+$/, '').replace(/\.$/, '');
 }
 
 function describeTransaction(tx: any, walletAddr: string): string {
@@ -507,7 +520,7 @@ export default function HistoryScreen() {
   // Calculate stats
   useEffect(() => {
     const uniqueServices = new Set(allTxs.map((t) => t.service).filter(Boolean));
-    const totalVolume = allTxs.reduce((sum, t) => sum + Math.abs(t.amount), 0);
+    const totalVolume = allTxs.reduce((sum, t) => sum + Math.abs(t.amount ?? 0), 0);
     setStats({ total: allTxs.length, volume: totalVolume, services: uniqueServices.size });
   }, [allTxs]);
 
@@ -572,14 +585,20 @@ export default function HistoryScreen() {
           </View>
         </View>
         <View style={styles.txAmount}>
-          <Text style={[styles.txAmountText, { color: isSend ? COLORS.error : COLORS.success }]}>
-            {isSend ? '-' : '+'}{formatAmount(item.amount)} {item.token}
+          <Text style={[styles.txAmountText, { color: item.amount === null ? COLORS.textSecondary : isSend ? COLORS.error : COLORS.success }]}>
+            {item.amount === null ? '—' : `${isSend ? '-' : '+'}${formatAmount(item.amount)} ${item.token}`}
           </Text>
-          {item.fee > 0 && (
-            <Text style={styles.txFee}>Fee: {item.fee} THR</Text>
+          {item.fee != null && item.fee > 0 && (
+            <Text style={styles.txFee}>Fee: {formatAmount(item.fee)} THR</Text>
           )}
           {item.status === 'pending' && (
             <Text style={styles.txPending}>Pending</Text>
+          )}
+          {item.status === 'failed' && (
+            <Text style={[styles.txPending, { color: COLORS.error }]}>Failed</Text>
+          )}
+          {item.status === 'reverted' && (
+            <Text style={[styles.txPending, { color: COLORS.error }]}>Reverted</Text>
           )}
         </View>
       </TouchableOpacity>
@@ -711,7 +730,7 @@ export default function HistoryScreen() {
                   <Text style={[styles.detailAmount, {
                     color: selectedTx.direction === 'sent' ? COLORS.error : COLORS.success,
                   }]}>
-                    {selectedTx.direction === 'sent' ? '-' : '+'}{formatAmount(selectedTx.amount)}
+                    {selectedTx.amount === null ? '—' : `${selectedTx.direction === 'sent' ? '-' : '+'}${formatAmountExact(selectedTx.amount)}`}
                   </Text>
                   <Text style={styles.detailTokenLabel}>{selectedTx.token}</Text>
                 </View>
@@ -729,7 +748,7 @@ export default function HistoryScreen() {
                   { label: 'To', value: selectedTx.to || 'N/A', mono: true },
                   selectedTx.metadata?.external_from ? { label: 'EVM From', value: selectedTx.metadata.external_from, mono: true } : null,
                   selectedTx.metadata?.external_to ? { label: 'EVM To', value: selectedTx.metadata.external_to, mono: true } : null,
-                  { label: 'Fee', value: selectedTx.fee > 0 ? `${selectedTx.fee} THR` : 'Free' },
+                  { label: 'Fee', value: selectedTx.fee != null && selectedTx.fee > 0 ? `${formatAmountExact(selectedTx.fee)} THR` : selectedTx.fee === null ? '—' : 'Free' },
                   { label: 'Time', value: formatFullDate(selectedTx.timestampMs) },
                   { label: 'TX Hash', value: selectedTx.hash || 'Pending...', mono: true },
                 ].filter((r): r is { label: string; value: string; mono?: boolean } => r !== null).map((row) => (

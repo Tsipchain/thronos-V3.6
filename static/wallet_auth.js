@@ -43,6 +43,14 @@
                   window.walletSession.hasRuntimeSigningMaterial(address));
     }
 
+    function isUnlockedFor(address) {
+        if (!window.walletSession) return false;
+        if (typeof window.walletSession.isUnlockedFor === 'function') {
+            return !!window.walletSession.isUnlockedFor(address);
+        }
+        return hasRuntimeSigningMaterial(address);
+    }
+
     function hasEncryptedSeed() {
         return !!(window.walletSession &&
                   typeof window.walletSession.hasEncryptedPrivateKey === 'function' &&
@@ -172,17 +180,21 @@
             const credentialLookupAddress = getCredentialLookupAddress(address);
             logAuthDiagnostics(address, source);
 
-            // Check if Wallet V1 runtime signing material is already available in this tab.
-            if (hasRuntimeSigningMaterial(address)) {
-                cachedRuntimeSigningAddress = address;
+            // Reuse runtime material only when walletSession confirms it is
+            // bound to this exact active address.
+            if (isUnlockedFor(address)) {
+                if (hasRuntimeSigningMaterial(address)) {
+                    cachedRuntimeSigningAddress = address;
+                    return buildAuthResult(address, '', credentialLookupAddress);
+                }
+            }
+
+            if (cachedRuntimeSigningAddress && cachedRuntimeSigningAddress === address && isUnlockedFor(address)) {
                 return buildAuthResult(address, '', credentialLookupAddress);
             }
 
-            if (cachedRuntimeSigningAddress && cachedRuntimeSigningAddress === address && hasRuntimeSigningMaterial(address)) {
-                return buildAuthResult(address, '', credentialLookupAddress);
-            }
-
-            // Signing material is persisted in sessionStorage for the tab lifetime (cleared on tab close).
+            // Legacy HMAC auth material may use a tab-scoped session. Wallet V1
+            // private keys remain memory-only inside walletSession.
             if (cachedAuthSecret && (!cachedAuthAddress || cachedAuthAddress === address || cachedAuthAddress === credentialLookupAddress)) {
                 _refreshAuthSessionTimestamp();
                 return buildAuthResult(address, cachedAuthSecret, credentialLookupAddress);
@@ -206,7 +218,7 @@
                 return buildAuthResult(address, storedSecret, credentialLookupAddress);
             }
 
-            if (hasEncryptedSeed() && window.walletSession && typeof window.walletSession.isLocked === 'function' && !window.walletSession.isLocked() && !hasRuntimeSigningMaterial(address)) {
+            if (hasEncryptedSeed() && window.walletSession && typeof window.walletSession.isLocked === 'function' && !window.walletSession.isLocked() && !isUnlockedFor(address) && !hasRuntimeSigningMaterial(address)) {
                 if (typeof window.walletSession.lockWallet === 'function') window.walletSession.lockWallet();
                 logAuthDiagnostics(address, source);
             }
@@ -237,9 +249,11 @@
                         }
                     }
 
-                    if (hasRuntimeSigningMaterial(address)) {
-                        cachedRuntimeSigningAddress = address;
-                        return buildAuthResult(address, '', credentialLookupAddress);
+                    if (isUnlockedFor(address)) {
+                        if (hasRuntimeSigningMaterial(address)) {
+                            cachedRuntimeSigningAddress = address;
+                            return buildAuthResult(address, '', credentialLookupAddress);
+                        }
                     }
                     const authSecret = getSigningMaterial(address);
                     if (authSecret) {
@@ -298,7 +312,7 @@
                             }
                         }
                     }
-                    if (hasRuntimeSigningMaterial(address)) {
+                    if (isUnlockedFor(address)) {
                         cachedRuntimeSigningAddress = address;
                         return buildAuthResult(address, '', credentialLookupAddress);
                     }
@@ -327,7 +341,7 @@
 
         isUnlocked() {
             const address = getActiveWalletAddress();
-            if (hasRuntimeSigningMaterial(address) || cachedAuthSecret || getSigningMaterial(address)) return true;
+            if (isUnlockedFor(address) || cachedAuthSecret || getSigningMaterial(address)) return true;
             // Also check sessionStorage (restored after navigation)
             const s = _loadAuthSession();
             return !!(s && s.secret);
@@ -335,7 +349,7 @@
 
         hasRuntimeSigningMaterial(address = null) {
             const active = address || getActiveWalletAddress();
-            return hasRuntimeSigningMaterial(active);
+            return isUnlockedFor(active);
         },
 
         logDiagnostics(source = 'wallet_auth') {
@@ -450,7 +464,7 @@
 
     window.addEventListener('thronos:wallet:v1:unlocked', (event) => {
         const address = event && event.detail ? event.detail.address : getActiveWalletAddress();
-        if (address && hasRuntimeSigningMaterial(address)) {
+        if (address && isUnlockedFor(address)) {
             cachedRuntimeSigningAddress = address;
         }
         logAuthDiagnostics(address, 'header');
@@ -458,7 +472,7 @@
 
     window.addEventListener('thronos:wallet:state-changed', () => {
         const address = getActiveWalletAddress();
-        if (!hasRuntimeSigningMaterial(address)) {
+        if (!isUnlockedFor(address)) {
             cachedRuntimeSigningAddress = '';
         }
     });
@@ -470,9 +484,8 @@
     }
 
     function initAutoLock() {
-        // On page load: if wallet was unlocked in this tab (session restored), resume the timer.
-        // isUnlocked() will return true because cachedAuthSecret was restored from sessionStorage
-        // at module init time, or walletSession restored unlockedPrivateKeyHex from sessionStorage.
+        // On page load, resume the timer only for an in-memory Wallet V1
+        // unlock or a restored legacy HMAC auth session.
         if (WalletAuth.isUnlocked()) {
             WalletAuth.startAutoLock();
         }
@@ -494,6 +507,6 @@
             return result;
         };
 
-        console.log('[WalletAuth] Auto-lock initialized (30 min timeout, session persistence enabled)');
+        console.log('[WalletAuth] Auto-lock initialized (30 min timeout, memory-only Wallet V1 keys)');
     }
 })(window);

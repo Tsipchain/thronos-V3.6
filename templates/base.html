@@ -9087,43 +9087,36 @@ async function unlockWalletV1FromHeader(){
     const pin = (document.getElementById('walletWidgetUnlockPin')?.value || '').trim();
     if (!pin) return alert('PIN is required to unlock.');
 
-    // CRITICAL: Check that an active wallet address exists before attempting unlock
-    // Unlock is only valid when an active address has been set via:
-    // - Import (key derivation → address)
-    // - Create (wallet generation → address)
-    // - Migrate (legacy → new address)
-    // - Restore (migration record → canonical address)
-    const activeAddress = walletSession.getActiveAddress ? walletSession.getActiveAddress() : null;
-    if (!activeAddress) {
-        console.error('[UnlockWallet] wallet_import_required - No active wallet address exists');
-        return alert('wallet_import_required\n\nImport or migrate a wallet before unlocking.');
+    const enteredAddress = (document.getElementById('walletWidgetThrAddress')?.value || '').trim().toUpperCase();
+    if (!/^THR[A-F0-9]{40}$/.test(enteredAddress) ||
+        !walletSession.isValidThrAddress || !walletSession.isValidThrAddress(enteredAddress)) {
+        return alert('wallet_address_required\n\nEnter a valid THR wallet address before unlocking.');
     }
 
     const blockedSystemWalletAddress = 'THR5DF27A86C477F381594E896F0E55357DEC5942BA';
-    const isBlockedSystemWallet = (addr) => addr === blockedSystemWalletAddress ||
-        !!(walletSession.isSystemWalletAddress && walletSession.isSystemWalletAddress(addr));
-
-    // Validate that the active address is the one we're unlocking for
-    if (isBlockedSystemWallet(activeAddress)) {
+    if (enteredAddress === blockedSystemWalletAddress ||
+        walletSession.isSystemWalletAddress?.(enteredAddress)) {
         return alert('system_wallet_not_allowed');
     }
 
+    const currentActiveAddress = walletSession.getActiveAddress ? walletSession.getActiveAddress() : null;
+    if (currentActiveAddress && currentActiveAddress.toUpperCase() !== enteredAddress) {
+        return alert('wallet_address_mismatch\n\nThe entered address does not match the active Wallet V1 address.');
+    }
+
     try {
-        console.info('[UnlockWallet] Attempting unlock with PIN for active address:', activeAddress.substring(0, 10) + '...');
-        const ok = await walletSession.unlockWallet({ pin, address: activeAddress });
+        const ok = await walletSession.unlockWallet({ pin, address: enteredAddress });
 
         if (!ok) {
-            console.warn('[UnlockWallet] PIN decrypt failed - wrong PIN');
             return alert('Unlock failed - wrong PIN or wallet not found');
         }
 
-        console.info('[UnlockWallet] Success:', activeAddress.substring(0, 10) + '...');
+        const activeAddress = walletSession.persistActiveUserAddress(enteredAddress);
         walletSession.setBound(true);
         document.getElementById('walletWidgetUnlockPin').value = '';
         showWalletContentSection();
         updateHeaderWalletUi();
         loadWalletBalances(true);
-        // Dispatch events to notify other pages of wallet unlock
         window.dispatchEvent(new CustomEvent('thronos:wallet:v1:unlocked', { detail: { address: activeAddress } }));
         window.dispatchEvent(new Event('thronos:wallet:state-changed'));
         alert('Wallet unlocked successfully!');

@@ -988,6 +988,17 @@ class EarnAccountStore:
                     )
         return {"earn_user_id": uid, "email": email, "email_verified": False}
 
+    def user_by_email(self, email: str) -> dict[str, Any] | None:
+        """Return the public account identity for an exact normalized email."""
+        email = _validate_email(email)
+        with self._tx() as con:
+            row = con.execute(
+                """SELECT earn_user_id, email, email_verified, cpx_ext_user_id
+                   FROM earn_accounts WHERE email = ?""",
+                (email,),
+            ).fetchone()
+            return dict(row) if row else None
+
     # ── Rate limiting ────────────────────────────────────────────────────
 
     def _check_rate_limit(self, con: sqlite3.Connection, email: str) -> None:

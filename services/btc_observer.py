@@ -139,6 +139,10 @@ class BtcObserverStore:
                     block_hash TEXT NOT NULL,
                     observed_at INTEGER NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS btc_observer_meta (
+                    key TEXT PRIMARY KEY,
+                    value INTEGER NOT NULL
+                );
                 """
             )
 
@@ -178,6 +182,28 @@ class BtcObserverStore:
                 "SELECT * FROM btc_observer_deposits WHERE txid=? ORDER BY vout", (txid,)
             ).fetchall()
         return [self._row(row) for row in rows]
+
+    def all_events(self) -> list[ObservedDeposit]:
+        with self._connect() as con:
+            rows = con.execute(
+                "SELECT * FROM btc_observer_deposits ORDER BY first_seen_at, event_id"
+            ).fetchall()
+        return [self._row(row) for row in rows]
+
+    def next_sequence(self) -> int:
+        """Atomically allocate a monotonic node-agent sequence number."""
+        with self._connect() as con:
+            row = con.execute(
+                "SELECT value FROM btc_observer_meta WHERE key='node_agent_sequence'"
+            ).fetchone()
+            current = int(row["value"]) if row else 0
+            next_value = current + 1
+            con.execute(
+                """INSERT INTO btc_observer_meta(key, value) VALUES('node_agent_sequence', ?)
+                   ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
+                (next_value,),
+            )
+        return next_value
 
     def upsert(
         self, *, txid: str, vout: int, address: str, owner_ref: str,
@@ -339,28 +365,42 @@ class BtcObserver:
             raise BtcObserverError("invalid_btc_block_height")
         return height
 
-    def observe_transaction(self, txid: str) -> list[ObservedDeposit]:
-        txid = _hash256(txid, "invalid_btc_txid")
-        raw = self.rpc.call("getrawtransaction", [txid, True])
+    def observe_decoded_transaction(
+        self,
+        raw: Mapping[str, Any],
+        *,
+        confirmations: int = 0,
+        block_hash: str | None = None,
+        block_height: int | None = None,
+    ) -> list[ObservedDeposit]:
+        """Observe a decoded transaction supplied by local ZMQ/block scanning.
+
+        This path is intentionally independent of txindex and is therefore
+        compatible with pruned Bitcoin Core nodes.
+        """
         if not isinstance(raw, Mapping):
             raise BtcObserverError("btc_rpc_transaction_unavailable")
-        if _hash256(raw.get("txid"), "invalid_btc_txid") != txid:
-            raise BtcObserverError("btc_rpc_txid_mismatch")
-
-        raw_conf = raw.get("confirmations", 0)
-        if isinstance(raw_conf, bool):
+        txid = _hash256(raw.get("txid"), "invalid_btc_txid")
+        if isinstance(confirmations, bool):
             raise BtcObserverError("invalid_btc_confirmations")
         try:
-            confirmations = max(0, int(raw_conf or 0))
+            confirmations = max(0, int(confirmations))
         except (TypeError, ValueError) as exc:
             raise BtcObserverError("invalid_btc_confirmations") from exc
 
-        block_hash = str(raw.get("blockhash") or "").strip() or None
         if block_hash:
             block_hash = _hash256(block_hash, "invalid_btc_block_hash")
-        block_height = self._block_height(block_hash)
-        observed_at = int(self.now_fn())
+        if block_height is not None:
+            if isinstance(block_height, bool):
+                raise BtcObserverError("invalid_btc_block_height")
+            try:
+                block_height = int(block_height)
+            except (TypeError, ValueError) as exc:
+                raise BtcObserverError("invalid_btc_block_height") from exc
+            if block_height < 0:
+                raise BtcObserverError("invalid_btc_block_height")
 
+        observed_at = int(self.now_fn())
         outputs = raw.get("vout")
         if not isinstance(outputs, list):
             raise BtcObserverError("invalid_btc_transaction_outputs")
@@ -397,6 +437,121 @@ class BtcObserver:
                 )
             )
         return observed
+
+    def observe_transaction(self, txid: str) -> list[ObservedDeposit]:
+        """Legacy/read-only RPC lookup path for nodes with tx lookup available."""
+        txid = _hash256(txid, "invalid_btc_txid")
+        raw = self.rpc.call("getrawtransaction", [txid, True])
+        if not isinstance(raw, Mapping):
+            raise BtcObserverError("btc_rpc_transaction_unavailable")
+        if _hash256(raw.get("txid"), "invalid_btc_txid") != txid:
+            raise BtcObserverError("btc_rpc_txid_mismatch")
+
+        raw_conf = raw.get("confirmations", 0)
+        if isinstance(raw_conf, bool):
+            raise BtcObserverError("invalid_btc_confirmations")
+        try:
+            confirmations = max(0, int(raw_conf or 0))
+        except (TypeError, ValueError) as exc:
+            raise BtcObserverError("invalid_btc_confirmations") from exc
+
+        block_hash = str(raw.get("blockhash") or "").strip() or None
+        if block_hash:
+            block_hash = _hash256(block_hash, "invalid_btc_block_hash")
+        block_height = self._block_height(block_hash)
+        return self.observe_decoded_transaction(
+            raw,
+            confirmations=confirmations,
+            block_hash=block_hash,
+            block_height=block_height,
+        )
+
+    def observe_block(self, block: Mapping[str, Any]) -> list[ObservedDeposit]:
+        """Scan a freshly announced decoded block (getblock verbosity=2)."""
+        if not isinstance(block, Mapping):
+            raise BtcObserverError("invalid_btc_block")
+        block_hash = _hash256(block.get("hash"), "invalid_btc_block_hash")
+        raw_height = block.get("height")
+        if isinstance(raw_height, bool):
+            raise BtcObserverError("invalid_btc_block_height")
+        try:
+            height = int(raw_height)
+        except (TypeError, ValueError) as exc:
+            raise BtcObserverError("invalid_btc_block_height") from exc
+        if height < 0:
+            raise BtcObserverError("invalid_btc_block_height")
+        txs = block.get("tx")
+        if not isinstance(txs, list):
+            raise BtcObserverError("invalid_btc_block_transactions")
+
+        observed: list[ObservedDeposit] = []
+        for tx in txs:
+            if not isinstance(tx, Mapping):
+                raise BtcObserverError("invalid_btc_block_transaction")
+            observed.extend(
+                self.observe_decoded_transaction(
+                    tx,
+                    confirmations=1,
+                    block_hash=block_hash,
+                    block_height=height,
+                )
+            )
+        return observed
+
+    def reconcile_tip(self) -> list[ObservedDeposit]:
+        """Recompute confirmations and detect reorgs using block-index RPC only."""
+        raw_height = self.rpc.call("getblockcount", [])
+        if isinstance(raw_height, bool):
+            raise BtcObserverError("invalid_btc_block_height")
+        try:
+            tip_height = int(raw_height)
+        except (TypeError, ValueError) as exc:
+            raise BtcObserverError("invalid_btc_block_height") from exc
+        if tip_height < 0:
+            raise BtcObserverError("invalid_btc_block_height")
+
+        reconciled: list[ObservedDeposit] = []
+        observed_at = int(self.now_fn())
+        for event in self.store.all_events():
+            if event.block_height is None or not event.block_hash:
+                continue
+            canonical_hash = _hash256(
+                self.rpc.call("getblockhash", [event.block_height]),
+                "invalid_btc_block_hash",
+            )
+            if canonical_hash != event.block_hash:
+                reconciled.append(
+                    self.store.upsert(
+                        txid=event.txid,
+                        vout=event.vout,
+                        address=event.address,
+                        owner_ref=event.owner_ref,
+                        amount_sats=event.amount_sats,
+                        confirmations=0,
+                        block_hash=None,
+                        block_height=None,
+                        minimum_confirmations=self.minimum_confirmations,
+                        observed_at=observed_at,
+                    )
+                )
+                continue
+
+            confirmations = max(1, tip_height - event.block_height + 1)
+            reconciled.append(
+                self.store.upsert(
+                    txid=event.txid,
+                    vout=event.vout,
+                    address=event.address,
+                    owner_ref=event.owner_ref,
+                    amount_sats=event.amount_sats,
+                    confirmations=confirmations,
+                    block_hash=event.block_hash,
+                    block_height=event.block_height,
+                    minimum_confirmations=self.minimum_confirmations,
+                    observed_at=observed_at,
+                )
+            )
+        return reconciled
 
     def checkpoint_tip(self) -> dict[str, Any]:
         raw_height = self.rpc.call("getblockcount", [])

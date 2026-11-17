@@ -232,6 +232,24 @@ class BtcObserverStore:
             )
         return next_value
 
+
+    def set_meta_int(self, key: str, value: int) -> None:
+        key = _text(key, "invalid_btc_observer_meta_key", 100)
+        with self._connect() as con:
+            con.execute(
+                """INSERT INTO btc_observer_meta(key, value) VALUES(?, ?)
+                   ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
+                (key, int(value)),
+            )
+
+    def get_meta_int(self, key: str, default: int = 0) -> int:
+        key = _text(key, "invalid_btc_observer_meta_key", 100)
+        with self._connect() as con:
+            row = con.execute(
+                "SELECT value FROM btc_observer_meta WHERE key=?", (key,)
+            ).fetchone()
+        return int(row["value"]) if row else int(default)
+
     def upsert(
         self, *, txid: str, vout: int, address: str, owner_ref: str,
         amount_sats: int, confirmations: int, block_hash: str | None,

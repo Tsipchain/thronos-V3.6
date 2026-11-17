@@ -260,3 +260,52 @@ def test_meta_reconciliation_flags_are_durable(store):
     reopened = BtcObserverStore(store.db_path)
     assert reopened.get_meta_int("observer_reconciliation_required") == 1
     assert reopened.get_meta_int("missing_flag") == 0
+
+
+
+def test_global_reconciliation_flag_blocks_credit(store):
+    rpc = FakeRpc()
+    rpc.tx["confirmations"] = 3
+    rpc.tx["blockhash"] = BLOCK_A
+    obs = observer(store, rpc)
+    event = obs.observe_transaction(TXID)[0]
+    store.set_meta_int("observer_reconciliation_required", 1)
+    with pytest.raises(BtcObserverError, match="global_reconciliation_required"):
+        store.mark_credited(event.event_id)
+
+
+def test_missing_vout_number_fails_before_any_matching_output_is_persisted(store):
+    rpc = FakeRpc()
+    obs = observer(store, rpc)
+    decoded = {
+        "txid": TXID,
+        "vout": [
+            {"n": 0, "value": "0.00100000", "scriptPubKey": {"address": WATCH}},
+            {"value": "0.00000001", "scriptPubKey": {"address": WATCH}},
+        ],
+    }
+    with pytest.raises(BtcObserverError, match="invalid_btc_vout"):
+        obs.observe_decoded_transaction(decoded)
+    assert store.by_txid(TXID) == []
+
+
+def test_non_integer_vout_and_confirmations_fail_closed(store):
+    rpc = FakeRpc()
+    obs = observer(store, rpc)
+    decoded = {
+        "txid": TXID,
+        "vout": [
+            {"n": 0.0, "value": "0.00100000", "scriptPubKey": {"address": WATCH}},
+        ],
+    }
+    with pytest.raises(BtcObserverError, match="invalid_btc_vout"):
+        obs.observe_decoded_transaction(decoded)
+
+    valid = {
+        "txid": TXID,
+        "vout": [
+            {"n": 0, "value": "0.00100000", "scriptPubKey": {"address": WATCH}},
+        ],
+    }
+    with pytest.raises(BtcObserverError, match="invalid_btc_confirmations"):
+        obs.observe_decoded_transaction(valid, confirmations=1.0)

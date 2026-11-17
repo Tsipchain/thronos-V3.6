@@ -16,7 +16,9 @@ Never by txid alone and never by an inferred sender address. A single Bitcoin tr
 
 ## State machine
 
-`seen -> confirming -> confirmed -> credited\n\nAn unconfirmed transaction removed from the mempool for a non-block reason is marked `dropped`. If the same `txid:vout` reappears, the idempotent observer may return it to `seen`.`
+`seen -> confirming -> confirmed -> credited`
+
+An unconfirmed transaction removed from the mempool for a non-block reason is marked `dropped`. If the same `txid:vout` reappears, the idempotent observer may return it to `seen`.
 
 A loss of finality or block-hash change after finality moves the event to:
 
@@ -97,7 +99,7 @@ BTC_ZMQ_HASHBLOCK=tcp://127.0.0.1:28332
 BTC_ZMQ_RAWTX=tcp://127.0.0.1:28333
 BTC_ZMQ_SEQUENCE=tcp://127.0.0.1:28334
 
-BTC_ADAPTER_URL=https://btc-api.thronoschain.org
+BTC_ADAPTER_URL=https://thronos-btc-api-adapter-production.up.railway.app
 BTC_ADAPTER_NODE_AGENT_TOKEN=<secret; never commit>
 BTC_OBSERVER_DB=./data/btc_observer.db
 BTC_WATCH_REGISTRY=./data/btc_watch_registry.json
@@ -138,3 +140,41 @@ On live startup, recent blocks between the durable checkpoint and current tip ar
 A watched transaction that entered the mempool entirely while the agent was offline and remains unconfirmed when the agent restarts is not yet guaranteed to be discovered by startup recovery. For the first controlled mainnet observation test, start the live agent before broadcasting the BTC transaction and keep automatic Bridge/Earn credit disabled.
 
 A later production-hardening phase should add either a bounded startup mempool snapshot scan or a dedicated Bitcoin Core descriptor/watch-only wallet reconciliation path.
+
+## Confirmed-deposit outbox contract
+
+Confirmed detection and balance credit are deliberately separated.
+
+The local observer now uses a durable SQLite outbox keyed by:
+
+`main:txid:vout`
+
+Before an event can enter the outbox it must:
+- be in `confirmed` state;
+- meet `BTC_MIN_CONFIRMATIONS` (default 6);
+- have a canonical block hash and height;
+- have no event-level reconciliation requirement;
+- have no global `observer_reconciliation_required` or `zmq_gap_detected` flag.
+
+The observer database is bound to the Bitcoin network identity from block 0. Reusing the same SQLite database with another network/genesis fails closed. Every configured watched address is also checked by the local mainnet Bitcoin Core using read-only `validateaddress`.
+
+Outbox delivery is disabled by default:
+
+```text
+BTC_DEPOSIT_DELIVERY_ENABLED=0
+```
+
+When explicitly enabled, the local agent POSTs authenticated confirmed-deposit observations to the adapter's `/api/node-agent/deposits` endpoint. Delivery is retried from the durable outbox. The adapter must acknowledge the same `main:txid:vout` idempotency key.
+
+An adapter acknowledgement means only **durable receipt**. It must report `credit_applied=false`. No Bridge/Earn balance mutation is part of this observer/outbox lane.
+
+The adapter deposit endpoint must remain disabled/fail-closed until its SQLite database path is backed by persistent storage. A transient container filesystem is not sufficient for production idempotency.
+
+### Liveness
+
+The node agent sends an independent adapter heartbeat every `BTC_ADAPTER_HEARTBEAT_SECONDS` (default 30 seconds), even when no Bitcoin block arrives. Heartbeats do not advance the observer block checkpoint.
+
+### Current production boundary
+
+Even after outbox acknowledgement is proven, automatic Bridge/Earn credit remains OFF until the downstream accounting ledger implements the same idempotency key and a reviewed compensation policy for a previously acknowledged deposit that later loses Bitcoin finality.
+

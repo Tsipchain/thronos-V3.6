@@ -5,7 +5,9 @@ on:
     paths:
       - "services/btc_observer.py"
       - "services/btc_node_agent.py"
+      - "services/btc_deposit_outbox.py"
       - "tests/test_btc_observer.py"
+      - "tests/test_btc_deposit_outbox.py"
       - "tests/test_btc_node_agent.py"
       - "docs/BTC_OBSERVER_V1.md"
       - "requirements.txt"
@@ -14,7 +16,9 @@ on:
     paths:
       - "services/btc_observer.py"
       - "services/btc_node_agent.py"
+      - "services/btc_deposit_outbox.py"
       - "tests/test_btc_observer.py"
+      - "tests/test_btc_deposit_outbox.py"
       - "tests/test_btc_node_agent.py"
       - "docs/BTC_OBSERVER_V1.md"
       - "requirements.txt"
@@ -33,6 +37,7 @@ jobs:
       - name: Compile BTC observer and local node agent
         run: |
           python -m py_compile services/btc_observer.py
+          python -m py_compile services/btc_deposit_outbox.py
           python -m py_compile services/btc_node_agent.py
       - name: Run focused BTC observer tests
-        run: python -m pytest -q tests/test_btc_observer.py tests/test_btc_node_agent.py
+        run: python -m pytest -q tests/test_btc_observer.py tests/test_btc_deposit_outbox.py tests/test_btc_node_agent.py

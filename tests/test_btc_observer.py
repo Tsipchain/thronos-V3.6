@@ -40,6 +40,11 @@ class FakeRpc:
         }
         self.tip_height = 900010
         self.tip_hash = TIP
+        self.hash_by_height = {
+            900000: BLOCK_A,
+            900001: BLOCK_B,
+            self.tip_height: self.tip_hash,
+        }
 
     def call(self, method, params):
         if method == "getrawtransaction":
@@ -49,8 +54,7 @@ class FakeRpc:
         if method == "getblockcount":
             return self.tip_height
         if method == "getblockhash":
-            assert params == [self.tip_height]
-            return self.tip_hash
+            return self.hash_by_height[params[0]]
         raise AssertionError((method, params))
 
 
@@ -150,3 +154,63 @@ def test_invalid_sub_satoshi_amount_fails_closed(store):
     rpc.tx["vout"][0]["value"] = "0.000000001"
     with pytest.raises(BtcObserverError, match="below_satoshi_precision"):
         observer(store, rpc).observe_transaction(TXID)
+
+
+def test_decoded_transaction_path_does_not_require_txindex(store):
+    rpc = FakeRpc()
+    obs = observer(store, rpc)
+    decoded = dict(rpc.tx)
+    decoded.pop("confirmations", None)
+    rows = obs.observe_decoded_transaction(decoded)
+    assert [row.event_id for row in rows] == [f"{TXID}:0", f"{TXID}:1"]
+    assert all(row.state == SEEN for row in rows)
+
+
+def test_observe_block_promotes_seen_output_without_getrawtransaction(store):
+    rpc = FakeRpc()
+    obs = observer(store, rpc)
+    decoded = dict(rpc.tx)
+    decoded.pop("confirmations", None)
+    obs.observe_decoded_transaction(decoded)
+
+    block = {
+        "hash": BLOCK_A,
+        "height": 900000,
+        "tx": [decoded],
+    }
+    rows = obs.observe_block(block)
+    assert rows[0].state == CONFIRMING
+    assert rows[0].block_hash == BLOCK_A
+    assert rows[0].block_height == 900000
+
+
+def test_reconcile_tip_uses_block_index_and_advances_confirmations(store):
+    rpc = FakeRpc()
+    obs = observer(store, rpc)
+    decoded = dict(rpc.tx)
+    decoded.pop("confirmations", None)
+    obs.observe_block({"hash": BLOCK_A, "height": 900000, "tx": [decoded]})
+    rows = obs.reconcile_tip()
+    target = next(row for row in rows if row.event_id == f"{TXID}:0")
+    assert target.state == CONFIRMED
+    assert target.confirmations == 11
+
+
+def test_reconcile_tip_detects_reorg_without_txindex(store):
+    rpc = FakeRpc()
+    obs = observer(store, rpc)
+    decoded = dict(rpc.tx)
+    decoded.pop("confirmations", None)
+    obs.observe_block({"hash": BLOCK_A, "height": 900000, "tx": [decoded]})
+    rpc.hash_by_height[900000] = BLOCK_B
+    rows = obs.reconcile_tip()
+    target = next(row for row in rows if row.event_id == f"{TXID}:0")
+    assert target.state == REORGED
+    assert target.requires_reconciliation is True
+
+
+def test_node_agent_sequence_is_durable(store):
+    assert store.next_sequence() == 1
+    assert store.next_sequence() == 2
+    reopened = BtcObserverStore(store.db_path)
+    assert reopened.next_sequence() == 3

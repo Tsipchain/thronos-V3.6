@@ -22,6 +22,11 @@ from ecdsa.errors import MalformedPointError
 from ecdsa.keys import BadSignatureError
 from ecdsa.util import sigdecode_der, sigencode_der
 
+from wallet_v1_address_derivation import (
+    derive_thronos_address,
+    validate_thronos_address,
+)
+
 
 PROTOCOL = "thronos-survival-envelope"
 VERSION = 1
@@ -29,7 +34,6 @@ DOMAIN = b"THRONOS/SURVIVAL/M0\x00"
 _HEX64 = re.compile(r"^[0-9a-fA-F]{64}$")
 _ETH = re.compile(r"^0x[0-9a-fA-F]{40}$")
 _BTC = re.compile(r"^(bc1|tb1|bcrt1|[13mn2])[A-Za-z0-9]{10,90}$")
-_THR = re.compile(r"^THR[A-Za-z0-9._:-]{5,127}$")
 
 
 class EnvelopeError(ValueError):
@@ -97,12 +101,30 @@ def _require_int(value: Any, field: str, *, minimum: int = 0) -> int:
 
 def _address_ok(asset_id: str, address: str) -> bool:
     if asset_id == "THR":
-        return bool(_THR.fullmatch(address))
+        return validate_thronos_address(address)
     if asset_id == "BTC":
         return bool(_BTC.fullmatch(address))
     if asset_id == "ETH":
         return bool(_ETH.fullmatch(address))
     return bool(address) and len(address) <= 128
+
+
+def _verify_sender_binding(asset_id: str, sender: str, public_key: str) -> None:
+    """Bind an envelope signer to the canonical sender identity.
+
+    M0 currently shares a canonical public-key derivation only with Wallet V1
+    for THR. Other asset identifiers remain in the envelope schema, but their
+    signatures fail closed until an asset-specific canonical derivation is
+    defined and reviewed.
+    """
+    if asset_id != "THR":
+        raise EnvelopeError(f"sender identity binding unsupported for {asset_id}")
+    try:
+        derived = derive_thronos_address(public_key)
+    except ValueError as exc:
+        raise EnvelopeError("invalid signing public key") from exc
+    if derived != sender:
+        raise EnvelopeError("signing public key does not match sender")
 
 
 def verify_checkpoint(
@@ -191,7 +213,11 @@ class Envelope:
         _require_int(self.expires_at, "expires_at")
         if self.expires_at <= self.issued_at:
             raise EnvelopeError("expires_at must be after issued_at")
-        if len(self.public_key) != 66 or not re.fullmatch(r"[0-9a-fA-F]{66}", self.public_key):
+        if (
+            len(self.public_key) != 66
+            or not self.public_key.startswith(("02", "03"))
+            or not re.fullmatch(r"[0-9a-fA-F]{66}", self.public_key)
+        ):
             raise EnvelopeError("public_key must be a compressed secp256k1 key")
         if not self.signature or not re.fullmatch(r"[0-9a-fA-F]+", self.signature):
             raise EnvelopeError("signature must be hex")
@@ -231,6 +257,7 @@ class Envelope:
         return _canonical_json(self.as_dict()).decode("utf-8")
 
     def verify_signature(self, now: int | None = None) -> None:
+        _verify_sender_binding(self.asset_id, self.sender, self.public_key)
         try:
             key = VerifyingKey.from_string(bytes.fromhex(self.public_key), curve=SECP256k1)
             signature = bytes.fromhex(self.signature)
@@ -307,6 +334,7 @@ def sign_envelope(
         public_key=key.verifying_key.to_string(encoding="compressed").hex(),
         signature="00",
     )
+    _verify_sender_binding(asset_id, sender, unsigned.public_key)
     signature = key.sign_digest_deterministic(
         hashlib.sha256(unsigned.canonical_bytes()).digest(),
         hashfunc=hashlib.sha256,

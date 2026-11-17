@@ -1,7 +1,10 @@
+import hashlib
 import json
 from pathlib import Path
 
 import pytest
+from ecdsa import SECP256k1, SigningKey
+from ecdsa.util import sigencode_der
 
 from survival_protocol_v1 import (
     Checkpoint,
@@ -12,15 +15,19 @@ from survival_protocol_v1 import (
     sign_envelope,
     verify_checkpoint,
 )
+from wallet_v1_address_derivation import derive_thronos_address
 
 
 PRIVATE_KEY = "01" * 32
+UNRELATED_PRIVATE_KEY = "02" * 32
+PUBLIC_KEY = "031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f"
+SENDER = derive_thronos_address(PUBLIC_KEY)
 CHECKPOINT = Checkpoint(630001, "ab" * 32)
 FIXTURE = {
     "chain_id": "thronos-testnet-1",
     "asset_id": "THR",
-    "sender": "THRsenderA1",
-    "recipient": "THRrecipientB2",
+    "sender": SENDER,
+    "recipient": "THR" + "A" * 40,
     "amount_units": 125000,
     "fee_units": 100,
     "nonce": 7,
@@ -36,14 +43,59 @@ def make_envelope(**overrides):
     return sign_envelope(private_key_hex=PRIVATE_KEY, **values)
 
 
+def forge_sender_claim(sender: str, private_key_hex: str) -> Envelope:
+    """Build a cryptographically valid signature with a false sender claim."""
+    key = SigningKey.from_string(bytes.fromhex(private_key_hex), curve=SECP256k1)
+    public_key = key.verifying_key.to_string(encoding="compressed").hex()
+    unsigned = Envelope(
+        **{**FIXTURE, "sender": sender},
+        public_key=public_key,
+        signature="00",
+    )
+    signature = key.sign_digest_deterministic(
+        hashlib.sha256(unsigned.canonical_bytes()).digest(),
+        hashfunc=hashlib.sha256,
+        sigencode=sigencode_der,
+    ).hex()
+    return Envelope(**{**unsigned.as_dict(), "signature": signature})
+
+
 def test_golden_fixture_is_stable_and_verifies():
     envelope = make_envelope()
-    assert envelope.public_key == "031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f"
+    assert envelope.public_key == PUBLIC_KEY
     fixture = (Path(__file__).parent / "fixtures" / "survival_m0_golden.json").read_text().strip()
     assert envelope.to_json() == fixture
     assert envelope.to_json() == json.dumps(json.loads(envelope.to_json()), sort_keys=True, separators=(",", ":"))
     envelope.verify_signature(now=1730000001)
     assert "private" not in envelope.to_json().lower()
+
+
+def test_valid_sender_is_canonical_and_bound_to_public_key():
+    envelope = make_envelope()
+    assert envelope.sender == derive_thronos_address(envelope.public_key)
+    assert envelope.sender == envelope.sender.upper()
+    envelope.verify_signature(now=1730000001)
+
+
+def test_forged_sender_with_valid_attacker_signature_is_rejected():
+    victim = "THR" + "B" * 40
+    forged = forge_sender_claim(victim, UNRELATED_PRIVATE_KEY)
+    with pytest.raises(EnvelopeError, match="public key does not match sender"):
+        forged.verify_signature(now=1730000001)
+    with pytest.raises(EnvelopeError, match="public key does not match sender"):
+        make_envelope(sender=victim)
+
+
+def test_unrelated_public_key_is_rejected_before_signature_acceptance():
+    data = json.loads(make_envelope().to_json())
+    unrelated = SigningKey.from_string(
+        bytes.fromhex(UNRELATED_PRIVATE_KEY), curve=SECP256k1
+    )
+    data["public_key"] = unrelated.verifying_key.to_string(
+        encoding="compressed"
+    ).hex()
+    with pytest.raises(EnvelopeError, match="public key does not match sender"):
+        Envelope.from_json(json.dumps(data)).verify_signature(now=1730000001)
 
 
 def test_binary_domain_separation_changes_signature_digest():
@@ -117,6 +169,35 @@ def test_tampering_signature_and_unknown_fields_are_rejected():
     data["unexpected"] = True
     with pytest.raises(EnvelopeError, match="unexpected"):
         Envelope.from_json(json.dumps(data))
+
+
+@pytest.mark.parametrize("sender", [
+    SENDER.lower(),
+    "THR" + "A" * 39,
+    "THR" + "G" * 40,
+])
+def test_noncanonical_thr_sender_is_rejected(sender):
+    with pytest.raises(EnvelopeError, match="sender"):
+        make_envelope(sender=sender)
+
+
+@pytest.mark.parametrize("asset_id,sender,recipient", [
+    (
+        "BTC",
+        "bc1qvalidsender12345",
+        "bc1qvalidrecipient12345",
+    ),
+    (
+        "ETH",
+        "0x0000000000000000000000000000000000000001",
+        "0x0000000000000000000000000000000000000002",
+    ),
+])
+def test_assets_without_canonical_key_derivation_fail_closed(
+    asset_id, sender, recipient,
+):
+    with pytest.raises(EnvelopeError, match="identity binding unsupported"):
+        make_envelope(asset_id=asset_id, sender=sender, recipient=recipient)
 
 
 def test_fixture_has_no_server_or_transport_dependency():

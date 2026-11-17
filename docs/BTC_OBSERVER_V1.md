@@ -16,7 +16,7 @@ Never by txid alone and never by an inferred sender address. A single Bitcoin tr
 
 ## State machine
 
-`seen -> confirming -> confirmed -> credited`
+`seen -> confirming -> confirmed -> credited\n\nAn unconfirmed transaction removed from the mempool for a non-block reason is marked `dropped`. If the same `txid:vout` reappears, the idempotent observer may return it to `seen`.`
 
 A loss of finality or block-hash change after finality moves the event to:
 
@@ -112,3 +112,29 @@ python -m services.btc_node_agent --once
 ```
 
 Do not run the live agent against production adapter ingest until the adapter PR containing the authenticated node-agent endpoints is merged, deployed, and its token is configured on both sides.
+
+## Pre-deposit hardening checkpoint
+
+Before any real BTC test, run:
+
+```powershell
+python -m services.btc_node_agent --probe-zmq 10
+```
+
+The probe verifies Bitcoin Core reports pubhashblock, pubrawtx, and pubsequence, connects only to loopback ZMQ endpoints, and performs no signing, broadcast, crediting, or wallet mutation.
+
+The live agent now tracks Bitcoin Core's per-topic ZMQ message sequence. A detected gap persists `zmq_gap_detected=1` and `observer_reconciliation_required=1`.
+
+Sequence handling:
+- A: recover/observe a mempool transaction using read-only getrawtransaction.
+- R: mark unconfirmed watched outputs as dropped.
+- C: block-connect processing remains driven by hashblock.
+- D: mark reconciliation required and re-check canonical block hashes.
+
+On live startup, recent blocks between the durable checkpoint and current tip are replayed with getblock verbosity 2. Replay is bounded by `BTC_BACKFILL_MAX_BLOCKS` (default 144) and fails closed on checkpoint reorg or an excessive gap.
+
+### Remaining limitation before automatic production credit
+
+A watched transaction that entered the mempool entirely while the agent was offline and remains unconfirmed when the agent restarts is not yet guaranteed to be discovered by startup recovery. For the first controlled mainnet observation test, start the live agent before broadcasting the BTC transaction and keep automatic Bridge/Earn credit disabled.
+
+A later production-hardening phase should add either a bounded startup mempool snapshot scan or a dedicated Bitcoin Core descriptor/watch-only wallet reconciliation path.

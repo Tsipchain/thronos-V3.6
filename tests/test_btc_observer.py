@@ -11,6 +11,7 @@ from services.btc_observer import (
     CONFIRMED,
     CONFIRMING,
     CREDITED,
+    DROPPED,
     REORGED,
     SEEN,
 )
@@ -214,3 +215,48 @@ def test_node_agent_sequence_is_durable(store):
     assert store.next_sequence() == 2
     reopened = BtcObserverStore(store.db_path)
     assert reopened.next_sequence() == 3
+
+
+def test_mempool_removal_marks_unconfirmed_event_dropped(store):
+    rpc = FakeRpc()
+    obs = observer(store, rpc)
+    event = obs.observe_transaction(TXID)[0]
+    assert event.state == SEEN
+
+    rows = store.mark_mempool_removed(TXID, observed_at=1500)
+    target = next(row for row in rows if row.event_id == f"{TXID}:0")
+    assert target.state == DROPPED
+    assert target.block_hash is None
+
+
+def test_dropped_event_can_reappear_idempotently(store):
+    rpc = FakeRpc()
+    obs = observer(store, rpc)
+    obs.observe_transaction(TXID)
+    store.mark_mempool_removed(TXID, observed_at=1500)
+
+    rows = obs.observe_transaction(TXID)
+    target = next(row for row in rows if row.event_id == f"{TXID}:0")
+    assert target.state == SEEN
+    assert len(store.by_txid(TXID)) == 2
+
+
+def test_mempool_removal_never_downgrades_confirmed_event(store):
+    rpc = FakeRpc()
+    rpc.tx["confirmations"] = 3
+    rpc.tx["blockhash"] = BLOCK_A
+    obs = observer(store, rpc)
+    confirmed = obs.observe_transaction(TXID)[0]
+    assert confirmed.state == CONFIRMED
+
+    rows = store.mark_mempool_removed(TXID, observed_at=1500)
+    target = next(row for row in rows if row.event_id == f"{TXID}:0")
+    assert target.state == CONFIRMED
+    assert target.block_hash == BLOCK_A
+
+
+def test_meta_reconciliation_flags_are_durable(store):
+    store.set_meta_int("observer_reconciliation_required", 1)
+    reopened = BtcObserverStore(store.db_path)
+    assert reopened.get_meta_int("observer_reconciliation_required") == 1
+    assert reopened.get_meta_int("missing_flag") == 0

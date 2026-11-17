@@ -25,6 +25,18 @@ class FakeRpc:
                 {"n": 0, "value": "0.00100000", "scriptPubKey": {"address": WATCH}},
             ],
         }
+        self.blocks = {
+            self.height: {
+                "hash": self.block_hash,
+                "height": self.height,
+                "tx": [dict(self.decoded)],
+            }
+        }
+        self.zmq_notifications = [
+            {"type": "pubhashblock", "address": "tcp://127.0.0.1:28332"},
+            {"type": "pubrawtx", "address": "tcp://127.0.0.1:28333"},
+            {"type": "pubsequence", "address": "tcp://127.0.0.1:28334"},
+        ]
 
     def call(self, method, params):
         if method == "getblockchaininfo":
@@ -38,15 +50,26 @@ class FakeRpc:
         if method == "getblockcount":
             return self.height
         if method == "getblockhash":
-            return self.block_hash
+            height = params[0]
+            if height == self.height:
+                return self.block_hash
+            return f"{height:064x}"[-64:]
         if method == "decoderawtransaction":
             return dict(self.decoded)
+        if method == "getrawtransaction":
+            return dict(self.decoded)
         if method == "getblock":
+            block_hash = params[0]
+            if block_hash == self.block_hash:
+                return dict(self.blocks[self.height])
+            height = int(block_hash, 16)
             return {
-                "hash": self.block_hash,
-                "height": self.height,
-                "tx": [dict(self.decoded)],
+                "hash": block_hash,
+                "height": height,
+                "tx": [],
             }
+        if method == "getzmqnotifications":
+            return list(self.zmq_notifications)
         raise AssertionError((method, params))
 
 
@@ -124,3 +147,59 @@ def test_remote_rpc_url_is_rejected():
 def test_public_adapter_requires_https():
     with pytest.raises(NodeAgentError, match="https"):
         _https_adapter_url("http://btc-api.thronoschain.org")
+
+
+def test_sequence_remove_marks_seen_event_dropped(agent):
+    instance, _rpc, _adapter = agent
+    instance.handle_rawtx(b"\x01")
+    body = bytes.fromhex(TXID) + b"R" + (77).to_bytes(8, "little")
+    event = instance.handle_sequence(body)
+    assert event["label"] == "R"
+    row = instance.store.by_txid(TXID)[0]
+    assert row.state == "dropped"
+
+
+def test_sequence_add_recovers_watched_mempool_tx(agent):
+    instance, _rpc, _adapter = agent
+    body = bytes.fromhex(TXID) + b"A" + (78).to_bytes(8, "little")
+    event = instance.handle_sequence(body)
+    assert event["label"] == "A"
+    assert event["changed"] == 1
+    row = instance.store.by_txid(TXID)[0]
+    assert row.state == "seen"
+
+
+def test_zmq_message_sequence_gap_is_detected(agent):
+    instance, _rpc, _adapter = agent
+    assert instance._check_zmq_message_sequence(b"rawtx", (10).to_bytes(4, "little")) is False
+    assert instance._check_zmq_message_sequence(b"rawtx", (11).to_bytes(4, "little")) is False
+    assert instance._check_zmq_message_sequence(b"rawtx", (13).to_bytes(4, "little")) is True
+
+
+def test_recover_from_checkpoint_backfills_missed_blocks(agent):
+    instance, rpc, _adapter = agent
+    old_height = rpc.height - 2
+    old_hash = f"{old_height:064x}"[-64:]
+    instance.store.save_checkpoint(old_height, old_hash, observed_at=1)
+
+    blocks, matches = instance.recover_from_checkpoint()
+    assert blocks == 2
+    assert matches == 1
+
+
+def test_recover_from_checkpoint_fails_closed_on_large_gap(agent, monkeypatch):
+    instance, rpc, _adapter = agent
+    old_height = rpc.height - 3
+    old_hash = f"{old_height:064x}"[-64:]
+    instance.store.save_checkpoint(old_height, old_hash, observed_at=1)
+    monkeypatch.setenv("BTC_BACKFILL_MAX_BLOCKS", "2")
+
+    with pytest.raises(NodeAgentError, match="gap_exceeds_backfill_limit"):
+        instance.recover_from_checkpoint()
+    assert instance.store.get_meta_int("observer_reconciliation_required") == 1
+
+
+def test_sequence_rejects_invalid_body(agent):
+    instance, _rpc, _adapter = agent
+    with pytest.raises(NodeAgentError, match="invalid_zmq_sequence_body"):
+        instance.handle_sequence(b"bad")

@@ -19,7 +19,8 @@ CONFIRMING = "confirming"
 CONFIRMED = "confirmed"
 CREDITED = "credited"
 REORGED = "reorged"
-VALID_STATES = frozenset({SEEN, CONFIRMING, CONFIRMED, CREDITED, REORGED})
+DROPPED = "dropped"
+VALID_STATES = frozenset({SEEN, CONFIRMING, CONFIRMED, CREDITED, REORGED, DROPPED})
 
 
 class BtcObserverError(RuntimeError):
@@ -190,6 +191,32 @@ class BtcObserverStore:
             ).fetchall()
         return [self._row(row) for row in rows]
 
+
+    def mark_mempool_removed(
+        self, txid: str, *, observed_at: int | None = None
+    ) -> list[ObservedDeposit]:
+        """Mark unconfirmed watched outputs as dropped after a ZMQ R event.
+
+        Confirmed/credited rows are never changed by a mempool removal signal.
+        A later reappearance of the same txid:vout can move DROPPED back to SEEN
+        through the normal idempotent upsert path.
+        """
+        txid = _hash256(txid, "invalid_btc_txid")
+        now = int(time.time()) if observed_at is None else int(observed_at)
+        with self._connect() as con:
+            con.execute(
+                """UPDATE btc_observer_deposits
+                   SET state=?, last_seen_at=?
+                   WHERE txid=? AND block_hash IS NULL
+                     AND state IN (?, ?)""",
+                (DROPPED, now, txid, SEEN, DROPPED),
+            )
+            rows = con.execute(
+                "SELECT * FROM btc_observer_deposits WHERE txid=? ORDER BY vout",
+                (txid,),
+            ).fetchall()
+        return [self._row(row) for row in rows]
+
     def next_sequence(self) -> int:
         """Atomically allocate a monotonic node-agent sequence number."""
         with self._connect() as con:
@@ -204,6 +231,24 @@ class BtcObserverStore:
                 (next_value,),
             )
         return next_value
+
+
+    def set_meta_int(self, key: str, value: int) -> None:
+        key = _text(key, "invalid_btc_observer_meta_key", 100)
+        with self._connect() as con:
+            con.execute(
+                """INSERT INTO btc_observer_meta(key, value) VALUES(?, ?)
+                   ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
+                (key, int(value)),
+            )
+
+    def get_meta_int(self, key: str, default: int = 0) -> int:
+        key = _text(key, "invalid_btc_observer_meta_key", 100)
+        with self._connect() as con:
+            row = con.execute(
+                "SELECT value FROM btc_observer_meta WHERE key=?", (key,)
+            ).fetchone()
+        return int(row["value"]) if row else int(default)
 
     def upsert(
         self, *, txid: str, vout: int, address: str, owner_ref: str,
@@ -243,6 +288,8 @@ class BtcObserverStore:
                     next_state = REORGED
                 elif str(old["state"]) == CREDITED:
                     next_state = CREDITED
+                elif str(old["state"]) == DROPPED and confirmations <= 0:
+                    next_state = SEEN
 
                 con.execute(
                     """UPDATE btc_observer_deposits

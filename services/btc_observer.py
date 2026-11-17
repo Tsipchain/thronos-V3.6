@@ -64,6 +64,14 @@ def _text(value: object, error: str, limit: int) -> str:
     return result
 
 
+def _strict_int(value: object, error: str, *, minimum: int = 0) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise BtcObserverError(error)
+    if value < minimum:
+        raise BtcObserverError(error)
+    return value
+
+
 def _btc_to_sats(value: object) -> int:
     try:
         amount = Decimal(str(value))
@@ -326,6 +334,12 @@ class BtcObserverStore:
     def mark_credited(self, event_id: str, *, credited_at: int | None = None) -> ObservedDeposit:
         now = int(time.time()) if credited_at is None else int(credited_at)
         with self._connect() as con:
+            global_flags = con.execute(
+                """SELECT key, value FROM btc_observer_meta
+                   WHERE key IN ('observer_reconciliation_required','zmq_gap_detected')"""
+            ).fetchall()
+            if any(int(flag["value"]) != 0 for flag in global_flags):
+                raise BtcObserverError("btc_observer_global_reconciliation_required")
             row = con.execute(
                 "SELECT * FROM btc_observer_deposits WHERE event_id=?", (event_id,)
             ).fetchone()
@@ -402,15 +416,7 @@ class BtcObserver:
         if not isinstance(header, Mapping):
             raise BtcObserverError("invalid_btc_block_header")
         raw_height = header.get("height")
-        if isinstance(raw_height, bool):
-            raise BtcObserverError("invalid_btc_block_height")
-        try:
-            height = int(raw_height)
-        except (TypeError, ValueError) as exc:
-            raise BtcObserverError("invalid_btc_block_height") from exc
-        if height < 0:
-            raise BtcObserverError("invalid_btc_block_height")
-        return height
+        return _strict_int(raw_height, "invalid_btc_block_height")
 
     def observe_decoded_transaction(
         self,
@@ -420,62 +426,48 @@ class BtcObserver:
         block_hash: str | None = None,
         block_height: int | None = None,
     ) -> list[ObservedDeposit]:
-        """Observe a decoded transaction supplied by local ZMQ/block scanning.
-
-        This path is intentionally independent of txindex and is therefore
-        compatible with pruned Bitcoin Core nodes.
-        """
+        """Validate the full transaction before persisting watched outputs."""
         if not isinstance(raw, Mapping):
             raise BtcObserverError("btc_rpc_transaction_unavailable")
         txid = _hash256(raw.get("txid"), "invalid_btc_txid")
-        if isinstance(confirmations, bool):
-            raise BtcObserverError("invalid_btc_confirmations")
-        try:
-            confirmations = max(0, int(confirmations))
-        except (TypeError, ValueError) as exc:
-            raise BtcObserverError("invalid_btc_confirmations") from exc
+        confirmations = _strict_int(confirmations, "invalid_btc_confirmations")
 
         if block_hash:
             block_hash = _hash256(block_hash, "invalid_btc_block_hash")
         if block_height is not None:
-            if isinstance(block_height, bool):
-                raise BtcObserverError("invalid_btc_block_height")
-            try:
-                block_height = int(block_height)
-            except (TypeError, ValueError) as exc:
-                raise BtcObserverError("invalid_btc_block_height") from exc
-            if block_height < 0:
-                raise BtcObserverError("invalid_btc_block_height")
+            block_height = _strict_int(block_height, "invalid_btc_block_height")
 
-        observed_at = int(self.now_fn())
         outputs = raw.get("vout")
         if not isinstance(outputs, list):
             raise BtcObserverError("invalid_btc_transaction_outputs")
 
-        observed: list[ObservedDeposit] = []
-        for fallback_n, output in enumerate(outputs):
+        # Pre-validate every output first so a malformed later output can never
+        # leave earlier watched outputs partially committed.
+        prepared: list[tuple[int, str, str, int]] = []
+        for output in outputs:
             if not isinstance(output, Mapping):
                 raise BtcObserverError("invalid_btc_transaction_output")
+            if "n" not in output:
+                raise BtcObserverError("invalid_btc_vout")
+            vout = _strict_int(output.get("n"), "invalid_btc_vout")
             address = _script_address(output)
             if not address or address not in self.watched_addresses:
                 continue
-            raw_n = output.get("n", fallback_n)
-            if isinstance(raw_n, bool):
-                raise BtcObserverError("invalid_btc_vout")
-            try:
-                vout = int(raw_n)
-            except (TypeError, ValueError) as exc:
-                raise BtcObserverError("invalid_btc_vout") from exc
-            if vout < 0:
-                raise BtcObserverError("invalid_btc_vout")
+            amount_sats = _btc_to_sats(output.get("value"))
+            prepared.append(
+                (vout, address, self.watched_addresses[address], amount_sats)
+            )
 
+        observed_at = int(self.now_fn())
+        observed: list[ObservedDeposit] = []
+        for vout, address, owner_ref, amount_sats in prepared:
             observed.append(
                 self.store.upsert(
                     txid=txid,
                     vout=vout,
                     address=address,
-                    owner_ref=self.watched_addresses[address],
-                    amount_sats=_btc_to_sats(output.get("value")),
+                    owner_ref=owner_ref,
+                    amount_sats=amount_sats,
                     confirmations=confirmations,
                     block_hash=block_hash,
                     block_height=block_height,
@@ -495,12 +487,7 @@ class BtcObserver:
             raise BtcObserverError("btc_rpc_txid_mismatch")
 
         raw_conf = raw.get("confirmations", 0)
-        if isinstance(raw_conf, bool):
-            raise BtcObserverError("invalid_btc_confirmations")
-        try:
-            confirmations = max(0, int(raw_conf or 0))
-        except (TypeError, ValueError) as exc:
-            raise BtcObserverError("invalid_btc_confirmations") from exc
+        confirmations = _strict_int(raw_conf, "invalid_btc_confirmations")
 
         block_hash = str(raw.get("blockhash") or "").strip() or None
         if block_hash:
@@ -519,14 +506,7 @@ class BtcObserver:
             raise BtcObserverError("invalid_btc_block")
         block_hash = _hash256(block.get("hash"), "invalid_btc_block_hash")
         raw_height = block.get("height")
-        if isinstance(raw_height, bool):
-            raise BtcObserverError("invalid_btc_block_height")
-        try:
-            height = int(raw_height)
-        except (TypeError, ValueError) as exc:
-            raise BtcObserverError("invalid_btc_block_height") from exc
-        if height < 0:
-            raise BtcObserverError("invalid_btc_block_height")
+        height = _strict_int(raw_height, "invalid_btc_block_height")
         txs = block.get("tx")
         if not isinstance(txs, list):
             raise BtcObserverError("invalid_btc_block_transactions")
@@ -548,14 +528,7 @@ class BtcObserver:
     def reconcile_tip(self) -> list[ObservedDeposit]:
         """Recompute confirmations and detect reorgs using block-index RPC only."""
         raw_height = self.rpc.call("getblockcount", [])
-        if isinstance(raw_height, bool):
-            raise BtcObserverError("invalid_btc_block_height")
-        try:
-            tip_height = int(raw_height)
-        except (TypeError, ValueError) as exc:
-            raise BtcObserverError("invalid_btc_block_height") from exc
-        if tip_height < 0:
-            raise BtcObserverError("invalid_btc_block_height")
+        tip_height = _strict_int(raw_height, "invalid_btc_block_height")
 
         reconciled: list[ObservedDeposit] = []
         observed_at = int(self.now_fn())
@@ -602,14 +575,7 @@ class BtcObserver:
 
     def checkpoint_tip(self) -> dict[str, Any]:
         raw_height = self.rpc.call("getblockcount", [])
-        if isinstance(raw_height, bool):
-            raise BtcObserverError("invalid_btc_block_height")
-        try:
-            height = int(raw_height)
-        except (TypeError, ValueError) as exc:
-            raise BtcObserverError("invalid_btc_block_height") from exc
-        if height < 0:
-            raise BtcObserverError("invalid_btc_block_height")
+        height = _strict_int(raw_height, "invalid_btc_block_height")
         block_hash = _hash256(
             self.rpc.call("getblockhash", [height]), "invalid_btc_block_hash"
         )

@@ -1430,6 +1430,13 @@ SESSIONS_DIR = AI_SESSIONS_DIR
 # BTC_PLEDGE_VAULT: Address where all BTC pledges land
 BTC_PLEDGE_VAULT = os.getenv("BTC_PLEDGE_VAULT", "1QFeDPwEF8yEgPEfP79hpc8pHytXMz9oEQ")
 
+# The legacy pledge watcher relies on public explorer evidence, txid-only
+# identity, and a direct balance-credit endpoint.  Keep that path disabled by
+# default until deposits are migrated to the canonical main:txid:vout pipeline.
+BTC_LEGACY_PLEDGE_CREDIT_ENABLED = _strip_env_quotes(
+    os.getenv("BTC_LEGACY_PLEDGE_CREDIT_ENABLED", "0")
+).lower() in ("1", "true", "yes")
+
 # BTC_HOT_WALLET: Hot wallet used as source for BTC withdrawals in bridge-out flows
 BTC_HOT_WALLET = os.getenv("BTC_HOT_WALLET", "1QFeDPwEF8yEgPEfP79hpc8pHytXMz9oEQ")
 
@@ -33953,14 +33960,18 @@ if NODE_ROLE == "master" and SCHEDULER_ENABLED and ENABLE_CHAIN:
                      coalesce=True, max_instances=1)
     print("[SCHEDULER] Daily pool volume reset scheduled (midnight UTC)")
 
-    # BTC Pledge Watcher – polls blockstream.info for vault deposits
-    try:
-        from btc_pledge_watcher import watch_btc_pledges
-        scheduler.add_job(_with_app_context(watch_btc_pledges), "interval", minutes=5,
-                         coalesce=True, max_instances=1, id="btc_pledge_watcher")
-        print("[SCHEDULER] BTC pledge watcher scheduled (every 5 min)")
-    except ImportError as e:
-        print(f"[SCHEDULER] BTC pledge watcher unavailable: {e}")
+    # BTC Pledge Watcher – legacy public-explorer/txid-only path.  It must not
+    # run merely because the general scheduler is enabled.
+    if BTC_LEGACY_PLEDGE_CREDIT_ENABLED:
+        try:
+            from btc_pledge_watcher import watch_btc_pledges
+            scheduler.add_job(_with_app_context(watch_btc_pledges), "interval", minutes=5,
+                             coalesce=True, max_instances=1, id="btc_pledge_watcher")
+            print("[SCHEDULER] Legacy BTC pledge watcher scheduled (every 5 min)")
+        except ImportError as e:
+            print(f"[SCHEDULER] Legacy BTC pledge watcher unavailable: {e}")
+    else:
+        print("[SCHEDULER] Legacy BTC pledge watcher disabled")
 
     # BNB/USDT Pledge Watcher – polls BSC for USDT vault deposits via eth_getLogs
     # Interval configurable via BNB_WATCHER_INTERVAL_MINUTES (default 30).
@@ -34232,6 +34243,13 @@ def api_btc_pledge():
 
     if secret != ADMIN_SECRET:
         return jsonify(ok=False, error="Unauthorized"), 403
+
+    # Authentication alone is not settlement authorization.  This endpoint
+    # predates canonical output identity and independently verified Bitcoin
+    # confirmations, so it remains fail-closed unless an operator explicitly
+    # opts into the legacy flow during migration.
+    if not BTC_LEGACY_PLEDGE_CREDIT_ENABLED:
+        return jsonify(ok=False, error="Legacy BTC pledge credit disabled"), 503
 
     # Validate required fields
     thr_address = data.get("thr_address")

@@ -18,11 +18,13 @@ class BtcPledgeWatcherRetryTests(unittest.TestCase):
             "UNRESOLVED_TXS_FILE": getattr(watcher, "UNRESOLVED_TXS_FILE", None),
             "USER_REGISTRY_FILE": watcher.USER_REGISTRY_FILE,
             "PLEDGE_CHAIN_FILE": watcher.PLEDGE_CHAIN_FILE,
+            "BTC_LEGACY_PLEDGE_CREDIT_ENABLED": watcher.BTC_LEGACY_PLEDGE_CREDIT_ENABLED,
         }
         watcher.PROCESSED_TXS_FILE = os.path.join(self.data_dir, "btc_pledge_processed.json")
         watcher.UNRESOLVED_TXS_FILE = os.path.join(self.data_dir, "btc_pledge_unresolved.json")
         watcher.USER_REGISTRY_FILE = os.path.join(self.data_dir, "btc_user_registry.json")
         watcher.PLEDGE_CHAIN_FILE = os.path.join(self.data_dir, "pledge_chain.json")
+        watcher.BTC_LEGACY_PLEDGE_CREDIT_ENABLED = True
         self.tx = {
             "txid": "btc-tx-001",
             "address": "bc1qsource",
@@ -39,6 +41,7 @@ class BtcPledgeWatcherRetryTests(unittest.TestCase):
         watcher.UNRESOLVED_TXS_FILE = self.paths["UNRESOLVED_TXS_FILE"] or os.path.join(self.data_dir, "btc_pledge_unresolved.json")
         watcher.USER_REGISTRY_FILE = self.paths["USER_REGISTRY_FILE"]
         watcher.PLEDGE_CHAIN_FILE = self.paths["PLEDGE_CHAIN_FILE"]
+        watcher.BTC_LEGACY_PLEDGE_CREDIT_ENABLED = self.paths["BTC_LEGACY_PLEDGE_CREDIT_ENABLED"]
         shutil.rmtree(self.data_dir, ignore_errors=True)
 
     def _run_cycle(self, txs, resolver, create):
@@ -65,6 +68,17 @@ class BtcPledgeWatcherRetryTests(unittest.TestCase):
         self.assertEqual(len(unresolved), 1)
         self.assertEqual(unresolved[0]["last_reason"], "user_unresolved")
         self.assertEqual(unresolved[0]["transaction"]["txid"], self.tx["txid"])
+
+    def test_default_off_gate_prevents_observation_and_credit(self):
+        watcher.BTC_LEGACY_PLEDGE_CREDIT_ENABLED = False
+        observe = unittest.mock.Mock(return_value=[self.tx])
+        credit = unittest.mock.Mock(return_value=True)
+        with patch.object(watcher, "sync_pledge_chain_from_fallback"):
+            with patch.object(watcher, "get_vault_transactions", observe):
+                with patch.object(watcher, "create_pledge_transaction", credit):
+                    watcher.watch_btc_pledges()
+        observe.assert_not_called()
+        credit.assert_not_called()
 
     def test_unresolved_deposit_retries_after_it_leaves_recent_api_results(self):
         self._run_cycle([self.tx], lambda _tx: None, lambda *_: True)

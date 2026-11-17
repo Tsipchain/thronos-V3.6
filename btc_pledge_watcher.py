@@ -43,6 +43,9 @@ THR_BTC_RATE = float(os.getenv("THR_BTC_RATE", "33333.33"))
 MASTER_NODE_URL = os.getenv("MASTER_NODE_URL", "http://localhost:5000")
 ADMIN_SECRET = os.getenv("ADMIN_SECRET", "CHANGE_ME_NOW")
 DATA_DIR = os.getenv("DATA_DIR", "./data")
+BTC_LEGACY_PLEDGE_CREDIT_ENABLED = os.getenv(
+    "BTC_LEGACY_PLEDGE_CREDIT_ENABLED", "0"
+).strip().lower() in ("1", "true", "yes")
 
 # Thronos BTC API adapter (primary) – falls back to blockstream.info if unavailable
 BTC_API_URL = os.getenv("BTC_API_URL", "https://btc-api.thronoschain.org")
@@ -597,6 +600,10 @@ def watch_btc_pledges():
     Unknown users and temporary master/API failures remain in a durable retry
     queue even after they leave the explorer/adapter's recent transaction list.
     """
+    if not BTC_LEGACY_PLEDGE_CREDIT_ENABLED:
+        logger.warning("Legacy BTC pledge watcher disabled; no observations or credits attempted")
+        return
+
     logger.info("Starting BTC pledge watcher...")
     logger.info(f"Watching vault: {BTC_PLEDGE_VAULT}")
     logger.info(f"THR/BTC rate: {THR_BTC_RATE}")

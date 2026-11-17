@@ -35,21 +35,24 @@ A loss of finality or block-hash change after finality moves the event to:
 - Identity conflicts fail closed.
 - Durable SQLite event store and chain-tip checkpoint.
 
-## Node requirements for later live integration
+## Node requirements for live integration
 
-Recommended local Bitcoin Core configuration after wallet backup:
+The canonical local path is designed to work with a **synced pruned Bitcoin Core node**. A global txindex is not required for Observer v1.1 because live transactions arrive through ZMQ and confirmed transactions are reconciled from freshly announced blocks using `getblock(..., 2)`.
+
+Recommended local Bitcoin Core configuration:
 
 ```ini
 server=1
-prune=0
-txindex=1
 rpcbind=127.0.0.1
+rpcallowip=127.0.0.1
 zmqpubhashblock=tcp://127.0.0.1:28332
 zmqpubrawtx=tcp://127.0.0.1:28333
 zmqpubsequence=tcp://127.0.0.1:28334
 ```
 
-RPC port 8332 must not be exposed to the public Internet.
+Pruning may remain enabled. `txindex=1` is intentionally **not required** for this phase.
+
+RPC port 8332 must never be exposed to the public Internet. The local node agent accepts only loopback Bitcoin RPC/ZMQ and pushes outbound authenticated HTTPS state to the Thronos BTC adapter.
 
 ## Existing code migration notes
 
@@ -65,3 +68,47 @@ RPC port 8332 must not be exposed to the public Internet.
 4. Registration table for real Bridge/Earn deposit intents and watched addresses.
 5. Adapter from `confirmed` events into a separate idempotent credit workflow.
 6. No withdrawals/signing until the observer is proven with real mainnet deposit confirmations and reorg/replay tests.
+
+
+## Local node-agent flow
+
+```text
+Bitcoin Core (mainnet, synced, pruning allowed)
+  -> localhost RPC + ZMQ
+  -> services/btc_node_agent.py
+       -> durable SQLite observer/checkpoint/sequence
+       -> watched output detection
+       -> confirmation + reorg reconciliation
+       -> outbound authenticated HTTPS only
+  -> btc-api.thronoschain.org
+```
+
+The node agent uses a read-only RPC whitelist. It has no signing, wallet-unlock, private-key, transaction-creation, or broadcast method.
+
+### Local environment
+
+```text
+BITCOIN_RPC_URL=http://127.0.0.1:8332
+BITCOIN_RPC_COOKIE_FILE=<optional explicit .cookie path>
+BITCOIN_RPC_USER=<optional; use with password>
+BITCOIN_RPC_PASSWORD=<optional; use with user>
+
+BTC_ZMQ_HASHBLOCK=tcp://127.0.0.1:28332
+BTC_ZMQ_RAWTX=tcp://127.0.0.1:28333
+BTC_ZMQ_SEQUENCE=tcp://127.0.0.1:28334
+
+BTC_ADAPTER_URL=https://btc-api.thronoschain.org
+BTC_ADAPTER_NODE_AGENT_TOKEN=<secret; never commit>
+BTC_OBSERVER_DB=./data/btc_observer.db
+BTC_WATCH_REGISTRY=./data/btc_watch_registry.json
+```
+
+If no watch registry is configured, the agent can still perform node preflight and publish authoritative tip state; deposit discovery remains disabled until explicit watched-address intents exist.
+
+A one-shot preflight can be run with:
+
+```bash
+python -m services.btc_node_agent --once
+```
+
+Do not run the live agent against production adapter ingest until the adapter PR containing the authenticated node-agent endpoints is merged, deployed, and its token is configured on both sides.

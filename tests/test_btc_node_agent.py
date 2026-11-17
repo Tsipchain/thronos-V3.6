@@ -12,6 +12,7 @@ from services.btc_node_agent import (
 
 TXID = "11" * 32
 BLOCK = "aa" * 32
+GENESIS = "00" * 31 + "01"
 WATCH = "bc1qwatchaddress000000000000000000000000000"
 
 
@@ -51,6 +52,8 @@ class FakeRpc:
             return self.height
         if method == "getblockhash":
             height = params[0]
+            if height == 0:
+                return GENESIS
             if height == self.height:
                 return self.block_hash
             return f"{height:064x}"[-64:]
@@ -70,15 +73,22 @@ class FakeRpc:
             }
         if method == "getzmqnotifications":
             return list(self.zmq_notifications)
+        if method == "validateaddress":
+            return {"isvalid": params[0] == WATCH}
         raise AssertionError((method, params))
 
 
 class FakeAdapter:
     def __init__(self):
         self.pushes = []
+        self.deposits = []
 
     def push_tip(self, *, height, block_hash, sequence):
         self.pushes.append((height, block_hash, sequence))
+
+    def push_deposit(self, payload):
+        self.deposits.append(dict(payload))
+        return "accepted"
 
 
 @pytest.fixture()
@@ -100,10 +110,12 @@ def test_preflight_accepts_synced_pruned_mainnet(agent):
     instance, _rpc, _adapter = agent
     assert instance.preflight() == {
         "chain": "main",
+        "genesis_hash": GENESIS,
         "blocks": 976278,
         "pruned": True,
         "synced": True,
     }
+    assert instance.outbox is not None
 
 
 def test_publish_tip_uses_durable_monotonic_sequence(agent):
@@ -203,3 +215,54 @@ def test_sequence_rejects_invalid_body(agent):
     instance, _rpc, _adapter = agent
     with pytest.raises(NodeAgentError, match="invalid_zmq_sequence_body"):
         instance.handle_sequence(b"bad")
+
+
+
+def test_preflight_rejects_wrong_network_watch_address():
+    with tempfile.TemporaryDirectory() as td:
+        rpc = FakeRpc()
+        instance = LocalBitcoinNodeAgent(
+            db_path=str(Path(td) / "observer.db"),
+            watch_registry={"tb1qwrongnetwork000000000000000000000000000": "intent"},
+            rpc=rpc,
+            adapter=FakeAdapter(),
+        )
+        with pytest.raises(NodeAgentError, match="wrong_network_watch_address"):
+            instance.preflight()
+
+
+def test_heartbeat_does_not_advance_observer_checkpoint(agent):
+    instance, rpc, _adapter = agent
+    instance.preflight()
+    old_height = rpc.height - 1
+    old_hash = f"{old_height:064x}"[-64:]
+    instance.store.save_checkpoint(old_height, old_hash, observed_at=1)
+
+    height, block_hash, sequence = instance.publish_heartbeat()
+    assert (height, block_hash, sequence) == (rpc.height, BLOCK, 1)
+    checkpoint = instance.store.checkpoint()
+    assert checkpoint["block_height"] == old_height
+    assert checkpoint["block_hash"] == old_hash
+
+
+def test_confirmed_outbox_delivery_acks_without_balance_credit(agent):
+    instance, _rpc, adapter = agent
+    instance.preflight()
+    instance.delivery_enabled = True
+    instance.store.upsert(
+        txid=TXID,
+        vout=0,
+        address=WATCH,
+        owner_ref="bridge-intent-1",
+        amount_sats=100000,
+        confirmations=3,
+        block_hash=BLOCK,
+        block_height=976278,
+        minimum_confirmations=3,
+        observed_at=1,
+    )
+    assert instance.enqueue_confirmed_deposits() == 1
+    assert instance.deliver_outbox(limit=1) == 1
+    assert len(adapter.deposits) == 1
+    assert adapter.deposits[0]["idempotency_key"] == f"main:{TXID}:0"
+    assert instance.outbox.counts() == {"acknowledged": 1}

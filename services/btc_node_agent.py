@@ -15,6 +15,7 @@ import logging
 import os
 from pathlib import Path
 import socket
+import struct
 import time
 from typing import Any
 from urllib.parse import urlparse
@@ -34,6 +35,8 @@ RPC_METHODS = frozenset(
         "getbestblockhash",
         "decoderawtransaction",
         "getmempoolentry",
+        "getrawtransaction",
+        "getzmqnotifications",
     }
 )
 
@@ -217,6 +220,7 @@ class LocalBitcoinNodeAgent:
             if watch_registry
             else None
         )
+        self._zmq_sequences: dict[bytes, int] = {}
 
     def preflight(self) -> dict[str, Any]:
         info = self.rpc.call("getblockchaininfo", [])
@@ -250,6 +254,169 @@ class LocalBitcoinNodeAgent:
         sequence = self.store.next_sequence()
         self.adapter.push_tip(height=height, block_hash=block_hash, sequence=sequence)
         return height, block_hash, sequence
+
+
+    def recover_from_checkpoint(self) -> tuple[int, int]:
+        """Backfill blocks missed while the local agent was offline.
+
+        Only a bounded recent gap is replayed. A checkpoint reorg or excessive
+        gap fails closed instead of guessing across a pruned boundary.
+        """
+        if self.observer is None:
+            return (0, 0)
+
+        checkpoint = self.store.checkpoint()
+        if not checkpoint:
+            return (0, 0)
+
+        current_height, _current_hash = self.current_tip()
+        previous_height = int(checkpoint["block_height"])
+        previous_hash = str(checkpoint["block_hash"]).lower()
+        max_blocks = max(1, int(os.getenv("BTC_BACKFILL_MAX_BLOCKS", "144")))
+
+        if previous_height > current_height:
+            self.store.set_meta_int("observer_reconciliation_required", 1)
+            raise NodeAgentError("btc_checkpoint_ahead_of_chain")
+
+        canonical_previous = str(
+            self.rpc.call("getblockhash", [previous_height])
+        ).lower()
+        if canonical_previous != previous_hash:
+            self.store.set_meta_int("observer_reconciliation_required", 1)
+            self.observer.reconcile_tip()
+            raise NodeAgentError("btc_checkpoint_reorg_requires_manual_reconciliation")
+
+        gap = current_height - previous_height
+        if gap > max_blocks:
+            self.store.set_meta_int("observer_reconciliation_required", 1)
+            raise NodeAgentError("btc_checkpoint_gap_exceeds_backfill_limit")
+
+        blocks_scanned = 0
+        matched_outputs = 0
+        for height in range(previous_height + 1, current_height + 1):
+            block_hash = str(self.rpc.call("getblockhash", [height])).lower()
+            block = self.rpc.call("getblock", [block_hash, 2])
+            if not isinstance(block, dict):
+                raise NodeAgentError("getblock_failed")
+            matched_outputs += len(self.observer.observe_block(block))
+            blocks_scanned += 1
+
+        self.observer.reconcile_tip()
+        return blocks_scanned, matched_outputs
+
+    def _check_zmq_message_sequence(self, topic: bytes, raw_seq: bytes) -> bool:
+        """Return True when Bitcoin Core's per-topic ZMQ sequence has a gap."""
+        if len(raw_seq) != 4:
+            raise NodeAgentError("invalid_zmq_message_sequence")
+        current = struct.unpack("<I", raw_seq)[0]
+        previous = self._zmq_sequences.get(topic)
+        self._zmq_sequences[topic] = current
+        if previous is None:
+            return False
+        return current != ((previous + 1) & 0xFFFFFFFF)
+
+    def handle_sequence(self, body: bytes) -> dict[str, Any]:
+        """Handle Bitcoin Core sequence A/R/C/D notifications.
+
+        A/R include a mempool sequence number; C/D are block connect/disconnect.
+        """
+        if len(body) not in (33, 41):
+            raise NodeAgentError("invalid_zmq_sequence_body")
+
+        object_hash = body[:32].hex()
+        label = chr(body[32])
+        mempool_sequence = (
+            struct.unpack("<Q", body[33:41])[0] if len(body) == 41 else None
+        )
+
+        if label in ("A", "R") and len(body) != 41:
+            raise NodeAgentError("invalid_zmq_mempool_sequence_body")
+        if label in ("C", "D") and len(body) != 33:
+            raise NodeAgentError("invalid_zmq_block_sequence_body")
+        if label not in ("A", "R", "C", "D"):
+            raise NodeAgentError("unsupported_zmq_sequence_label")
+
+        changed = 0
+        if self.observer is not None and label == "A":
+            # getrawtransaction without txindex is sufficient for mempool txs.
+            raw = self.rpc.call("getrawtransaction", [object_hash, True])
+            if isinstance(raw, dict):
+                changed = len(self.observer.observe_decoded_transaction(raw))
+        elif self.observer is not None and label == "R":
+            rows = self.store.mark_mempool_removed(
+                object_hash, observed_at=int(time.time())
+            )
+            changed = len([row for row in rows if row.block_hash is None])
+        elif self.observer is not None and label == "D":
+            self.store.set_meta_int("observer_reconciliation_required", 1)
+            self.observer.reconcile_tip()
+
+        return {
+            "label": label,
+            "hash": object_hash,
+            "mempool_sequence": mempool_sequence,
+            "changed": changed,
+        }
+
+    def probe_zmq(self, timeout_seconds: int = 10) -> dict[str, Any]:
+        """Verify local ZMQ configuration and observe traffic without BTC actions."""
+        try:
+            import zmq
+        except ImportError as exc:
+            raise NodeAgentError("pyzmq_not_installed") from exc
+
+        configured = self.rpc.call("getzmqnotifications", [])
+        if not isinstance(configured, list):
+            raise NodeAgentError("invalid_getzmqnotifications")
+
+        configured_types = {
+            str(item.get("type"))
+            for item in configured
+            if isinstance(item, dict) and item.get("type")
+        }
+        required = {"pubhashblock", "pubrawtx", "pubsequence"}
+        missing = sorted(required - configured_types)
+        if missing:
+            raise NodeAgentError("missing_required_zmq_notifications:" + ",".join(missing))
+
+        endpoints = {
+            "hashblock": os.getenv("BTC_ZMQ_HASHBLOCK", "tcp://127.0.0.1:28332"),
+            "rawtx": os.getenv("BTC_ZMQ_RAWTX", "tcp://127.0.0.1:28333"),
+            "sequence": os.getenv("BTC_ZMQ_SEQUENCE", "tcp://127.0.0.1:28334"),
+        }
+        context = zmq.Context.instance()
+        sock = context.socket(zmq.SUB)
+        try:
+            sock.setsockopt(zmq.RCVHWM, 10000)
+            for endpoint in endpoints.values():
+                parsed = urlparse(endpoint)
+                if parsed.scheme != "tcp" or parsed.hostname not in {
+                    "127.0.0.1", "::1", "localhost"
+                }:
+                    raise NodeAgentError("bitcoin_zmq_must_be_loopback")
+                sock.connect(endpoint)
+            for topic in (b"hashblock", b"rawtx", b"sequence"):
+                sock.setsockopt(zmq.SUBSCRIBE, topic)
+
+            poller = zmq.Poller()
+            poller.register(sock, zmq.POLLIN)
+            deadline = time.time() + max(1, int(timeout_seconds))
+            observed: set[str] = set()
+            while time.time() < deadline:
+                remaining_ms = max(1, int((deadline - time.time()) * 1000))
+                events = dict(poller.poll(min(remaining_ms, 1000)))
+                if sock not in events:
+                    continue
+                frames = sock.recv_multipart()
+                if len(frames) >= 2:
+                    observed.add(frames[0].decode("ascii", errors="replace"))
+            return {
+                "configured": sorted(configured_types),
+                "observed": sorted(observed),
+                "timeout_seconds": int(timeout_seconds),
+            }
+        finally:
+            sock.close(0)
 
     def handle_rawtx(self, raw_tx: bytes) -> int:
         if self.observer is None:
@@ -300,10 +467,15 @@ class LocalBitcoinNodeAgent:
         logger.info("BTC node agent listening on local Bitcoin Core ZMQ")
         while True:
             frames = sock.recv_multipart()
-            if len(frames) < 2:
+            if len(frames) < 3:
                 continue
-            topic, body = frames[0], frames[1]
+            topic, body, raw_seq = frames[0], frames[1], frames[2]
             try:
+                if self._check_zmq_message_sequence(topic, raw_seq):
+                    self.store.set_meta_int("zmq_gap_detected", 1)
+                    self.store.set_meta_int("observer_reconciliation_required", 1)
+                    logger.error("Detected lost Bitcoin Core ZMQ message(s) on topic=%s", topic.decode("ascii", errors="replace"))
+
                 if topic == b"rawtx":
                     count = self.handle_rawtx(body)
                     if count:
@@ -314,10 +486,12 @@ class LocalBitcoinNodeAgent:
                         "Reconciled Bitcoin block %d; watched outputs=%d", height, matched
                     )
                 elif topic == b"sequence":
-                    # Sequence notifications are intentionally not used to mutate
-                    # balances yet. They are reserved for explicit RBF/mempool
-                    # eviction handling in a later reviewed phase.
-                    continue
+                    event = self.handle_sequence(body)
+                    if event["label"] in ("R", "D") or event["changed"]:
+                        logger.info(
+                            "Bitcoin sequence event label=%s changed=%s",
+                            event["label"], event["changed"],
+                        )
             except (NodeAgentError, BtcObserverError) as exc:
                 logger.error("BTC node-agent event failed closed: %s", exc)
 
@@ -335,6 +509,13 @@ def main() -> int:
         default=os.getenv("BTC_WATCH_REGISTRY", ""),
         help="JSON mapping of watched BTC address -> owner/intention ref",
     )
+    parser.add_argument(
+        "--probe-zmq",
+        nargs="?",
+        const=10,
+        type=int,
+        help="verify configured local ZMQ and observe topics for N seconds (default 10)",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -344,13 +525,32 @@ def main() -> int:
     watch = load_watch_registry(args.watch_registry or None)
     agent = LocalBitcoinNodeAgent(db_path=args.db, watch_registry=watch)
     info = agent.preflight()
+
+    if args.probe_zmq is not None:
+        probe = agent.probe_zmq(args.probe_zmq)
+        logger.info(
+            "ZMQ probe configured=%s observed=%s timeout=%ss",
+            ",".join(probe["configured"]),
+            ",".join(probe["observed"]) or "none",
+            probe["timeout_seconds"],
+        )
+        return 0
+
+    if args.once:
+        height, _block_hash, sequence = agent.publish_tip()
+        logger.info(
+            "Bitcoin node ready: chain=%s height=%d pruned=%s sequence=%d watched=%d",
+            info["chain"], height, info["pruned"], sequence, len(watch),
+        )
+        return 0
+
+    blocks_scanned, recovered_matches = agent.recover_from_checkpoint()
     height, _block_hash, sequence = agent.publish_tip()
     logger.info(
-        "Bitcoin node ready: chain=%s height=%d pruned=%s sequence=%d watched=%d",
+        "Bitcoin node ready: chain=%s height=%d pruned=%s sequence=%d watched=%d backfill_blocks=%d backfill_matches=%d",
         info["chain"], height, info["pruned"], sequence, len(watch),
+        blocks_scanned, recovered_matches,
     )
-    if args.once:
-        return 0
     agent.run_zmq()
     return 0
 

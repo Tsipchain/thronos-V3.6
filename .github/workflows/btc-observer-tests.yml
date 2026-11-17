@@ -1,0 +1,30 @@
+name: BTC Observer Foundation Tests
+
+on:
+  pull_request:
+    paths:
+      - "services/btc_observer.py"
+      - "tests/test_btc_observer.py"
+      - "docs/BTC_OBSERVER_V1.md"
+      - ".github/workflows/btc-observer-tests.yml"
+  push:
+    paths:
+      - "services/btc_observer.py"
+      - "tests/test_btc_observer.py"
+      - "docs/BTC_OBSERVER_V1.md"
+      - ".github/workflows/btc-observer-tests.yml"
+
+jobs:
+  observer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install pytest
+        run: python -m pip install pytest
+      - name: Compile observer
+        run: python -m py_compile services/btc_observer.py
+      - name: Run focused observer tests
+        run: python -m pytest -q tests/test_btc_observer.py

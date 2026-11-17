@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from services.earn_account import EarnAccountStore, EarnError  # noqa: E402
 
 
-def _arguments() -> argparse.Namespace:
+def _arguments(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--earn-user-id", required=True)
     parser.add_argument(
@@ -25,14 +25,14 @@ def _arguments() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--site-url", default="https://basketball.thronoschain.org"
+        "--site-url", default="https://tranfermarktbasket.com"
     )
     parser.add_argument(
         "--secret-stdin",
         action="store_true",
         help="Read one secret line from stdin instead of a hidden prompt",
     )
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def main() -> int:

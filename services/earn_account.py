@@ -5270,7 +5270,7 @@ class EarnAccountStore:
         self,
         earn_user_id: str,
         publisher_secret: str,
-        site_url: str = "https://basketball.thronoschain.org",
+        site_url: str = "https://tranfermarktbasket.com",
     ) -> dict[str, Any]:
         """Idempotently provision the canonical Basketball publisher."""
         earn_user_id = str(earn_user_id or "").strip()

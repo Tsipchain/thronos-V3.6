@@ -12,6 +12,7 @@ from services.earn_account import (
     EarnError,
     register_earn_account_routes,
 )
+from scripts.bootstrap_basketball_publisher import _arguments
 
 
 @pytest.fixture()
@@ -168,13 +169,16 @@ def test_basketball_bootstrap_is_idempotent_and_preflight_is_secret_safe(
 
     with store._tx() as con:
         placements = con.execute(
-            """SELECT placement_type, status
+            """SELECT placement_type, status, site_url
                FROM earn_publisher_placements WHERE publisher_id = ?""",
             (first["publisher_id"],),
         ).fetchall()
     assert {(row["placement_type"], row["status"]) for row in placements} == {
         ("basketball_sidebar", "active"),
         ("basketball_header_interstitial", "active"),
+    }
+    assert {row["site_url"] for row in placements} == {
+        "https://tranfermarktbasket.com"
     }
 
     ready = store.publisher_delivery_preflight(first["publisher_id"], secret)
@@ -192,6 +196,11 @@ def test_basketball_bootstrap_is_idempotent_and_preflight_is_secret_safe(
         "sidebar_placement_active": False,
         "header_interstitial_placement_active": False,
     }
+
+
+def test_basketball_bootstrap_cli_defaults_to_production_site():
+    args = _arguments(["--earn-user-id", "earn_test"])
+    assert args.site_url == "https://tranfermarktbasket.com"
 
 
 def test_preflight_route_returns_flags_only(store, monkeypatch):

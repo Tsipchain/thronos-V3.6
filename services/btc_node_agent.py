@@ -65,6 +65,15 @@ def _default_cookie_file() -> Path | None:
     if explicit:
         return Path(explicit)
 
+    # Bitcoin Core 28+ defaults to LOCALAPPDATA on Windows, but it keeps
+    # using the legacy APPDATA/Roaming directory when that old directory
+    # already exists. Check both for compatibility with upgraded nodes.
+    roaming = os.getenv("APPDATA", "").strip()
+    if roaming:
+        candidate = Path(roaming) / "Bitcoin" / ".cookie"
+        if candidate.exists():
+            return candidate
+
     local = os.getenv("LOCALAPPDATA", "").strip()
     if local:
         candidate = Path(local) / "Bitcoin" / ".cookie"

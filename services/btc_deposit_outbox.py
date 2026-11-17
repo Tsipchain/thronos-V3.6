@@ -93,7 +93,10 @@ class BtcDepositOutbox:
     def _global_reconciliation_required(self, con: sqlite3.Connection) -> bool:
         rows = con.execute(
             """SELECT key, value FROM btc_observer_meta
-               WHERE key IN ('observer_reconciliation_required','zmq_gap_detected')"""
+               WHERE key IN (
+                 'observer_reconciliation_required','zmq_gap_detected',
+                 'observer_unverified_history'
+               )"""
         ).fetchall()
         return any(int(row["value"]) != 0 for row in rows)
 

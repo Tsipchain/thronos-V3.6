@@ -140,14 +140,20 @@ def test_identity_conflict_fails_closed(store):
 
 
 def test_checkpoint_is_durable(store):
-    rpc = FakeRpc()
-    checkpoint = observer(store, rpc).checkpoint_tip()
+    store.save_checkpoint(900010, TIP, observed_at=1000)
+    checkpoint = store.checkpoint()
     assert checkpoint == {
         "block_height": 900010,
         "block_hash": TIP,
         "observed_at": 1000,
     }
     assert store.checkpoint() == checkpoint
+
+
+def test_legacy_tip_checkpoint_fails_closed_without_moving_checkpoint(store):
+    with pytest.raises(BtcObserverError, match="without_scan_forbidden"):
+        observer(store, FakeRpc()).checkpoint_tip()
+    assert store.checkpoint() is None
 
 
 def test_invalid_sub_satoshi_amount_fails_closed(store):

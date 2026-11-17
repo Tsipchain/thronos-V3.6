@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+from decimal import Decimal
 import json
 import logging
 import os
@@ -22,6 +23,7 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from services.btc_observer import BtcObserver, BtcObserverError, BtcObserverStore
+from services.btc_deposit_outbox import BtcDepositOutbox, BtcDepositOutboxError
 
 logger = logging.getLogger("btc_node_agent")
 
@@ -37,6 +39,7 @@ RPC_METHODS = frozenset(
         "getmempoolentry",
         "getrawtransaction",
         "getzmqnotifications",
+        "validateaddress",
     }
 )
 
@@ -126,15 +129,16 @@ class BitcoinCoreRpc:
                 "Authorization": f"Basic {auth}",
             },
         )
+        max_response = 64 * 1024 * 1024 if method == "getblock" else 16 * 1024 * 1024
         try:
-            with urlopen(req, timeout=10) as response:
-                raw = response.read(16 * 1024 * 1024 + 1)
+            with urlopen(req, timeout=30 if method == "getblock" else 10) as response:
+                raw = response.read(max_response + 1)
         except Exception as exc:
             raise NodeAgentError("bitcoin_rpc_unreachable") from exc
-        if len(raw) > 16 * 1024 * 1024:
+        if len(raw) > max_response:
             raise NodeAgentError("bitcoin_rpc_response_too_large")
         try:
-            body = json.loads(raw)
+            body = json.loads(raw, parse_float=Decimal)
         except json.JSONDecodeError as exc:
             raise NodeAgentError("invalid_bitcoin_rpc_response") from exc
         if body.get("error"):
@@ -145,7 +149,10 @@ class BitcoinCoreRpc:
 class AdapterClient:
     def __init__(self) -> None:
         self.base_url = _https_adapter_url(
-            os.getenv("BTC_ADAPTER_URL", "https://btc-api.thronoschain.org")
+            os.getenv(
+                "BTC_ADAPTER_URL",
+                "https://thronos-btc-api-adapter-production.up.railway.app",
+            )
         )
         self.token = os.getenv("BTC_ADAPTER_NODE_AGENT_TOKEN", "").strip()
 
@@ -173,6 +180,43 @@ class AdapterClient:
             raise NodeAgentError("btc_adapter_push_failed") from exc
         if status < 200 or status >= 300 or len(raw) > 1024 * 1024:
             raise NodeAgentError("btc_adapter_rejected_tip")
+
+
+    def push_deposit(self, payload: dict[str, Any]) -> str:
+        if not self.token:
+            raise NodeAgentError("btc_adapter_node_agent_token_missing")
+        encoded = json.dumps(
+            payload, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        req = Request(
+            f"{self.base_url}/api/node-agent/deposits",
+            data=encoded,
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "X-Node-Agent-Token": self.token,
+            },
+        )
+        try:
+            with urlopen(req, timeout=10) as response:
+                raw = response.read(1024 * 1024 + 1)
+                status = getattr(response, "status", 200)
+        except Exception as exc:
+            raise NodeAgentError("btc_adapter_deposit_push_failed") from exc
+        if status < 200 or status >= 300 or len(raw) > 1024 * 1024:
+            raise NodeAgentError("btc_adapter_rejected_deposit")
+        try:
+            body = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise NodeAgentError("btc_adapter_invalid_deposit_ack") from exc
+        if not isinstance(body, dict) or body.get("accepted") is not True:
+            raise NodeAgentError("btc_adapter_invalid_deposit_ack")
+        if body.get("credit_applied") is not False:
+            raise NodeAgentError("btc_adapter_unexpected_credit_side_effect")
+        result = str(body.get("status") or "")
+        if result not in {"accepted", "duplicate"}:
+            raise NodeAgentError("btc_adapter_invalid_deposit_ack")
+        return result
 
 
 def load_watch_registry(path: str | None) -> dict[str, str]:
@@ -209,17 +253,28 @@ class LocalBitcoinNodeAgent:
     ) -> None:
         self.rpc = rpc or BitcoinCoreRpc()
         self.adapter = adapter or AdapterClient()
+        self.db_path = db_path
+        self.watch_registry = dict(watch_registry)
+        self.minimum_confirmations = int(minimum_confirmations)
+        if self.minimum_confirmations < 1:
+            raise NodeAgentError("invalid_btc_minimum_confirmations")
         self.store = BtcObserverStore(db_path)
         self.observer = (
             BtcObserver(
                 self.rpc,
                 self.store,
                 watch_registry,
-                minimum_confirmations=minimum_confirmations,
+                minimum_confirmations=self.minimum_confirmations,
             )
             if watch_registry
             else None
         )
+        self.outbox: BtcDepositOutbox | None = None
+        self.network = ""
+        self.genesis_hash = ""
+        self.delivery_enabled = os.getenv(
+            "BTC_DEPOSIT_DELIVERY_ENABLED", "0"
+        ).strip().lower() in {"1", "true", "yes", "on"}
         self._zmq_sequences: dict[bytes, int] = {}
 
     def preflight(self) -> dict[str, Any]:
@@ -230,19 +285,48 @@ class LocalBitcoinNodeAgent:
             raise NodeAgentError("bitcoin_node_not_mainnet")
         if bool(info.get("initialblockdownload")):
             raise NodeAgentError("bitcoin_node_still_syncing")
-        blocks = int(info.get("blocks", -1))
-        headers = int(info.get("headers", -2))
-        if blocks < 0 or headers < 0 or blocks != headers:
+
+        blocks = info.get("blocks")
+        headers = info.get("headers")
+        if (
+            isinstance(blocks, bool) or not isinstance(blocks, int)
+            or isinstance(headers, bool) or not isinstance(headers, int)
+            or blocks < 0 or headers < 0 or blocks != headers
+        ):
             raise NodeAgentError("bitcoin_node_tip_not_synced")
+
+        genesis_hash = str(self.rpc.call("getblockhash", [0]) or "").lower()
+        if len(genesis_hash) != 64 or any(
+            ch not in "0123456789abcdef" for ch in genesis_hash
+        ):
+            raise NodeAgentError("invalid_bitcoin_genesis_hash")
+
+        for address in self.watch_registry:
+            result = self.rpc.call("validateaddress", [address])
+            if not isinstance(result, dict) or result.get("isvalid") is not True:
+                raise NodeAgentError("invalid_or_wrong_network_watch_address")
+
+        self.network = "main"
+        self.genesis_hash = genesis_hash
+        self.outbox = BtcDepositOutbox(
+            self.db_path,
+            network=self.network,
+            genesis_hash=self.genesis_hash,
+        )
+
         return {
             "chain": "main",
+            "genesis_hash": genesis_hash,
             "blocks": blocks,
             "pruned": bool(info.get("pruned")),
             "synced": True,
         }
 
     def current_tip(self) -> tuple[int, str]:
-        height = int(self.rpc.call("getblockcount", []))
+        raw_height = self.rpc.call("getblockcount", [])
+        if isinstance(raw_height, bool) or not isinstance(raw_height, int) or raw_height < 0:
+            raise NodeAgentError("invalid_bitcoin_tip_height")
+        height = raw_height
         block_hash = str(self.rpc.call("getblockhash", [height])).lower()
         if len(block_hash) != 64 or any(ch not in "0123456789abcdef" for ch in block_hash):
             raise NodeAgentError("invalid_bitcoin_tip_hash")
@@ -250,10 +334,45 @@ class LocalBitcoinNodeAgent:
 
     def publish_tip(self) -> tuple[int, str, int]:
         height, block_hash = self.current_tip()
+        sequence = self.store.next_sequence()
+        self.adapter.push_tip(height=height, block_hash=block_hash, sequence=sequence)
         self.store.save_checkpoint(height, block_hash, observed_at=int(time.time()))
+        return height, block_hash, sequence
+
+    def publish_heartbeat(self) -> tuple[int, str, int]:
+        """Refresh adapter liveness without advancing the observer checkpoint."""
+        height, block_hash = self.current_tip()
         sequence = self.store.next_sequence()
         self.adapter.push_tip(height=height, block_hash=block_hash, sequence=sequence)
         return height, block_hash, sequence
+
+    def enqueue_confirmed_deposits(self) -> int:
+        if self.observer is None or self.outbox is None:
+            return 0
+        return self.outbox.enqueue_confirmed(
+            minimum_confirmations=self.minimum_confirmations
+        )
+
+    def deliver_outbox(self, *, limit: int = 10) -> int:
+        if not self.delivery_enabled or self.outbox is None:
+            return 0
+        delivered = 0
+        for _ in range(max(1, int(limit))):
+            item = self.outbox.claim_next()
+            if item is None:
+                break
+            try:
+                self.adapter.push_deposit(item.payload)
+                self.outbox.acknowledge(item.idempotency_key)
+                delivered += 1
+            except (NodeAgentError, BtcDepositOutboxError) as exc:
+                self.outbox.fail(item.idempotency_key, str(exc))
+                logger.error(
+                    "BTC deposit outbox delivery failed closed key=%s",
+                    item.idempotency_key,
+                )
+                break
+        return delivered
 
 
     def recover_from_checkpoint(self) -> tuple[int, int]:
@@ -302,6 +421,7 @@ class LocalBitcoinNodeAgent:
             blocks_scanned += 1
 
         self.observer.reconcile_tip()
+        self.enqueue_confirmed_deposits()
         return blocks_scanned, matched_outputs
 
     def _check_zmq_message_sequence(self, topic: bytes, raw_seq: bytes) -> bool:
@@ -435,9 +555,10 @@ class LocalBitcoinNodeAgent:
                 raise NodeAgentError("getblock_failed")
             matched = len(self.observer.observe_block(block))
             self.observer.reconcile_tip()
-        self.store.save_checkpoint(height, block_hash, observed_at=int(time.time()))
+            self.enqueue_confirmed_deposits()
         sequence = self.store.next_sequence()
         self.adapter.push_tip(height=height, block_hash=block_hash, sequence=sequence)
+        self.store.save_checkpoint(height, block_hash, observed_at=int(time.time()))
         return matched, height, block_hash, sequence
 
     def run_zmq(self) -> None:
@@ -456,6 +577,9 @@ class LocalBitcoinNodeAgent:
             if parsed.scheme != "tcp" or parsed.hostname not in {"127.0.0.1", "::1", "localhost"}:
                 raise NodeAgentError("bitcoin_zmq_must_be_loopback")
 
+        heartbeat_seconds = max(
+            10, int(os.getenv("BTC_ADAPTER_HEARTBEAT_SECONDS", "30"))
+        )
         context = zmq.Context.instance()
         sock = context.socket(zmq.SUB)
         sock.setsockopt(zmq.RCVHWM, 10000)
@@ -464,35 +588,57 @@ class LocalBitcoinNodeAgent:
         for topic in (b"hashblock", b"rawtx", b"sequence"):
             sock.setsockopt(zmq.SUBSCRIBE, topic)
 
+        poller = zmq.Poller()
+        poller.register(sock, zmq.POLLIN)
+        next_heartbeat = time.time() + heartbeat_seconds
+
         logger.info("BTC node agent listening on local Bitcoin Core ZMQ")
         while True:
-            frames = sock.recv_multipart()
-            if len(frames) < 3:
-                continue
-            topic, body, raw_seq = frames[0], frames[1], frames[2]
             try:
-                if self._check_zmq_message_sequence(topic, raw_seq):
-                    self.store.set_meta_int("zmq_gap_detected", 1)
-                    self.store.set_meta_int("observer_reconciliation_required", 1)
-                    logger.error("Detected lost Bitcoin Core ZMQ message(s) on topic=%s", topic.decode("ascii", errors="replace"))
+                events = dict(poller.poll(1000))
+                if sock in events:
+                    frames = sock.recv_multipart()
+                    if len(frames) < 3:
+                        self.store.set_meta_int("zmq_gap_detected", 1)
+                        self.store.set_meta_int("observer_reconciliation_required", 1)
+                        logger.error("Malformed Bitcoin Core ZMQ frame set; reconciliation required")
+                    else:
+                        topic, body, raw_seq = frames[0], frames[1], frames[2]
+                        if self._check_zmq_message_sequence(topic, raw_seq):
+                            self.store.set_meta_int("zmq_gap_detected", 1)
+                            self.store.set_meta_int("observer_reconciliation_required", 1)
+                            logger.error(
+                                "Detected lost Bitcoin Core ZMQ message(s) on topic=%s",
+                                topic.decode("ascii", errors="replace"),
+                            )
 
-                if topic == b"rawtx":
-                    count = self.handle_rawtx(body)
-                    if count:
-                        logger.info("Observed %d watched BTC output(s)", count)
-                elif topic == b"hashblock":
-                    matched, height, _hash, _seq = self.handle_new_block()
+                        if topic == b"rawtx":
+                            count = self.handle_rawtx(body)
+                            if count:
+                                logger.info("Observed %d watched BTC output(s)", count)
+                        elif topic == b"hashblock":
+                            matched, height, _hash, _seq = self.handle_new_block()
+                            logger.info(
+                                "Reconciled Bitcoin block %d; watched outputs=%d",
+                                height, matched,
+                            )
+                        elif topic == b"sequence":
+                            event = self.handle_sequence(body)
+                            if event["label"] in ("R", "D") or event["changed"]:
+                                logger.info(
+                                    "Bitcoin sequence event label=%s changed=%s",
+                                    event["label"], event["changed"],
+                                )
+
+                if time.time() >= next_heartbeat:
+                    height, _hash, sequence = self.publish_heartbeat()
+                    delivered = self.deliver_outbox()
                     logger.info(
-                        "Reconciled Bitcoin block %d; watched outputs=%d", height, matched
+                        "Bitcoin heartbeat height=%d sequence=%d deposit_acks=%d",
+                        height, sequence, delivered,
                     )
-                elif topic == b"sequence":
-                    event = self.handle_sequence(body)
-                    if event["label"] in ("R", "D") or event["changed"]:
-                        logger.info(
-                            "Bitcoin sequence event label=%s changed=%s",
-                            event["label"], event["changed"],
-                        )
-            except (NodeAgentError, BtcObserverError) as exc:
+                    next_heartbeat = time.time() + heartbeat_seconds
+            except (NodeAgentError, BtcObserverError, BtcDepositOutboxError) as exc:
                 logger.error("BTC node-agent event failed closed: %s", exc)
 
 
@@ -516,6 +662,12 @@ def main() -> int:
         type=int,
         help="verify configured local ZMQ and observe topics for N seconds (default 10)",
     )
+    parser.add_argument(
+        "--min-confirmations",
+        type=int,
+        default=int(os.getenv("BTC_MIN_CONFIRMATIONS", "6")),
+        help="minimum Bitcoin confirmations before a deposit is eligible for outbox delivery",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -523,7 +675,11 @@ def main() -> int:
         format="[BTC_NODE_AGENT] %(asctime)s %(levelname)s %(message)s",
     )
     watch = load_watch_registry(args.watch_registry or None)
-    agent = LocalBitcoinNodeAgent(db_path=args.db, watch_registry=watch)
+    agent = LocalBitcoinNodeAgent(
+        db_path=args.db,
+        watch_registry=watch,
+        minimum_confirmations=args.min_confirmations,
+    )
     info = agent.preflight()
 
     if args.probe_zmq is not None:
@@ -545,11 +701,12 @@ def main() -> int:
         return 0
 
     blocks_scanned, recovered_matches = agent.recover_from_checkpoint()
+    queued = agent.enqueue_confirmed_deposits()
     height, _block_hash, sequence = agent.publish_tip()
     logger.info(
-        "Bitcoin node ready: chain=%s height=%d pruned=%s sequence=%d watched=%d backfill_blocks=%d backfill_matches=%d",
+        "Bitcoin node ready: chain=%s height=%d pruned=%s sequence=%d watched=%d backfill_blocks=%d backfill_matches=%d outbox_queued=%d delivery_enabled=%s",
         info["chain"], height, info["pruned"], sequence, len(watch),
-        blocks_scanned, recovered_matches,
+        blocks_scanned, recovered_matches, queued, agent.delivery_enabled,
     )
     agent.run_zmq()
     return 0

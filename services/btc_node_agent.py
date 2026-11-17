@@ -337,29 +337,7 @@ class LocalBitcoinNodeAgent:
 
     def recovery_status(self) -> dict[str, Any]:
         """Return only non-secret observer recovery state for operators."""
-        return {
-            "fully_scanned_checkpoint": self.store.checkpoint(),
-            "published_adapter_tip": self.store.published_tip(),
-            "reconciliation_checkpoint": self.store.reconciliation_checkpoint(),
-            "observer_reconciliation_required": bool(
-                self.store.get_meta_int("observer_reconciliation_required")
-            ),
-            "zmq_gap_detected": bool(self.store.get_meta_int("zmq_gap_detected")),
-            "observer_unverified_history": bool(
-                self.store.get_meta_int("observer_unverified_history")
-            ),
-            "open_diagnostics": [
-                {
-                    key: row[key]
-                    for key in (
-                        "id", "category", "topic", "expected_sequence",
-                        "observed_sequence", "range_start", "range_end",
-                        "detail", "detected_at",
-                    )
-                }
-                for row in self.store.diagnostics(status="open")
-            ],
-        }
+        return BtcObserverStore.read_recovery_status(self.db_path)
 
     def acknowledge_unverified_history_before(self, height: int) -> dict[str, Any]:
         """Scan one explicit boundary while permanently labelling earlier history.
@@ -939,15 +917,15 @@ def main() -> int:
         level=os.getenv("BTC_NODE_AGENT_LOG_LEVEL", "INFO"),
         format="[BTC_NODE_AGENT] %(asctime)s %(levelname)s %(message)s",
     )
+    if args.recovery_status:
+        print(json.dumps(BtcObserverStore.read_recovery_status(args.db), sort_keys=True))
+        return 0
     watch = load_watch_registry(args.watch_registry or None)
     agent = LocalBitcoinNodeAgent(
         db_path=args.db,
         watch_registry=watch,
         minimum_confirmations=args.min_confirmations,
     )
-    if args.recovery_status:
-        print(json.dumps(agent.recovery_status(), sort_keys=True))
-        return 0
     info = agent.preflight()
 
     if args.acknowledge_unverified_history_before_height is not None:

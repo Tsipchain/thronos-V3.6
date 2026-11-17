@@ -164,6 +164,18 @@ Inspect non-secret durable recovery state without contacting the adapter:
 python -m services.btc_node_agent --db C:\Thronos\btc_observer.db --recovery-status
 ```
 
+This path opens the existing SQLite database in read-only mode. It does not
+create tables, switch journal modes, load the watch registry, contact Bitcoin
+Core/the adapter, or migrate legacy state. A checkpoint without the v2
+provenance marker is reported as `legacy_unverified`, never as fully scanned.
+
+On the first later **normal agent startup** (not the status command), an
+existing pre-v2 checkpoint is migrated conservatively: its provenance version
+is recorded as legacy, `0..checkpoint_height` is recorded as unknown coverage,
+and `observer_reconciliation_required=1` plus
+`observer_unverified_history=1` are persisted. No existing safety flag is
+cleared and no checkpoint is deleted or advanced.
+
 For the currently verified production database,
 `observer_reconciliation_required=1` and `zmq_gap_detected=1` must remain set.
 Do not edit SQLite, delete/recreate the database, or run an ad-hoc flag reset.

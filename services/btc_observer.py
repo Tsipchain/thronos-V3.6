@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 import sqlite3
 import time
 from typing import Any, Mapping, Protocol
@@ -121,6 +122,15 @@ class BtcObserverStore:
 
     def _init_db(self) -> None:
         with self._connect() as con:
+            checkpoint_table_existed = con.execute(
+                """SELECT 1 FROM sqlite_master
+                   WHERE type='table' AND name='btc_observer_checkpoint'"""
+            ).fetchone() is not None
+            legacy_checkpoint = False
+            if checkpoint_table_existed:
+                legacy_checkpoint = con.execute(
+                    "SELECT 1 FROM btc_observer_checkpoint WHERE singleton=1"
+                ).fetchone() is not None
             con.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS btc_observer_deposits (
@@ -185,6 +195,126 @@ class BtcObserverStore:
                     ON btc_observer_diagnostics(status, detected_at, id);
                 """
             )
+            provenance = con.execute(
+                """SELECT value FROM btc_observer_meta
+                   WHERE key='scan_checkpoint_provenance_version'"""
+            ).fetchone()
+            if provenance is None:
+                version = 1 if legacy_checkpoint else 2
+                con.execute(
+                    """INSERT INTO btc_observer_meta(key, value)
+                       VALUES('scan_checkpoint_provenance_version', ?)""",
+                    (version,),
+                )
+                if legacy_checkpoint:
+                    checkpoint = con.execute(
+                        """SELECT block_height FROM btc_observer_checkpoint
+                           WHERE singleton=1"""
+                    ).fetchone()
+                    con.execute(
+                        """INSERT INTO btc_observer_meta(key, value)
+                           VALUES('observer_reconciliation_required', 1)
+                           ON CONFLICT(key) DO UPDATE SET value=1"""
+                    )
+                    con.execute(
+                        """INSERT INTO btc_observer_meta(key, value)
+                           VALUES('observer_unverified_history', 1)
+                           ON CONFLICT(key) DO UPDATE SET value=1"""
+                    )
+                    con.execute(
+                        """INSERT INTO btc_observer_diagnostics
+                           (category, topic, expected_sequence, observed_sequence,
+                            range_start, range_end, detail, status, detected_at)
+                           VALUES ('legacy_checkpoint_provenance_unknown', NULL,
+                                   NULL, NULL, 0, ?, ?, 'open', ?)""",
+                        (
+                            int(checkpoint["block_height"]),
+                            "Pre-v2 checkpoint may have been published without scanning",
+                            int(time.time()),
+                        ),
+                    )
+
+    @staticmethod
+    def read_recovery_status(db_path: str) -> dict[str, Any]:
+        """Read recovery metadata without schema creation or journal mutation."""
+        database = Path(db_path).resolve()
+        if not database.is_file():
+            raise BtcObserverError("btc_observer_database_not_found")
+        uri = database.as_uri() + "?mode=ro"
+        con = sqlite3.connect(uri, uri=True, timeout=30)
+        con.row_factory = sqlite3.Row
+        try:
+            tables = {
+                str(row["name"])
+                for row in con.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+
+            def singleton(table: str, columns: str) -> dict[str, Any] | None:
+                if table not in tables:
+                    return None
+                row = con.execute(
+                    f"SELECT {columns} FROM {table} WHERE singleton=1"
+                ).fetchone()
+                return dict(row) if row else None
+
+            meta: dict[str, int] = {}
+            if "btc_observer_meta" in tables:
+                meta = {
+                    str(row["key"]): int(row["value"])
+                    for row in con.execute(
+                        "SELECT key, value FROM btc_observer_meta"
+                    ).fetchall()
+                }
+            checkpoint = singleton(
+                "btc_observer_checkpoint", "block_height, block_hash, observed_at"
+            )
+            provenance_version = meta.get("scan_checkpoint_provenance_version")
+            if checkpoint is None:
+                provenance = "none"
+            elif provenance_version == 2:
+                provenance = "v2_scanned"
+            else:
+                provenance = "legacy_unverified"
+
+            diagnostics: list[dict[str, Any]] = []
+            if "btc_observer_diagnostics" in tables:
+                diagnostics = [
+                    dict(row)
+                    for row in con.execute(
+                        """SELECT id, category, topic, expected_sequence,
+                                  observed_sequence, range_start, range_end,
+                                  detail, detected_at
+                           FROM btc_observer_diagnostics
+                           WHERE status='open' ORDER BY id"""
+                    ).fetchall()
+                ]
+            effective_unverified = bool(
+                meta.get("observer_unverified_history")
+                or provenance == "legacy_unverified"
+            )
+            return {
+                "scan_checkpoint": checkpoint,
+                "scan_checkpoint_provenance": provenance,
+                "published_adapter_tip": singleton(
+                    "btc_observer_published_tip",
+                    "block_height, block_hash, sequence, published_at",
+                ),
+                "reconciliation_checkpoint": singleton(
+                    "btc_observer_reconciliation_checkpoint",
+                    "range_start, target_height, last_verified_height, "
+                    "status, started_at, updated_at",
+                ),
+                "observer_reconciliation_required": bool(
+                    meta.get("observer_reconciliation_required")
+                ),
+                "zmq_gap_detected": bool(meta.get("zmq_gap_detected")),
+                "observer_unverified_history": effective_unverified,
+                "open_diagnostics": diagnostics,
+            }
+        finally:
+            con.close()
 
     @staticmethod
     def _row(row: sqlite3.Row) -> ObservedDeposit:

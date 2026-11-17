@@ -226,6 +226,7 @@ def test_recovery_status_survives_restart_without_sensitive_registry_data(agent)
     encoded = str(status)
     assert status["zmq_gap_detected"] is True
     assert status["published_adapter_tip"]["block_height"] == instance.rpc.height
+    assert status["scan_checkpoint_provenance"] == "none"
     assert status["open_diagnostics"][0]["topic"] == "rawtx"
     assert "different-sensitive-owner-reference" not in encoded
 

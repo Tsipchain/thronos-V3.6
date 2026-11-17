@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 import sqlite3
 import time
 from typing import Any, Mapping, Protocol
@@ -121,6 +122,15 @@ class BtcObserverStore:
 
     def _init_db(self) -> None:
         with self._connect() as con:
+            checkpoint_table_existed = con.execute(
+                """SELECT 1 FROM sqlite_master
+                   WHERE type='table' AND name='btc_observer_checkpoint'"""
+            ).fetchone() is not None
+            legacy_checkpoint = False
+            if checkpoint_table_existed:
+                legacy_checkpoint = con.execute(
+                    "SELECT 1 FROM btc_observer_checkpoint WHERE singleton=1"
+                ).fetchone() is not None
             con.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS btc_observer_deposits (
@@ -148,12 +158,163 @@ class BtcObserverStore:
                     block_hash TEXT NOT NULL,
                     observed_at INTEGER NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS btc_observer_published_tip (
+                    singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+                    block_height INTEGER NOT NULL,
+                    block_hash TEXT NOT NULL,
+                    sequence INTEGER NOT NULL,
+                    published_at INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS btc_observer_reconciliation_checkpoint (
+                    singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+                    range_start INTEGER NOT NULL,
+                    target_height INTEGER NOT NULL,
+                    last_verified_height INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    started_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS btc_observer_meta (
                     key TEXT PRIMARY KEY,
                     value INTEGER NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS btc_observer_diagnostics (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    category TEXT NOT NULL,
+                    topic TEXT,
+                    expected_sequence INTEGER,
+                    observed_sequence INTEGER,
+                    range_start INTEGER,
+                    range_end INTEGER,
+                    detail TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'open',
+                    detected_at INTEGER NOT NULL,
+                    resolved_at INTEGER
+                );
+                CREATE INDEX IF NOT EXISTS idx_btc_observer_diagnostics_status
+                    ON btc_observer_diagnostics(status, detected_at, id);
                 """
             )
+            provenance = con.execute(
+                """SELECT value FROM btc_observer_meta
+                   WHERE key='scan_checkpoint_provenance_version'"""
+            ).fetchone()
+            if provenance is None:
+                version = 1 if legacy_checkpoint else 2
+                con.execute(
+                    """INSERT INTO btc_observer_meta(key, value)
+                       VALUES('scan_checkpoint_provenance_version', ?)""",
+                    (version,),
+                )
+                if legacy_checkpoint:
+                    checkpoint = con.execute(
+                        """SELECT block_height FROM btc_observer_checkpoint
+                           WHERE singleton=1"""
+                    ).fetchone()
+                    con.execute(
+                        """INSERT INTO btc_observer_meta(key, value)
+                           VALUES('observer_reconciliation_required', 1)
+                           ON CONFLICT(key) DO UPDATE SET value=1"""
+                    )
+                    con.execute(
+                        """INSERT INTO btc_observer_meta(key, value)
+                           VALUES('observer_unverified_history', 1)
+                           ON CONFLICT(key) DO UPDATE SET value=1"""
+                    )
+                    con.execute(
+                        """INSERT INTO btc_observer_diagnostics
+                           (category, topic, expected_sequence, observed_sequence,
+                            range_start, range_end, detail, status, detected_at)
+                           VALUES ('legacy_checkpoint_provenance_unknown', NULL,
+                                   NULL, NULL, 0, ?, ?, 'open', ?)""",
+                        (
+                            int(checkpoint["block_height"]),
+                            "Pre-v2 checkpoint may have been published without scanning",
+                            int(time.time()),
+                        ),
+                    )
+
+    @staticmethod
+    def read_recovery_status(db_path: str) -> dict[str, Any]:
+        """Read recovery metadata without schema creation or journal mutation."""
+        database = Path(db_path).resolve()
+        if not database.is_file():
+            raise BtcObserverError("btc_observer_database_not_found")
+        uri = database.as_uri() + "?mode=ro"
+        con = sqlite3.connect(uri, uri=True, timeout=30)
+        con.row_factory = sqlite3.Row
+        try:
+            tables = {
+                str(row["name"])
+                for row in con.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+
+            def singleton(table: str, columns: str) -> dict[str, Any] | None:
+                if table not in tables:
+                    return None
+                row = con.execute(
+                    f"SELECT {columns} FROM {table} WHERE singleton=1"
+                ).fetchone()
+                return dict(row) if row else None
+
+            meta: dict[str, int] = {}
+            if "btc_observer_meta" in tables:
+                meta = {
+                    str(row["key"]): int(row["value"])
+                    for row in con.execute(
+                        "SELECT key, value FROM btc_observer_meta"
+                    ).fetchall()
+                }
+            checkpoint = singleton(
+                "btc_observer_checkpoint", "block_height, block_hash, observed_at"
+            )
+            provenance_version = meta.get("scan_checkpoint_provenance_version")
+            if checkpoint is None:
+                provenance = "none"
+            elif provenance_version == 2:
+                provenance = "v2_scanned"
+            else:
+                provenance = "legacy_unverified"
+
+            diagnostics: list[dict[str, Any]] = []
+            if "btc_observer_diagnostics" in tables:
+                diagnostics = [
+                    dict(row)
+                    for row in con.execute(
+                        """SELECT id, category, topic, expected_sequence,
+                                  observed_sequence, range_start, range_end,
+                                  detail, detected_at
+                           FROM btc_observer_diagnostics
+                           WHERE status='open' ORDER BY id"""
+                    ).fetchall()
+                ]
+            effective_unverified = bool(
+                meta.get("observer_unverified_history")
+                or provenance == "legacy_unverified"
+            )
+            return {
+                "scan_checkpoint": checkpoint,
+                "scan_checkpoint_provenance": provenance,
+                "published_adapter_tip": singleton(
+                    "btc_observer_published_tip",
+                    "block_height, block_hash, sequence, published_at",
+                ),
+                "reconciliation_checkpoint": singleton(
+                    "btc_observer_reconciliation_checkpoint",
+                    "range_start, target_height, last_verified_height, "
+                    "status, started_at, updated_at",
+                ),
+                "observer_reconciliation_required": bool(
+                    meta.get("observer_reconciliation_required")
+                ),
+                "zmq_gap_detected": bool(meta.get("zmq_gap_detected")),
+                "observer_unverified_history": effective_unverified,
+                "open_diagnostics": diagnostics,
+            }
+        finally:
+            con.close()
 
     @staticmethod
     def _row(row: sqlite3.Row) -> ObservedDeposit:
@@ -258,6 +419,113 @@ class BtcObserverStore:
             ).fetchone()
         return int(row["value"]) if row else int(default)
 
+    def record_diagnostic(
+        self,
+        category: str,
+        *,
+        topic: str | None = None,
+        expected_sequence: int | None = None,
+        observed_sequence: int | None = None,
+        range_start: int | None = None,
+        range_end: int | None = None,
+        detail: str,
+        detected_at: int | None = None,
+    ) -> int:
+        """Persist non-secret recovery evidence without changing safety flags."""
+        category = _text(category, "invalid_btc_diagnostic_category", 100)
+        topic = _text(topic, "invalid_btc_diagnostic_topic", 100) if topic else None
+        detail = _text(detail, "invalid_btc_diagnostic_detail", 500)
+        now = int(time.time()) if detected_at is None else int(detected_at)
+        values = (expected_sequence, observed_sequence, range_start, range_end)
+        if any(value is not None and (isinstance(value, bool) or value < 0) for value in values):
+            raise BtcObserverError("invalid_btc_diagnostic_value")
+        with self._connect() as con:
+            cur = con.execute(
+                """INSERT INTO btc_observer_diagnostics
+                   (category, topic, expected_sequence, observed_sequence,
+                    range_start, range_end, detail, status, detected_at)
+                   VALUES (?,?,?,?,?,?,?,'open',?)""",
+                (
+                    category, topic, expected_sequence, observed_sequence,
+                    range_start, range_end, detail, now,
+                ),
+            )
+            return int(cur.lastrowid)
+
+    def diagnostics(self, *, status: str | None = None) -> list[dict[str, Any]]:
+        with self._connect() as con:
+            if status is None:
+                rows = con.execute(
+                    "SELECT * FROM btc_observer_diagnostics ORDER BY id"
+                ).fetchall()
+            else:
+                rows = con.execute(
+                    "SELECT * FROM btc_observer_diagnostics WHERE status=? ORDER BY id",
+                    (status,),
+                ).fetchall()
+        return [dict(row) for row in rows]
+
+    def save_published_tip(
+        self, height: int, block_hash: str, sequence: int, *, published_at: int
+    ) -> None:
+        height = _strict_int(height, "invalid_btc_block_height")
+        sequence = _strict_int(sequence, "invalid_btc_node_agent_sequence", minimum=1)
+        block_hash = _hash256(block_hash, "invalid_btc_block_hash")
+        with self._connect() as con:
+            con.execute(
+                """INSERT INTO btc_observer_published_tip
+                   (singleton, block_height, block_hash, sequence, published_at)
+                   VALUES (1,?,?,?,?)
+                   ON CONFLICT(singleton) DO UPDATE SET
+                     block_height=excluded.block_height,
+                     block_hash=excluded.block_hash,
+                     sequence=excluded.sequence,
+                     published_at=excluded.published_at""",
+                (height, block_hash, sequence, int(published_at)),
+            )
+
+    def published_tip(self) -> dict[str, Any] | None:
+        with self._connect() as con:
+            row = con.execute(
+                """SELECT block_height, block_hash, sequence, published_at
+                   FROM btc_observer_published_tip WHERE singleton=1"""
+            ).fetchone()
+        return dict(row) if row else None
+
+    def begin_reconciliation(
+        self, *, range_start: int, target_height: int, previous_height: int
+    ) -> None:
+        range_start = _strict_int(range_start, "invalid_btc_block_height")
+        target_height = _strict_int(target_height, "invalid_btc_block_height")
+        previous_height = _strict_int(previous_height, "invalid_btc_block_height")
+        if range_start != previous_height + 1 or target_height < range_start:
+            raise BtcObserverError("invalid_btc_reconciliation_range")
+        now = int(time.time())
+        with self._connect() as con:
+            con.execute(
+                """INSERT INTO btc_observer_reconciliation_checkpoint
+                   (singleton, range_start, target_height, last_verified_height,
+                    status, started_at, updated_at)
+                   VALUES (1,?,?,?,'running',?,?)
+                   ON CONFLICT(singleton) DO UPDATE SET
+                     range_start=excluded.range_start,
+                     target_height=excluded.target_height,
+                     last_verified_height=excluded.last_verified_height,
+                     status='running',
+                     started_at=excluded.started_at,
+                     updated_at=excluded.updated_at""",
+                (range_start, target_height, previous_height, now, now),
+            )
+
+    def reconciliation_checkpoint(self) -> dict[str, Any] | None:
+        with self._connect() as con:
+            row = con.execute(
+                """SELECT range_start, target_height, last_verified_height,
+                          status, started_at, updated_at
+                   FROM btc_observer_reconciliation_checkpoint WHERE singleton=1"""
+            ).fetchone()
+        return dict(row) if row else None
+
     def upsert(
         self, *, txid: str, vout: int, address: str, owner_ref: str,
         amount_sats: int, confirmations: int, block_hash: str | None,
@@ -336,7 +604,10 @@ class BtcObserverStore:
         with self._connect() as con:
             global_flags = con.execute(
                 """SELECT key, value FROM btc_observer_meta
-                   WHERE key IN ('observer_reconciliation_required','zmq_gap_detected')"""
+                   WHERE key IN (
+                     'observer_reconciliation_required','zmq_gap_detected',
+                     'observer_unverified_history'
+                   )"""
             ).fetchall()
             if any(int(flag["value"]) != 0 for flag in global_flags):
                 raise BtcObserverError("btc_observer_global_reconciliation_required")
@@ -364,8 +635,7 @@ class BtcObserverStore:
         return self._row(updated)
 
     def save_checkpoint(self, height: int, block_hash: str, *, observed_at: int) -> None:
-        if height < 0:
-            raise BtcObserverError("invalid_btc_block_height")
+        height = _strict_int(height, "invalid_btc_block_height")
         block_hash = _hash256(block_hash, "invalid_btc_block_hash")
         with self._connect() as con:
             con.execute(
@@ -378,6 +648,67 @@ class BtcObserverStore:
                      observed_at=excluded.observed_at""",
                 (height, block_hash, observed_at),
             )
+
+    def advance_checkpoint(
+        self,
+        height: int,
+        block_hash: str,
+        *,
+        observed_at: int,
+        expected_previous_height: int | None,
+    ) -> None:
+        """Atomically commit one fully scanned canonical block, never skipping."""
+        height = _strict_int(height, "invalid_btc_block_height")
+        block_hash = _hash256(block_hash, "invalid_btc_block_hash")
+        if expected_previous_height is not None:
+            expected_previous_height = _strict_int(
+                expected_previous_height, "invalid_btc_block_height"
+            )
+            if height != expected_previous_height + 1:
+                raise BtcObserverError("btc_scan_checkpoint_non_contiguous")
+        with self._connect() as con:
+            con.execute("BEGIN IMMEDIATE")
+            row = con.execute(
+                "SELECT block_height, block_hash FROM btc_observer_checkpoint WHERE singleton=1"
+            ).fetchone()
+            if expected_previous_height is None:
+                if row is not None:
+                    raise BtcObserverError("btc_scan_checkpoint_concurrent_change")
+            elif row is None or int(row["block_height"]) != expected_previous_height:
+                raise BtcObserverError("btc_scan_checkpoint_concurrent_change")
+            if row is not None and height <= int(row["block_height"]):
+                raise BtcObserverError("btc_scan_checkpoint_not_advanced")
+            con.execute(
+                """INSERT INTO btc_observer_checkpoint
+                   (singleton, block_height, block_hash, observed_at)
+                   VALUES (1,?,?,?)
+                   ON CONFLICT(singleton) DO UPDATE SET
+                     block_height=excluded.block_height,
+                     block_hash=excluded.block_hash,
+                     observed_at=excluded.observed_at""",
+                (height, block_hash, int(observed_at)),
+            )
+            reconciliation = con.execute(
+                """SELECT last_verified_height, target_height, status
+                   FROM btc_observer_reconciliation_checkpoint WHERE singleton=1"""
+            ).fetchone()
+            if reconciliation is not None and str(reconciliation["status"]) == "running":
+                if (
+                    height != int(reconciliation["last_verified_height"]) + 1
+                    or height > int(reconciliation["target_height"])
+                ):
+                    raise BtcObserverError("btc_reconciliation_checkpoint_conflict")
+                status = (
+                    "complete"
+                    if height == int(reconciliation["target_height"])
+                    else "running"
+                )
+                con.execute(
+                    """UPDATE btc_observer_reconciliation_checkpoint
+                       SET last_verified_height=?, status=?, updated_at=?
+                       WHERE singleton=1""",
+                    (height, status, int(observed_at)),
+                )
 
     def checkpoint(self) -> dict[str, Any] | None:
         with self._connect() as con:
@@ -574,14 +905,5 @@ class BtcObserver:
         return reconciled
 
     def checkpoint_tip(self) -> dict[str, Any]:
-        raw_height = self.rpc.call("getblockcount", [])
-        height = _strict_int(raw_height, "invalid_btc_block_height")
-        block_hash = _hash256(
-            self.rpc.call("getblockhash", [height]), "invalid_btc_block_hash"
-        )
-        observed_at = int(self.now_fn())
-        self.store.save_checkpoint(height, block_hash, observed_at=observed_at)
-        checkpoint = self.store.checkpoint()
-        if checkpoint is None:
-            raise BtcObserverError("btc_observer_checkpoint_write_failed")
-        return checkpoint
+        """Legacy unsafe API retained only to fail closed for old callers."""
+        raise BtcObserverError("btc_checkpoint_tip_without_scan_forbidden")

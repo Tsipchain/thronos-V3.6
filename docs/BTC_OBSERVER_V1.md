@@ -107,11 +107,15 @@ BTC_WATCH_REGISTRY=./data/btc_watch_registry.json
 
 If no watch registry is configured, the agent can still perform node preflight and publish authoritative tip state; deposit discovery remains disabled until explicit watched-address intents exist.
 
-A one-shot preflight can be run with:
+A one-shot preflight/adapter heartbeat can be run with:
 
 ```bash
 python -m services.btc_node_agent --once
 ```
+
+`--once` never creates or advances the fully scanned block checkpoint. Adapter
+publication state, the monotonic heartbeat sequence, and the last fully scanned
+canonical block are separate durable records.
 
 Do not run the live agent against production adapter ingest until the adapter PR containing the authenticated node-agent endpoints is merged, deployed, and its token is configured on both sides.
 
@@ -125,7 +129,12 @@ python -m services.btc_node_agent --probe-zmq 10
 
 The probe verifies Bitcoin Core reports pubhashblock, pubrawtx, and pubsequence, connects only to loopback ZMQ endpoints, and performs no signing, broadcast, crediting, or wallet mutation.
 
-The live agent now tracks Bitcoin Core's per-topic ZMQ message sequence. A detected gap persists `zmq_gap_detected=1` and `observer_reconciliation_required=1`.
+The live agent tracks Bitcoin Core's per-topic ZMQ message sequence. A detected
+gap or malformed frame persists `zmq_gap_detected=1` and
+`observer_reconciliation_required=1`, plus a structured diagnostic containing
+only the topic, expected/observed sequence (when available), affected block
+range (when known), category, and timestamp. Diagnostics never contain RPC
+credentials, private keys, extended public keys, or watched-owner references.
 
 Sequence handling:
 - A: recover/observe a mempool transaction using read-only getrawtransaction.
@@ -133,13 +142,76 @@ Sequence handling:
 - C: block-connect processing remains driven by hashblock.
 - D: mark reconciliation required and re-check canonical block hashes.
 
-On live startup, recent blocks between the durable checkpoint and current tip are replayed with getblock verbosity 2. Replay is bounded by `BTC_BACKFILL_MAX_BLOCKS` (default 144) and fails closed on checkpoint reorg or an excessive gap.
+On live startup, recent blocks between the durable **fully scanned** checkpoint
+and current tip are replayed with `getblock` verbosity 2. Each checkpoint move
+is committed only after that exact canonical height/hash has been decoded and
+observed. Replay is bounded by `BTC_BACKFILL_MAX_BLOCKS` (default 144) and fails
+closed on checkpoint reorg, an excessive gap, conflicting block identity, or a
+required block unavailable below a pruned boundary. The unavailable range is
+recorded; the checkpoint is never moved over it.
 
-### Remaining limitation before automatic production credit
+Startup also obtains `getrawmempool` and observes the complete snapshot up to
+`BTC_MEMPOOL_RECONCILE_MAX_TXS` (default 10000). If the snapshot exceeds the
+bound, contains an invalid entry, or changes so a requested transaction cannot
+be verified, startup fails closed and records a diagnostic. It never scans a
+truncated snapshot.
 
-A watched transaction that entered the mempool entirely while the agent was offline and remains unconfirmed when the agent restarts is not yet guaranteed to be discovered by startup recovery. For the first controlled mainnet observation test, start the live agent before broadcasting the BTC transaction and keep automatic Bridge/Earn credit disabled.
+### Recovery status and operator boundary
 
-A later production-hardening phase should add either a bounded startup mempool snapshot scan or a dedicated Bitcoin Core descriptor/watch-only wallet reconciliation path.
+Inspect non-secret durable recovery state without contacting the adapter:
+
+```powershell
+python -m services.btc_node_agent --db C:\Thronos\btc_observer.db --recovery-status
+```
+
+This path opens the existing SQLite database in read-only mode. It does not
+create tables, switch journal modes, load the watch registry, contact Bitcoin
+Core/the adapter, or migrate legacy state. A checkpoint without the v2
+provenance marker is reported as `legacy_unverified`, never as fully scanned.
+
+On the first later **normal agent startup** (not the status command), an
+existing pre-v2 checkpoint is migrated conservatively: its provenance version
+is recorded as legacy, `0..checkpoint_height` is recorded as unknown coverage,
+and `observer_reconciliation_required=1` plus
+`observer_unverified_history=1` are persisted. No existing safety flag is
+cleared and no checkpoint is deleted or advanced.
+
+For the currently verified production database,
+`observer_reconciliation_required=1` and `zmq_gap_detected=1` must remain set.
+Do not edit SQLite, delete/recreate the database, or run an ad-hoc flag reset.
+First preserve a filesystem backup, identify the recorded checkpoint and open
+diagnostic ranges, and prove every required retained block with the bounded
+scanner plus a complete startup mempool snapshot.
+
+If a historical interval is below the pruned boundary or otherwise cannot be
+reconstructed, an owner must explicitly acknowledge that exact interval and
+its limits in the release record before considering a future activation. Such
+history must remain labelled **unverified**, not reconciled. The durable
+`observer_unverified_history=1` gate blocks both enqueue and delivery; this
+phase intentionally provides no automatic flag-clearing or activation command.
+Prefer a non-pruned archival peer/node to establish evidence. If that is
+impossible, the owner may initialize a new database at an explicitly scanned
+retained boundary while permanently recording the earlier interval as
+unverified:
+
+```powershell
+python -m services.btc_node_agent `
+  --db C:\Thronos\btc_observer.db `
+  --watch-registry C:\Thronos\btc_watch_registry.json `
+  --acknowledge-unverified-history-before-height <RETAINED_HEIGHT>
+```
+
+The command refuses an existing checkpoint, scans the stated boundary block
+before checkpointing it, records `0..HEIGHT-1` as unverified, and leaves both
+reconciliation and unverified-history gates active. It is a continuity tool,
+not an activation tool. For the current production database, do not run it over
+the existing checkpoint; preserve and review that database first.
+
+### Production activation remains blocked
+
+Keep automatic Bridge/Earn credit disabled. This phase does not clear the
+existing production flags and does not assert that historical ZMQ traffic has
+been reconstructed.
 
 ## Confirmed-deposit outbox contract
 
@@ -154,7 +226,8 @@ Before an event can enter the outbox it must:
 - meet `BTC_MIN_CONFIRMATIONS` (default 6);
 - have a canonical block hash and height;
 - have no event-level reconciliation requirement;
-- have no global `observer_reconciliation_required` or `zmq_gap_detected` flag.
+- have no global `observer_reconciliation_required`, `zmq_gap_detected`, or
+  `observer_unverified_history` flag.
 
 The observer database is bound to the Bitcoin network identity from block 0. Reusing the same SQLite database with another network/genesis fails closed. Every configured watched address is also checked by the local mainnet Bitcoin Core using read-only `validateaddress`.
 

@@ -74,6 +74,19 @@ def test_global_reconciliation_flag_blocks_enqueue_and_claim():
             outbox.enqueue_confirmed(minimum_confirmations=6)
 
 
+def test_unverified_history_flag_blocks_enqueue_and_claim():
+    with tempfile.TemporaryDirectory() as td:
+        path = str(Path(td) / "observer.db")
+        store = seed_confirmed(path)
+        outbox = BtcDepositOutbox(path, network=NETWORK, genesis_hash=GENESIS)
+        store.set_meta_int("observer_unverified_history", 1)
+
+        with pytest.raises(BtcDepositOutboxError, match="global_reconciliation"):
+            outbox.enqueue_confirmed(minimum_confirmations=6)
+        with pytest.raises(BtcDepositOutboxError, match="global_reconciliation"):
+            outbox.claim_next()
+
+
 def test_failed_delivery_is_retryable_after_backoff():
     with tempfile.TemporaryDirectory() as td:
         path = str(Path(td) / "observer.db")

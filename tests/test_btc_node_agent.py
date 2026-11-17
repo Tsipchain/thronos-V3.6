@@ -1,5 +1,6 @@
 from pathlib import Path
 import tempfile
+import threading
 
 import pytest
 
@@ -61,6 +62,8 @@ class FakeRpc:
             return dict(self.decoded)
         if method == "getrawtransaction":
             return dict(self.decoded)
+        if method == "getrawmempool":
+            return [TXID]
         if method == "getblock":
             block_hash = params[0]
             if block_hash == self.block_hash:
@@ -126,6 +129,8 @@ def test_publish_tip_uses_durable_monotonic_sequence(agent):
         (976278, BLOCK, 1),
         (976278, BLOCK, 2),
     ]
+    assert instance.store.checkpoint() is None
+    assert instance.store.published_tip()["block_height"] == 976278
 
 
 def test_rawtx_is_observed_without_txindex(agent):
@@ -140,6 +145,10 @@ def test_rawtx_is_observed_without_txindex(agent):
 def test_new_block_reconciles_and_pushes_tip(agent):
     instance, _rpc, adapter = agent
     instance.handle_rawtx(b"\x01")
+    previous_height = instance.rpc.height - 1
+    instance.store.save_checkpoint(
+        previous_height, f"{previous_height:064x}"[-64:], observed_at=1
+    )
     matched, height, block_hash, sequence = instance.handle_new_block()
     assert matched == 1
     assert height == 976278
@@ -186,6 +195,40 @@ def test_zmq_message_sequence_gap_is_detected(agent):
     assert instance._check_zmq_message_sequence(b"rawtx", (10).to_bytes(4, "little")) is False
     assert instance._check_zmq_message_sequence(b"rawtx", (11).to_bytes(4, "little")) is False
     assert instance._check_zmq_message_sequence(b"rawtx", (13).to_bytes(4, "little")) is True
+    assert instance.store.get_meta_int("zmq_gap_detected") == 1
+    diagnostic = instance.store.diagnostics()[0]
+    assert diagnostic["category"] == "zmq_sequence_gap"
+    assert diagnostic["topic"] == "rawtx"
+    assert diagnostic["expected_sequence"] == 12
+    assert diagnostic["observed_sequence"] == 13
+
+
+def test_missing_zmq_frames_are_durable_and_fail_closed(agent):
+    instance, _rpc, _adapter = agent
+    instance.record_malformed_zmq_frames([b"sequence"])
+    assert instance.store.get_meta_int("zmq_gap_detected") == 1
+    diagnostic = instance.store.diagnostics()[0]
+    assert diagnostic["category"] == "zmq_malformed_frames"
+    assert diagnostic["topic"] == "sequence"
+
+
+def test_recovery_status_survives_restart_without_sensitive_registry_data(agent):
+    instance, _rpc, _adapter = agent
+    instance.record_malformed_zmq_frames([b"rawtx"])
+    instance.publish_heartbeat()
+    reopened = LocalBitcoinNodeAgent(
+        db_path=instance.db_path,
+        watch_registry={WATCH: "different-sensitive-owner-reference"},
+        rpc=instance.rpc,
+        adapter=FakeAdapter(),
+    )
+    status = reopened.recovery_status()
+    encoded = str(status)
+    assert status["zmq_gap_detected"] is True
+    assert status["published_adapter_tip"]["block_height"] == instance.rpc.height
+    assert status["scan_checkpoint_provenance"] == "none"
+    assert status["open_diagnostics"][0]["topic"] == "rawtx"
+    assert "different-sensitive-owner-reference" not in encoded
 
 
 def test_recover_from_checkpoint_backfills_missed_blocks(agent):
@@ -197,6 +240,77 @@ def test_recover_from_checkpoint_backfills_missed_blocks(agent):
     blocks, matches = instance.recover_from_checkpoint()
     assert blocks == 2
     assert matches == 1
+    assert instance.store.checkpoint()["block_height"] == rpc.height
+    reconciliation = instance.store.reconciliation_checkpoint()
+    assert reconciliation["last_verified_height"] == rpc.height
+    assert reconciliation["status"] == "complete"
+
+
+def test_missing_checkpoint_fails_closed_without_moving_it(agent):
+    instance, _rpc, _adapter = agent
+    with pytest.raises(NodeAgentError, match="scan_checkpoint_missing"):
+        instance.recover_from_checkpoint()
+    assert instance.store.checkpoint() is None
+    assert instance.store.get_meta_int("observer_reconciliation_required") == 1
+    assert instance.store.diagnostics()[0]["category"] == "missing_scan_checkpoint"
+
+
+def test_explicit_pruned_boundary_stays_unverified_and_blocks_delivery(agent):
+    instance, rpc, _adapter = agent
+    instance.preflight()
+    result = instance.acknowledge_unverified_history_before(rpc.height)
+    assert result == {
+        "boundary_height": rpc.height,
+        "unverified_through_height": rpc.height - 1,
+    }
+    assert instance.store.checkpoint()["block_height"] == rpc.height
+    assert instance.store.get_meta_int("observer_unverified_history") == 1
+    assert instance.store.get_meta_int("observer_reconciliation_required") == 1
+    assert instance.enqueue_confirmed_deposits() == 0
+    diagnostic = instance.store.diagnostics()[0]
+    assert diagnostic["category"] == "operator_unverified_history_boundary"
+    assert diagnostic["range_end"] == rpc.height - 1
+
+
+def test_recovery_commits_each_fully_scanned_block_before_later_failure(agent):
+    instance, rpc, _adapter = agent
+    old_height = rpc.height - 2
+    instance.store.save_checkpoint(
+        old_height, f"{old_height:064x}"[-64:], observed_at=1
+    )
+    original_call = rpc.call
+
+    def fail_on_tip(method, params):
+        if method == "getblock" and params[0] == BLOCK:
+            raise NodeAgentError("pruned")
+        return original_call(method, params)
+
+    rpc.call = fail_on_tip
+    with pytest.raises(NodeAgentError, match="block_history_unavailable"):
+        instance.recover_from_checkpoint()
+    assert instance.store.checkpoint()["block_height"] == rpc.height - 1
+    reconciliation = instance.store.reconciliation_checkpoint()
+    assert reconciliation["last_verified_height"] == rpc.height - 1
+    assert reconciliation["status"] == "running"
+    diagnostic = instance.store.diagnostics()[0]
+    assert diagnostic["range_start"] == rpc.height
+    assert diagnostic["range_end"] == rpc.height
+
+
+def test_bounded_startup_mempool_snapshot_observes_watched_output(agent):
+    instance, _rpc, _adapter = agent
+    scanned, matched = instance.reconcile_mempool()
+    assert (scanned, matched) == (1, 1)
+    assert instance.store.by_txid(TXID)[0].state == "seen"
+
+
+def test_startup_mempool_snapshot_fails_closed_instead_of_truncating(agent, monkeypatch):
+    instance, _rpc, _adapter = agent
+    monkeypatch.setenv("BTC_MEMPOOL_RECONCILE_MAX_TXS", "1")
+    instance.rpc.call = lambda method, params: [TXID, "22" * 32] if method == "getrawmempool" else None
+    with pytest.raises(NodeAgentError, match="snapshot_exceeds_limit"):
+        instance.reconcile_mempool()
+    assert instance.store.get_meta_int("observer_reconciliation_required") == 1
 
 
 def test_recover_from_checkpoint_fails_closed_on_large_gap(agent, monkeypatch):
@@ -209,6 +323,41 @@ def test_recover_from_checkpoint_fails_closed_on_large_gap(agent, monkeypatch):
     with pytest.raises(NodeAgentError, match="gap_exceeds_backfill_limit"):
         instance.recover_from_checkpoint()
     assert instance.store.get_meta_int("observer_reconciliation_required") == 1
+
+
+def test_checkpoint_reorg_never_advances_scan_boundary(agent):
+    instance, rpc, _adapter = agent
+    instance.store.save_checkpoint(rpc.height, "bb" * 32, observed_at=1)
+    with pytest.raises(NodeAgentError, match="checkpoint_reorg"):
+        instance.recover_from_checkpoint()
+    assert instance.store.checkpoint()["block_hash"] == "bb" * 32
+    assert instance.store.diagnostics()[0]["category"] == "checkpoint_reorg"
+
+
+def test_simultaneous_block_notifications_scan_once(agent):
+    instance, rpc, adapter = agent
+    previous_height = rpc.height - 1
+    instance.store.save_checkpoint(
+        previous_height, f"{previous_height:064x}"[-64:], observed_at=1
+    )
+    results = []
+    errors = []
+
+    def run():
+        try:
+            results.append(instance.handle_new_block())
+        except Exception as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=run), threading.Thread(target=run)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert errors == []
+    assert sorted(result[0] for result in results) == [0, 1]
+    assert instance.store.checkpoint()["block_height"] == rpc.height
+    assert len(adapter.pushes) == 2
 
 
 def test_sequence_rejects_invalid_body(agent):
@@ -243,6 +392,7 @@ def test_heartbeat_does_not_advance_observer_checkpoint(agent):
     checkpoint = instance.store.checkpoint()
     assert checkpoint["block_height"] == old_height
     assert checkpoint["block_hash"] == old_hash
+    assert instance.store.published_tip()["block_height"] == rpc.height
 
 
 def test_confirmed_outbox_delivery_acks_without_balance_credit(agent):
@@ -266,3 +416,16 @@ def test_confirmed_outbox_delivery_acks_without_balance_credit(agent):
     assert len(adapter.deposits) == 1
     assert adapter.deposits[0]["idempotency_key"] == f"main:{TXID}:0"
     assert instance.outbox.counts() == {"acknowledged": 1}
+
+
+def test_reconciliation_flags_allow_observation_but_block_agent_outbox(agent):
+    instance, _rpc, adapter = agent
+    instance.preflight()
+    instance.delivery_enabled = True
+    instance.store.set_meta_int("observer_reconciliation_required", 1)
+    instance.handle_rawtx(b"\x01")
+    row = instance.store.by_txid(TXID)[0]
+    assert row.amount_sats == 100000
+    assert instance.enqueue_confirmed_deposits() == 0
+    assert instance.deliver_outbox() == 0
+    assert adapter.deposits == []

@@ -1,5 +1,6 @@
 
 from pathlib import Path
+import sqlite3
 import tempfile
 
 import pytest
@@ -140,14 +141,129 @@ def test_identity_conflict_fails_closed(store):
 
 
 def test_checkpoint_is_durable(store):
-    rpc = FakeRpc()
-    checkpoint = observer(store, rpc).checkpoint_tip()
+    store.save_checkpoint(900010, TIP, observed_at=1000)
+    checkpoint = store.checkpoint()
     assert checkpoint == {
         "block_height": 900010,
         "block_hash": TIP,
         "observed_at": 1000,
     }
     assert store.checkpoint() == checkpoint
+
+
+def test_read_recovery_status_does_not_migrate_legacy_database():
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / "legacy.db"
+        with sqlite3.connect(path) as con:
+            con.executescript(
+                """
+                CREATE TABLE btc_observer_checkpoint (
+                    singleton INTEGER PRIMARY KEY,
+                    block_height INTEGER NOT NULL,
+                    block_hash TEXT NOT NULL,
+                    observed_at INTEGER NOT NULL
+                );
+                CREATE TABLE btc_observer_meta (
+                    key TEXT PRIMARY KEY,
+                    value INTEGER NOT NULL
+                );
+                """
+            )
+            con.execute(
+                "INSERT INTO btc_observer_checkpoint VALUES(1,?,?,?)",
+                (900010, TIP, 1000),
+            )
+            schema_version = con.execute("PRAGMA schema_version").fetchone()[0]
+
+        status = BtcObserverStore.read_recovery_status(str(path))
+        assert status["scan_checkpoint"]["block_height"] == 900010
+        assert status["scan_checkpoint_provenance"] == "legacy_unverified"
+        assert status["observer_unverified_history"] is True
+        with sqlite3.connect(path) as con:
+            assert con.execute("PRAGMA schema_version").fetchone()[0] == schema_version
+            tables = {
+                row[0]
+                for row in con.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+        assert "btc_observer_diagnostics" not in tables
+
+
+def test_read_recovery_status_sees_committed_wal_without_schema_mutation():
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / "wal.db"
+        writer = sqlite3.connect(path)
+        try:
+            assert writer.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+            writer.execute("PRAGMA wal_autocheckpoint=0")
+            writer.executescript(
+                """
+                CREATE TABLE btc_observer_checkpoint (
+                    singleton INTEGER PRIMARY KEY,
+                    block_height INTEGER NOT NULL,
+                    block_hash TEXT NOT NULL,
+                    observed_at INTEGER NOT NULL
+                );
+                CREATE TABLE btc_observer_meta (
+                    key TEXT PRIMARY KEY,
+                    value INTEGER NOT NULL
+                );
+                """
+            )
+            writer.execute(
+                "INSERT INTO btc_observer_checkpoint VALUES(1,?,?,?)",
+                (900010, TIP, 1000),
+            )
+            writer.commit()
+            schema_version = writer.execute("PRAGMA schema_version").fetchone()[0]
+            assert Path(str(path) + "-wal").is_file()
+
+            status = BtcObserverStore.read_recovery_status(str(path))
+            assert status["scan_checkpoint"]["block_height"] == 900010
+            assert status["scan_checkpoint_provenance"] == "legacy_unverified"
+            assert writer.execute("PRAGMA schema_version").fetchone()[0] == schema_version
+        finally:
+            writer.close()
+
+
+def test_legacy_checkpoint_migration_is_fail_closed_and_idempotent():
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / "legacy.db"
+        with sqlite3.connect(path) as con:
+            con.executescript(
+                """
+                CREATE TABLE btc_observer_checkpoint (
+                    singleton INTEGER PRIMARY KEY,
+                    block_height INTEGER NOT NULL,
+                    block_hash TEXT NOT NULL,
+                    observed_at INTEGER NOT NULL
+                );
+                CREATE TABLE btc_observer_meta (
+                    key TEXT PRIMARY KEY,
+                    value INTEGER NOT NULL
+                );
+                """
+            )
+            con.execute(
+                "INSERT INTO btc_observer_checkpoint VALUES(1,?,?,?)",
+                (900010, TIP, 1000),
+            )
+        store = BtcObserverStore(str(path))
+        BtcObserverStore(str(path))
+        assert store.get_meta_int("scan_checkpoint_provenance_version") == 1
+        assert store.get_meta_int("observer_reconciliation_required") == 1
+        assert store.get_meta_int("observer_unverified_history") == 1
+        diagnostics = store.diagnostics()
+        assert len(diagnostics) == 1
+        assert diagnostics[0]["category"] == "legacy_checkpoint_provenance_unknown"
+        assert diagnostics[0]["range_end"] == 900010
+
+
+def test_legacy_tip_checkpoint_fails_closed_without_moving_checkpoint(store):
+    with pytest.raises(BtcObserverError, match="without_scan_forbidden"):
+        observer(store, FakeRpc()).checkpoint_tip()
+    assert store.checkpoint() is None
 
 
 def test_invalid_sub_satoshi_amount_fails_closed(store):

@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 import socket
 import struct
+import threading
 import time
 from typing import Any
 from urllib.parse import urlparse
@@ -37,6 +38,7 @@ RPC_METHODS = frozenset(
         "getbestblockhash",
         "decoderawtransaction",
         "getmempoolentry",
+        "getrawmempool",
         "getrawtransaction",
         "getzmqnotifications",
         "validateaddress",
@@ -276,6 +278,7 @@ class LocalBitcoinNodeAgent:
             "BTC_DEPOSIT_DELIVERY_ENABLED", "0"
         ).strip().lower() in {"1", "true", "yes", "on"}
         self._zmq_sequences: dict[bytes, int] = {}
+        self._event_lock = threading.RLock()
 
     def preflight(self) -> dict[str, Any]:
         info = self.rpc.call("getblockchaininfo", [])
@@ -332,22 +335,106 @@ class LocalBitcoinNodeAgent:
             raise NodeAgentError("invalid_bitcoin_tip_hash")
         return height, block_hash
 
-    def publish_tip(self) -> tuple[int, str, int]:
-        height, block_hash = self.current_tip()
-        sequence = self.store.next_sequence()
-        self.adapter.push_tip(height=height, block_hash=block_hash, sequence=sequence)
+    def recovery_status(self) -> dict[str, Any]:
+        """Return only non-secret observer recovery state for operators."""
+        return BtcObserverStore.read_recovery_status(self.db_path)
+
+    def acknowledge_unverified_history_before(self, height: int) -> dict[str, Any]:
+        """Scan one explicit boundary while permanently labelling earlier history.
+
+        This enables observation to continue on a pruned node; it never enables
+        enqueue/delivery and never describes the missing interval as reconciled.
+        """
+        if self.observer is None:
+            raise NodeAgentError("btc_watch_registry_required")
+        if isinstance(height, bool) or not isinstance(height, int) or height < 1:
+            raise NodeAgentError("invalid_btc_history_boundary")
+        if self.store.checkpoint() is not None:
+            raise NodeAgentError("btc_scan_checkpoint_already_exists")
+        tip_height, _ = self.current_tip()
+        if height > tip_height:
+            raise NodeAgentError("btc_history_boundary_ahead_of_chain")
+
+        # Persist the fail-closed classification before attempting any scan.
+        self.store.set_meta_int("observer_unverified_history", 1)
+        self.store.set_meta_int("observer_reconciliation_required", 1)
+        self.store.record_diagnostic(
+            "operator_unverified_history_boundary",
+            range_start=0,
+            range_end=height - 1,
+            detail="Operator acknowledged that history before this boundary is unverified",
+        )
+        block_hash = str(self.rpc.call("getblockhash", [height]) or "").lower()
+        try:
+            block = self.rpc.call("getblock", [block_hash, 2])
+        except Exception as exc:
+            raise NodeAgentError(
+                f"btc_block_history_unavailable:{height}:{height}"
+            ) from exc
+        if (
+            not isinstance(block, dict)
+            or str(block.get("hash") or "").lower() != block_hash
+            or block.get("height") != height
+        ):
+            raise NodeAgentError("btc_block_identity_mismatch")
+        self.observer.observe_block(block)
         self.store.save_checkpoint(height, block_hash, observed_at=int(time.time()))
-        return height, block_hash, sequence
+        return {"boundary_height": height, "unverified_through_height": height - 1}
+
+    def publish_tip(self) -> tuple[int, str, int]:
+        """Publish adapter liveness state, never the block-scan checkpoint."""
+        with self._event_lock:
+            height, block_hash = self.current_tip()
+            sequence = self.store.next_sequence()
+            self.adapter.push_tip(height=height, block_hash=block_hash, sequence=sequence)
+            self.store.save_published_tip(
+                height, block_hash, sequence, published_at=int(time.time())
+            )
+            return height, block_hash, sequence
 
     def publish_heartbeat(self) -> tuple[int, str, int]:
         """Refresh adapter liveness without advancing the observer checkpoint."""
-        height, block_hash = self.current_tip()
-        sequence = self.store.next_sequence()
-        self.adapter.push_tip(height=height, block_hash=block_hash, sequence=sequence)
-        return height, block_hash, sequence
+        return self.publish_tip()
+
+    def _record_reconciliation_failure(
+        self,
+        category: str,
+        detail: str,
+        *,
+        topic: str | None = None,
+        expected_sequence: int | None = None,
+        observed_sequence: int | None = None,
+        range_start: int | None = None,
+        range_end: int | None = None,
+        zmq_gap: bool = False,
+    ) -> int:
+        self.store.set_meta_int("observer_reconciliation_required", 1)
+        if zmq_gap:
+            self.store.set_meta_int("zmq_gap_detected", 1)
+        return self.store.record_diagnostic(
+            category,
+            topic=topic,
+            expected_sequence=expected_sequence,
+            observed_sequence=observed_sequence,
+            range_start=range_start,
+            range_end=range_end,
+            detail=detail,
+        )
 
     def enqueue_confirmed_deposits(self) -> int:
         if self.observer is None or self.outbox is None:
+            return 0
+        if any(
+            self.store.get_meta_int(key)
+            for key in (
+                "observer_reconciliation_required",
+                "zmq_gap_detected",
+                "observer_unverified_history",
+            )
+        ):
+            logger.warning(
+                "BTC deposit enqueue remains disabled by durable reconciliation state"
+            )
             return 0
         return self.outbox.enqueue_confirmed(
             minimum_confirmations=self.minimum_confirmations
@@ -355,6 +442,18 @@ class LocalBitcoinNodeAgent:
 
     def deliver_outbox(self, *, limit: int = 10) -> int:
         if not self.delivery_enabled or self.outbox is None:
+            return 0
+        if any(
+            self.store.get_meta_int(key)
+            for key in (
+                "observer_reconciliation_required",
+                "zmq_gap_detected",
+                "observer_unverified_history",
+            )
+        ):
+            logger.warning(
+                "BTC deposit delivery remains disabled by durable reconciliation state"
+            )
             return 0
         delivered = 0
         for _ in range(max(1, int(limit))):
@@ -375,7 +474,7 @@ class LocalBitcoinNodeAgent:
         return delivered
 
 
-    def recover_from_checkpoint(self) -> tuple[int, int]:
+    def _recover_from_checkpoint(self) -> tuple[int, int]:
         """Backfill blocks missed while the local agent was offline.
 
         Only a bounded recent gap is replayed. A checkpoint reorg or excessive
@@ -386,7 +485,14 @@ class LocalBitcoinNodeAgent:
 
         checkpoint = self.store.checkpoint()
         if not checkpoint:
-            return (0, 0)
+            current_height, _ = self.current_tip()
+            self._record_reconciliation_failure(
+                "missing_scan_checkpoint",
+                "No fully scanned block boundary is recorded",
+                range_start=0,
+                range_end=current_height,
+            )
+            raise NodeAgentError("btc_scan_checkpoint_missing")
 
         current_height, _current_hash = self.current_tip()
         previous_height = int(checkpoint["block_height"])
@@ -394,48 +500,159 @@ class LocalBitcoinNodeAgent:
         max_blocks = max(1, int(os.getenv("BTC_BACKFILL_MAX_BLOCKS", "144")))
 
         if previous_height > current_height:
-            self.store.set_meta_int("observer_reconciliation_required", 1)
+            self._record_reconciliation_failure(
+                "checkpoint_ahead_of_chain",
+                "The fully scanned checkpoint is above the canonical tip",
+                range_start=current_height,
+                range_end=previous_height,
+            )
             raise NodeAgentError("btc_checkpoint_ahead_of_chain")
 
         canonical_previous = str(
             self.rpc.call("getblockhash", [previous_height])
         ).lower()
         if canonical_previous != previous_hash:
-            self.store.set_meta_int("observer_reconciliation_required", 1)
+            self._record_reconciliation_failure(
+                "checkpoint_reorg",
+                "The recorded fully scanned block is no longer canonical",
+                range_start=previous_height,
+                range_end=current_height,
+            )
             self.observer.reconcile_tip()
             raise NodeAgentError("btc_checkpoint_reorg_requires_manual_reconciliation")
 
         gap = current_height - previous_height
         if gap > max_blocks:
-            self.store.set_meta_int("observer_reconciliation_required", 1)
+            self._record_reconciliation_failure(
+                "scan_range_exceeds_bound",
+                "Required block recovery exceeds BTC_BACKFILL_MAX_BLOCKS",
+                range_start=previous_height + 1,
+                range_end=current_height,
+            )
             raise NodeAgentError("btc_checkpoint_gap_exceeds_backfill_limit")
 
         blocks_scanned = 0
         matched_outputs = 0
+        if gap:
+            self.store.begin_reconciliation(
+                range_start=previous_height + 1,
+                target_height=current_height,
+                previous_height=previous_height,
+            )
         for height in range(previous_height + 1, current_height + 1):
             block_hash = str(self.rpc.call("getblockhash", [height])).lower()
-            block = self.rpc.call("getblock", [block_hash, 2])
+            try:
+                block = self.rpc.call("getblock", [block_hash, 2])
+            except Exception as exc:
+                self._record_reconciliation_failure(
+                    "block_history_unavailable",
+                    "A required canonical block could not be read; pruning may be the cause",
+                    range_start=height,
+                    range_end=current_height,
+                )
+                raise NodeAgentError(
+                    f"btc_block_history_unavailable:{height}:{current_height}"
+                ) from exc
             if not isinstance(block, dict):
+                self._record_reconciliation_failure(
+                    "block_history_unavailable",
+                    "A required canonical block response was incomplete",
+                    range_start=height,
+                    range_end=current_height,
+                )
                 raise NodeAgentError("getblock_failed")
+            if str(block.get("hash") or "").lower() != block_hash or block.get("height") != height:
+                self._record_reconciliation_failure(
+                    "conflicting_block_observation",
+                    "Canonical hash/height did not match the decoded block",
+                    range_start=height,
+                    range_end=height,
+                )
+                raise NodeAgentError("btc_block_identity_mismatch")
             matched_outputs += len(self.observer.observe_block(block))
+            self.store.advance_checkpoint(
+                height,
+                block_hash,
+                observed_at=int(time.time()),
+                expected_previous_height=height - 1,
+            )
             blocks_scanned += 1
 
         self.observer.reconcile_tip()
         self.enqueue_confirmed_deposits()
         return blocks_scanned, matched_outputs
 
+    def recover_from_checkpoint(self) -> tuple[int, int]:
+        with self._event_lock:
+            return self._recover_from_checkpoint()
+
+    def reconcile_mempool(self) -> tuple[int, int]:
+        """Observe a bounded startup snapshot; never silently truncate it."""
+        if self.observer is None:
+            return (0, 0)
+        txids = self.rpc.call("getrawmempool", [])
+        if not isinstance(txids, list):
+            self._record_reconciliation_failure(
+                "mempool_snapshot_invalid", "getrawmempool did not return a list"
+            )
+            raise NodeAgentError("invalid_btc_mempool_snapshot")
+        limit = max(1, int(os.getenv("BTC_MEMPOOL_RECONCILE_MAX_TXS", "10000")))
+        if len(txids) > limit:
+            self._record_reconciliation_failure(
+                "mempool_snapshot_exceeds_bound",
+                "Startup mempool exceeds BTC_MEMPOOL_RECONCILE_MAX_TXS",
+                range_start=0,
+                range_end=len(txids),
+            )
+            raise NodeAgentError("btc_mempool_snapshot_exceeds_limit")
+        matched = 0
+        for txid in txids:
+            value = str(txid or "").lower()
+            if len(value) != 64 or any(ch not in "0123456789abcdef" for ch in value):
+                self._record_reconciliation_failure(
+                    "mempool_snapshot_invalid", "A mempool txid was invalid"
+                )
+                raise NodeAgentError("invalid_btc_mempool_txid")
+            raw = self.rpc.call("getrawtransaction", [value, True])
+            if not isinstance(raw, dict) or str(raw.get("txid") or "").lower() != value:
+                self._record_reconciliation_failure(
+                    "mempool_transaction_unavailable",
+                    "A transaction disappeared or conflicted during the bounded snapshot",
+                )
+                raise NodeAgentError("btc_mempool_transaction_unavailable")
+            matched += len(self.observer.observe_decoded_transaction(raw))
+        return len(txids), matched
+
     def _check_zmq_message_sequence(self, topic: bytes, raw_seq: bytes) -> bool:
         """Return True when Bitcoin Core's per-topic ZMQ sequence has a gap."""
         if len(raw_seq) != 4:
+            self._record_reconciliation_failure(
+                "zmq_invalid_sequence_frame",
+                "Bitcoin Core ZMQ sequence frame was not four bytes",
+                topic=topic.decode("ascii", errors="replace")[:100],
+                zmq_gap=True,
+            )
             raise NodeAgentError("invalid_zmq_message_sequence")
         current = struct.unpack("<I", raw_seq)[0]
         previous = self._zmq_sequences.get(topic)
         self._zmq_sequences[topic] = current
         if previous is None:
             return False
-        return current != ((previous + 1) & 0xFFFFFFFF)
+        expected = (previous + 1) & 0xFFFFFFFF
+        if current == expected:
+            return False
+        topic_name = topic.decode("ascii", errors="replace")[:100]
+        self._record_reconciliation_failure(
+            "zmq_sequence_gap",
+            "Bitcoin Core per-topic ZMQ sequence was not contiguous",
+            topic=topic_name,
+            expected_sequence=expected,
+            observed_sequence=current,
+            zmq_gap=True,
+        )
+        return True
 
-    def handle_sequence(self, body: bytes) -> dict[str, Any]:
+    def _handle_sequence(self, body: bytes) -> dict[str, Any]:
         """Handle Bitcoin Core sequence A/R/C/D notifications.
 
         A/R include a mempool sequence number; C/D are block connect/disconnect.
@@ -468,7 +685,12 @@ class LocalBitcoinNodeAgent:
             )
             changed = len([row for row in rows if row.block_hash is None])
         elif self.observer is not None and label == "D":
-            self.store.set_meta_int("observer_reconciliation_required", 1)
+            self._record_reconciliation_failure(
+                "zmq_block_disconnect",
+                "Bitcoin Core reported a block disconnect; canonical review is required",
+                topic="sequence",
+                zmq_gap=True,
+            )
             self.observer.reconcile_tip()
 
         return {
@@ -477,6 +699,22 @@ class LocalBitcoinNodeAgent:
             "mempool_sequence": mempool_sequence,
             "changed": changed,
         }
+
+    def handle_sequence(self, body: bytes) -> dict[str, Any]:
+        with self._event_lock:
+            return self._handle_sequence(body)
+
+    def record_malformed_zmq_frames(self, frames: list[bytes]) -> None:
+        topic = (
+            frames[0].decode("ascii", errors="replace")[:100]
+            if frames else "unknown"
+        )
+        self._record_reconciliation_failure(
+            "zmq_malformed_frames",
+            "ZMQ multipart message had fewer than three frames",
+            topic=topic,
+            zmq_gap=True,
+        )
 
     def probe_zmq(self, timeout_seconds: int = 10) -> dict[str, Any]:
         """Verify local ZMQ configuration and observe traffic without BTC actions."""
@@ -539,27 +777,19 @@ class LocalBitcoinNodeAgent:
             sock.close(0)
 
     def handle_rawtx(self, raw_tx: bytes) -> int:
-        if self.observer is None:
-            return 0
-        decoded = self.rpc.call("decoderawtransaction", [raw_tx.hex()])
-        if not isinstance(decoded, dict):
-            raise NodeAgentError("decoderawtransaction_failed")
-        return len(self.observer.observe_decoded_transaction(decoded))
+        with self._event_lock:
+            if self.observer is None:
+                return 0
+            decoded = self.rpc.call("decoderawtransaction", [raw_tx.hex()])
+            if not isinstance(decoded, dict):
+                raise NodeAgentError("decoderawtransaction_failed")
+            return len(self.observer.observe_decoded_transaction(decoded))
 
     def handle_new_block(self) -> tuple[int, int, str, int]:
-        height, block_hash = self.current_tip()
-        matched = 0
-        if self.observer is not None:
-            block = self.rpc.call("getblock", [block_hash, 2])
-            if not isinstance(block, dict):
-                raise NodeAgentError("getblock_failed")
-            matched = len(self.observer.observe_block(block))
-            self.observer.reconcile_tip()
-            self.enqueue_confirmed_deposits()
-        sequence = self.store.next_sequence()
-        self.adapter.push_tip(height=height, block_hash=block_hash, sequence=sequence)
-        self.store.save_checkpoint(height, block_hash, observed_at=int(time.time()))
-        return matched, height, block_hash, sequence
+        with self._event_lock:
+            _blocks, matched = self.recover_from_checkpoint()
+            height, block_hash, sequence = self.publish_heartbeat()
+            return matched, height, block_hash, sequence
 
     def run_zmq(self) -> None:
         try:
@@ -599,8 +829,7 @@ class LocalBitcoinNodeAgent:
                 if sock in events:
                     frames = sock.recv_multipart()
                     if len(frames) < 3:
-                        self.store.set_meta_int("zmq_gap_detected", 1)
-                        self.store.set_meta_int("observer_reconciliation_required", 1)
+                        self.record_malformed_zmq_frames(frames)
                         logger.error("Malformed Bitcoin Core ZMQ frame set; reconciliation required")
                     else:
                         topic, body, raw_seq = frames[0], frames[1], frames[2]
@@ -663,6 +892,20 @@ def main() -> int:
         help="verify configured local ZMQ and observe topics for N seconds (default 10)",
     )
     parser.add_argument(
+        "--recovery-status",
+        action="store_true",
+        help="print non-secret durable checkpoint/gap status and exit",
+    )
+    parser.add_argument(
+        "--acknowledge-unverified-history-before-height",
+        type=int,
+        metavar="HEIGHT",
+        help=(
+            "scan HEIGHT as the initial boundary and permanently mark all earlier "
+            "history unverified; never enables deposit delivery"
+        ),
+    )
+    parser.add_argument(
         "--min-confirmations",
         type=int,
         default=int(os.getenv("BTC_MIN_CONFIRMATIONS", "6")),
@@ -674,6 +917,9 @@ def main() -> int:
         level=os.getenv("BTC_NODE_AGENT_LOG_LEVEL", "INFO"),
         format="[BTC_NODE_AGENT] %(asctime)s %(levelname)s %(message)s",
     )
+    if args.recovery_status:
+        print(json.dumps(BtcObserverStore.read_recovery_status(args.db), sort_keys=True))
+        return 0
     watch = load_watch_registry(args.watch_registry or None)
     agent = LocalBitcoinNodeAgent(
         db_path=args.db,
@@ -681,6 +927,16 @@ def main() -> int:
         minimum_confirmations=args.min_confirmations,
     )
     info = agent.preflight()
+
+    if args.acknowledge_unverified_history_before_height is not None:
+        result = agent.acknowledge_unverified_history_before(
+            args.acknowledge_unverified_history_before_height
+        )
+        logger.warning(
+            "Recorded unverified BTC history through height=%d; delivery remains blocked",
+            result["unverified_through_height"],
+        )
+        return 0
 
     if args.probe_zmq is not None:
         probe = agent.probe_zmq(args.probe_zmq)
@@ -693,7 +949,7 @@ def main() -> int:
         return 0
 
     if args.once:
-        height, _block_hash, sequence = agent.publish_tip()
+        height, _block_hash, sequence = agent.publish_heartbeat()
         logger.info(
             "Bitcoin node ready: chain=%s height=%d pruned=%s sequence=%d watched=%d",
             info["chain"], height, info["pruned"], sequence, len(watch),
@@ -701,12 +957,17 @@ def main() -> int:
         return 0
 
     blocks_scanned, recovered_matches = agent.recover_from_checkpoint()
+    mempool_scanned, mempool_matches = agent.reconcile_mempool()
     queued = agent.enqueue_confirmed_deposits()
-    height, _block_hash, sequence = agent.publish_tip()
+    height, _block_hash, sequence = agent.publish_heartbeat()
     logger.info(
         "Bitcoin node ready: chain=%s height=%d pruned=%s sequence=%d watched=%d backfill_blocks=%d backfill_matches=%d outbox_queued=%d delivery_enabled=%s",
         info["chain"], height, info["pruned"], sequence, len(watch),
         blocks_scanned, recovered_matches, queued, agent.delivery_enabled,
+    )
+    logger.info(
+        "Bitcoin startup mempool snapshot transactions=%d watched_outputs=%d",
+        mempool_scanned, mempool_matches,
     )
     agent.run_zmq()
     return 0

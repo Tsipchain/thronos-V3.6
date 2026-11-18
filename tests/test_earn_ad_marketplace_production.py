@@ -68,7 +68,7 @@ def _active_campaign(store, placement="basketball_sidebar"):
     _credit(store, user_id)
     publisher_id = _publisher(store, user_id, placement)
     campaign = store.create_campaign(
-        user_id, "Basketball paid", campaign_type="cpc",
+        user_id, "Basketball paid", campaign_type="cpm",
         bid_amount="1.000000", total_budget="1000.000000",
         placement=placement, country_targets="GR,US",
     )
@@ -100,34 +100,41 @@ def test_synthetic_5000_reserve_charge_refund_conserves_thc(store, monkeypatch):
         "viewer_hash_1234567890", "GR", "publisher-secret",
     )
     assert not served["is_house"]
-    event = store.verified_record_event(
+    click = store.verified_record_event(
         served["proof"]["proof_id"], "click",
         served["proof"]["proof_token"],
     )
-    assert event["charged_amount"] == "1.000000"
-    replay = store.verified_record_event(
-        served["proof"]["proof_id"], "click",
+    assert click["charged_amount"] == "0.000000"
+    event = store.verified_record_event(
+        served["proof"]["proof_id"], "view",
         served["proof"]["proof_token"],
+        viewable_ms=1200, visible_percent=80, page_visible=True,
+    )
+    assert event["charged_amount"] == "0.001000"
+    replay = store.verified_record_event(
+        served["proof"]["proof_id"], "view",
+        served["proof"]["proof_token"],
+        viewable_ms=1200, visible_percent=80, page_visible=True,
     )
     assert replay["idempotent"] is True
 
     charged = store.thc_balance(user_id)
-    assert charged["spent"] == "1.000000"
-    assert charged["reserved"] == "999.000000"
+    assert charged["spent"] == "0.001000"
+    assert charged["reserved"] == "999.999000"
     assert charged["available"] == "4000.000000"
 
     cancelled = store.cancel_campaign(campaign_id, user_id)
     assert cancelled == {
         "campaign_id": campaign_id,
         "status": "cancelled",
-        "refunded": "999.000000",
+        "refunded": "999.999000",
     }
     final = store.thc_balance(user_id)
     assert final["total_earned"] == "5000.000000"
-    assert final["spent"] == "1.000000"
+    assert final["spent"] == "0.001000"
     assert final["reserved"] == "0.000000"
-    assert final["available"] == "4999.000000"
-    assert store.treasury_summary()["total_balance"] == "1.000000"
+    assert final["available"] == "4999.999000"
+    assert store.treasury_summary()["total_balance"] == "0.001000"
 
 
 def test_policy_publisher_binding_and_legacy_paid_guard(store, monkeypatch):
@@ -291,7 +298,7 @@ def test_no_immediate_paid_campaign_repeat_when_alternative_exists(store, monkey
     monkeypatch.setenv("EARN_DELIVERY_SECRET", "delivery-secret")
     user_id, publisher_id, first_id, token = _active_campaign(store)
     second = store.create_campaign(
-        user_id, "Basketball paid two", campaign_type="cpc",
+        user_id, "Basketball paid two", campaign_type="cpm",
         bid_amount="1.000000", total_budget="10.000000",
         placement="basketball_sidebar",
     )

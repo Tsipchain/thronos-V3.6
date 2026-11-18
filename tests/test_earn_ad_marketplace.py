@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import pytest
+import secrets
 import tempfile
 import time
 import unittest.mock as mock
@@ -61,7 +62,19 @@ def store():
 
 @pytest.fixture()
 def advertiser(store):
-    return store.register("advertiser@test.com", "SecurePass123!")
+    user = store.register("advertiser@test.com", "SecurePass123!")
+    now = int(time.time())
+    with store._tx() as con:
+        con.execute(
+            """INSERT INTO thc_ledger
+               (entry_id, earn_user_id, source, source_ref, amount, state,
+                note, created_at, updated_at)
+               VALUES ('marketplace-fixture-credit',?,'synthetic_test',
+                       'marketplace-fixture','1000000.000000','confirmed',
+                       'test only',?,?)""",
+            (user["earn_user_id"], now, now),
+        )
+    return user
 
 
 @pytest.fixture()
@@ -71,6 +84,7 @@ def campaign(store, advertiser):
         name="Test Campaign",
         campaign_type="cpm",
         bid_amount="2.000000",
+        total_budget="100.000000",
     )
 
 
@@ -119,14 +133,13 @@ class TestCampaignCRUD:
         assert result["name"] == "My First Ad"
 
     def test_create_campaign_cpc(self, store, advertiser):
-        result = store.create_campaign(
-            advertiser_id=advertiser["earn_user_id"],
-            name="CPC Camp",
-            campaign_type="cpc",
-            bid_amount="0.500000",
-        )
-        full = store.get_campaign(result["campaign_id"])
-        assert full["campaign_type"] == "cpc"
+        with pytest.raises(EarnError, match="cpc_campaigns_closed"):
+            store.create_campaign(
+                advertiser_id=advertiser["earn_user_id"],
+                name="CPC Camp",
+                campaign_type="cpc",
+                bid_amount="0.500000",
+            )
 
     def test_create_campaign_invalid_type(self, store, advertiser):
         with pytest.raises(EarnError, match="invalid_campaign_type"):
@@ -354,11 +367,12 @@ class TestEscrowIntentFlow:
             store, advertiser["earn_user_id"],
             campaign["campaign_id"], "deposit", "100.000000",
         )
-        result = _escrow_via_intent(
-            store, advertiser["earn_user_id"],
-            campaign["campaign_id"], "refund", "100.000000",
-        )
-        assert Decimal(result["balance_after"]) == Decimal("0.000000")
+        with pytest.raises(EarnError, match="campaign_cancellation_required"):
+            _escrow_via_intent(
+                store, advertiser["earn_user_id"],
+                campaign["campaign_id"], "refund", "100.000000",
+            )
+        assert Decimal(store.escrow_balance(campaign["campaign_id"])) == Decimal("100.000000")
 
     def test_refund_partial(self, store, advertiser, campaign):
         _link_wallet(store, advertiser["earn_user_id"])
@@ -366,11 +380,12 @@ class TestEscrowIntentFlow:
             store, advertiser["earn_user_id"],
             campaign["campaign_id"], "deposit", "100.000000",
         )
-        result = _escrow_via_intent(
-            store, advertiser["earn_user_id"],
-            campaign["campaign_id"], "refund", "40.000000",
-        )
-        assert Decimal(result["balance_after"]) == Decimal("60.000000")
+        with pytest.raises(EarnError, match="campaign_cancellation_required"):
+            _escrow_via_intent(
+                store, advertiser["earn_user_id"],
+                campaign["campaign_id"], "refund", "40.000000",
+            )
+        assert Decimal(store.escrow_balance(campaign["campaign_id"])) == Decimal("100.000000")
 
     def test_refund_exceeds_balance(self, store, advertiser, campaign):
         _link_wallet(store, advertiser["earn_user_id"])
@@ -378,7 +393,7 @@ class TestEscrowIntentFlow:
             store, advertiser["earn_user_id"],
             campaign["campaign_id"], "deposit", "10.000000",
         )
-        with pytest.raises(EarnError, match="insufficient_escrow_balance"):
+        with pytest.raises(EarnError, match="campaign_cancellation_required"):
             _escrow_via_intent(
                 store, advertiser["earn_user_id"],
                 campaign["campaign_id"], "refund", "50.000000",
@@ -558,22 +573,13 @@ class TestEscrowSecurityGates:
             store, advertiser["earn_user_id"],
             campaign["campaign_id"], "deposit", "10.000000",
         )
-        intent = store.escrow_create_intent(
-            advertiser["earn_user_id"],
-            campaign["campaign_id"], "refund", "5.000000",
-        )
-        _escrow_via_intent(
-            store, advertiser["earn_user_id"],
-            campaign["campaign_id"], "refund", "8.000000",
-        )
-        sig = _sign_intent(_DEFAULT_PRIVKEY, intent)
-        with pytest.raises(EarnError, match="insufficient_escrow_balance"):
-            store.escrow_execute(
-                intent["intent_id"], advertiser["earn_user_id"],
-                intent["nonce"], wallet_signature=sig,
+        with pytest.raises(EarnError, match="campaign_cancellation_required"):
+            store.escrow_create_intent(
+                advertiser["earn_user_id"],
+                campaign["campaign_id"], "refund", "5.000000",
             )
         bal = store.escrow_balance(campaign["campaign_id"])
-        assert Decimal(bal) == Decimal("2.000000")
+        assert Decimal(bal) == Decimal("10.000000")
 
     def test_invalid_action_rejected(self, store, advertiser, campaign):
         _link_wallet(store, advertiser["earn_user_id"])
@@ -604,6 +610,7 @@ class TestAdServing:
         camp = store.create_campaign(
             advertiser["earn_user_id"], "Active Camp",
             campaign_type="cpm", bid_amount="5.000000",
+            total_budget="1000.000000",
         )
         store.moderate_campaign(camp["campaign_id"], "approve")
         with store._tx() as con:
@@ -640,6 +647,7 @@ class TestAdServing:
             advertiser["earn_user_id"], "Targeted",
             campaign_type="cpm", bid_amount="5.000000",
             country_targets="US,GB",
+            total_budget="100.000000",
         )
         store.moderate_campaign(camp["campaign_id"], "approve")
         with store._tx() as con:
@@ -655,7 +663,7 @@ class TestAdServing:
         _link_wallet(store, advertiser["earn_user_id"])
         _escrow_via_intent(
             store, advertiser["earn_user_id"],
-            camp["campaign_id"], "deposit", "100.000000",
+            camp["campaign_id"], "deposit", "50.000000",
         )
         ads_us = store.serve_campaign_ads(country="US")
         assert len(ads_us) == 1
@@ -667,7 +675,7 @@ class TestAdServing:
     def test_serve_respects_total_budget(self, store, advertiser):
         camp = store.create_campaign(
             advertiser["earn_user_id"], "Budget Camp",
-            campaign_type="cpc", bid_amount="50.000000",
+            campaign_type="cpm", bid_amount="50.000000",
             total_budget="50.000000",
         )
         store.moderate_campaign(camp["campaign_id"], "approve")
@@ -684,7 +692,7 @@ class TestAdServing:
         _link_wallet(store, advertiser["earn_user_id"])
         _escrow_via_intent(
             store, advertiser["earn_user_id"],
-            camp["campaign_id"], "deposit", "100.000000",
+            camp["campaign_id"], "deposit", "50.000000",
         )
         with pytest.raises(EarnError, match="verified_delivery_required"):
             store.record_campaign_event(
@@ -715,6 +723,7 @@ class TestAdServing:
             camp = store.create_campaign(
                 advertiser["earn_user_id"], f"Bid {bid}",
                 campaign_type="cpm", bid_amount=bid,
+                total_budget="100.000000",
             )
             store.moderate_campaign(camp["campaign_id"], "approve")
             with store._tx() as con:
@@ -741,7 +750,7 @@ class TestAdServing:
 class TestEventRecording:
     def _make_active_campaign(
         self, store, advertiser, campaign_type="cpm",
-        bid_amount="2.000000", total_budget="0",
+        bid_amount="2.000000", total_budget="100.000000",
     ):
         camp = store.create_campaign(
             advertiser["earn_user_id"], "Event Camp",
@@ -776,21 +785,17 @@ class TestEventRecording:
             )
 
     def test_cpc_click_cost(self, store, advertiser):
-        camp, crtv = self._make_active_campaign(
-            store, advertiser, campaign_type="cpc", bid_amount="0.500000",
-        )
-        with pytest.raises(EarnError, match="verified_delivery_required"):
-            store.record_campaign_event(
-                camp["campaign_id"], crtv["creative_id"], "click",
+        with pytest.raises(EarnError, match="cpc_campaigns_closed"):
+            store.create_campaign(
+                advertiser["earn_user_id"], "Closed CPC",
+                campaign_type="cpc", bid_amount="0.500000",
             )
 
     def test_cpc_impression_zero_cost(self, store, advertiser):
-        camp, crtv = self._make_active_campaign(
-            store, advertiser, campaign_type="cpc", bid_amount="0.500000",
-        )
-        with pytest.raises(EarnError, match="verified_delivery_required"):
-            store.record_campaign_event(
-                camp["campaign_id"], crtv["creative_id"], "impression",
+        with pytest.raises(EarnError, match="cpc_campaigns_closed"):
+            store.create_campaign(
+                advertiser["earn_user_id"], "Closed CPC",
+                campaign_type="cpc", bid_amount="0.500000",
             )
 
     def test_cpm_click_zero_cost(self, store, advertiser):
@@ -816,7 +821,7 @@ class TestEventRecording:
 
     def test_event_deducts_escrow(self, store, advertiser):
         camp, crtv = self._make_active_campaign(
-            store, advertiser, campaign_type="cpc", bid_amount="10.000000",
+            store, advertiser, campaign_type="cpm", bid_amount="10.000000",
         )
         with pytest.raises(EarnError, match="verified_delivery_required"):
             store.record_campaign_event(
@@ -828,7 +833,7 @@ class TestEventRecording:
     def test_campaign_completes_on_budget(self, store, advertiser):
         camp, crtv = self._make_active_campaign(
             store, advertiser,
-            campaign_type="cpc", bid_amount="50.000000",
+            campaign_type="cpm", bid_amount="50.000000",
             total_budget="100.000000",
         )
         with pytest.raises(EarnError, match="verified_delivery_required"):
@@ -850,6 +855,7 @@ class TestReporting:
         camp = store.create_campaign(
             advertiser["earn_user_id"], "Report Camp",
             campaign_type="cpm", bid_amount="2.000000",
+            total_budget="100.000000",
         )
         store.moderate_campaign(camp["campaign_id"], "approve")
         with store._tx() as con:
@@ -937,6 +943,16 @@ class TestMarketplaceAPI:
             json={"email": "adv@test.com", "password": "SecurePass123!"},
         )
         token = r.get_json()["access_token"]
+        now = int(time.time())
+        with store._tx() as con:
+            con.execute(
+                """INSERT INTO thc_ledger
+                   (entry_id, earn_user_id, source, source_ref, amount, state,
+                    note, created_at, updated_at)
+                   VALUES (?,?,?,?,?,'confirmed','api test only',?,?)""",
+                ("api-credit-" + secrets.token_hex(4), uid, "synthetic_test",
+                 "api-fixture", "1000.000000", now, now),
+            )
         return client, uid, token
 
     def _link_wallet_api(self, store, uid):
@@ -1108,7 +1124,7 @@ class TestMarketplaceAPI:
         self._link_wallet_api(store, uid)
         r = c.post(
             "/api/earn/ads/campaign/create",
-            json={"name": "Funded"},
+            json={"name": "Funded", "total_budget": "50.000000"},
             headers={"Authorization": f"Bearer {tok}"},
         )
         cid = r.get_json()["campaign_id"]
@@ -1129,14 +1145,23 @@ class TestMarketplaceAPI:
         self._link_wallet_api(store, uid)
         r = c.post(
             "/api/earn/ads/campaign/create",
-            json={"name": "Refundable"},
+            json={"name": "Refundable", "total_budget": "100.000000"},
             headers={"Authorization": f"Bearer {tok}"},
         )
         cid = r.get_json()["campaign_id"]
         self._escrow_intent_api(c, tok, cid, "deposit", "100.000000")
-        r = self._escrow_intent_api(c, tok, cid, "refund", "30.000000")
-        assert r.status_code == 200
-        assert Decimal(r.get_json()["balance_after"]) == Decimal("70.000000")
+        r = c.post(
+            "/api/earn/ads/escrow/intent",
+            json={
+                "campaign_id": cid,
+                "action": "refund",
+                "amount": "30.000000",
+            },
+            headers={"Authorization": f"Bearer {tok}"},
+        )
+        assert r.status_code == 400
+        assert r.get_json()["error"] == "campaign_cancellation_required"
+        assert Decimal(store.escrow_balance(cid)) == Decimal("100.000000")
 
     def test_escrow_no_wallet_rejected_api(self, store):
         c, uid, tok = self._auth_client(store)
@@ -1354,8 +1379,19 @@ class TestSettlementIntegration:
             name="Settlement Test Campaign",
             campaign_type="cpm",
             bid_amount="1.000000",
+            total_budget="100.000000",
         )
         cid = camp["campaign_id"]
+        now = int(time.time())
+        with store._tx() as con:
+            con.execute(
+                """INSERT INTO thc_ledger
+                   (entry_id, earn_user_id, source, source_ref, amount, state,
+                    note, created_at, updated_at)
+                   VALUES (?,?,?,?,?,'confirmed','settlement test only',?,?)""",
+                ("settle-credit-" + secrets.token_hex(4), uid, "synthetic_test",
+                 "settlement-fixture", "100.000000", now, now),
+            )
         return uid, cid
 
     # 1. Successful wallet debit + Pythia pool credit
@@ -1371,30 +1407,16 @@ class TestSettlementIntegration:
         assert result["balance_after"] == "50.000000"
         assert result["payload_hash"]
         assert len(result["payload_hash"]) == 64
-        assert result["settlement_status"] == "pending"
-        # TODO once WalletSettlementAdapter is wired:
-        #   assert result["wallet_tx_id"] is not None
-        #   assert result["pool_receipt_id"] is not None
-        #   assert result["pool_position_id"] is not None
-        #   assert result["settlement_status"] == "settled"
+        assert result["settlement_status"] == "settled"
 
     # 2. Insufficient THR balance
     def test_insufficient_thr_balance(self, store):
         uid, cid = self._setup_advertiser(store)
-        # Currently the escrow layer does not check wallet balance
-        # (that requires the adapter). Verify the escrow record is created
-        # with settlement_status="pending" — the adapter will reject it.
-        result = _escrow_via_intent(
-            store, uid, cid, "deposit", "999999.000000",
-            private_key=_SETTLE_PRIVKEY,
-        )
-        assert result["settlement_status"] == "pending"
-        # TODO once WalletSettlementAdapter is wired:
-        #   with pytest.raises(EarnError, match="insufficient_thr_balance"):
-        #       _escrow_via_intent(
-        #           store, uid, cid, "deposit", "999999.000000",
-        #           private_key=_SETTLE_PRIVKEY,
-        #       )
+        with pytest.raises(EarnError, match="amount_exceeds_campaign_funding_required"):
+            _escrow_via_intent(
+                store, uid, cid, "deposit", "999999.000000",
+                private_key=_SETTLE_PRIVKEY,
+            )
 
     # 3. Invalid signature rejected
     def test_invalid_signature_rejected(self, store):
@@ -1461,25 +1483,14 @@ class TestSettlementIntegration:
                 intent_id2, uid, nonce2, wallet_signature=sig2,
             )
 
-    # 6. Pool credit failure rolls back wallet debit
+    # 6. THC reservation settles without invoking the legacy THR pool path
     def test_pool_credit_failure_rolls_back_wallet_debit(self, store):
         uid, cid = self._setup_advertiser(store)
-        # This test documents the rollback invariant.
-        # Currently, without the adapter, escrow writes only to SQLite.
-        # Once the adapter is wired, a failing pool credit must reverse
-        # the wallet debit so no THR is lost.
         result = _escrow_via_intent(
             store, uid, cid, "deposit", "25.000000",
             private_key=_SETTLE_PRIVKEY,
         )
-        assert result["settlement_status"] == "pending"
-        # TODO once WalletSettlementAdapter is wired:
-        #   adapter = mock.MagicMock(spec=WalletSettlementAdapter)
-        #   adapter.debit_thr.return_value = WalletDebitResult(...)
-        #   adapter.credit_pythia_pool.side_effect = PoolCreditFailed("pool down")
-        #   with pytest.raises(EarnError, match="pool_credit_failed"):
-        #       _escrow_via_intent_with_adapter(...)
-        #   adapter.reverse_debit.assert_called_once()
+        assert result["settlement_status"] == "settled"
 
     # 7. Wallet debit failure leaves pool and escrow unchanged
     def test_wallet_debit_failure_leaves_pool_and_escrow_unchanged(self, store):

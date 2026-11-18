@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   RefreshControl,
   ActivityIndicator,
+  Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -167,6 +168,40 @@ export default function T2EDashboardScreen({ navigation }: Props) {
             <Ionicons name="time-outline" size={24} color={COLORS.textSecondary} />
           </TouchableOpacity>
         </View>
+
+        {/* Independent Earn Account: external browser, never reuses native wallet secrets. */}
+        <TouchableOpacity
+          accessibilityRole="link"
+          accessibilityLabel="Open Thronos Earn Account in your browser"
+          testID="nativeEarnAccountEntry"
+          activeOpacity={0.85}
+          onPress={() => {
+            Linking.openURL(`${CONFIG.API_URL}/earn`).catch((error) => {
+              console.warn('Earn Account: could not open browser', error);
+            });
+          }}
+          style={{
+            marginHorizontal: SPACING.md,
+            marginBottom: SPACING.md,
+            padding: SPACING.md,
+            borderRadius: BORDER_RADIUS.md,
+            backgroundColor: COLORS.primary + '16',
+            borderWidth: 1,
+            borderColor: COLORS.primary + '60',
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 12,
+          }}
+        >
+          <Ionicons name="gift-outline" size={26} color={COLORS.primary} />
+          <View style={{ flex: 1 }}>
+            <Text style={{ color: COLORS.text, fontWeight: '700', fontSize: 14 }}>Thronos Earn Account</Text>
+            <Text style={{ color: COLORS.textSecondary, fontSize: 11, marginTop: 3 }}>
+              Surveys, THC rewards, referrals and activity · Opens browser
+            </Text>
+          </View>
+          <Ionicons name="open-outline" size={20} color={COLORS.primary} />
+        </TouchableOpacity>
 
         {/* ── T2E Balance Card ─────────────────────────────────────────────── */}
         <View style={styles.balanceCard}>

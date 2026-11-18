@@ -1,0 +1,35 @@
+name: Native Earn Account Entry Checks
+
+on:
+  pull_request:
+    paths:
+      - "thronos-wallet-app/App.tsx"
+      - "thronos-wallet-app/src/screens/T2EDashboardScreen.tsx"
+      - "tests/test_native_earn_account_entry.py"
+      - ".github/workflows/native-earn-entry.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  native-earn:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: |
+          python -m pip install --disable-pip-version-check pytest
+          python -m pytest tests/test_native_earn_account_entry.py -q
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: thronos-wallet-app/package-lock.json
+      - name: Verify native TypeScript
+        working-directory: thronos-wallet-app
+        run: |
+          npm ci
+          npx tsc --noEmit

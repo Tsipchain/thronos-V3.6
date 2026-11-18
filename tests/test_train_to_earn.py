@@ -1,6 +1,7 @@
 """Tests for Train-to-Earn service."""
 import os
 import tempfile
+import time
 import pytest
 from services.train_to_earn import TrainToEarnStore, T2EError
 
@@ -175,3 +176,68 @@ class TestStats:
         history = store.get_history("earn_test11")
         assert len(history) == 1
         assert history[0]["activity_type"] == "workout"
+
+
+class TestTenantSubscriptionsAndOffers:
+    def test_plan_catalog_is_explicit_and_separate_from_rewards(self):
+        plans = TrainToEarnStore.plan_catalog()
+        assert plans == [{
+            "code": "gym_basic",
+            "monthly_eur": "1.00",
+            "includes_ad_package": True,
+            "description": "Gym membership, tenant dashboard and Train2Earn offers",
+        }]
+
+    def test_provider_confirmed_subscription_is_idempotent(self, store, gym_with_key):
+        gym, _ = gym_with_key
+        start = int(time.time())
+        first = store.reconcile_subscription(
+            gym_id=gym["gym_id"], plan_code="gym_basic", provider="stripe",
+            provider_ref="sub_provider_001", amount_eur="1.00",
+            period_start=start, period_end=start + 30 * 86400,
+        )
+        second = store.reconcile_subscription(
+            gym_id=gym["gym_id"], plan_code="gym_basic", provider="stripe",
+            provider_ref="sub_provider_001", amount_eur="1.00",
+            period_start=start, period_end=start + 30 * 86400,
+        )
+        assert first["subscription_id"] == second["subscription_id"]
+        assert store.get_subscription(gym["gym_id"])["status"] == "active"
+
+    def test_subscription_provider_reference_cannot_cross_tenant(self, store, gym_with_key):
+        gym_a, _ = gym_with_key
+        gym_b, _ = store.register_gym(name="Second Gym")
+        start = int(time.time())
+        store.reconcile_subscription(
+            gym_id=gym_a["gym_id"], plan_code="gym_basic", provider="stripe",
+            provider_ref="sub_shared", amount_eur="1.00",
+            period_start=start, period_end=start + 30 * 86400,
+        )
+        with pytest.raises(T2EError, match="provider_reference_conflict"):
+            store.reconcile_subscription(
+                gym_id=gym_b["gym_id"], plan_code="gym_basic", provider="stripe",
+                provider_ref="sub_shared", amount_eur="1.00",
+                period_start=start, period_end=start + 30 * 86400,
+            )
+
+    def test_offer_catalog_is_tenant_scoped_and_does_not_credit_thc(self, store, gym_with_key):
+        gym_a, _ = gym_with_key
+        gym_b, _ = store.register_gym(name="Second Gym")
+        offer = store.create_offer(
+            gym_id=gym_a["gym_id"], offer_code="welcome", title="Welcome workout",
+            description="Complete the introductory routine", status="active",
+        )
+        assert offer["offer_id"].startswith("offer_")
+        assert len(store.list_offers(gym_a["gym_id"])) == 1
+        assert store.list_offers(gym_b["gym_id"]) == []
+        assert "reward_thc" not in offer
+
+    def test_invalid_subscription_cannot_be_created_from_client_values(self, store, gym_with_key):
+        gym, _ = gym_with_key
+        start = int(time.time())
+        with pytest.raises(T2EError, match="unknown_plan"):
+            store.reconcile_subscription(
+                gym_id=gym["gym_id"], plan_code="free_money", provider="browser",
+                provider_ref="fake", amount_eur="999", period_start=start,
+                period_end=start + 86400,
+            )

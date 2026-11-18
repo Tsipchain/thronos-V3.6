@@ -33,6 +33,17 @@ _MILESTONE_REWARD = Decimal(os.getenv("T2E_MILESTONE_REWARD_THC", "5.00"))
 _DAILY_CAP = int(os.getenv("T2E_DAILY_CAP", "3"))
 _WEEKLY_CAP = int(os.getenv("T2E_WEEKLY_CAP", "15"))
 
+# Subscription and offer metadata deliberately stay outside the Earn/THC
+# ledger.  A payment provider may reconcile a subscription later, but this
+# service never accepts a browser claim as proof of payment.
+T2E_PLAN_CATALOG = {
+    "gym_basic": {
+        "monthly_eur": Decimal("1.00"),
+        "includes_ad_package": True,
+        "description": "Gym membership, tenant dashboard and Train2Earn offers",
+    },
+}
+
 
 class T2EError(Exception):
     pass
@@ -120,6 +131,39 @@ class TrainToEarnStore:
                 CREATE INDEX IF NOT EXISTS idx_t2e_activities_date
                     ON t2e_activities(earn_user_id, created_at);
 
+                CREATE TABLE IF NOT EXISTS t2e_subscriptions (
+                    subscription_id TEXT PRIMARY KEY,
+                    gym_id          TEXT NOT NULL REFERENCES t2e_gyms(gym_id),
+                    plan_code       TEXT NOT NULL,
+                    status          TEXT NOT NULL,
+                    provider        TEXT NOT NULL,
+                    provider_ref    TEXT NOT NULL,
+                    amount_eur      TEXT NOT NULL,
+                    period_start    INTEGER NOT NULL,
+                    period_end      INTEGER NOT NULL,
+                    created_at      INTEGER NOT NULL,
+                    updated_at      INTEGER NOT NULL,
+                    UNIQUE (provider, provider_ref)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_t2e_subscriptions_gym
+                    ON t2e_subscriptions(gym_id, status, period_end);
+
+                CREATE TABLE IF NOT EXISTS t2e_offers (
+                    offer_id        TEXT PRIMARY KEY,
+                    gym_id          TEXT NOT NULL REFERENCES t2e_gyms(gym_id),
+                    offer_code      TEXT NOT NULL,
+                    title           TEXT NOT NULL,
+                    description     TEXT NOT NULL DEFAULT '',
+                    status          TEXT NOT NULL DEFAULT 'draft',
+                    created_at      INTEGER NOT NULL,
+                    updated_at      INTEGER NOT NULL,
+                    UNIQUE (gym_id, offer_code)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_t2e_offers_gym
+                    ON t2e_offers(gym_id, status);
+
                 CREATE TABLE IF NOT EXISTS t2e_streaks (
                     earn_user_id    TEXT PRIMARY KEY,
                     current_streak  INTEGER NOT NULL DEFAULT 0,
@@ -184,6 +228,135 @@ class TrainToEarnStore:
                 q += " WHERE is_active = 1"
             q += " ORDER BY name"
             return [dict(r) for r in con.execute(q).fetchall()]
+        finally:
+            con.close()
+
+    # ── Tenant subscription and offer catalog ───────────────────────────
+
+    @staticmethod
+    def plan_catalog() -> list[dict[str, Any]]:
+        """Return public plan metadata; no payment state is inferred here."""
+        return [
+            {"code": code, **{k: (str(v) if isinstance(v, Decimal) else v)
+                               for k, v in plan.items()}}
+            for code, plan in T2E_PLAN_CATALOG.items()
+        ]
+
+    def reconcile_subscription(
+        self, *, gym_id: str, plan_code: str, provider: str,
+        provider_ref: str, amount_eur: str, period_start: int,
+        period_end: int, status: str = "active",
+    ) -> dict[str, Any]:
+        """Record a provider-confirmed subscription idempotently.
+
+        This is an accounting boundary only.  It requires a provider
+        reference and must be called by a trusted reconciliation process;
+        there is intentionally no public payment endpoint in this module.
+        """
+        if plan_code not in T2E_PLAN_CATALOG:
+            raise T2EError("unknown_plan")
+        if not provider or not provider_ref:
+            raise T2EError("provider_reference_required")
+        if status not in ("active", "past_due", "cancelled", "expired"):
+            raise T2EError("invalid_subscription_status")
+        try:
+            amount = Decimal(str(amount_eur)).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+        except Exception as exc:
+            raise T2EError("invalid_subscription_amount") from exc
+        if amount <= 0 or period_end <= period_start:
+            raise T2EError("invalid_subscription_period")
+        now = int(time.time())
+        subscription_id = "sub_" + secrets.token_urlsafe(12)
+        with self._tx() as con:
+            gym = con.execute(
+                "SELECT gym_id FROM t2e_gyms WHERE gym_id = ? AND is_active = 1",
+                (gym_id,),
+            ).fetchone()
+            if not gym:
+                raise T2EError("gym_not_found")
+            existing = con.execute(
+                "SELECT * FROM t2e_subscriptions WHERE provider = ? AND provider_ref = ?",
+                (provider, provider_ref),
+            ).fetchone()
+            if existing:
+                if existing["gym_id"] != gym_id or existing["plan_code"] != plan_code:
+                    raise T2EError("provider_reference_conflict")
+                con.execute(
+                    """UPDATE t2e_subscriptions SET status=?, amount_eur=?,
+                       period_start=?, period_end=?, updated_at=?
+                       WHERE subscription_id=?""",
+                    (status, str(amount), period_start, period_end, now,
+                     existing["subscription_id"]),
+                )
+                row = con.execute(
+                    "SELECT * FROM t2e_subscriptions WHERE subscription_id = ?",
+                    (existing["subscription_id"],),
+                ).fetchone()
+                return dict(row)
+            con.execute(
+                """INSERT INTO t2e_subscriptions
+                   (subscription_id, gym_id, plan_code, status, provider,
+                    provider_ref, amount_eur, period_start, period_end,
+                    created_at, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                (subscription_id, gym_id, plan_code, status, provider,
+                 provider_ref, str(amount), period_start, period_end, now, now),
+            )
+            return dict(con.execute(
+                "SELECT * FROM t2e_subscriptions WHERE subscription_id = ?",
+                (subscription_id,),
+            ).fetchone())
+
+    def get_subscription(self, gym_id: str) -> dict[str, Any] | None:
+        con = self._connect()
+        try:
+            row = con.execute(
+                """SELECT * FROM t2e_subscriptions WHERE gym_id = ?
+                   ORDER BY period_end DESC LIMIT 1""", (gym_id,),
+            ).fetchone()
+            return dict(row) if row else None
+        finally:
+            con.close()
+
+    def create_offer(
+        self, *, gym_id: str, offer_code: str, title: str,
+        description: str = "", status: str = "draft",
+    ) -> dict[str, Any]:
+        if not offer_code or not title or status not in ("draft", "active", "paused"):
+            raise T2EError("invalid_offer")
+        now = int(time.time())
+        offer_id = "offer_" + secrets.token_urlsafe(12)
+        with self._tx() as con:
+            gym = con.execute(
+                "SELECT gym_id FROM t2e_gyms WHERE gym_id = ? AND is_active = 1",
+                (gym_id,),
+            ).fetchone()
+            if not gym:
+                raise T2EError("gym_not_found")
+            try:
+                con.execute(
+                    """INSERT INTO t2e_offers
+                       (offer_id, gym_id, offer_code, title, description,
+                        status, created_at, updated_at)
+                       VALUES (?,?,?,?,?,?,?,?)""",
+                    (offer_id, gym_id, offer_code, title, description,
+                     status, now, now),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise T2EError("offer_already_exists") from exc
+            return dict(con.execute(
+                "SELECT * FROM t2e_offers WHERE offer_id = ?", (offer_id,),
+            ).fetchone())
+
+    def list_offers(self, gym_id: str, *, active_only: bool = True) -> list[dict[str, Any]]:
+        con = self._connect()
+        try:
+            query = "SELECT * FROM t2e_offers WHERE gym_id = ?"
+            params: list[Any] = [gym_id]
+            if active_only:
+                query += " AND status = 'active'"
+            query += " ORDER BY created_at DESC"
+            return [dict(row) for row in con.execute(query, params).fetchall()]
         finally:
             con.close()
 

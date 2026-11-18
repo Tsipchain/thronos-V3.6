@@ -117,6 +117,9 @@ _AD_VIEW_PRICING_VERSION = "thronos-view-fixed-v1"
 _AD_LEGACY_CPC_PRICING_VERSION = "legacy-cpc-contract"
 _AD_MIN_VIEWABLE_MS = 1000
 _AD_MIN_VISIBLE_PERCENT = 50
+_AD_OBSERVATION_CLOCK_SKEW_MS = 250
+_AD_OBSERVATION_STARTS_PER_MINUTE = 10
+_AD_BILLABLE_VIEWS_PER_MINUTE = 5
 
 _AD_PLACEMENT_RE = re.compile(r"^[a-z][a-z0-9_]{2,79}$")
 _AD_COUNTRY_RE = re.compile(r"^[A-Z]{2}$")
@@ -822,6 +825,22 @@ class EarnAccountStore:
                 CREATE INDEX IF NOT EXISTS idx_earn_ad_delivery_proofs_viewer
                     ON earn_ad_delivery_proofs(viewer_hash, campaign_id, issued_at);
 
+                CREATE TABLE IF NOT EXISTS earn_ad_view_observations (
+                    observation_id TEXT PRIMARY KEY,
+                    proof_id       TEXT NOT NULL UNIQUE,
+                    publisher_id   TEXT NOT NULL,
+                    placement      TEXT NOT NULL,
+                    viewer_hash    TEXT NOT NULL,
+                    started_at_ms  INTEGER NOT NULL,
+                    expires_at_ms  INTEGER NOT NULL,
+                    completed_at_ms INTEGER,
+                    status         TEXT NOT NULL DEFAULT 'observing'
+                );
+                CREATE INDEX IF NOT EXISTS idx_earn_ad_observations_rate
+                    ON earn_ad_view_observations(
+                        publisher_id, viewer_hash, started_at_ms
+                    );
+
                 CREATE TABLE IF NOT EXISTS earn_ad_delivery_events (
                     event_id        TEXT PRIMARY KEY,
                     proof_id        TEXT NOT NULL,
@@ -833,6 +852,7 @@ class EarnAccountStore:
                     viewable_ms      INTEGER,
                     visible_percent INTEGER,
                     page_visible    INTEGER,
+                    observation_id  TEXT,
                     viewer_hash     TEXT NOT NULL,
                     country         TEXT,
                     recorded_at     INTEGER NOT NULL,
@@ -1029,25 +1049,12 @@ class EarnAccountStore:
                 ("viewable_ms", "INTEGER"),
                 ("visible_percent", "INTEGER"),
                 ("page_visible", "INTEGER"),
+                ("observation_id", "TEXT"),
             ):
                 if column not in delivery_event_cols:
                     con.execute(
                         f"ALTER TABLE earn_ad_delivery_events ADD COLUMN {column} {definition}"
                     )
-            # Existing CPC contracts are never silently converted. They are
-            # held, with their remaining reservation still locked, until the
-            # advertiser explicitly cancels or accepts a separately quoted
-            # view-only replacement campaign.
-            con.execute(
-                """UPDATE earn_ad_campaigns
-                   SET status='legacy_contract_review',
-                       migration_state='cpc_contract_action_required',
-                       policy_reason='cpc_contract_action_required',
-                       pricing_version=?
-                 WHERE campaign_type='cpc'
-                   AND status IN ('active','paused','approved','funding_required')""",
-                (_AD_LEGACY_CPC_PRICING_VERSION,),
-            )
             con.commit()
             now = int(time.time())
             for ctype, vals in _AD_PRICING_DEFAULTS.items():
@@ -4235,6 +4242,70 @@ class EarnAccountStore:
         expected = self._sign_delivery_proof(proof_payload)
         return hmac.compare_digest(expected, signature)
 
+    def _authenticate_delivery_publisher_in_tx(
+        self,
+        con: sqlite3.Connection,
+        publisher_id: str,
+        placement: str,
+        publisher_secret: str,
+    ) -> None:
+        publisher = con.execute(
+            """SELECT status, postback_secret FROM earn_publishers
+               WHERE publisher_id=?""",
+            (publisher_id,),
+        ).fetchone()
+        expected_secret = str(publisher["postback_secret"] or "") if publisher else ""
+        supplied_secret = str(publisher_secret or "")
+        if (
+            not publisher
+            or publisher["status"] != "active"
+            or not expected_secret
+            or not supplied_secret
+            or not hmac.compare_digest(expected_secret, supplied_secret)
+        ):
+            raise EarnError("publisher_auth_required")
+        placement_row = con.execute(
+            """SELECT 1 FROM earn_publisher_placements
+               WHERE publisher_id=? AND placement_type=? AND status='active'""",
+            (publisher_id, placement),
+        ).fetchone()
+        if not placement_row:
+            raise EarnError("publisher_placement_not_active")
+
+    def _observation_payload(
+        self, observation: sqlite3.Row | dict[str, Any],
+    ) -> dict[str, Any]:
+        return {
+            "observation_id": observation["observation_id"],
+            "proof_id": observation["proof_id"],
+            "publisher_id": observation["publisher_id"],
+            "placement": observation["placement"],
+            "viewer_hash": observation["viewer_hash"],
+            "started_at_ms": observation["started_at_ms"],
+            "expires_at_ms": observation["expires_at_ms"],
+        }
+
+    def _sign_observation(self, observation: sqlite3.Row | dict[str, Any]) -> str:
+        message = json.dumps(
+            self._observation_payload(observation),
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        return hmac.new(self._delivery_secret(), message, hashlib.sha256).hexdigest()
+
+    def _delivery_proof_payload(self, proof: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "proof_id": proof["proof_id"],
+            "campaign_id": proof["campaign_id"],
+            "creative_id": proof["creative_id"],
+            "placement": proof["placement"],
+            "publisher_id": proof["publisher_id"],
+            "viewer_hash": proof["viewer_hash"],
+            "country": proof["country"],
+            "issued_at": proof["issued_at"],
+            "expires_at": proof["expires_at"],
+        }
+
     def verified_serve(
         self,
         placement: str,
@@ -4262,26 +4333,9 @@ class EarnAccountStore:
         day_start = now - (now % 86400)
 
         with self._tx() as con:
-            # Validate publisher
-            pub = con.execute(
-                "SELECT publisher_id, status, postback_secret FROM earn_publishers WHERE publisher_id = ?",
-                (publisher_id,),
-            ).fetchone()
-            if not pub or pub["status"] != "active":
-                raise EarnError("publisher_not_active")
-            expected_secret = str(pub["postback_secret"] or "")
-            supplied_secret = str(publisher_secret or "")
-            if not expected_secret or not supplied_secret or not hmac.compare_digest(
-                expected_secret, supplied_secret,
-            ):
-                raise EarnError("publisher_auth_required")
-            registered = con.execute(
-                """SELECT 1 FROM earn_publisher_placements
-                   WHERE publisher_id=? AND placement_type=? AND status='active'""",
-                (publisher_id, placement),
-            ).fetchone()
-            if not registered:
-                raise EarnError("publisher_placement_not_active")
+            self._authenticate_delivery_publisher_in_tx(
+                con, publisher_id, placement, publisher_secret,
+            )
 
             expired = con.execute(
                 """SELECT campaign_id FROM earn_ad_campaigns
@@ -4480,11 +4534,135 @@ class EarnAccountStore:
             },
         }
 
+    def verified_start_observation(
+        self,
+        proof_id: str,
+        proof_token: str,
+        publisher_secret: str,
+    ) -> dict[str, Any]:
+        """Start a server-timed viewability window for one delivery proof.
+
+        This does not prove that a browser is honest. It binds an authenticated
+        publisher, proof, placement and opaque viewer to a server clock so a
+        later browser report cannot claim more visible time than elapsed.
+        """
+        if not self._delivery_secret():
+            raise EarnError("verified_ad_event_required")
+        now_ms = int(time.time() * 1000)
+        rejection: str | None = None
+        result: dict[str, Any] | None = None
+        with self._tx() as con:
+            proof = con.execute(
+                "SELECT * FROM earn_ad_delivery_proofs WHERE proof_id=?",
+                (proof_id,),
+            ).fetchone()
+            if not proof:
+                raise EarnError("proof_not_found")
+            if now_ms > int(proof["expires_at"]) * 1000:
+                raise EarnError("proof_expired")
+            if not self._verify_delivery_proof(
+                self._delivery_proof_payload(proof), proof_token,
+            ):
+                raise EarnError("invalid_proof_signature")
+            self._authenticate_delivery_publisher_in_tx(
+                con, proof["publisher_id"], proof["placement"], publisher_secret,
+            )
+            existing = con.execute(
+                "SELECT * FROM earn_ad_view_observations WHERE proof_id=?",
+                (proof_id,),
+            ).fetchone()
+            if existing:
+                result = {
+                    **self._observation_payload(existing),
+                    "observation_token": self._sign_observation(existing),
+                    "not_before_ms": int(existing["started_at_ms"])
+                    + _AD_MIN_VIEWABLE_MS,
+                    "idempotent": True,
+                }
+            else:
+                recent = con.execute(
+                    """SELECT COUNT(*) AS cnt FROM earn_ad_view_observations
+                       WHERE publisher_id=? AND viewer_hash=?
+                         AND started_at_ms>=?""",
+                    (proof["publisher_id"], proof["viewer_hash"], now_ms - 60_000),
+                ).fetchone()
+                campaign = con.execute(
+                    "SELECT advertiser_id FROM earn_ad_campaigns WHERE campaign_id=?",
+                    (proof["campaign_id"],),
+                ).fetchone()
+                if int(recent["cnt"] or 0) >= _AD_OBSERVATION_STARTS_PER_MINUTE:
+                    rejection = "observation_rate_limited"
+                    if campaign:
+                        self._ad_audit_in_tx(
+                            con,
+                            campaign_id=proof["campaign_id"],
+                            advertiser_id=campaign["advertiser_id"],
+                            event_type="delivery_security_rejection",
+                            event_ref=(
+                                f"observation-rate:{proof['publisher_id']}:"
+                                f"{proof['viewer_hash']}:{now_ms // 60_000}"
+                            ),
+                            details={
+                                "reason": rejection,
+                                "proof_id": proof_id,
+                                "publisher_id": proof["publisher_id"],
+                                "placement": proof["placement"],
+                            },
+                        )
+                else:
+                    observation = {
+                        "observation_id": "vobs_" + secrets.token_urlsafe(18),
+                        "proof_id": proof_id,
+                        "publisher_id": proof["publisher_id"],
+                        "placement": proof["placement"],
+                        "viewer_hash": proof["viewer_hash"],
+                        "started_at_ms": now_ms,
+                        "expires_at_ms": int(proof["expires_at"]) * 1000,
+                    }
+                    con.execute(
+                        """INSERT INTO earn_ad_view_observations
+                           (observation_id, proof_id, publisher_id, placement,
+                            viewer_hash, started_at_ms, expires_at_ms)
+                           VALUES (?,?,?,?,?,?,?)""",
+                        (
+                            observation["observation_id"], proof_id,
+                            observation["publisher_id"], observation["placement"],
+                            observation["viewer_hash"], observation["started_at_ms"],
+                            observation["expires_at_ms"],
+                        ),
+                    )
+                    if campaign:
+                        self._ad_audit_in_tx(
+                            con,
+                            campaign_id=proof["campaign_id"],
+                            advertiser_id=campaign["advertiser_id"],
+                            event_type="view_observation_started",
+                            event_ref=observation["observation_id"],
+                            details={
+                                "proof_id": proof_id,
+                                "publisher_id": proof["publisher_id"],
+                                "placement": proof["placement"],
+                            },
+                        )
+                    result = {
+                        **observation,
+                        "observation_token": self._sign_observation(observation),
+                        "not_before_ms": now_ms + _AD_MIN_VIEWABLE_MS,
+                        "idempotent": False,
+                    }
+        if rejection:
+            raise EarnError(rejection)
+        assert result is not None
+        return result
+
     def verified_record_event(
         self,
         proof_id: str,
         event_type: str,
         proof_token: str,
+        publisher_secret: str = "",
+        observation_id: str | None = None,
+        observation_token: str | None = None,
         viewable_ms: int | None = None,
         visible_percent: int | None = None,
         page_visible: bool | None = None,
@@ -4494,7 +4672,8 @@ class EarnAccountStore:
         if event_type not in ("view", "click"):
             raise EarnError("invalid_event_type")
 
-        now = int(time.time())
+        now_ms = int(time.time() * 1000)
+        now = now_ms // 1000
 
         with self._tx() as con:
             proof = con.execute(
@@ -4509,19 +4688,41 @@ class EarnAccountStore:
                 raise EarnError("proof_expired")
 
             # Verify HMAC signature
-            proof_payload = {
-                "proof_id": proof["proof_id"],
-                "campaign_id": proof["campaign_id"],
-                "creative_id": proof["creative_id"],
-                "placement": proof["placement"],
-                "publisher_id": proof["publisher_id"],
-                "viewer_hash": proof["viewer_hash"],
-                "country": proof["country"],
-                "issued_at": proof["issued_at"],
-                "expires_at": proof["expires_at"],
-            }
-            if not self._verify_delivery_proof(proof_payload, proof_token):
+            if not self._verify_delivery_proof(
+                self._delivery_proof_payload(proof), proof_token,
+            ):
                 raise EarnError("invalid_proof_signature")
+
+            self._authenticate_delivery_publisher_in_tx(
+                con, proof["publisher_id"], proof["placement"], publisher_secret,
+            )
+
+            observation = None
+            if event_type == "view":
+                if not observation_id or not observation_token:
+                    raise EarnError("observation_required")
+                observation = con.execute(
+                    """SELECT * FROM earn_ad_view_observations
+                       WHERE observation_id=? AND proof_id=?""",
+                    (observation_id, proof_id),
+                ).fetchone()
+                if not observation:
+                    raise EarnError("observation_not_found")
+                if not hmac.compare_digest(
+                    self._sign_observation(observation), str(observation_token),
+                ):
+                    raise EarnError("invalid_observation_token")
+                if (
+                    observation["publisher_id"] != proof["publisher_id"]
+                    or observation["placement"] != proof["placement"]
+                    or observation["viewer_hash"] != proof["viewer_hash"]
+                ):
+                    raise EarnError("observation_binding_mismatch")
+                if now_ms > int(observation["expires_at_ms"]):
+                    raise EarnError("observation_expired")
+                server_elapsed_ms = now_ms - int(observation["started_at_ms"])
+                if server_elapsed_ms < _AD_MIN_VIEWABLE_MS:
+                    raise EarnError("observation_too_short")
 
             # Idempotency: check if already consumed for this event_type
             existing = con.execute(
@@ -4545,7 +4746,7 @@ class EarnAccountStore:
                     isinstance(viewable_ms, bool)
                     or not isinstance(viewable_ms, int)
                     or viewable_ms < _AD_MIN_VIEWABLE_MS
-                    or viewable_ms > self._DELIVERY_PROOF_TTL * 1000
+                    or viewable_ms > server_elapsed_ms + _AD_OBSERVATION_CLOCK_SKEW_MS
                     or isinstance(visible_percent, bool)
                     or not isinstance(visible_percent, int)
                     or visible_percent < _AD_MIN_VISIBLE_PERCENT
@@ -4553,6 +4754,18 @@ class EarnAccountStore:
                     or page_visible is not True
                 ):
                     raise EarnError("view_not_qualifying")
+                recent_views = con.execute(
+                    """SELECT COUNT(*) AS cnt
+                         FROM earn_ad_delivery_events e
+                         JOIN earn_ad_delivery_proofs p ON p.proof_id=e.proof_id
+                        WHERE p.publisher_id=? AND e.viewer_hash=?
+                          AND e.event_type='view' AND e.recorded_at>=?""",
+                    (proof["publisher_id"], proof["viewer_hash"], now - 60),
+                ).fetchone()
+                if int(recent_views["cnt"] or 0) >= _AD_BILLABLE_VIEWS_PER_MINUTE:
+                    raise EarnError("suspicious_view_rate")
+                if observation["completed_at_ms"] is not None:
+                    raise EarnError("observation_already_completed")
 
             # Mark proof consumed (first event of any type)
             if proof["consumed_at"] is None:
@@ -4619,18 +4832,26 @@ class EarnAccountStore:
                 """INSERT INTO earn_ad_delivery_events
                    (event_id, proof_id, campaign_id, creative_id,
                     event_type, charged_amount, pricing_version,
-                    viewable_ms, visible_percent, page_visible,
+                    viewable_ms, visible_percent, page_visible, observation_id,
                     viewer_hash, country, recorded_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (event_id, proof_id, proof["campaign_id"],
                  proof["creative_id"], event_type,
                  str(cost), camp["pricing_version"],
                  viewable_ms if event_type == "view" else None,
                  visible_percent if event_type == "view" else None,
                  1 if event_type == "view" and page_visible else None,
+                 observation_id if event_type == "view" else None,
                  proof["viewer_hash"],
                  proof["country"], now),
             )
+            if observation is not None:
+                con.execute(
+                    """UPDATE earn_ad_view_observations
+                       SET completed_at_ms=?, status='completed'
+                       WHERE observation_id=? AND completed_at_ms IS NULL""",
+                    (now_ms, observation_id),
+                )
 
             # Atomic escrow debit + campaign counter update
             if cost > 0:
@@ -4658,6 +4879,26 @@ class EarnAccountStore:
                 )
 
             new_spent = (Decimal(camp["spent"]) + cost).quantize(_THC_SCALE)
+            self._ad_audit_in_tx(
+                con,
+                campaign_id=proof["campaign_id"],
+                advertiser_id=camp["advertiser_id"],
+                event_type="delivery_event",
+                event_ref=event_id,
+                amount=cost,
+                details={
+                    "event_type": event_type,
+                    "proof_id": proof_id,
+                    "observation_id": observation_id if event_type == "view" else None,
+                    "publisher_id": proof["publisher_id"],
+                    "placement": proof["placement"],
+                    "viewer_hash": proof["viewer_hash"],
+                    "browser_measurement_claim": event_type == "view",
+                    "server_elapsed_ms": (
+                        server_elapsed_ms if event_type == "view" else None
+                    ),
+                },
+            )
             if event_type == "view":
                 con.execute(
                     "UPDATE earn_ad_campaigns SET impressions = impressions + 1, spent = ? WHERE campaign_id = ?",
@@ -4700,6 +4941,43 @@ class EarnAccountStore:
         if vip_credit:
             result["vip_credit"] = vip_credit
         return result
+
+    def audit_delivery_rejection(
+        self, proof_id: str, event_type: str, reason: str,
+    ) -> None:
+        """Persist a secret-free security audit after a rejected API request."""
+        safe_reason = re.sub(r"[^a-z0-9_:-]", "_", str(reason).lower())[:80]
+        with self._tx() as con:
+            proof = con.execute(
+                "SELECT * FROM earn_ad_delivery_proofs WHERE proof_id=?",
+                (proof_id,),
+            ).fetchone()
+            if not proof:
+                return
+            campaign = con.execute(
+                "SELECT advertiser_id FROM earn_ad_campaigns WHERE campaign_id=?",
+                (proof["campaign_id"],),
+            ).fetchone()
+            if not campaign:
+                return
+            self._ad_audit_in_tx(
+                con,
+                campaign_id=proof["campaign_id"],
+                advertiser_id=campaign["advertiser_id"],
+                event_type="delivery_security_rejection",
+                event_ref=(
+                    f"reject:{proof_id}:{event_type}:{safe_reason}:"
+                    f"{int(time.time()) // 60}"
+                ),
+                details={
+                    "reason": safe_reason,
+                    "proof_id": proof_id,
+                    "event_type": event_type,
+                    "publisher_id": proof["publisher_id"],
+                    "placement": proof["placement"],
+                    "viewer_hash": proof["viewer_hash"],
+                },
+            )
 
     # ── Ad Marketplace — Reporting ────────────────────────────────────
 
@@ -7536,6 +7814,9 @@ def register_earn_account_routes(
                 proof_id=proof_id,
                 event_type=event_type,
                 proof_token=proof_token,
+                publisher_secret=request.headers.get("X-Publisher-Key", ""),
+                observation_id=body.get("observation_id"),
+                observation_token=body.get("observation_token"),
                 viewable_ms=body.get("viewable_ms"),
                 visible_percent=body.get("visible_percent"),
                 page_visible=body.get("page_visible"),
@@ -7544,12 +7825,36 @@ def register_earn_account_routes(
         except EarnError as exc:
             code = 400
             err = str(exc)
+            store.audit_delivery_rejection(proof_id, event_type, err)
             if err in ("proof_expired", "proof_not_found"):
                 code = 410
             elif err in ("total_budget_exhausted", "daily_budget_exhausted",
                          "insufficient_escrow_balance"):
                 code = 402
             return jsonify(ok=False, error=err), code
+
+    @app.post("/api/earn/ads/serve/observation")
+    def earn_ads_serve_observation():
+        if not os.getenv("EARN_DELIVERY_SECRET", ""):
+            return jsonify(ok=False, error="verified_ad_event_required"), 503
+        body = request.get_json(silent=True) or {}
+        proof_id = str(body.get("proof_id", "")).strip()
+        proof_token = str(body.get("proof_token", "")).strip()
+        if not proof_id or not proof_token:
+            return jsonify(ok=False, error="missing_params"), 400
+        try:
+            result = store.verified_start_observation(
+                proof_id,
+                proof_token,
+                request.headers.get("X-Publisher-Key", ""),
+            )
+            return jsonify(ok=True, **result)
+        except EarnError as exc:
+            err = str(exc)
+            store.audit_delivery_rejection(proof_id, "observation", err)
+            return jsonify(ok=False, error=err), (
+                410 if err in ("proof_expired", "proof_not_found") else 400
+            )
 
     @app.get("/api/earn/ads/campaign/<campaign_id>/report")
     def earn_campaign_report(campaign_id):

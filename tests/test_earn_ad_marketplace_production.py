@@ -85,6 +85,25 @@ def _active_campaign(store, placement="basketball_sidebar"):
     return user_id, publisher_id, campaign["campaign_id"], token
 
 
+def _start_elapsed_observation(store, served):
+    observation = store.verified_start_observation(
+        served["proof"]["proof_id"], served["proof"]["proof_token"],
+        "publisher-secret",
+    )
+    with store._tx() as con:
+        con.execute(
+            """UPDATE earn_ad_view_observations
+               SET started_at_ms=started_at_ms-1200 WHERE observation_id=?""",
+            (observation["observation_id"],),
+        )
+        row = con.execute(
+            "SELECT * FROM earn_ad_view_observations WHERE observation_id=?",
+            (observation["observation_id"],),
+        ).fetchone()
+        observation["observation_token"] = store._sign_observation(row)
+    return observation
+
+
 def test_synthetic_5000_reserve_charge_refund_conserves_thc(store, monkeypatch):
     monkeypatch.setenv("EARN_DELIVERY_SECRET", "delivery-secret")
     user_id, publisher_id, campaign_id, _ = _active_campaign(store)
@@ -103,17 +122,25 @@ def test_synthetic_5000_reserve_charge_refund_conserves_thc(store, monkeypatch):
     click = store.verified_record_event(
         served["proof"]["proof_id"], "click",
         served["proof"]["proof_token"],
+        publisher_secret="publisher-secret",
     )
     assert click["charged_amount"] == "0.000000"
+    observation = _start_elapsed_observation(store, served)
     event = store.verified_record_event(
         served["proof"]["proof_id"], "view",
         served["proof"]["proof_token"],
+        publisher_secret="publisher-secret",
+        observation_id=observation["observation_id"],
+        observation_token=observation["observation_token"],
         viewable_ms=1200, visible_percent=80, page_visible=True,
     )
     assert event["charged_amount"] == "0.001000"
     replay = store.verified_record_event(
         served["proof"]["proof_id"], "view",
         served["proof"]["proof_token"],
+        publisher_secret="publisher-secret",
+        observation_id=observation["observation_id"],
+        observation_token=observation["observation_token"],
         viewable_ms=1200, visible_percent=80, page_visible=True,
     )
     assert replay["idempotent"] is True
@@ -233,6 +260,91 @@ def test_preflight_route_returns_flags_only(store, monkeypatch):
         "sidebar_placement_active": True,
         "header_interstitial_placement_active": True,
     }
+
+
+def test_observation_and_event_routes_require_authenticated_publisher(
+    store, monkeypatch,
+):
+    monkeypatch.setenv("EARN_DELIVERY_SECRET", "delivery-secret")
+    _, publisher_id, campaign_id, _ = _active_campaign(store)
+    app = Flask(__name__)
+    app.config["TESTING"] = True
+    register_earn_account_routes(app, store)
+    client = app.test_client()
+    served = client.get(
+        "/api/earn/ads/serve",
+        query_string={
+            "placement": "basketball_sidebar",
+            "publisher_id": publisher_id,
+            "viewer_hash": "route_viewer_hash_12345",
+            "country": "GR",
+        },
+        headers={"X-Publisher-Key": "publisher-secret"},
+    ).get_json()
+    proof = served["proof"]
+    missing_auth = client.post(
+        "/api/earn/ads/serve/observation", json=proof,
+    )
+    assert missing_auth.status_code == 400
+    assert missing_auth.get_json()["error"] == "publisher_auth_required"
+
+    started = client.post(
+        "/api/earn/ads/serve/observation",
+        json=proof,
+        headers={"X-Publisher-Key": "publisher-secret"},
+    )
+    assert started.status_code == 200
+    observation = started.get_json()
+    premature = client.post(
+        "/api/earn/ads/serve/event",
+        json={
+            **proof,
+            "event_type": "view",
+            "observation_id": observation["observation_id"],
+            "observation_token": observation["observation_token"],
+            "viewable_ms": 1200,
+            "visible_percent": 80,
+            "page_visible": True,
+        },
+        headers={"X-Publisher-Key": "publisher-secret"},
+    )
+    assert premature.status_code == 400
+    assert premature.get_json()["error"] == "observation_too_short"
+
+    with store._tx() as con:
+        con.execute(
+            """UPDATE earn_ad_view_observations
+               SET started_at_ms=started_at_ms-1200 WHERE observation_id=?""",
+            (observation["observation_id"],),
+        )
+        row = con.execute(
+            "SELECT * FROM earn_ad_view_observations WHERE observation_id=?",
+            (observation["observation_id"],),
+        ).fetchone()
+        observation_token = store._sign_observation(row)
+    accepted = client.post(
+        "/api/earn/ads/serve/event",
+        json={
+            **proof,
+            "event_type": "view",
+            "observation_id": observation["observation_id"],
+            "observation_token": observation_token,
+            "viewable_ms": 1200,
+            "visible_percent": 80,
+            "page_visible": True,
+        },
+        headers={"X-Publisher-Key": "publisher-secret"},
+    )
+    assert accepted.status_code == 200
+    assert accepted.get_json()["charged_amount"] == "0.001000"
+    with store._tx() as con:
+        rejection = con.execute(
+            """SELECT 1 FROM earn_ad_audit
+               WHERE campaign_id=?
+                 AND event_type='delivery_security_rejection'""",
+            (campaign_id,),
+        ).fetchone()
+    assert rejection is not None
 
 
 def test_empty_stored_publisher_secret_fails_closed(store, monkeypatch):

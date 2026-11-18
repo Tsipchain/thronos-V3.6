@@ -161,6 +161,35 @@ def _activate_publisher(store, publisher, owner_id):
     store.publisher_moderate(publisher["publisher_id"], "approve")
 
 
+def _verified_view(store, served):
+    observation = store.verified_start_observation(
+        served["proof"]["proof_id"], served["proof"]["proof_token"],
+        "publisher-secret",
+    )
+    with store._tx() as con:
+        con.execute(
+            """UPDATE earn_ad_view_observations
+               SET started_at_ms=started_at_ms-1200 WHERE observation_id=?""",
+            (observation["observation_id"],),
+        )
+        row = con.execute(
+            "SELECT * FROM earn_ad_view_observations WHERE observation_id=?",
+            (observation["observation_id"],),
+        ).fetchone()
+        observation_token = store._sign_observation(row)
+    return store.verified_record_event(
+        proof_id=served["proof"]["proof_id"],
+        event_type="view",
+        proof_token=served["proof"]["proof_token"],
+        publisher_secret="publisher-secret",
+        observation_id=observation["observation_id"],
+        observation_token=observation_token,
+        viewable_ms=1200,
+        visible_percent=80,
+        page_visible=True,
+    )
+
+
 # ── Pricing Tests ────────────────────────────────────────────────────
 
 class TestAdPricing:
@@ -449,12 +478,7 @@ class TestPythiaTreasury:
         assert serve_result["ad"] is not None
         assert serve_result["is_house"] is False
 
-        event_result = store.verified_record_event(
-            proof_id=serve_result["proof"]["proof_id"],
-            event_type="view",
-            proof_token=serve_result["proof"]["proof_token"],
-            viewable_ms=1200, visible_percent=80, page_visible=True,
-        )
+        event_result = _verified_view(store, serve_result)
         assert Decimal(event_result["charged_amount"]) > 0
 
         summary = store.treasury_summary()
@@ -515,12 +539,7 @@ class TestVIPLoyaltyCredits:
             )
             if not serve.get("ad") or serve.get("is_house"):
                 break
-            event = store.verified_record_event(
-                proof_id=serve["proof"]["proof_id"],
-                event_type="view",
-                proof_token=serve["proof"]["proof_token"],
-                viewable_ms=1200, visible_percent=80, page_visible=True,
-            )
+            event = _verified_view(store, serve)
             if event.get("vip_credit"):
                 credits_found.append(event["vip_credit"])
 
@@ -564,12 +583,7 @@ class TestEnhancedReports:
             publisher_secret="publisher-secret",
         )
         if serve.get("ad") and not serve.get("is_house"):
-            store.verified_record_event(
-                proof_id=serve["proof"]["proof_id"],
-                event_type="view",
-                proof_token=serve["proof"]["proof_token"],
-                viewable_ms=1200, visible_percent=80, page_visible=True,
-            )
+            _verified_view(store, serve)
 
         report = store.campaign_report(campaign["campaign_id"], uid)
         assert "vip_credits" in report
@@ -601,12 +615,7 @@ class TestEnhancedReports:
             publisher_secret="publisher-secret",
         )
         if serve.get("ad") and not serve.get("is_house"):
-            store.verified_record_event(
-                proof_id=serve["proof"]["proof_id"],
-                event_type="view",
-                proof_token=serve["proof"]["proof_token"],
-                viewable_ms=1200, visible_percent=80, page_visible=True,
-            )
+            _verified_view(store, serve)
 
         daily = store.campaign_report_daily(campaign["campaign_id"], uid)
         assert isinstance(daily, list)
@@ -730,12 +739,7 @@ class TestEndToEndWalletless:
         assert serve["ad"] is not None
         assert serve["is_house"] is False
 
-        event = store.verified_record_event(
-            proof_id=serve["proof"]["proof_id"],
-            event_type="view",
-            proof_token=serve["proof"]["proof_token"],
-            viewable_ms=1200, visible_percent=80, page_visible=True,
-        )
+        event = _verified_view(store, serve)
         assert Decimal(event["charged_amount"]) > 0
 
         treasury = store.treasury_summary()

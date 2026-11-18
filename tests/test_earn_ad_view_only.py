@@ -10,6 +10,8 @@ import time
 import pytest
 
 from services.earn_account import EarnAccountStore, EarnError
+from services.earn_ad_cpc_migration import APPROVAL_PHRASE, dry_run, execute
+from scripts.diagnose_pending_ad_campaigns import diagnose
 
 
 @pytest.fixture()
@@ -96,11 +98,39 @@ def _serve(store, publisher_id, placement="earn", viewer="viewer_1234567890"):
 
 
 def _view(store, served):
+    observation = _started_observation(store, served)
+    return _record_view(store, served, observation)
+
+
+def _record_view(store, served, observation):
     return store.verified_record_event(
         served["proof"]["proof_id"], "view",
         served["proof"]["proof_token"],
+        publisher_secret="publisher-secret",
+        observation_id=observation["observation_id"],
+        observation_token=observation["observation_token"],
         viewable_ms=1200, visible_percent=75, page_visible=True,
     )
+
+
+def _started_observation(store, served):
+    observation = store.verified_start_observation(
+        served["proof"]["proof_id"], served["proof"]["proof_token"],
+        "publisher-secret",
+    )
+    with store._tx() as con:
+        con.execute(
+            """UPDATE earn_ad_view_observations
+               SET started_at_ms=started_at_ms-1200
+               WHERE observation_id=?""",
+            (observation["observation_id"],),
+        )
+        row = con.execute(
+            "SELECT * FROM earn_ad_view_observations WHERE observation_id=?",
+            (observation["observation_id"],),
+        ).fetchone()
+        observation["observation_token"] = store._sign_observation(row)
+    return observation
 
 
 def test_new_cpc_contracts_are_closed(store):
@@ -146,6 +176,7 @@ def test_click_is_analytics_only_and_view_is_exactly_once(store):
     served = _serve(store, publisher_id)
     click = store.verified_record_event(
         served["proof"]["proof_id"], "click", served["proof"]["proof_token"],
+        publisher_secret="publisher-secret",
     )
     assert click["charged_amount"] == "0.000000"
     view = _view(store, served)
@@ -161,6 +192,102 @@ def test_click_is_analytics_only_and_view_is_exactly_once(store):
     assert report["ctr"] == 100.0
 
 
+def test_view_requires_publisher_auth_and_server_timed_observation(store):
+    user_id, publisher_id, campaign_id = _active(store)
+    served = _serve(store, publisher_id)
+    with pytest.raises(EarnError, match="publisher_auth_required"):
+        store.verified_start_observation(
+            served["proof"]["proof_id"], served["proof"]["proof_token"],
+            "wrong-secret",
+        )
+    observation = store.verified_start_observation(
+        served["proof"]["proof_id"], served["proof"]["proof_token"],
+        "publisher-secret",
+    )
+    with pytest.raises(EarnError, match="publisher_auth_required"):
+        store.verified_record_event(
+            served["proof"]["proof_id"], "view",
+            served["proof"]["proof_token"],
+            publisher_secret="wrong-secret",
+            observation_id=observation["observation_id"],
+            observation_token=observation["observation_token"],
+            viewable_ms=1200, visible_percent=75, page_visible=True,
+        )
+    with pytest.raises(EarnError, match="observation_too_short"):
+        store.verified_record_event(
+            served["proof"]["proof_id"], "view",
+            served["proof"]["proof_token"],
+            publisher_secret="publisher-secret",
+            observation_id=observation["observation_id"],
+            observation_token=observation["observation_token"],
+            viewable_ms=1200, visible_percent=75, page_visible=True,
+        )
+
+    elapsed = _started_observation(store, served)
+    with pytest.raises(EarnError, match="view_not_qualifying"):
+        store.verified_record_event(
+            served["proof"]["proof_id"], "view",
+            served["proof"]["proof_token"],
+            publisher_secret="publisher-secret",
+            observation_id=elapsed["observation_id"],
+            observation_token=elapsed["observation_token"],
+            viewable_ms=5000, visible_percent=75, page_visible=True,
+        )
+    result = _record_view(store, served, elapsed)
+    assert result["charged_amount"] == "0.050000"
+    assert store.thc_balance(user_id)["spent"] == "0.050000"
+    with store._tx() as con:
+        audit = con.execute(
+            """SELECT details FROM earn_ad_audit
+               WHERE campaign_id=? AND event_type='delivery_event'""",
+            (campaign_id,),
+        ).fetchone()
+    assert audit is not None
+    assert '"browser_measurement_claim":true' in audit["details"]
+    assert '"server_elapsed_ms":' in audit["details"]
+
+
+def test_observation_is_bound_to_proof_viewer_and_placement(store):
+    _, publisher_id, _ = _active(store)
+    first = _serve(store, publisher_id, viewer="viewer_binding_0001")
+    second = _serve(store, publisher_id, viewer="viewer_binding_0002")
+    observation = _started_observation(store, first)
+    with pytest.raises(EarnError, match="observation_not_found"):
+        store.verified_record_event(
+            second["proof"]["proof_id"], "view",
+            second["proof"]["proof_token"],
+            publisher_secret="publisher-secret",
+            observation_id=observation["observation_id"],
+            observation_token=observation["observation_token"],
+            viewable_ms=1200, visible_percent=75, page_visible=True,
+        )
+
+
+def test_observation_start_rate_limit_fails_closed_and_is_audited(store):
+    _, publisher_id, campaign_id = _active(store)
+    for _ in range(10):
+        served = _serve(store, publisher_id, viewer="viewer_rate_limit_01")
+        store.verified_start_observation(
+            served["proof"]["proof_id"], served["proof"]["proof_token"],
+            "publisher-secret",
+        )
+    blocked = _serve(store, publisher_id, viewer="viewer_rate_limit_01")
+    with pytest.raises(EarnError, match="observation_rate_limited"):
+        store.verified_start_observation(
+            blocked["proof"]["proof_id"], blocked["proof"]["proof_token"],
+            "publisher-secret",
+        )
+    with store._tx() as con:
+        audit = con.execute(
+            """SELECT details FROM earn_ad_audit
+               WHERE campaign_id=?
+                 AND event_type='delivery_security_rejection'""",
+            (campaign_id,),
+        ).fetchone()
+    assert audit is not None
+    assert "observation_rate_limited" in audit["details"]
+
+
 @pytest.mark.parametrize("kwargs", [
     {},
     {"viewable_ms": 999, "visible_percent": 75, "page_visible": True},
@@ -170,10 +297,15 @@ def test_click_is_analytics_only_and_view_is_exactly_once(store):
 def test_fake_or_unqualified_view_is_zero_charge(store, kwargs):
     user_id, publisher_id, campaign_id = _active(store)
     served = _serve(store, publisher_id)
+    observation = _started_observation(store, served)
     with pytest.raises(EarnError, match="view_not_qualifying"):
         store.verified_record_event(
             served["proof"]["proof_id"], "view",
-            served["proof"]["proof_token"], **kwargs,
+            served["proof"]["proof_token"],
+            publisher_secret="publisher-secret",
+            observation_id=observation["observation_id"],
+            observation_token=observation["observation_token"],
+            **kwargs,
         )
     assert store.thc_balance(user_id)["spent"] == "0.000000"
     assert store.campaign_report(campaign_id, user_id)["verified_views"] == 0
@@ -217,9 +349,10 @@ def test_sub_view_budget_remainder_completes_and_refunds(store):
 def test_concurrent_duplicate_event_cannot_overspend(store):
     user_id, publisher_id, campaign_id = _active(store, budget="0.050000")
     served = _serve(store, publisher_id)
+    observation = _started_observation(store, served)
 
     def submit():
-        return _view(store, served)
+        return _record_view(store, served, observation)
 
     with ThreadPoolExecutor(max_workers=8) as pool:
         results = list(pool.map(lambda _: submit(), range(8)))
@@ -263,6 +396,14 @@ def test_existing_active_cpc_is_held_without_releasing_reservation(tmp_path):
             (user["earn_user_id"], now, now),
         )
         con.execute(
+            """INSERT INTO earn_ad_escrow
+               (escrow_id, campaign_id, advertiser_id, action, amount,
+                balance_after, note, created_at)
+               VALUES ('legacy-escrow','legacy-cpc',?,'deposit','5.000000',
+                       '5.000000','legacy fixture',?)""",
+            (user["earn_user_id"], now),
+        )
+        con.execute(
             """INSERT INTO earn_thc_reservations
                (reservation_id, earn_user_id, reservation_type, amount, state,
                 source_ref, idempotency_key, created_at, updated_at)
@@ -270,10 +411,26 @@ def test_existing_active_cpc_is_held_without_releasing_reservation(tmp_path):
                        'legacy-cpc','legacy-idem',?,?)""",
             (user["earn_user_id"], now, now),
         )
-    # Reopening runs the additive migration policy.
+    # Routine startup is schema-only and must not mutate advertiser contracts.
     reopened = EarnAccountStore(str(path), "legacy-key")
     campaign = reopened.get_campaign("legacy-cpc")
+    assert campaign["status"] == "active"
+    assert campaign["thc_still_reserved"] == "5.000000"
+    plan = dry_run(path)
+    assert plan["candidate_campaigns"] == 1
+    assert plan["escrow_reservations_reconciled"] is True
+    assert reopened.get_campaign("legacy-cpc")["status"] == "active"
+    diagnosis = diagnose(path)
+    assert diagnosis["mode"] == "read_only"
+    assert diagnosis["campaigns"][0]["escrow_reservation_match"] is True
+
+    result = execute(path, tmp_path / "backup", APPROVAL_PHRASE)
+    assert result["changed_campaigns"] == 1
+    migrated = EarnAccountStore(str(path), "legacy-key")
+    campaign = migrated.get_campaign("legacy-cpc")
     assert campaign["status"] == "legacy_contract_review"
     assert campaign["migration_state"] == "cpc_contract_action_required"
     assert campaign["thc_still_reserved"] == "5.000000"
+    repeated = execute(path, tmp_path / "backup", APPROVAL_PHRASE)
+    assert repeated["result"] == "already_applied"
 

@@ -34,10 +34,19 @@ class TestEarnReferral:
             assert store.release_mature_earn_holds() == 1
 
     @staticmethod
-    def _cpx_reward(store, earned_user, trans_id, amount):
+    def _provider_identity(store, registered_user):
+        identity = store.user_by_email(registered_user["email"])
+        assert identity is not None
+        assert identity["earn_user_id"] == registered_user["earn_user_id"]
+        assert identity["cpx_ext_user_id"].startswith("thr_")
+        return identity
+
+    @classmethod
+    def _cpx_reward(cls, store, earned_user, trans_id, amount):
+        provider_identity = cls._provider_identity(store, earned_user)
         store.record_cpx_receipt(
             trans_id=trans_id,
-            cpx_ext_user_id=earned_user["cpx_ext_user_id"],
+            cpx_ext_user_id=provider_identity["cpx_ext_user_id"],
             status=1,
             amount_local=amount,
             payload={"status": "1"},
@@ -51,6 +60,12 @@ class TestEarnReferral:
         )
         stats = store.referral_stats(referrer["earn_user_id"])
         assert stats["referral_count"] == 1
+
+    def test_registration_response_does_not_expose_provider_identity(self, store):
+        registered = store.register("private-id@test.com", "SecurePass123!")
+        assert "cpx_ext_user_id" not in registered
+        internal = self._provider_identity(store, registered)
+        assert internal["cpx_ext_user_id"] != registered["earn_user_id"]
 
     def test_referral_stats_empty_by_default(self, store):
         user = store.register("solo@test.com", "SecurePass123!")
@@ -199,15 +214,18 @@ class TestEarnReferral:
         self._cpx_reward(store, player, "ref-reverse-500", "500")
         self._release(store, player["earn_user_id"], monkeypatch)
         assert Decimal(store.thc_balance(inviter["earn_user_id"])["available"]) == Decimal("10.000000")
+        provider_identity = self._provider_identity(store, player)
 
         store.record_cpx_receipt(
-            trans_id="ref-reverse-500", cpx_ext_user_id=player["cpx_ext_user_id"],
+            trans_id="ref-reverse-500",
+            cpx_ext_user_id=provider_identity["cpx_ext_user_id"],
             status=2, amount_local="500", payload={"status": "2"},
         )
         assert Decimal(store.thc_balance(inviter["earn_user_id"])["available"]) == Decimal("0")
         # Same provider reversal must be idempotent and cannot reverse twice.
         receipt, changed = store.record_cpx_receipt(
-            trans_id="ref-reverse-500", cpx_ext_user_id=player["cpx_ext_user_id"],
+            trans_id="ref-reverse-500",
+            cpx_ext_user_id=provider_identity["cpx_ext_user_id"],
             status=2, amount_local="500", payload={"status": "2"},
         )
         assert changed is False

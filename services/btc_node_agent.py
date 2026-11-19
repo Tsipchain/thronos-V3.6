@@ -25,6 +25,12 @@ from urllib.request import Request, urlopen
 
 from services.btc_observer import BtcObserver, BtcObserverError, BtcObserverStore
 from services.btc_deposit_outbox import BtcDepositOutbox, BtcDepositOutboxError
+from services.btc_provider_revenue import (
+    MAINNET_GENESIS_HASH,
+    PURPOSE as PROVIDER_REVENUE_PURPOSE,
+    REVENUE_ADDRESS,
+    ProviderRevenueStore,
+)
 
 logger = logging.getLogger("btc_node_agent")
 
@@ -239,7 +245,15 @@ def load_watch_registry(path: str | None) -> dict[str, str]:
         owner_ref = str(owner_ref).strip()
         if not address or not owner_ref or len(address) > 128 or len(owner_ref) > 200:
             raise NodeAgentError("invalid_btc_watch_registry_entry")
+        if address == REVENUE_ADDRESS and owner_ref != PROVIDER_REVENUE_PURPOSE:
+            raise NodeAgentError("btc_provider_revenue_purpose_mismatch")
+        if owner_ref == PROVIDER_REVENUE_PURPOSE and address != REVENUE_ADDRESS:
+            raise NodeAgentError("btc_provider_revenue_address_mismatch")
         result[address] = owner_ref
+    if PROVIDER_REVENUE_PURPOSE in result.values() and os.getenv(
+        "BTC_PROVIDER_REVENUE_PAYOUT_CONFIG_VERIFIED", ""
+    ).strip().lower() not in {"1", "true", "yes", "on"}:
+        raise NodeAgentError("btc_provider_revenue_payout_config_not_verified")
     return result
 
 
@@ -261,6 +275,11 @@ class LocalBitcoinNodeAgent:
         if self.minimum_confirmations < 1:
             raise NodeAgentError("invalid_btc_minimum_confirmations")
         self.store = BtcObserverStore(db_path)
+        self.provider_revenue_store = (
+            ProviderRevenueStore(db_path)
+            if PROVIDER_REVENUE_PURPOSE in self.watch_registry.values()
+            else None
+        )
         self.observer = (
             BtcObserver(
                 self.rpc,
@@ -303,6 +322,8 @@ class LocalBitcoinNodeAgent:
             ch not in "0123456789abcdef" for ch in genesis_hash
         ):
             raise NodeAgentError("invalid_bitcoin_genesis_hash")
+        if self.provider_revenue_store is not None and genesis_hash != MAINNET_GENESIS_HASH:
+            raise NodeAgentError("bitcoin_mainnet_genesis_mismatch")
 
         for address in self.watch_registry:
             result = self.rpc.call("validateaddress", [address])
@@ -439,6 +460,12 @@ class LocalBitcoinNodeAgent:
         return self.outbox.enqueue_confirmed(
             minimum_confirmations=self.minimum_confirmations
         )
+
+    def reconcile_provider_revenue(self) -> int:
+        """Refresh statement matches; never enqueue, deliver, or credit them."""
+        if self.provider_revenue_store is None:
+            return 0
+        return len(self.provider_revenue_store.reconcile_all())
 
     def deliver_outbox(self, *, limit: int = 10) -> int:
         if not self.delivery_enabled or self.outbox is None:
@@ -579,6 +606,7 @@ class LocalBitcoinNodeAgent:
             blocks_scanned += 1
 
         self.observer.reconcile_tip()
+        self.reconcile_provider_revenue()
         self.enqueue_confirmed_deposits()
         return blocks_scanned, matched_outputs
 
@@ -693,6 +721,9 @@ class LocalBitcoinNodeAgent:
             )
             self.observer.reconcile_tip()
 
+        if self.provider_revenue_store is not None and label in ("A", "R", "C", "D"):
+            self.reconcile_provider_revenue()
+
         return {
             "label": label,
             "hash": object_hash,
@@ -783,7 +814,9 @@ class LocalBitcoinNodeAgent:
             decoded = self.rpc.call("decoderawtransaction", [raw_tx.hex()])
             if not isinstance(decoded, dict):
                 raise NodeAgentError("decoderawtransaction_failed")
-            return len(self.observer.observe_decoded_transaction(decoded))
+            changed = len(self.observer.observe_decoded_transaction(decoded))
+            self.reconcile_provider_revenue()
+            return changed
 
     def handle_new_block(self) -> tuple[int, int, str, int]:
         with self._event_lock:
@@ -897,6 +930,11 @@ def main() -> int:
         help="print non-secret durable checkpoint/gap status and exit",
     )
     parser.add_argument(
+        "--provider-revenue-report",
+        action="store_true",
+        help="print the existing CPX/TimeWall reconciliation report read-only and exit",
+    )
+    parser.add_argument(
         "--acknowledge-unverified-history-before-height",
         type=int,
         metavar="HEIGHT",
@@ -919,6 +957,10 @@ def main() -> int:
     )
     if args.recovery_status:
         print(json.dumps(BtcObserverStore.read_recovery_status(args.db), sort_keys=True))
+        return 0
+    if args.provider_revenue_report:
+        store = ProviderRevenueStore.open_existing_readonly(args.db)
+        print(json.dumps(store.read_only_report(), sort_keys=True))
         return 0
     watch = load_watch_registry(args.watch_registry or None)
     agent = LocalBitcoinNodeAgent(

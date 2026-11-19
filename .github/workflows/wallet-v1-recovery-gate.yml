@@ -37,6 +37,7 @@ jobs:
           python -m pytest -q \
             tests/test_btc_pledge_watcher_retry.py \
             tests/test_wallet_v1_bound_signer_acceptance.py \
+            tests/test_wallet_v1_credential_security.py \
             tests/test_wallet_v1_migration.py \
             tests/test_wallet_v1_recovery_browser_e2e.py \
             tests/test_wallet_v1_recovery_kit_restore.py \

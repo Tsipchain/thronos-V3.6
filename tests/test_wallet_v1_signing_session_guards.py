@@ -55,7 +55,7 @@ def test_pools_use_shared_walletauth_unlock_source_and_runtime_guard():
 
 def test_walletauth_prefers_runtime_signing_material_without_legacy_secret():
     runtime_pos = STATIC_AUTH.index("if (hasRuntimeSigningMaterial(address))")
-    legacy_pos = STATIC_AUTH.index("const storedSecret = getSigningMaterial(address)")
+    legacy_pos = STATIC_AUTH.index("const storedSecret = modernWalletV1 ? '' : getSigningMaterial(address)")
     assert runtime_pos < legacy_pos
     assert "return buildAuthResult(address, '', credentialLookupAddress)" in STATIC_AUTH
 

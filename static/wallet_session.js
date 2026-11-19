@@ -11,6 +11,7 @@
   const V1_ENCRYPTED_KEY = 'wallet_v1_encrypted_priv';
   const V1_PUBLIC_KEY = 'wallet_v1_public_key';
   const V1_ADDRESS_KEY = 'wallet_v1_address';
+  const CREDENTIAL_MIGRATION_KEY = 'wallet_v1_credential_migration';
   const VERIFIED_LEGACY_SOURCE_ADDRESS = 'THR79ca94a7eb70a6aa99d12d7fdb01446ef246301a';
   const VERIFIED_CANONICAL_V1_ADDRESS = 'THR683318ACF083723B3EDFE6C0A30AD62670F00353';
 
@@ -161,7 +162,12 @@
 
     return '';
   }
-  function setAddress(addr){ setItem(ADDRESS_KEY, addr ? addr.trim() : ''); }
+  function setAddress(addr){
+    const next = normalizeAddress(addr);
+    const current = normalizeAddress(getActiveAddress());
+    if (unlockedPrivateKeyHex && current && next && current !== next) lockWallet();
+    setItem(ADDRESS_KEY, next);
+  }
 
   function persistActiveUserAddress(addr){
     const normalized = normalizeAddress(addr);
@@ -171,12 +177,12 @@
     if (canonical) {
       localStorage.setItem(V1_ADDRESS_KEY, canonical);
       localStorage.setItem(ADDRESS_KEY, canonical);
-      if (unlockedPrivateKeyHex) unlockedForAddress = canonical;
+      if (unlockedPrivateKeyHex && normalizeAddress(unlockedForAddress) !== canonical) lockWallet();
       return canonical;
     }
     localStorage.setItem(V1_ADDRESS_KEY, normalized);
     localStorage.setItem(ADDRESS_KEY, normalized);
-    if (unlockedPrivateKeyHex) unlockedForAddress = normalized;
+    if (unlockedPrivateKeyHex && normalizeAddress(unlockedForAddress) !== normalized) lockWallet();
     return normalized;
   }
 
@@ -320,8 +326,28 @@
 
   const getSendSecret = getSendSeed;
   const setSendSecret = setSendSeed;
-  function getPin(){ return localStorage.getItem(PIN_KEY) || ''; }
-  function setPin(pin){ setItem(PIN_KEY, pin ? pin.trim() : ''); }
+  function getPin(){
+    // Existing plaintext PINs remain readable only for legacy wallets until
+    // they complete a verified V1 enrollment/recovery. Modern Wallet V1 never
+    // exposes a persisted PIN back to callers.
+    return isWalletV1() ? '' : (localStorage.getItem(PIN_KEY) || '');
+  }
+  function retireLegacyPinAfterVerifiedV1(source){
+    if (!isWalletV1()) return false;
+    localStorage.removeItem(PIN_KEY);
+    localStorage.setItem(CREDENTIAL_MIGRATION_KEY, JSON.stringify({
+      version: 1,
+      status: 'plaintext_pin_retired',
+      source: String(source || 'verified_v1'),
+      migrated_at: Date.now()
+    }));
+    return true;
+  }
+  function setPin(_pin){
+    // Compatibility API only. PINs are operation-scoped and are never written.
+    // A pre-existing legacy PIN is retired only after V1 material is verified.
+    return retireLegacyPinAfterVerifiedV1('set_pin_compat');
+  }
 
   function lockWallet(){ unlockedPrivateKeyHex = null; unlockedForAddress = null; localStorage.setItem(LOCK_KEY, '1'); _clearLegacySessionUnlock(); }
   function lock(){ return lockWallet(); }
@@ -516,10 +542,11 @@
     localStorage.setItem(V1_ENCRYPTED_KEY, enc);
     localStorage.setItem(V1_PUBLIC_KEY, pub);
     localStorage.setItem(V1_ADDRESS_KEY, address);
-    setPin(pin);
+    retireLegacyPinAfterVerifiedV1('wallet_created');
     setBound(true);
     localStorage.setItem(LOCK_KEY, '0');
     unlockedPrivateKeyHex = priv;
+    unlockedForAddress = address;
     return { address, publicKey: pub };
   }
 
@@ -577,7 +604,7 @@
     // After a browser/PWA reload encrypted storage can still exist while the
     // decrypted signing key is gone. Never report unlocked without matching
     // in-memory material for the requested wallet.
-    if (!isLocked() && isBound() && hasRuntimeSigningMaterial(options.address)) return true;
+    if (!options.forceReauth && !isLocked() && isBound() && hasRuntimeSigningMaterial(options.address)) return true;
     if (customUnlockHandler) {
       try { const ok = await customUnlockHandler(options); if (ok) { setBound(true); localStorage.setItem(LOCK_KEY, '0'); return true; } }
       catch(_) {}
@@ -644,6 +671,7 @@
           unlockedForAddress = activeAddr;
           setBound(true);
           localStorage.setItem(LOCK_KEY, '0');
+          retireLegacyPinAfterVerifiedV1('wallet_unlock');
           return true;
         }
 
@@ -658,6 +686,7 @@
               unlockedForAddress = activeAddr;
               setBound(true);
               localStorage.setItem(LOCK_KEY, '0');
+              retireLegacyPinAfterVerifiedV1('bound_wallet_unlock');
               return true;
             }
           } catch (bindingCheckErr) {
@@ -683,6 +712,7 @@
         unlockedForAddress = activeAddr;
         setBound(true);
         localStorage.setItem(LOCK_KEY, '0');
+        retireLegacyPinAfterVerifiedV1('wallet_unlock');
         return true;
       }
       catch(err) {
@@ -707,7 +737,8 @@
 
   function hasRuntimeSigningMaterial(address){
     const normalized = normalizeAddress(address || getActiveAddress());
-    return !!(unlockedPrivateKeyHex && (!normalized || !unlockedForAddress || unlockedForAddress === normalized));
+    const boundAddress = normalizeAddress(unlockedForAddress);
+    return !!(unlockedPrivateKeyHex && normalized && boundAddress && boundAddress === normalized);
   }
 
   function isUnlockedFor(address){
@@ -760,8 +791,21 @@
       + '}';
   }
 
+  function assertRuntimeSignerForSender(sender){
+    const claimed = normalizeAddress(sender);
+    const active = normalizeAddress(getActiveAddress());
+    if (!claimed || !active || claimed !== active || !hasRuntimeSigningMaterial(claimed)) {
+      lockWallet();
+      const err = new Error('wallet_signing_address_mismatch');
+      err.code = 'WALLET_SIGNING_ADDRESS_MISMATCH';
+      throw err;
+    }
+    return claimed;
+  }
+
   async function signTransaction(txCore){
     if (isLocked() || !isBound()) throw new Error('wallet_locked');
+    assertRuntimeSignerForSender(txCore && (txCore.from || txCore.trader_thr || txCore.provider_thr));
     const secp = await _ensureSecpLoaded();
     if (!secp || !secp.sign) throw new Error('secp256k1_library_missing');
     if (!unlockedPrivateKeyHex) throw new Error('wallet_locked');
@@ -784,6 +828,7 @@
 
   async function signInternalTransferIntent(intent) {
     if (isLocked() || !isBound()) throw new Error('wallet_locked');
+    assertRuntimeSignerForSender(intent && intent.from_thr);
     const secp = await _ensureSecpLoaded();
     if (!secp || !secp.sign) throw new Error('secp256k1_library_missing');
     if (!unlockedPrivateKeyHex) throw new Error('wallet_locked');
@@ -859,6 +904,7 @@
    */
   async function signWalletActionIntent(intent) {
     if (isLocked() || !isBound()) throw new Error('wallet_locked');
+    assertRuntimeSignerForSender(intent && intent.from_thr);
     const secp = await _ensureSecpLoaded();
     if (!secp || !secp.sign) throw new Error('secp256k1_library_missing');
     if (!unlockedPrivateKeyHex) throw new Error('wallet_locked');
@@ -878,6 +924,7 @@
 
   async function signLoginChallenge(challengeResponse) {
     if (isLocked() || !isBound()) throw new Error('wallet_locked');
+    assertRuntimeSignerForSender(getActiveAddress());
     const secp = await _ensureSecpLoaded();
     if (!secp || !secp.sign) throw new Error('secp256k1_library_missing');
     if (!unlockedPrivateKeyHex) throw new Error('wallet_locked');
@@ -921,14 +968,24 @@
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok || data.ok === false) throw new Error(data.error || 'wallet_signing_enrollment_failed');
+    const derivedSignerAddress = await deriveAddressFromPublicKey(pub);
+    const authoritativeBinding = data.binding || {};
+    const authoritativePublicKey = normalizeAddress(authoritativeBinding.public_key).toLowerCase();
+    const authoritativeSignerAddress = normalizeAddress(
+      authoritativeBinding.public_key_address || authoritativeBinding.bound_key_address
+    );
+    if (authoritativePublicKey !== pub.toLowerCase() || authoritativeSignerAddress !== derivedSignerAddress) {
+      throw new Error('wallet_signing_enrollment_binding_mismatch');
+    }
     localStorage.setItem(V1_ENCRYPTED_KEY, enc);
     localStorage.setItem(V1_PUBLIC_KEY, pub);
     localStorage.setItem(V1_ADDRESS_KEY, activeAddress);
-    setPin(unlockPin);
+    retireLegacyPinAfterVerifiedV1('signing_enrollment');
     setBound(true);
     localStorage.setItem(LOCK_KEY, '0');
     unlockedPrivateKeyHex = priv;
-    return { address: activeAddress, credentialLookupAddress: lookupAddress, publicKey: pub, binding: data.binding || data };
+    unlockedForAddress = activeAddress;
+    return { address: activeAddress, credentialLookupAddress: lookupAddress, publicKey: pub, binding: authoritativeBinding };
   }
 
   async function migrateLegacyWallet({oldAddress, sendSecret, pin, signedMigrationRequest} = {}){
@@ -1199,8 +1256,10 @@
       const encrypted = await encryptPrivateKeyHex(privateKeyHex, pin);
       localStorage.setItem(V1_ENCRYPTED_KEY, encrypted);
       localStorage.setItem(V1_PUBLIC_KEY, pubHex);
-      localStorage.setItem(PIN_KEY, pin);
+      localStorage.setItem(V1_ADDRESS_KEY, normalized);
+      retireLegacyPinAfterVerifiedV1('signing_key_import');
       unlockedPrivateKeyHex = null;
+      unlockedForAddress = null;
       lastSigningKeyMismatch = null;
       localStorage.setItem(LOCK_KEY, '1');
       return {success: true};
@@ -1209,11 +1268,19 @@
     }
   }
 
-  function disconnect(){ setBound(false); setQrSession(false); localStorage.setItem(LOCK_KEY, '1'); unlockedPrivateKeyHex = null; }
-  function forgetDevice(){ [ADDRESS_KEY,SEND_SECRET_KEY,SEND_SEED_KEY,SEND_SEED_COMPAT_KEY,PIN_KEY,BOUND_KEY,LOCK_KEY,V1_ENCRYPTED_KEY,V1_PUBLIC_KEY,V1_ADDRESS_KEY,MIGRATION_META_KEY].forEach(k => localStorage.removeItem(k)); unlockedPrivateKeyHex = null; }
+  function disconnect(){ setBound(false); setQrSession(false); localStorage.setItem(LOCK_KEY, '1'); unlockedPrivateKeyHex = null; unlockedForAddress = null; }
+  function forgetDevice(){ [ADDRESS_KEY,SEND_SECRET_KEY,SEND_SEED_KEY,SEND_SEED_COMPAT_KEY,PIN_KEY,BOUND_KEY,LOCK_KEY,V1_ENCRYPTED_KEY,V1_PUBLIC_KEY,V1_ADDRESS_KEY,MIGRATION_META_KEY,CREDENTIAL_MIGRATION_KEY].forEach(k => localStorage.removeItem(k)); unlockedPrivateKeyHex = null; unlockedForAddress = null; }
   function clearSession(){ forgetDevice(); }
-  function saveSession({address, sendSeed, pin, bound} = {}){ setAddress(address || ''); setSendSeed(sendSeed || ''); setPin(pin || ''); setBound(bound !== undefined ? !!bound : !!(address && sendSeed)); if (address || sendSeed) localStorage.setItem(LOCK_KEY, '0'); }
-  function requirePin(actionLabel = 'continue'){ const stored = getPin(); if(!stored) return true; const entered = prompt(`Enter wallet PIN to ${actionLabel}`); if(entered === null) return false; if(entered !== stored){ alert('Wrong PIN.'); return false; } return true; }
+  function saveSession({address, sendSeed, bound} = {}){ setAddress(address || ''); setSendSeed(sendSeed || ''); setBound(bound !== undefined ? !!bound : !!(address && sendSeed)); if (!isWalletV1() && (address || sendSeed)) localStorage.setItem(LOCK_KEY, '0'); }
+  function requirePin(actionLabel = 'continue'){
+    if (isWalletV1()) return false;
+    const stored = getPin();
+    if (!stored) return false;
+    const entered = prompt(`Enter wallet PIN to ${actionLabel}`);
+    if (entered === null) return false;
+    if (entered !== stored){ alert('Wrong PIN.'); return false; }
+    return true;
+  }
 
   // ── Unified user-presence check ─────────────────────────────────────────────
   // Same conceptual gate as PWA biometric prompt (assertWebAuthn) but works on
@@ -1251,7 +1318,17 @@
       const fidRaw = activeAddr ? localStorage.getItem(`thr_fid_${activeAddr}`) : null;
       if (fidRaw) return false;
     }
-    // No biometric registered → PIN prompt fallback
+    // No biometric registered. Wallet V1 validates the entered PIN by
+    // decrypting and rebinding the key for this one operation; it never reads
+    // or writes a plaintext PIN credential.
+    if (isWalletV1()) {
+      const entered = prompt(`Enter wallet PIN to ${actionLabel}`);
+      if (!entered) return false;
+      try {
+        return !!(await unlockWallet({pin: entered, address: activeAddr, prompt: false, forceReauth: true})
+          && isUnlockedFor(activeAddr));
+      } catch (_) { return false; }
+    }
     return requirePin(actionLabel);
   }
 
@@ -1378,6 +1455,7 @@
   // Keeps private key inside closure — caller only gets (r, s, recovery).
   async function signEvmTxHash(txHashHex) {
     if (isLocked() || !isBound()) throw new Error('wallet_locked');
+    assertRuntimeSignerForSender(getActiveAddress());
     if (!unlockedPrivateKeyHex) throw new Error('wallet_locked');
     const secp = await _ensureSecpLoaded();
     if (!secp) throw new Error('secp256k1_library_missing');
@@ -1409,13 +1487,13 @@
     migrateLegacyWallet, restoreMigratedWallet, encryptPrivateKeyHex, decryptPrivateKeyHex,
     getCredentialLookupAddress, getSendSeed, setSendSeed, getSendSecret, setSendSecret,
     hasSigningMaterial, hasRuntimeSigningMaterial, getWalletAuthDiagnostics, logWalletAuthDiagnostics,
-    getPin, setPin, isLocked, lockWallet, lock: lockWallet, unlockWallet, unlock: unlockWallet, unlock,
+    getPin, setPin, retireLegacyPinAfterVerifiedV1, isLocked, lockWallet, lock: lockWallet, unlockWallet, unlock: unlockWallet, unlock,
     setCustomUnlockHandler, isBound, setBound, isQrSession, setQrSession, disconnect, forgetDevice, clearSession, saveSession, requirePin, confirmUserPresence,
     isUnlockedFor,
     getDebugState, restoreToMigratedWallet, resetActiveWalletPointers, clearAllWalletData, isValidThrAddress,
     persistActiveUserAddress, isSystemWalletAddress,
     getSigningKeyMismatch, getUnusableKeyDiagnostics, clearLocalSigningKey, clearUnusableSigningKey,
-    getActiveKeyBinding, importSigningKeyForAddress, getWalletState,
+    getActiveKeyBinding, enrollSigningMaterial, importSigningKeyForAddress, getWalletState,
     hasPledgeOrMigrationSource, getModalState,
     generateV1KeyPair, derivePublicKeyAndAddress,
     resolveCanonicalWalletAddress,

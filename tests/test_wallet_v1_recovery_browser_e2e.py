@@ -25,24 +25,25 @@ from wallet_v1_production_final import (
 
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE = (ROOT / "templates" / "base.html").read_text()
+PLEDGE_TEMPLATE = (ROOT / "templates" / "pledge_form.html").read_text()
 
 
-def _extract_function(name: str) -> str:
+def _extract_function(name: str, source: str = TEMPLATE) -> str:
     """Extract one top-level JS function, respecting strings and comments."""
     markers = (f"async function {name}", f"function {name}")
-    start = next((TEMPLATE.find(marker) for marker in markers if TEMPLATE.find(marker) >= 0), -1)
+    start = next((source.find(marker) for marker in markers if source.find(marker) >= 0), -1)
     if start < 0:
         raise AssertionError(f"production function not found: {name}")
-    brace = TEMPLATE.find("{", start)
+    brace = source.find("{", start)
     depth = 0
     quote = None
     escaped = False
     line_comment = False
     block_comment = False
     index = brace
-    while index < len(TEMPLATE):
-        char = TEMPLATE[index]
-        nxt = TEMPLATE[index + 1] if index + 1 < len(TEMPLATE) else ""
+    while index < len(source):
+        char = source[index]
+        nxt = source[index + 1] if index + 1 < len(source) else ""
         if line_comment:
             if char == "\n":
                 line_comment = False
@@ -70,7 +71,7 @@ def _extract_function(name: str) -> str:
         elif char == "}":
             depth -= 1
             if depth == 0:
-                return TEMPLATE[start : index + 1]
+                return source[start : index + 1]
         index += 1
     raise AssertionError(f"unterminated production function: {name}")
 
@@ -86,6 +87,7 @@ RECOVERY_JS = "\n".join(
         "walletV1HandleRecoveryKitRestore",
     )
 )
+RECOVERY_JS += "\n" + _extract_function("installPledgeWalletV1", PLEDGE_TEMPLATE)
 
 
 HARNESS_HTML = f"""<!doctype html>
@@ -115,6 +117,7 @@ HARNESS_HTML = f"""<!doctype html>
 def wallet_browser_server():
     app = Flask(__name__, static_folder=None)
     used_nonces: set[str] = set()
+    bindings: dict[str, dict] = {}
     noble_module = Path(
         os.environ.get(
             "WALLET_E2E_NOBLE_MODULE",
@@ -152,7 +155,21 @@ def wallet_browser_server():
 
     @app.get("/api/wallet/v1/key-binding/<address>")
     def no_binding(address):
-        return jsonify(ok=True, binding=None)
+        return jsonify(ok=True, binding=bindings.get(address))
+
+    @app.post("/api/v1/wallet/bind_public_key")
+    def bind_public_key():
+        body = request.get_json(force=True)
+        public_key = body["public_key"]
+        binding = {
+            "status": "active",
+            "public_key": public_key,
+            "bound_key_address": derive_thronos_address(public_key),
+        }
+        if body["address"] == "THR" + "D" * 40:
+            binding["bound_key_address"] = "THR" + "E" * 40
+        bindings[body["address"]] = binding
+        return jsonify(ok=True, binding=binding)
 
     @app.get("/test/pledge/<address>")
     def pledge(address):
@@ -234,7 +251,8 @@ def test_fresh_pledged_wallet_recovery_signing_and_replay(wallet_page):
           const signed = {...tx, signature, publicKey: kit.public_key};
           const first = await fetch('/test/verify', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(signed)});
           const replay = await fetch('/test/verify', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(signed)});
-          return {restored, advancedOpen, expanded, unlocked: walletSession.isUnlockedFor(kit.canonical_v1_address), first: first.status, replay: replay.status};
+          const persisted = Object.fromEntries(Object.keys(localStorage).map(key => [key, localStorage.getItem(key)]));
+          return {restored, advancedOpen, expanded, unlocked: walletSession.isUnlockedFor(kit.canonical_v1_address), first: first.status, replay: replay.status, persisted};
         }""",
         material,
     )
@@ -244,6 +262,8 @@ def test_fresh_pledged_wallet_recovery_signing_and_replay(wallet_page):
     assert result["unlocked"] is True
     assert result["first"] == 200
     assert result["replay"] == 409
+    assert "wallet_pin" not in result["persisted"]
+    assert material["privateKey"] not in result["persisted"].values()
 
 
 def test_wrong_pin_wrong_kit_and_signing_key_mismatch_fail_closed(wallet_page):
@@ -260,13 +280,107 @@ def test_wrong_pin_wrong_kit_and_signing_key_mismatch_fail_closed(wallet_page):
           try { await walletV1RestoreFromRecoveryKit(malformed, first.pin); } catch (e) { errors.push(e.message); }
           const mismatched = {...first.kit, public_key: second.kit.public_key};
           try { await walletV1RestoreFromRecoveryKit(mismatched, first.pin); } catch (e) { errors.push(e.message); }
-          return {errors, identity: localStorage.getItem('wallet_v1_address'), encrypted: localStorage.getItem('wallet_v1_encrypted_priv'), original};
+          const mismatchedBound = {...first.kit, bound_key_address: second.kit.canonical_v1_address};
+          try { await walletV1RestoreFromRecoveryKit(mismatchedBound, first.pin); } catch (e) { errors.push(e.message); }
+          return {errors, identity: localStorage.getItem('wallet_v1_address'), encrypted: localStorage.getItem('wallet_v1_encrypted_priv'), pin: localStorage.getItem('wallet_pin'), original};
         }""",
         {"first": first, "second": second},
     )
-    assert len(result["errors"]) == 3
+    assert len(result["errors"]) == 4
     assert result["identity"] == result["original"]
     assert result["encrypted"] is None
+    assert result["pin"] is None
+
+
+def test_create_enroll_import_and_pledge_never_persist_plaintext_pin(wallet_page):
+    imported = _make_kit(wallet_page, "8642")
+    result = wallet_page.evaluate(
+        """async ({imported}) => {
+          const snapshots = {};
+          const snapshot = (name, privateKey) => {
+            const values = Object.fromEntries(Object.keys(localStorage).map(k => [k, localStorage.getItem(k)]));
+            snapshots[name] = {pin: localStorage.getItem('wallet_pin'), leaksPrivateKey: Object.values(values).includes(privateKey)};
+          };
+
+          localStorage.clear();
+          const created = await walletSession.createWalletV1({pin:'1234'});
+          snapshot('create', 'not-returned');
+
+          localStorage.clear();
+          const importedResult = await walletSession.importSigningKeyForAddress(imported.privateKey, imported.pin, imported.kit.canonical_v1_address);
+          snapshot('import', imported.privateKey);
+
+          localStorage.clear();
+          await installPledgeWalletV1(imported.kit.canonical_v1_address, 'synthetic-send-secret', imported.kit, imported.pin);
+          snapshot('pledge', imported.privateKey);
+
+          localStorage.clear();
+          const canonical = 'THR' + 'A'.repeat(40);
+          walletSession.setAddress(canonical);
+          walletSession.setSendSeed('synthetic-legacy-secret');
+          const enrolled = await walletSession.enrollSigningMaterial({address:canonical, credentialLookupAddress:canonical, pin:'9753'});
+          snapshot('enroll', 'not-returned');
+
+          localStorage.clear();
+          const mismatchedCanonical = 'THR' + 'D'.repeat(40);
+          walletSession.setAddress(mismatchedCanonical);
+          walletSession.setSendSeed('synthetic-legacy-secret');
+          let enrollmentMismatch = '';
+          try { await walletSession.enrollSigningMaterial({address:mismatchedCanonical, credentialLookupAddress:mismatchedCanonical, pin:'9753'}); }
+          catch (e) { enrollmentMismatch = e.message; }
+          snapshot('enrollMismatch', 'not-returned');
+
+          return {snapshots, created, importedResult, enrolledAddress:enrolled.address, enrollmentMismatch};
+        }""",
+        {"imported": imported},
+    )
+    assert result["importedResult"]["success"] is True
+    assert result["enrollmentMismatch"] == "wallet_signing_enrollment_binding_mismatch"
+    for snapshot in result["snapshots"].values():
+        assert snapshot == {"pin": None, "leaksPrivateKey": False}
+
+
+def test_legacy_credentials_survive_until_verified_v1_reauthentication(wallet_page):
+    result = wallet_page.evaluate(
+        """async () => {
+          localStorage.clear();
+          localStorage.setItem('thr_address', 'THR' + 'B'.repeat(40));
+          localStorage.setItem('wallet_pin', 'legacy-pin');
+          localStorage.setItem('send_secret', 'legacy-send-secret');
+          const legacyPinBefore = walletSession.getPin();
+          await walletSession.createWalletV1({pin:'new-v1-pin'});
+          return {
+            legacyPinBefore,
+            pinAfter: localStorage.getItem('wallet_pin'),
+            secretAfter: localStorage.getItem('send_secret'),
+            migration: JSON.parse(localStorage.getItem('wallet_v1_credential_migration'))
+          };
+        }"""
+    )
+    assert result["legacyPinBefore"] == "legacy-pin"
+    assert result["pinAfter"] is None
+    assert result["secretAfter"] == "legacy-send-secret"
+    assert result["migration"]["status"] == "plaintext_pin_retired"
+
+
+def test_account_switch_clears_runtime_signer_and_fails_closed(wallet_page):
+    material = _make_kit(wallet_page)
+    result = wallet_page.evaluate(
+        """async ({kit, pin}) => {
+          localStorage.clear();
+          localStorage.setItem('wallet_v1_address', kit.canonical_v1_address);
+          await walletV1RestoreFromRecoveryKit(kit, pin);
+          const before = walletSession.isUnlockedFor(kit.canonical_v1_address);
+          const other = 'THR' + 'C'.repeat(40);
+          walletSession.setAddress(other);
+          let error = '';
+          try { await walletSession.signTransaction({from:other, to:kit.canonical_v1_address, amount:'1', token:'THR', nonce:'switch', timestamp:1700000000}); }
+          catch (e) { error = e.message; }
+          return {before, oldUnlocked:walletSession.isUnlockedFor(kit.canonical_v1_address), otherUnlocked:walletSession.isUnlockedFor(other), error};
+        }""",
+        material,
+    )
+    assert result == {"before": True, "oldUnlocked": False, "otherUnlocked": False, "error": "wallet_locked"}
 
 
 def test_reload_expiry_cancelled_signing_and_legacy_access(wallet_page):
@@ -305,3 +419,79 @@ def test_reload_expiry_cancelled_signing_and_legacy_access(wallet_page):
 
     wallet_page.once("dialog", lambda dialog: dialog.dismiss())
     assert wallet_page.evaluate("() => walletSession.confirmUserPresence('synthetic signing')") is False
+
+
+@pytest.fixture(scope="module")
+def actual_auth_server(tmp_path_factory):
+    """Serve the real server_ext challenge/verification routes on an isolated DB."""
+    isolated = tmp_path_factory.mktemp("wallet-auth-server")
+    os.environ.setdefault("SCHEDULER_ENABLED", "0")
+    os.environ.setdefault("EDU_DB_PATH", str(isolated / "edu.db"))
+    os.environ.setdefault("DATA_DIR", str(isolated / "data"))
+    from server_ext import app
+
+    server = make_server("127.0.0.1", 0, app, threaded=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_real_server_challenge_signature_binding_and_replay(actual_auth_server):
+    playwright = pytest.importorskip("playwright.sync_api")
+    noble_module = Path(os.environ.get(
+        "WALLET_E2E_NOBLE_MODULE",
+        "/tmp/wallet-e2e-js/node_modules/@noble/secp256k1/index.js",
+    ))
+    with playwright.sync_playwright() as runtime:
+        executable = os.environ.get("WALLET_E2E_CHROMIUM") or shutil.which("chromium")
+        options = {"headless": True, "args": ["--no-sandbox"]}
+        if executable:
+            options["executable_path"] = executable
+        browser = runtime.chromium.launch(**options)
+        page = browser.new_page()
+        page.route(
+            "https://cdn.jsdelivr.net/npm/@noble/secp256k1@2.2.3/+esm",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="application/javascript",
+                headers={"Access-Control-Allow-Origin": "*"},
+                body=noble_module.read_text(),
+            ),
+        )
+        def fulfill_address_derivation(route):
+            import json
+            body = json.loads(route.request.post_data or "{}")
+            public_key = body.get("public_key") or body["compressed_public_key"]
+            route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps({"address": derive_thronos_address(public_key)}),
+            )
+        page.route("**/api/v1/address/derive", fulfill_address_derivation)
+        page.goto(actual_auth_server + "/api/auth/challenge", wait_until="domcontentloaded")
+        page.add_script_tag(url=actual_auth_server + "/static/vendor/noble-secp256k1.min.js")
+        page.add_script_tag(url=actual_auth_server + "/static/wallet_session.js")
+        page.evaluate("() => window.__nobleSecp256k1Ready")
+
+        result = page.evaluate(
+            """async () => {
+              localStorage.clear();
+              const created = await walletSession.createWalletV1({pin:'actual-route-pin'});
+              const challengeResponse = await fetch('/api/auth/challenge', {method:'POST'});
+              const challenge = (await challengeResponse.json()).challenge;
+              const signed = await walletSession.signLoginChallenge(challenge);
+              const payload = {challenge_response:challenge, signature:signed.signature, public_key:signed.public_key};
+              const verified = await fetch('/api/auth/verify', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+              const replay = await fetch('/api/auth/verify', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+              return {created, verified:verified.status, replay:replay.status, pin:localStorage.getItem('wallet_pin')};
+            }"""
+        )
+        browser.close()
+
+    assert result["verified"] == 200
+    assert result["replay"] == 400
+    assert result["pin"] is None

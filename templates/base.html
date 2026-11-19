@@ -1792,7 +1792,7 @@
                         <button class="primary" onclick="createWalletV1FromHeader()">Create Wallet V1</button>
                     </div>
                     <div style="font-size:11px; color:#9f9; opacity:0.7; margin-top:6px;">
-                        Stored locally (wallet_v1_address, encrypted key material, wallet_pin).
+                        Stored locally: wallet address, encrypted signing material, and non-secret metadata. Your PIN is never stored.
                     </div>
                 </div>
 
@@ -3932,7 +3932,7 @@ async function walletV1RestoreFromRecoveryKit(recoveryKitJson, pin) {
                 localStorage.removeItem('wallet_v1_bound_address');
             }
             localStorage.setItem('thr_address', canonical);
-            walletSession.setPin?.(pin);
+            walletSession.retireLegacyPinAfterVerifiedV1?.('recovery_kit_restore');
             walletSession.setAddress?.(canonical);
 
             // Force decryption and identity binding instead of accepting a
@@ -6960,7 +6960,7 @@ async function submitSend() {
         return;
     }
 
-    if(!walletSession.requirePin('send tokens')) return;
+    if(!await walletSession.confirmUserPresence('send tokens', {strict: true})) return;
 
     try {
         // Check if this is a cross-chain send
@@ -9363,16 +9363,9 @@ async function startQrWalletLogin() {
                         walletSession.setAddress(sessData.address);
                         walletSession.setQrSession(true);
 
-                        // Prompt for PIN on this device (3FA: website=PIN, PWA=biometric)
-                        const existingPin = walletSession.getPin();
-                        if (!existingPin) {
-                            const pinVal = prompt('🔐 Set a PIN for this device\n\nThis PIN will be used to authorize transactions on this browser.\nYour PWA handles biometric signing (3FA).');
-                            if (pinVal && pinVal.trim().length >= 4) {
-                                walletSession.setPin(pinVal.trim());
-                            } else if (pinVal !== null) {
-                                alert('PIN must be at least 4 characters. You can set it later from wallet settings.');
-                            }
-                        }
+                        // QR login binds identity only. This browser must still
+                        // import/enroll encrypted signing material and decrypt it
+                        // for each approved signing session.
 
                         walletSession.setBound(true);
                         updateWalletUI();
@@ -11416,27 +11409,7 @@ async function submitGlobalTip() {
     const amount = parseFloat(document.getElementById('globalTipAmount')?.value || '0');
     if (!amount || amount <= 0) { alert('Invalid amount'); return; }
 
-    // PIN confirmation before sending (require for every tip)
-    const storedPin = localStorage.getItem('wallet_pin');
-    if (storedPin) {
-        const enteredPin = prompt(`🔐 Confirm PIN to send ${amount} ${asset} tip:`);
-        if (enteredPin === null) return; // Cancelled
-        if (enteredPin !== storedPin) {
-            alert('Wrong PIN.');
-            return;
-        }
-    } else if (window.walletSession && window.walletSession.getPin && window.walletSession.getPin()) {
-        const enteredPin = prompt(`🔐 Confirm PIN to send ${amount} ${asset} tip:`);
-        if (enteredPin === null) return;
-        if (enteredPin !== window.walletSession.getPin()) {
-            alert('Wrong PIN.');
-            return;
-        }
-    } else {
-        // If no PIN is set, require wallet confirmation at minimum
-        const confirm = prompt(`⚠️ Confirm sending ${amount} ${asset} tip to ${track.artist_name || track.artist || 'artist'}?\n\nType "YES" to confirm:`);
-        if (confirm?.toUpperCase() !== 'YES') return;
-    }
+    if (!window.walletSession || !await walletSession.confirmUserPresence(`send ${amount} ${asset} tip`, {strict: true})) return;
 
     const hint = document.getElementById('globalTipHint');
     if (hint) hint.textContent = `Sending ${amount} ${asset}...`;

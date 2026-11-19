@@ -865,7 +865,7 @@ async function deployContract() {
         return;
     }
 
-    if(!walletSession.requirePin('deploy contract')) return;
+    if(!await walletSession.confirmUserPresence('deploy contract', {strict: true})) return;
 
     if (!address || !secret || !bytecode) {
         alert('Missing required fields');
@@ -908,7 +908,7 @@ async function callContract() {
         return;
     }
 
-    if(!walletSession.requirePin('execute call')) return;
+    if(!await walletSession.confirmUserPresence('execute call', {strict: true})) return;
 
     if (!address || !secret || !contract || !dataHex) {
         alert('Missing required fields');

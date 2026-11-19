@@ -127,21 +127,14 @@
     const _SESSION_TTL = 30 * 60 * 1000;
 
     function _saveAuthSession(address, secret) {
-        try {
-            sessionStorage.setItem(_SESSION_SECRET_KEY, btoa(secret || ''));
-            sessionStorage.setItem(_SESSION_ADDRESS_KEY, address || '');
-            sessionStorage.setItem(_SESSION_TS_KEY, String(Date.now()));
-        } catch (_) {}
+        // Secrets are memory-only. Legacy local credentials remain available
+        // through their existing storage until a verified V1 migration, but
+        // are never copied into tab/session storage.
+        _clearAuthSession();
     }
     function _loadAuthSession() {
-        try {
-            const ts = parseInt(sessionStorage.getItem(_SESSION_TS_KEY) || '0', 10);
-            if (!ts || Date.now() - ts > _SESSION_TTL) { _clearAuthSession(); return null; }
-            const secret = atob(sessionStorage.getItem(_SESSION_SECRET_KEY) || '');
-            const address = sessionStorage.getItem(_SESSION_ADDRESS_KEY) || '';
-            if (!secret || !address) return null;
-            return { secret, address };
-        } catch (_) { return null; }
+        _clearAuthSession();
+        return null;
     }
     function _clearAuthSession() {
         try {
@@ -151,7 +144,7 @@
         } catch (_) {}
     }
     function _refreshAuthSessionTimestamp() {
-        try { sessionStorage.setItem(_SESSION_TS_KEY, String(Date.now())); } catch (_) {}
+        // No persistent/session credential timestamp: auth material is memory-only.
     }
 
     // Restore session on page load (for legacy HMAC wallets)
@@ -178,7 +171,14 @@
 
             const source = options.source || 'wallet_auth';
             const credentialLookupAddress = getCredentialLookupAddress(address);
+            const modernWalletV1 = hasV1SigningMaterial();
             logAuthDiagnostics(address, source);
+
+            if (modernWalletV1) {
+                cachedAuthSecret = '';
+                cachedAuthAddress = '';
+                _clearAuthSession();
+            }
 
             // Reuse runtime material only when walletSession confirms it is
             // bound to this exact active address.
@@ -195,13 +195,13 @@
 
             // Legacy HMAC auth material may use a tab-scoped session. Wallet V1
             // private keys remain memory-only inside walletSession.
-            if (cachedAuthSecret && (!cachedAuthAddress || cachedAuthAddress === address || cachedAuthAddress === credentialLookupAddress)) {
+            if (!modernWalletV1 && cachedAuthSecret && (!cachedAuthAddress || cachedAuthAddress === address || cachedAuthAddress === credentialLookupAddress)) {
                 _refreshAuthSessionTimestamp();
                 return buildAuthResult(address, cachedAuthSecret, credentialLookupAddress);
             }
 
             // Restore from sessionStorage if page was navigated (cachedAuthSecret lost in memory).
-            const restoredSession = _loadAuthSession();
+            const restoredSession = modernWalletV1 ? null : _loadAuthSession();
             if (restoredSession && restoredSession.secret &&
                 (!restoredSession.address || restoredSession.address === address || restoredSession.address === credentialLookupAddress)) {
                 cachedAuthSecret = restoredSession.secret;
@@ -210,7 +210,7 @@
                 return buildAuthResult(address, restoredSession.secret, credentialLookupAddress);
             }
 
-            const storedSecret = getSigningMaterial(address);
+            const storedSecret = modernWalletV1 ? '' : getSigningMaterial(address);
             if (storedSecret) {
                 cachedAuthSecret = storedSecret;
                 cachedAuthAddress = address;
@@ -294,7 +294,7 @@
                 }
             }
 
-            const storedPin = localStorage.getItem('wallet_pin');
+            const storedPin = modernWalletV1 ? '' : localStorage.getItem('wallet_pin');
             if (storedPin === pin) {
                 try {
                     if (!hasV1SigningMaterial()) {
@@ -341,6 +341,7 @@
 
         isUnlocked() {
             const address = getActiveWalletAddress();
+            if (hasV1SigningMaterial()) return isUnlockedFor(address);
             if (isUnlockedFor(address) || cachedAuthSecret || getSigningMaterial(address)) return true;
             // Also check sessionStorage (restored after navigation)
             const s = _loadAuthSession();

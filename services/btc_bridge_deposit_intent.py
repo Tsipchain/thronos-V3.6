@@ -1,8 +1,9 @@
 """Fail-closed, purpose-bound configuration for BTC bridge deposit intents.
 
 This module does not watch Bitcoin, credit a ledger, mint an asset, or sign a
-transaction.  It only exposes a short-lived, authenticated description of an
-operator-verified bridge receiving address.  Settlement remains disabled.
+transaction. A shared receiving address cannot unambiguously attribute a
+Bitcoin output to a recipient, so intent issuance remains unavailable until a
+durable unique-address allocator is implemented. Settlement remains disabled.
 """
 from __future__ import annotations
 
@@ -23,14 +24,28 @@ CORPORATE_REVENUE_ADDRESS = "1N5ddgzVp5it6FgxninDD1R56Rh72D9HKy"
 _BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 _BECH32_ALPHABET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
 _INCOMPATIBLE_ADDRESS_VARS = (
+    # Corporate/provider revenue roles.
     "BTC_PROVIDER_REVENUE_ADDRESS",
     "BTC_EARN_PROVIDER_REVENUE_ADDRESS",
+    "EARN_PROVIDER_REVENUE_ADDRESS",
+    "CPX_REVENUE_ADDRESS",
+    "TIMEWALL_REVENUE_ADDRESS",
+    # Pledge custody. Railway's deployed legacy name omits _ADDRESS.
+    "BTC_PLEDGE_VAULT",
     "BTC_PLEDGE_VAULT_ADDRESS",
+    # Hot custody roles. Railway's Replica uses BTC_HOT_WALLET.
+    "BTC_HOT_WALLET",
     "BTC_BRIDGE_HOT_ADDRESS",
     "BTC_EARN_HOT_ADDRESS",
+    # Settlement and treasury custody.
+    "BTC_SETTLEMENT_RESERVE",
     "BTC_SETTLEMENT_RESERVE_ADDRESS",
+    "BTC_TREASURY",
+    "BTC_TREASURY_ADDRESS",
+    "BTC_OFFLINE_TREASURY",
     "BTC_OFFLINE_TREASURY_ADDRESS",
 )
+_OPERATOR_INCOMPATIBLE_ROLES_VAR = "BTC_BRIDGE_INCOMPATIBLE_CUSTODY_ROLES"
 
 
 class BridgeDepositIntentUnavailable(RuntimeError):
@@ -118,6 +133,42 @@ def is_valid_mainnet_address(address: str) -> bool:
     return _valid_mainnet_segwit_address(candidate)
 
 
+def _operator_incompatible_addresses(env: Mapping[str, str]) -> set[str]:
+    """Load a name-to-address role registry without exposing either in errors.
+
+    The JSON object is deliberately strict. A malformed or non-mainnet entry
+    makes bridge intent configuration unavailable instead of silently skipping
+    an operator-declared custody boundary.
+    """
+    raw = str(env.get(_OPERATOR_INCOMPATIBLE_ROLES_VAR, "")).strip()
+    if not raw:
+        return set()
+    try:
+        roles = json.loads(raw)
+    except (TypeError, ValueError):
+        raise BridgeDepositIntentUnavailable(
+            "bridge_incompatible_custody_roles_invalid"
+        ) from None
+    if not isinstance(roles, dict) or not roles:
+        raise BridgeDepositIntentUnavailable(
+            "bridge_incompatible_custody_roles_invalid"
+        )
+
+    addresses: set[str] = set()
+    for role_name, role_address in roles.items():
+        if not str(role_name).strip():
+            raise BridgeDepositIntentUnavailable(
+                "bridge_incompatible_custody_roles_invalid"
+            )
+        address = str(role_address or "").strip()
+        if not is_valid_mainnet_address(address):
+            raise BridgeDepositIntentUnavailable(
+                "bridge_incompatible_custody_roles_invalid"
+            )
+        addresses.add(address)
+    return addresses
+
+
 @dataclass(frozen=True)
 class BridgeDepositIntent:
     intent_id: str
@@ -172,6 +223,7 @@ def build_intent(
         for name in _INCOMPATIBLE_ADDRESS_VARS
         if str(env.get(name, "")).strip()
     }
+    incompatible.update(_operator_incompatible_addresses(env))
     if address in incompatible:
         raise BridgeDepositIntentUnavailable("bridge_address_role_conflict")
 
@@ -191,6 +243,15 @@ def build_intent(
     configuration_version = str(env.get("BTC_BRIDGE_CONFIG_VERSION", "")).strip()
     if not configuration_version:
         raise BridgeDepositIntentUnavailable("bridge_config_version_missing")
+
+    # A recipient-bound HMAC authenticates an API response; it cannot prove
+    # which payer created a txid:vout sent to one shared Bitcoin address. Keep
+    # the endpoint fail-closed until the separately documented durable,
+    # unique-address attribution prerequisite exists.
+    raise BridgeDepositIntentUnavailable("bridge_deposit_attribution_unavailable")
+
+    # Retained as the envelope specification for the future allocator. This is
+    # unreachable by design and must not be enabled by configuration alone.
     issued_at = int(time.time()) if now is None else int(now)
     expires_at = issued_at + ttl_seconds
     body = {

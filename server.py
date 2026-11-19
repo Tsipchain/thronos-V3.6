@@ -13235,9 +13235,10 @@ def api_bridge_deposit():
     """
     Return a short-lived, purpose-bound BTC bridge deposit intent.
 
-    No address is derived here.  The endpoint fails closed unless an operator
-    has explicitly enabled and verified a dedicated mainnet bridge address.
-    The response never authorizes settlement, minting, or balance credit.
+    No address is derived here. A shared receiving address is not sufficient
+    payment attribution, so the endpoint remains fail-closed until a durable
+    unique-address allocator exists. The response never authorizes settlement,
+    minting, or balance credit.
     """
     network = request.args.get("network", "").strip().lower()
     thr_address = request.args.get("thr_address", "").strip()
@@ -13257,7 +13258,12 @@ def api_bridge_deposit():
     try:
         intent = build_intent(thr_address).as_dict()
     except BridgeDepositIntentUnavailable as exc:
-        response = jsonify(ok=False, error=str(exc), paid_deposit_enabled=False)
+        response = jsonify(
+            ok=False,
+            error=str(exc),
+            paid_deposit_enabled=False,
+            attribution_ready=False,
+        )
         response.headers["Cache-Control"] = "no-store"
         return response, 503
 

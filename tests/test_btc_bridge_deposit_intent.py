@@ -38,19 +38,12 @@ def test_mainnet_address_validation_checks_checksum_and_network():
     assert is_valid_mainnet_address("mk2QpYatsKicvFVuTAQLBryyccRXMUaGHP") is False
 
 
-def test_verified_configuration_returns_purpose_bound_non_crediting_intent():
-    intent = build_intent(THR_ADDRESS, environ=_environment(), now=1_700_000_000)
-    payload = intent.as_dict()
-
-    assert payload["purpose"] == "bridge_inbound"
-    assert payload["network"] == "main"
-    assert payload["recipient"] == THR_ADDRESS
-    assert payload["confirmations_required"] == 6
-    assert payload["expires_at"] - payload["issued_at"] == 300
-    assert payload["proof"]
-    assert payload["credit_authorized"] is False
-    assert payload["settlement_enabled"] is False
-    assert payload["payout_enabled"] is False
+def test_complete_shared_address_configuration_still_fails_attribution_closed():
+    with pytest.raises(
+        BridgeDepositIntentUnavailable,
+        match="^bridge_deposit_attribution_unavailable$",
+    ):
+        build_intent(THR_ADDRESS, environ=_environment(), now=1_700_000_000)
 
 
 @pytest.mark.parametrize(
@@ -79,13 +72,55 @@ def test_corporate_revenue_address_can_never_be_reused_for_bridge():
         )
 
 
-def test_other_custody_role_address_cannot_be_reused_for_bridge():
+@pytest.mark.parametrize(
+    "role_variable",
+    [
+        "BTC_PROVIDER_REVENUE_ADDRESS",
+        "BTC_EARN_PROVIDER_REVENUE_ADDRESS",
+        "BTC_PLEDGE_VAULT",
+        "BTC_PLEDGE_VAULT_ADDRESS",
+        "BTC_HOT_WALLET",
+        "BTC_BRIDGE_HOT_ADDRESS",
+        "BTC_EARN_HOT_ADDRESS",
+        "BTC_SETTLEMENT_RESERVE",
+        "BTC_SETTLEMENT_RESERVE_ADDRESS",
+        "BTC_TREASURY",
+        "BTC_TREASURY_ADDRESS",
+        "BTC_OFFLINE_TREASURY_ADDRESS",
+    ],
+)
+def test_named_custody_role_address_cannot_be_reused_for_bridge(role_variable):
     with pytest.raises(BridgeDepositIntentUnavailable, match="bridge_address_role_conflict"):
         build_intent(
             THR_ADDRESS,
-            environ=_environment(BTC_SETTLEMENT_RESERVE_ADDRESS=BRIDGE_ADDRESS),
+            environ=_environment(**{role_variable: BRIDGE_ADDRESS}),
             now=1_700_000_000,
         )
+
+
+def test_operator_registered_incompatible_custody_role_cannot_be_reused():
+    registry = '{"independent_cold_role":"' + BRIDGE_ADDRESS + '"}'
+    with pytest.raises(
+        BridgeDepositIntentUnavailable,
+        match="^bridge_address_role_conflict$",
+    ):
+        build_intent(
+            THR_ADDRESS,
+            environ=_environment(BTC_BRIDGE_INCOMPATIBLE_CUSTODY_ROLES=registry),
+            now=1_700_000_000,
+        )
+
+
+@pytest.mark.parametrize("registry", ["not-json", "[]", '{"role":"invalid"}'])
+def test_invalid_operator_custody_registry_fails_closed_without_values(registry):
+    with pytest.raises(BridgeDepositIntentUnavailable) as exc_info:
+        build_intent(
+            THR_ADDRESS,
+            environ=_environment(BTC_BRIDGE_INCOMPATIBLE_CUSTODY_ROLES=registry),
+            now=1_700_000_000,
+        )
+    assert str(exc_info.value) == "bridge_incompatible_custody_roles_invalid"
+    assert registry not in str(exc_info.value)
 
 
 def test_deposit_endpoint_is_disabled_by_default_and_never_returns_placeholder(monkeypatch, tmp_path):
@@ -100,6 +135,7 @@ def test_deposit_endpoint_is_disabled_by_default_and_never_returns_placeholder(m
     assert response.status_code == 503
     payload = response.get_json()
     assert payload == {
+        "attribution_ready": False,
         "error": "bridge_inbound_disabled",
         "ok": False,
         "paid_deposit_enabled": False,
@@ -108,20 +144,22 @@ def test_deposit_endpoint_is_disabled_by_default_and_never_returns_placeholder(m
     assert "bc1qthronos" not in response.get_data(as_text=True)
 
 
-def test_deposit_endpoint_returns_only_verified_intent_data(monkeypatch, tmp_path):
+def test_deposit_endpoint_never_exposes_shared_address_as_attributed(monkeypatch, tmp_path):
     monkeypatch.setenv("EDU_DB_PATH", str(tmp_path / "l2e_edu.db"))
     monkeypatch.setenv("SCHEDULER_ENABLED", "0")
     import server
 
     with patch.dict(os.environ, _environment(), clear=False):
         response = server.app.test_client().get(f"/api/bridge/deposit?wallet={THR_ADDRESS}")
-    assert response.status_code == 200
+    assert response.status_code == 503
     payload = response.get_json()
-    assert payload["deposit_address"] == BRIDGE_ADDRESS
-    assert payload["deposit_intent"]["purpose"] == "bridge_inbound"
-    assert payload["deposit_intent"]["credit_authorized"] is False
-    assert "exchange_rate" not in payload
-    assert "min_deposit" not in payload
+    assert payload == {
+        "attribution_ready": False,
+        "error": "bridge_deposit_attribution_unavailable",
+        "ok": False,
+        "paid_deposit_enabled": False,
+    }
+    assert BRIDGE_ADDRESS not in response.get_data(as_text=True)
 
 
 def test_bridge_status_and_withdrawals_fail_closed_by_default(monkeypatch, tmp_path):

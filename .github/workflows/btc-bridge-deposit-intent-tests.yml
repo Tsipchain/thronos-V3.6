@@ -10,6 +10,7 @@ on:
       - "public/wallet-pwa/sw.js"
       - "thronos-wallet-app/src/screens/BridgeScreen.tsx"
       - "tests/test_btc_bridge_deposit_intent.py"
+      - "docs/BTC_BRIDGE_DEPOSIT_ATTRIBUTION_PREREQUISITE.md"
       - "tests/test_wallet_pwa_earn_tabs.py"
       - "tests/test_wallet_pwa_thr_coin_branding.py"
       - ".github/workflows/btc-bridge-deposit-intent-tests.yml"

@@ -58,7 +58,7 @@ jobs:
           cache-dependency-path: thronos-wallet-app/package-lock.json
       - name: Install mobile wallet dependencies
         working-directory: thronos-wallet-app
-        run: npm ci --no-audit --no-fund
+        run: npm install --no-audit --no-fund
       - name: Reject TypeScript errors in the changed bridge screen
         working-directory: thronos-wallet-app
         shell: bash

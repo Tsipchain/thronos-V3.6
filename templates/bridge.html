@@ -481,11 +481,11 @@
         <span class="lang-es">Puente THR ⟷ BTC</span>
     </h1>
     <p>
-        <span class="lang-el">Μετατρέψτε THR σε BTC και αντίστροφα. 1 THR = 0.0001 BTC</span>
-        <span class="lang-en">Convert THR to BTC and vice versa. 1 THR = 0.0001 BTC</span>
-        <span class="lang-ja">THRをBTCに、またはその逆に変換。1 THR = 0.0001 BTC</span>
-        <span class="lang-ru">Конвертируйте THR в BTC и наоборот. 1 THR = 0.0001 BTC</span>
-        <span class="lang-es">Convierta THR a BTC y viceversa. 1 THR = 0.0001 BTC</span>
+        <span class="lang-el">Οι καταθέσεις BTC εμφανίζονται μόνο όταν υπάρχει επαληθευμένο backend intent.</span>
+        <span class="lang-en">BTC deposits are shown only when a verified backend intent is available.</span>
+        <span class="lang-ja">BTC入金は、検証済みのバックエンド・インテントがある場合のみ表示されます。</span>
+        <span class="lang-ru">Депозит BTC показывается только при наличии проверенного серверного намерения.</span>
+        <span class="lang-es">Los depósitos BTC solo se muestran con una intención verificada del servidor.</span>
     </p>
     <div class="bridge-status">
         <div class="status-item">
@@ -510,8 +510,8 @@
             <span class="lang-el">Ισοτιμία</span>
             <span class="lang-en">Exchange Rate</span>
         </h4>
-        <div class="value">1:10,000</div>
-        <div class="label">1 BTC = 10,000 THR</div>
+        <div class="value">—</div>
+        <div class="label">Authoritative quote required</div>
     </div>
     <div class="info-card">
         <h4>🔥
@@ -542,23 +542,23 @@
 <!-- Deposit BTC Section -->
 <div class="deposit-address-section">
     <h3>₿
-        <span class="lang-el">Κατάθεση BTC → Λήψη THR</span>
-        <span class="lang-en">Deposit BTC → Receive THR</span>
+        <span class="lang-el">Intent Κατάθεσης BTC</span>
+        <span class="lang-en">BTC Deposit Intent</span>
         <span class="lang-ja">BTC入金 → THR受取</span>
         <span class="lang-ru">Депозит BTC → Получить THR</span>
         <span class="lang-es">Depositar BTC → Recibir THR</span>
     </h3>
     <p style="color: #888; margin-bottom: 15px;">
-        <span class="lang-el">Στείλτε BTC σε αυτή τη διεύθυνση για να λάβετε THR (10,000 THR ανά BTC)</span>
-        <span class="lang-en">Send BTC to this address to receive THR (10,000 THR per BTC)</span>
+        <span class="lang-el">Μη στείλετε BTC μέχρι να εμφανιστεί επαληθευμένη διεύθυνση intent.</span>
+        <span class="lang-en">Do not send BTC until a verified intent address is displayed.</span>
     </p>
-    <div class="deposit-address" id="depositAddress">bc1qthronos_bridge_mainnet_deposit</div>
-    <button class="copy-btn" onclick="copyAddress()">
+    <div class="deposit-address" id="depositAddress">Unavailable</div>
+    <button class="copy-btn" id="copyDepositAddress" onclick="copyAddress()" disabled>
         📋 <span class="lang-el">Αντιγραφή</span><span class="lang-en">Copy Address</span>
     </button>
     <p style="color: #888; margin-top: 15px; font-size: 0.85em;">
-        <span class="lang-el">Ελάχιστη κατάθεση: 0.0001 BTC | Επιβεβαιώσεις: 3</span>
-        <span class="lang-en">Minimum deposit: 0.0001 BTC | Confirmations: 3</span>
+        <span class="lang-el" id="depositIntentStatusEl">Η υπηρεσία αποτυγχάνει με ασφάλεια χωρίς επαληθευμένη διαμόρφωση.</span>
+        <span class="lang-en" id="depositIntentStatusEn">Service fails closed without verified configuration.</span>
     </p>
 </div>
 
@@ -651,21 +651,21 @@
                     <span class="lang-el">Ισοτιμία</span>
                     <span class="lang-en">Rate</span>
                 </span>
-                <span class="value">1 THR = 0.0001 BTC</span>
+                <span class="value">Authoritative quote unavailable</span>
             </div>
             <div class="conversion-row">
                 <span class="label">
                     <span class="lang-el">Τέλος Δικτύου</span>
                     <span class="lang-en">Network Fee</span>
                 </span>
-                <span class="value" id="networkFee">~0.00005 BTC</span>
+                <span class="value" id="networkFee">Unavailable</span>
             </div>
             <div class="conversion-row">
                 <span class="label">
                     <span class="lang-el">Χρόνος Επεξεργασίας</span>
                     <span class="lang-en">Processing Time</span>
                 </span>
-                <span class="value">~30 min</span>
+                <span class="value">Unavailable</span>
             </div>
         </div>
 
@@ -754,7 +754,35 @@ function applyBridgeLanguage() {
 }
 
 let fromToken = 'THR';
-const RATE = 0.0001; // 1 THR = 0.0001 BTC
+
+async function loadDepositIntent() {
+    const wallet = localStorage.getItem('thr_address');
+    const target = $('depositAddress');
+    const copyButton = $('copyDepositAddress');
+    if (!wallet || !target || !copyButton) return;
+    try {
+        const response = await fetch(`/api/bridge/deposit?wallet=${encodeURIComponent(wallet)}`, {
+            cache: 'no-store'
+        });
+        const data = await response.json();
+        const intent = data.deposit_intent;
+        if (!response.ok || !data.ok || !intent || intent.purpose !== 'bridge_inbound' ||
+            intent.network !== 'main' || intent.credit_authorized !== false ||
+            !intent.deposit_address || !intent.proof) {
+            throw new Error('bridge_intent_unavailable');
+        }
+        target.textContent = intent.deposit_address;
+        target.dataset.intentId = intent.intent_id;
+        copyButton.disabled = false;
+        const confirmations = Number(intent.confirmations_required);
+        $('depositIntentStatusEl').textContent = `Απαιτούμενες επιβεβαιώσεις: ${confirmations}. Δεν έχει εγκριθεί πίστωση.`;
+        $('depositIntentStatusEn').textContent = `Required confirmations: ${confirmations}. No credit is authorized.`;
+    } catch (_) {
+        target.textContent = 'Unavailable';
+        delete target.dataset.intentId;
+        copyButton.disabled = true;
+    }
+}
 
 async function loadBalances() {
     const wallet = localStorage.getItem('thr_address');
@@ -825,21 +853,8 @@ function isValidBtcAddress(address) {
 }
 
 function calculateOutput() {
-    const amount = parseFloat($('fromAmount').value) || 0;
-    let output = 0;
-
-    if (fromToken === 'THR') {
-        output = amount * RATE;
-        $('toAmount').value = output.toFixed(8) + ' BTC';
-    } else {
-        output = amount / RATE;
-        $('toAmount').value = output.toFixed(4) + ' THR';
-    }
-
-    // Enable/disable button with improved validation
-    const btcDest = $('btcDestination').value.trim();
-    const isValidBtc = isValidBtcAddress(btcDest);
-    $('bridgeBtn').disabled = amount <= 0 || !isValidBtc;
+    $('toAmount').value = 'Authoritative quote unavailable';
+    $('bridgeBtn').disabled = true;
 }
 
 function setMaxAmount() {
@@ -861,70 +876,14 @@ window.copyAddress = function copyAddress() {
     const target = $('depositAddress');
     if (!target) return;
     const addr = target.textContent;
-    if (!addr) return;
+    if (!addr || !target.dataset.intentId) return;
     navigator.clipboard.writeText(addr).then(() => {
         alert('Address copied!');
     });
 };
 
 async function executeBridge() {
-    const wallet = localStorage.getItem('thr_address');
-    const secret = localStorage.getItem('thr_secret');
-
-    if (!wallet) {
-        alert('Please connect your wallet first!');
-        return;
-    }
-
-    const amount = parseFloat($('fromAmount').value);
-    const btcDest = $('btcDestination').value.trim();
-
-    if (!amount || amount <= 0) {
-        alert('Please enter a valid amount');
-        return;
-    }
-
-    if (!isValidBtcAddress(btcDest)) {
-        alert('Please enter a valid BTC address (Legacy, SegWit, or Taproot)');
-        return;
-    }
-
-    const btn = $('bridgeBtn');
-    btn.disabled = true;
-    btn.textContent = '⏳ Processing...';
-
-    try {
-        const res = await fetch('/api/bridge/burn', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                wallet: wallet,
-                amount: amount,
-                btc_destination: btcDest,
-                secret: secret
-            })
-        });
-
-        const data = await res.json();
-
-        if (data.ok || data.status === 'pending') {
-            alert('✅ Bridge request submitted! Your BTC will be sent within 30 minutes.');
-            $('fromAmount').value = '';
-            $('toAmount').value = '';
-            $('btcDestination').value = '';
-            loadBalances();
-            loadHistory();
-        } else {
-            alert('❌ Error: ' + (data.error || 'Bridge failed'));
-        }
-    } catch (e) {
-        console.error('Bridge error:', e);
-        alert('❌ Network error. Please try again.');
-    } finally {
-        btn.disabled = false;
-        btn.innerHTML = '🔥 <span class="lang-el">Κάψε THR & Λάβε BTC</span><span class="lang-en">Burn THR & Receive BTC</span>';
-        applyBridgeLanguage();
-    }
+    alert('Bridge execution is disabled until an authoritative quote and settlement service are available.');
 }
 
 async function loadHistory() {
@@ -986,6 +945,7 @@ $('btcDestination').addEventListener('input', calculateOutput);
 // Init
 document.addEventListener('DOMContentLoaded', () => {
     applyBridgeLanguage();
+    loadDepositIntent();
     loadBalances();
     loadBridgeStats();
     loadHistory();

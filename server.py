@@ -12833,9 +12833,11 @@ def api_bridge_status():
     """
     txs = _load_bridge_txs()
 
-    # PRIORITY 4: Bridge is now in beta mode with burn/deposit support
-    mode = os.getenv("BRIDGE_MODE", "beta")
-    notes = "Bitcoin bridge is operational. Deposits receive wBTC after 3 confirmations. Withdrawals processed by operator within 24h."
+    mode = os.getenv("BRIDGE_MODE", "disabled")
+    notes = (
+        "Bridge execution is disabled pending authoritative deposit intents, "
+        "canonical Bitcoin verification, and settlement approval."
+    )
 
     # Calculate basic stats
     last_tx_time = None
@@ -12911,6 +12913,8 @@ def api_bridge_burn():
     PRIORITY 4: Bridge Withdrawal - Burn wBTC to get BTC.
     Creates BRIDGE_WITHDRAW_REQUEST transaction.
     """
+    if os.getenv("BTC_BRIDGE_WITHDRAWALS_ENABLED", "").strip().lower() not in {"1", "true", "yes", "on"}:
+        return jsonify({"ok": False, "error": "bridge_withdrawals_disabled"}), 503
     data = request.get_json() or {}
     wallet = (data.get("wallet") or "").strip()
     btc_address = (data.get("btc_address") or "").strip()
@@ -13229,125 +13233,47 @@ def process_bridge_deposit(
 @app.route("/api/bridge/deposit", methods=["GET"])
 def api_bridge_deposit():
     """
-    Multi-chain bridge: Generate deposit addresses for BTC, ETH, BNB, XRP.
+    Return a short-lived, purpose-bound BTC bridge deposit intent.
 
-    Supports two formats:
-    1. Legacy: ?wallet=THR... (returns BTC address)
-    2. New: ?network={bitcoin|ethereum|bnb|xrp}&thr_address=THR...
-
-    Uses RPC endpoints:
-    - BTC_RPC_URL (Bitcoin)
-    - ETH_RPC_URL (Ethereum)
-    - BSC_RPC_URL (BNB Chain)
-    - XRP_RPC_URL (XRP Ledger)
+    No address is derived here.  The endpoint fails closed unless an operator
+    has explicitly enabled and verified a dedicated mainnet bridge address.
+    The response never authorizes settlement, minting, or balance credit.
     """
-    # Check for new format first
     network = request.args.get("network", "").strip().lower()
     thr_address = request.args.get("thr_address", "").strip()
-
-    # Legacy format fallback (wallet parameter = BTC)
-    if not network and not thr_address:
-        wallet = request.args.get("wallet", "").strip()
-        if not wallet:
-            return jsonify({"ok": False, "error": "Missing parameters"}), 400
-        network = "bitcoin"
-        thr_address = wallet
-
     if not thr_address:
-        return jsonify({"ok": False, "error": "THR address required"}), 400
+        thr_address = request.args.get("wallet", "").strip()
+    network = network or "bitcoin"
+    if network != "bitcoin":
+        return jsonify(ok=False, error="bridge_network_unavailable"), 503
+    if not validate_thr_address(thr_address):
+        return jsonify(ok=False, error="invalid_canonical_thr_address"), 400
 
-    # Validate network
-    supported_networks = ["bitcoin", "ethereum", "bnb", "xrp"]
-    if network not in supported_networks:
-        return jsonify({
-            "ok": False,
-            "error": f"Unsupported network. Supported: {', '.join(supported_networks)}"
-        }), 400
+    from services.btc_bridge_deposit_intent import (
+        BridgeDepositIntentUnavailable,
+        build_intent,
+    )
 
-    # Generate deterministic deposit address based on network
-    deposit_seed = f"{thr_address}:{network}_bridge:thronos"
-    deposit_hash = hashlib.sha256(deposit_seed.encode()).hexdigest()
+    try:
+        intent = build_intent(thr_address).as_dict()
+    except BridgeDepositIntentUnavailable as exc:
+        response = jsonify(ok=False, error=str(exc), paid_deposit_enabled=False)
+        response.headers["Cache-Control"] = "no-store"
+        return response, 503
 
-    # Generate network-specific addresses
-    # TODO: Use actual RPC clients (BTC_RPC_URL, ETH_RPC_URL, BSC_RPC_URL, XRP_RPC_URL)
-    if network == "bitcoin":
-        # BTC: bc1 (bech32) format
-        deposit_address = f"bc1q{deposit_hash[:40]}"
-        wrapped_token = "WBTC"
-        min_deposit = 0.001
-        confirmations = 3
-    elif network == "ethereum":
-        # ETH: 0x format (40 hex chars)
-        deposit_address = f"0x{deposit_hash[:40]}"
-        wrapped_token = "WETH"
-        min_deposit = 0.01
-        confirmations = 12
-    elif network == "bnb":
-        # BNB: 0x format (same as ETH, BEP-20)
-        deposit_address = f"0x{deposit_hash[:40]}"
-        wrapped_token = "WBNB"
-        min_deposit = 0.01
-        confirmations = 15
-    elif network == "xrp":
-        # XRP: r-address format
-        # XRP addresses start with 'r' and use base58
-        deposit_address = f"r{deposit_hash[:33]}"
-        wrapped_token = "WXRP"
-        min_deposit = 10.0
-        confirmations = 1
-    else:
-        return jsonify({"ok": False, "error": "Network not implemented"}), 501
-
-    # Load or create deposit tracking
-    deposits_file = os.path.join(DATA_DIR, "bridge_deposits.json")
-    deposits = load_json(deposits_file, {})
-
-    # Create tracking key
-    tracking_key = f"{thr_address}:{network}"
-
-    if tracking_key not in deposits:
-        deposits[tracking_key] = {
-            "thr_address": thr_address,
-            "network": network,
-            "deposit_address": deposit_address,
-            "wrapped_token": wrapped_token,
-            "created_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
-            "total_deposited": 0.0,
-            "deposits": []
-        }
-        save_json(deposits_file, deposits)
-
-    deposit_info = deposits[tracking_key]
-
-    app.logger.info(f"🌉 Bridge Deposit Address Generated: {thr_address} ({network}) → {deposit_address}")
-
-    # Return response
-    response = {
-        "ok": True,
-        "thr_address": thr_address,
-        "network": network,
-        "deposit_address": deposit_address,
-        "wrapped_token": wrapped_token,
-        "qr_data": deposit_address,
-        "instructions": f"Send {network.upper()} to this address. You will receive {wrapped_token} after {confirmations} confirmations.",
-        "min_deposit": min_deposit,
-        "exchange_rate": f"1 {network.upper()} = 1 {wrapped_token}",
-        "confirmations_required": confirmations,
-        "total_deposited": deposit_info.get("total_deposited", 0.0),
-        "rpc_status": {
-            "bitcoin": bool(os.getenv("BTC_RPC_URL")),
-            "ethereum": bool(os.getenv("ETH_RPC_URL")),
-            "bnb": bool(os.getenv("BSC_RPC_URL")),
-            "xrp": bool(os.getenv("XRP_RPC_URL"))
-        }
-    }
-
-    # Legacy response format for BTC (backwards compatibility)
-    if network == "bitcoin" and request.args.get("wallet"):
-        response["btc_address"] = deposit_address
-        response["wallet"] = thr_address
-
-    return jsonify(response), 200
+    response = jsonify(
+        ok=True,
+        deposit_intent=intent,
+        # Compatibility aliases.  These values come from the same verified
+        # intent; no synthetic address or exchange-rate promise is generated.
+        deposit_address=intent["deposit_address"],
+        btc_address=intent["deposit_address"],
+        confirmations_required=intent["confirmations_required"],
+        network="bitcoin",
+        wallet=thr_address,
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return response, 200
 
 @app.route("/api/bridge/withdraw", methods=["POST"])
 def api_bridge_withdraw():
@@ -13369,6 +13295,8 @@ def api_bridge_withdraw():
     3. Create withdrawal request transaction
     4. Log to watcher ledger (operator will process)
     """
+    if os.getenv("BTC_BRIDGE_WITHDRAWALS_ENABLED", "").strip().lower() not in {"1", "true", "yes", "on"}:
+        return jsonify({"ok": False, "error": "bridge_withdrawals_disabled"}), 503
     data = request.get_json() or {}
     wallet = (data.get("wallet") or "").strip()
     network = (data.get("network") or "").strip().lower()

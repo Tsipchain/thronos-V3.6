@@ -3615,16 +3615,15 @@ async function showUsdtPledge(address) {
 }
 
 const _BRIDGE_PAIRS = [
-  { from:'BTC',  to:'WBTC', fee:0.1,  time:'~5 min',  label:'₿ BTC → WBTC',  available:true },
-  { from:'WBTC', to:'BTC',  fee:0.1,  time:'~15 min', label:'WBTC → ₿ BTC',  available:true },
-  { from:'THR',  to:'WBTC', fee:0.1,  time:'~2 min',  label:'THR → WBTC',    available:true },
+  { from:'BTC',  to:'WBTC', fee:null, time:null, label:'₿ BTC → WBTC',  available:false },
+  { from:'WBTC', to:'BTC',  fee:null, time:null, label:'WBTC → ₿ BTC',  available:false },
+  { from:'THR',  to:'WBTC', fee:null, time:null, label:'THR → WBTC',    available:false },
   { from:'ETH',  to:'THR',  fee:0.2,  time:'~10 min', label:'Ξ ETH → THR',   available:false },
   { from:'BNB',  to:'THR',  fee:0.15, time:'~8 min',  label:'🔶 BNB → THR',  available:false },
 ];
 
 async function showBridge(fromToken = 'BTC', toToken = 'WBTC') {
   const address = getActiveAddr();
-  const { privHex } = unlocked.get(address) || {};
   let activePair = _BRIDGE_PAIRS.find(p => p.from === fromToken && p.to === toToken) || _BRIDGE_PAIRS[0];
 
   const pairBtns = _BRIDGE_PAIRS.map((p, i) => {
@@ -3688,42 +3687,14 @@ async function showBridge(fromToken = 'BTC', toToken = 'WBTC') {
   });
 
   document.getElementById('quoteBtn').addEventListener('click', () => {
-    const amt = parseFloat(document.getElementById('bridgeAmt').value);
-    document.getElementById('bridgeErr').style.display = 'none';
-    if (!amt || amt <= 0) { document.getElementById('bridgeErr').textContent = 'Enter an amount'; document.getElementById('bridgeErr').style.display = ''; return; }
-    const fee = amt * (activePair.fee / 100);
-    document.getElementById('quoteOut').textContent = `${(amt - fee).toFixed(8)} ${activePair.to}`;
-    document.getElementById('quoteFee').textContent = `${fee.toFixed(8)} ${activePair.from} (${activePair.fee}%)`;
-    document.getElementById('quoteTime').textContent = activePair.time;
-    document.getElementById('quoteBox').style.display = '';
-    document.getElementById('bridgeBtn').disabled = false;
+    document.getElementById('bridgeErr').textContent = 'Bridge quotes and execution are disabled pending an authoritative settlement service.';
+    document.getElementById('bridgeErr').style.display = '';
+    document.getElementById('bridgeBtn').disabled = true;
   });
 
-  document.getElementById('bridgeBtn').addEventListener('click', async () => {
-    if (!privHex) { document.getElementById('bridgeErr').textContent = 'Wallet locked'; document.getElementById('bridgeErr').style.display = ''; return; }
-    const amt = parseFloat(document.getElementById('bridgeAmt').value);
-    if (!amt || amt <= 0) return;
-    const btn = document.getElementById('bridgeBtn');
-    btn.disabled = true; btn.textContent = 'Bridging…';
-    document.getElementById('bridgeErr').style.display = 'none';
-    try {
-      const r = await fetch(`${API_WRITE}/api/bridge/execute`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ from_token: activePair.from, to_token: activePair.to, amount: amt, from_address: address, private_key_hex: privHex }),
-      });
-      const d = await r.json().catch(() => ({}));
-      if (r.ok && (d.ok || d.accepted || d.tx_id || d.txid)) {
-        document.getElementById('bridgeOk').textContent = `✅ Bridge initiated! TX: ${d.tx_id || d.txid || 'submitted'}`;
-        document.getElementById('bridgeOk').style.display = '';
-        btn.textContent = 'Done ✓';
-      } else {
-        throw new Error(d.error || d.message || `HTTP ${r.status}`);
-      }
-    } catch (e) {
-      document.getElementById('bridgeErr').textContent = e.message;
-      document.getElementById('bridgeErr').style.display = '';
-      btn.disabled = false; btn.textContent = 'Bridge Now';
-    }
+  document.getElementById('bridgeBtn').addEventListener('click', () => {
+    document.getElementById('bridgeErr').textContent = 'Bridge execution is disabled.';
+    document.getElementById('bridgeErr').style.display = '';
   });
 }
 

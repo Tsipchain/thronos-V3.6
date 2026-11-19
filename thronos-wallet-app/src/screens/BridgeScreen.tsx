@@ -94,10 +94,10 @@ const BRIDGE_TOKENS: Record<ChainId, BridgeToken[]> = {
 };
 
 const BRIDGE_PAIRS: BridgePair[] = [
-  { from: 'THR', to: 'WBTC', fee: 0.1, estimatedMinutes: 5, available: true },
-  { from: 'WBTC', to: 'THR', fee: 0.1, estimatedMinutes: 5, available: true },
-  { from: 'WBTC', to: 'BTC', fee: 0.15, estimatedMinutes: 15, available: true },
-  { from: 'BTC', to: 'WBTC', fee: 0.15, estimatedMinutes: 15, available: true },
+  { from: 'THR', to: 'WBTC', fee: 0, estimatedMinutes: 0, available: false },
+  { from: 'WBTC', to: 'THR', fee: 0, estimatedMinutes: 0, available: false },
+  { from: 'WBTC', to: 'BTC', fee: 0, estimatedMinutes: 0, available: false },
+  { from: 'BTC', to: 'WBTC', fee: 0, estimatedMinutes: 0, available: false },
   { from: 'THR', to: 'ETH', fee: 0.2, estimatedMinutes: 10, available: false },
   { from: 'ETH', to: 'THR', fee: 0.2, estimatedMinutes: 10, available: false },
 ];

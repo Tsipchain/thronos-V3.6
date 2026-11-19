@@ -246,6 +246,20 @@ class GymEligibilityInbox:
         finally:
             connection.close()
 
+    def by_event(self, event_id: str) -> dict[str, Any] | None:
+        """Return stored eligibility evidence without authorizing a reward."""
+        if not event_id:
+            raise GymInboxError("invalid_gym_event_id")
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                "SELECT * FROM earn_gym_eligibility_receipts WHERE event_id=?",
+                (event_id,),
+            ).fetchone()
+            return self._public(row, idempotent=True) if row else None
+        finally:
+            connection.close()
+
 
 def reconcile_gym_eligibility(
     inbox: GymEligibilityInbox,

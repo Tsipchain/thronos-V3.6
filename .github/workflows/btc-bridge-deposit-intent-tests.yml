@@ -1,0 +1,78 @@
+name: BTC Bridge Deposit Intent Safety
+
+on:
+  pull_request:
+    paths:
+      - "services/btc_bridge_deposit_intent.py"
+      - "server.py"
+      - "templates/bridge.html"
+      - "public/wallet-pwa/app.js"
+      - "public/wallet-pwa/sw.js"
+      - "thronos-wallet-app/src/screens/BridgeScreen.tsx"
+      - "tests/test_btc_bridge_deposit_intent.py"
+      - "docs/BTC_BRIDGE_DEPOSIT_ATTRIBUTION_PREREQUISITE.md"
+      - "tests/test_wallet_pwa_earn_tabs.py"
+      - "tests/test_wallet_pwa_thr_coin_branding.py"
+      - ".github/workflows/btc-bridge-deposit-intent-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  bridge-safety:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install Python test dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.txt pytest
+      - name: Compile and parse changed runtime files
+        run: |
+          python -m py_compile services/btc_bridge_deposit_intent.py server.py
+          node --check public/wallet-pwa/app.js
+      - name: Run bridge and wallet regression tests
+        env:
+          SCHEDULER_ENABLED: "0"
+          EDU_DB_PATH: "/tmp/thronos-bridge-l2e.db"
+        run: >-
+          python -m pytest -q
+          tests/test_btc_bridge_deposit_intent.py
+          tests/test_btc_bridge_withdrawal_safety.py
+          tests/test_wallet_pwa_earn_tabs.py
+          tests/test_wallet_pwa_thr_coin_branding.py
+
+  mobile-bridge-typecheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: thronos-wallet-app/package-lock.json
+      - name: Install mobile wallet dependencies
+        working-directory: thronos-wallet-app
+        run: npm install --no-audit --no-fund
+      - name: Reject TypeScript errors in the changed bridge screen
+        working-directory: thronos-wallet-app
+        shell: bash
+        run: |
+          set +e
+          npx tsc --noEmit --pretty false > /tmp/wallet-bridge-tsc.log 2>&1
+          tsc_status=$?
+          cat /tmp/wallet-bridge-tsc.log
+          if grep -E 'src/screens/BridgeScreen\.tsx' /tmp/wallet-bridge-tsc.log; then
+            echo "TypeScript errors found in BridgeScreen.tsx."
+            exit 1
+          fi
+          if [ "$tsc_status" -ne 0 ]; then
+            echo "::warning::Project-wide TypeScript reports pre-existing errors outside BridgeScreen.tsx."
+          fi
+          echo "No TypeScript errors reported in BridgeScreen.tsx."

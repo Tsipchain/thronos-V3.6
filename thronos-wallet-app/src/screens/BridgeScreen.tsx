@@ -20,11 +20,8 @@ import { useStore } from '../store/useStore';
 import {
   getTokenBalances,
   getBridgeQuote,
-  executeBridgeSigned,
   getBridgeHistory,
 } from '../services/api';
-import { getWallet } from '../services/wallet';
-import { signThronosTransaction } from '../services/signing';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -307,73 +304,14 @@ export default function BridgeScreen({ navigation }: { navigation: any }) {
     setShowConfirm(true);
   }, [canBridge]);
 
-  const handleConfirmBridge = useCallback(async () => {
+  const handleConfirmBridge = useCallback(() => {
     setShowConfirm(false);
-    setLoading(true);
-    try {
-      const creds = await getWallet();
-      if (!creds) {
-        Alert.alert('Error', 'Wallet credentials not found.');
-        return;
-      }
-
-      const signedTx = await signThronosTransaction({
-        from: creds.address,
-        to: wallet.chainAddresses?.[destChain] || creds.address,
-        amount: parsedAmount,
-        token: selectedToken,
-        nonce: Math.floor(Date.now() / 1000),
-      });
-
-      const result = await executeBridgeSigned({
-        from_chain: sourceChain,
-        to_chain: destChain,
-        signedTx,
-      });
-
-      if (result.success && result.transfer) {
-        const newTransfer: BridgeTransfer = {
-          id: result.transfer.id || `br_${Date.now()}`,
-          fromChain: sourceChain,
-          toChain: destChain,
-          token: selectedToken,
-          amount: parsedAmount,
-          fee: feeAmount,
-          status: 'pending',
-          txHash: result.transfer.tx_hash || '',
-          timestamp: Date.now(),
-          estimatedTime: (currentPair?.estimatedMinutes ?? 5) * 60,
-        };
-
-        setBridgeHistory([newTransfer, ...(bridgeHistory || [])]);
-
-        Alert.alert(
-          'Bridge Initiated',
-          `Bridging ${parsedAmount} ${selectedToken} from ${sourceChainData.name} to ${destChainData.name}.\n\nEstimated time: ${formatTime(currentPair?.estimatedMinutes ?? 5)}`,
-          [{ text: 'OK' }],
-        );
-        setAmount('');
-      } else {
-        Alert.alert('Bridge Failed', result.error || 'Bridge operation failed.');
-      }
-    } catch (error: any) {
-      Alert.alert('Bridge Failed', error.message || 'An unexpected error occurred.');
-    } finally {
-      setLoading(false);
-    }
-  }, [
-    sourceChain,
-    destChain,
-    selectedToken,
-    parsedAmount,
-    feeAmount,
-    currentPair,
-    sourceChainData,
-    destChainData,
-    wallet,
-    bridgeHistory,
-    setBridgeHistory,
-  ]);
+    setLoading(false);
+    Alert.alert(
+      'Bridge Unavailable',
+      'Bridge execution is disabled pending an authoritative quote and settlement service.',
+    );
+  }, []);
 
   // Animated rotation value
   const spin = rotateAnim.interpolate({

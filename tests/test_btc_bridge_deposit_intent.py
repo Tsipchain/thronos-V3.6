@@ -164,3 +164,5 @@ def test_wallet_bridge_entry_points_are_non_executable_without_authoritative_ser
 
     pair_section = native[native.index("const BRIDGE_PAIRS"):native.index("// No mock data")]
     assert "available: true" not in pair_section
+    assert "executeBridgeSigned" not in native
+    assert "signThronosTransaction" not in native

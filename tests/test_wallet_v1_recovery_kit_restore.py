@@ -120,15 +120,15 @@ class TestRecoveryKitRestorePrimaryUI:
 
 
 class TestAdvancedRecoveryUI:
-    """Test that legacy recovery forms are hidden in Advanced section."""
+    """Test the approved canonical details-based advanced recovery UI."""
 
     def test_advanced_recovery_section_exists(self):
-        """Verify Advanced Recovery section div exists."""
+        """Verify the canonical Advanced Recovery details element exists."""
         base_html = Path(__file__).parent.parent / "templates" / "base.html"
         content = base_html.read_text()
 
-        assert 'id="walletV1AdvancedRecoverySection"' in content, \
-            "Advanced Recovery section not found"
+        assert '<details id="walletV1AdvancedRecoveryDetails"' in content
+        assert 'aria-label="walletV1AdvancedImport"' in content
 
     def test_advanced_recovery_toggle_exists(self):
         """Verify Advanced Recovery toggle button exists."""
@@ -139,45 +139,26 @@ class TestAdvancedRecoveryUI:
             "Advanced Recovery toggle button not found"
 
     def test_advanced_toggle_is_hidden_by_default(self):
-        """Verify Advanced Recovery section is hidden by default."""
+        """Verify details is closed by default and controlled accessibly."""
         base_html = Path(__file__).parent.parent / "templates" / "base.html"
         content = base_html.read_text()
 
-        # Find Advanced section
-        start = content.find('id="walletV1AdvancedRecoverySection"')
+        start = content.find('<details id="walletV1AdvancedRecoveryDetails"')
         end = content.find('>', start)
         tag = content[start:end + 1]
-
-        assert 'style="display:none;"' in tag or 'display:none' in tag, \
-            "Advanced Recovery section should be hidden by default"
+        assert start > 0
+        assert ' open' not in tag
+        assert 'aria-controls="walletV1AdvancedRecoveryDetails"' in content
+        assert 'aria-expanded="false"' in content
 
     def test_legacy_recovery_forms_in_advanced_section(self):
-        """Verify legacy recovery forms are in Advanced section."""
+        """Verify removed legacy forms are not restored into the canonical UI."""
         base_html = Path(__file__).parent.parent / "templates" / "base.html"
         content = base_html.read_text()
 
-        # Find positions
-        advanced_section_pos = content.find('id="walletV1AdvancedRecoverySection"')
-        legacy_form_pos = content.find('id="walletV1LegacyRecoveryForm"')
-        advanced_key_import_pos = content.find('id="walletV1AdvancedKeyImportForm"')
-        rekey_form_pos = content.find('id="walletV1RekeyCeremonyForm"')
-        advanced_section_close_pos = content.find('</div>  <!-- Close walletV1AdvancedRecoverySection -->')
-
-        # All forms should come after Advanced section opens
-        assert legacy_form_pos > advanced_section_pos, \
-            "Legacy recovery form should be after Advanced section opens"
-        assert advanced_key_import_pos > advanced_section_pos, \
-            "Advanced key import form should be after Advanced section opens"
-        assert rekey_form_pos > advanced_section_pos, \
-            "Re-key ceremony form should be after Advanced section opens"
-
-        # All forms should come before Advanced section closes
-        assert legacy_form_pos < advanced_section_close_pos, \
-            "Legacy recovery form should be before Advanced section closes"
-        assert advanced_key_import_pos < advanced_section_close_pos, \
-            "Advanced key import form should be before Advanced section closes"
-        assert rekey_form_pos < advanced_section_close_pos, \
-            "Re-key ceremony form should be before Advanced section closes"
+        assert 'id="walletV1AdvancedRecoveryDetails"' in content
+        assert 'id="walletV1AdvancedKeyImportForm"' not in content
+        assert 'id="walletV1AdvancedRecoverySection"' not in content
 
 
 class TestRecoveryKitRestoreLogic:
@@ -210,8 +191,8 @@ class TestRecoveryKitRestoreLogic:
 
         assert "walletV1LegacyRecoveryForm" in func, \
             "Should hide legacy recovery form"
-        assert "walletV1AdvancedKeyImportForm" in func, \
-            "Should hide advanced key import form"
+        assert "walletV1AdvancedRecoveryDetails" in func, \
+            "Should close canonical advanced details"
         assert "walletV1RekeyCeremonyForm" in func, \
             "Should hide re-key ceremony form"
         assert "style.display = 'none'" in func, \
@@ -244,8 +225,8 @@ class TestRecoveryKitRestoreLogic:
 
         assert "canonical_v1_address" in func, \
             "Should check canonical address from kit"
-        assert "startsWith('THR')" in func or "THR" in func, \
-            "Should validate canonical address starts with THR"
+        assert "walletSession.isValidThrAddress" in func, \
+            "Should use the canonical Wallet V1 address validator"
 
     def test_restore_checks_for_wallet_switch(self):
         """Verify restore function warns about wallet switching."""
@@ -339,8 +320,33 @@ class TestRecoveryKitRestoreLogic:
 
         assert "walletSession.setAddress" in func, \
             "Should update runtime address"
-        assert "walletSession.unlockWithPin" in func, \
-            "Should unlock runtime signing material"
+        assert "walletSession.unlockWallet" in func, \
+            "Should unlock runtime signing material through the exported API"
+        assert "walletSession.isUnlockedFor" in func, \
+            "Should confirm runtime material is bound to the restored address"
+
+    def test_restore_cryptographically_binds_recovery_material(self):
+        base_html = Path(__file__).parent.parent / "templates" / "base.html"
+        content = base_html.read_text()
+        start = content.find("async function walletV1RestoreFromRecoveryKit")
+        end = content.find("\n}", start) + 2
+        func = content[start:end]
+
+        assert "derivePublicKeyAndAddress" in func
+        assert "derived.publicKey.toLowerCase()" in func
+        assert "getActiveKeyBinding" in func
+        assert "authoritativeBoundAddress" in func
+
+    def test_restore_rolls_back_partial_persistence(self):
+        base_html = Path(__file__).parent.parent / "templates" / "base.html"
+        content = base_html.read_text()
+        start = content.find("async function walletV1RestoreFromRecoveryKit")
+        end = content.find("\n}", start) + 2
+        func = content[start:end]
+
+        assert "const previous = Object.fromEntries" in func
+        assert "const rollback" in func
+        assert "rollback();" in func
 
 
 class TestRecoveryKitHandlerValidation:
@@ -438,17 +444,15 @@ class TestNoOldDuplicates:
             f"Found orphaned data-missing-key-recovery divs: {orphaned}"
 
     def test_advanced_section_properly_closed(self):
-        """Verify walletV1AdvancedRecoverySection is properly closed."""
+        """Verify canonical details closes and the obsolete orphan does not exist."""
         base_html = Path(__file__).parent.parent / "templates" / "base.html"
         content = base_html.read_text()
 
-        # Find Advanced section with explicit close comment
-        start = content.find('id="walletV1AdvancedRecoverySection"')
-        closing = content.find('</div>  <!-- Close walletV1AdvancedRecoverySection -->', start)
-
-        assert start > 0, "Advanced Recovery section should exist"
-        assert closing > start, \
-            "Advanced Recovery section should be explicitly closed"
+        start = content.find('<details id="walletV1AdvancedRecoveryDetails"')
+        closing = content.find('</details>', start)
+        assert start > 0
+        assert closing > start
+        assert '<!-- Close walletV1AdvancedRecoverySection -->' not in content
 
 
 if __name__ == "__main__":

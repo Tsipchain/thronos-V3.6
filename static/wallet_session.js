@@ -574,7 +574,10 @@
   }
 
   async function unlockWallet(options = {}){
-    if (!isLocked() && isBound() && hasSigningMaterial(options.address)) return true;
+    // After a browser/PWA reload encrypted storage can still exist while the
+    // decrypted signing key is gone. Never report unlocked without matching
+    // in-memory material for the requested wallet.
+    if (!isLocked() && isBound() && hasRuntimeSigningMaterial(options.address)) return true;
     if (customUnlockHandler) {
       try { const ok = await customUnlockHandler(options); if (ok) { setBound(true); localStorage.setItem(LOCK_KEY, '0'); return true; } }
       catch(_) {}

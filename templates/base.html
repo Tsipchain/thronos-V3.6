@@ -1837,14 +1837,14 @@
                             <button onclick="walletV1HandleRecoveryKitRestore()" style="flex:1; padding:10px; background:#00aa66; color:#000; border:1px solid #00ff66; border-radius:6px; cursor:pointer; font-weight:bold;">
                                 ✓ Restore Wallet
                             </button>
-                            <button onclick="document.getElementById('walletV1AdvancedRecoveryToggle')?.click()" style="flex:1; padding:10px; background:#666; color:#fff; border:1px solid #999; border-radius:6px; cursor:pointer;">
+                            <button id="walletV1AdvancedRecoveryToggle" type="button" aria-controls="walletV1AdvancedRecoveryDetails" aria-expanded="false" onclick="walletV1ShowAdvancedRecovery()" style="flex:1; padding:10px; background:#666; color:#fff; border:1px solid #999; border-radius:6px; cursor:pointer;">
                                 Advanced Options
                             </button>
                         </div>
                     </div>
 
                     <!-- CANONICAL ADVANCED: Import Private Key (hidden by default) -->
-                    <details aria-label="walletV1AdvancedImport" style="margin:12px 0;">
+                    <details id="walletV1AdvancedRecoveryDetails" aria-label="walletV1AdvancedImport" style="margin:12px 0;">
                         <summary style="padding:10px; background:#333; color:#ccc; border:1px solid #666; border-radius:6px; cursor:pointer; font-size:0.9em;">
                             ⌥ Advanced: Import Private Key (Hex) [Optional]
                         </summary>
@@ -2020,8 +2020,6 @@
                             </button>
                         </div>
                     </div>
-
-                    </div>  <!-- Close walletV1AdvancedRecoverySection -->
 
                 </div>
 
@@ -3776,15 +3774,17 @@ function walletV1ShowRecoveryKitRestorePrimary() {
     // Hide legacy forms by default (move to Advanced)
     const legacyForm = document.getElementById('walletV1LegacyRecoveryForm');
     const rekeyForm = document.getElementById('walletV1RekeyCeremonyForm');
+    const advancedDetails = document.getElementById('walletV1AdvancedRecoveryDetails');
 
     if (legacyForm) legacyForm.style.display = 'none';
-    if (advancedForm) advancedForm.style.display = 'none';
     if (rekeyForm) rekeyForm.style.display = 'none';
+    if (advancedDetails) advancedDetails.open = false;
 
     // Show Advanced toggle button
     const advancedToggle = document.getElementById('walletV1AdvancedRecoveryToggle');
     if (advancedToggle) {
         advancedToggle.style.display = 'block';
+        advancedToggle.setAttribute('aria-expanded', 'false');
     }
 }
 
@@ -3792,9 +3792,13 @@ function walletV1ShowAdvancedRecovery() {
     /**
      * Toggle Advanced Recovery tab.
      */
-    const advancedSection = document.getElementById('walletV1AdvancedRecoverySection');
-    if (advancedSection) {
-        advancedSection.style.display = advancedSection.style.display === 'none' ? 'block' : 'none';
+    const advancedDetails = document.getElementById('walletV1AdvancedRecoveryDetails');
+    const advancedToggle = document.getElementById('walletV1AdvancedRecoveryToggle');
+    if (!advancedDetails) return;
+
+    advancedDetails.open = !advancedDetails.open;
+    if (advancedToggle) {
+        advancedToggle.setAttribute('aria-expanded', advancedDetails.open ? 'true' : 'false');
     }
 }
 
@@ -3836,7 +3840,7 @@ async function walletV1RestoreFromRecoveryKit(recoveryKitJson, pin) {
 
         // Step 3: Validate canonical address
         const canonical = kit.canonical_v1_address || '';
-        if (!canonical.startsWith('THR')) {
+        if (!walletSession.isValidThrAddress?.(canonical)) {
             throw new Error('Invalid canonical address in Recovery Kit');
         }
 
@@ -3881,38 +3885,67 @@ async function walletV1RestoreFromRecoveryKit(recoveryKitJson, pin) {
             throw new Error('Wrong PIN or invalid recovery kit');
         }
 
-        // Step 8: Verify decrypted key matches public key
-        // (This would require deriving public key from private key, which requires crypto library)
-        // For now, we trust the kit is valid and just restore
-
-        // Step 9: Save to localStorage
-        localStorage.setItem('wallet_v1_canonical_address', canonical);  // CRITICAL: Set canonical key for hasCanonical()
-        localStorage.setItem('wallet_v1_address', canonical);
-        localStorage.setItem('wallet_v1_encrypted_priv', encryptedKeyBackup);
-        localStorage.setItem('wallet_v1_public_key', publicKey);
-        if (kit.bound_key_address) {
-            localStorage.setItem('wallet_v1_bound_address', kit.bound_key_address);
+        // Step 8: Cryptographically bind the decrypted key to both the kit and
+        // the claimed wallet identity. Browser-supplied kit fields are not
+        // authoritative on their own.
+        const derived = await walletSession.derivePublicKeyAndAddress?.(decryptedPrivateKey);
+        if (!derived?.success || !derived.publicKey || !derived.address) {
+            throw new Error('Recovery Kit signing key could not be validated');
+        }
+        if (derived.publicKey.toLowerCase() !== publicKey.toLowerCase()) {
+            throw new Error('Recovery Kit public key does not match encrypted signing key');
         }
 
-        // Step 10: Set thr_address for compatibility
-        localStorage.setItem('thr_address', canonical);
-
-        // Step 11: Update runtime signer
-        if (walletSession.setAddress) {
-            walletSession.setAddress(canonical);
+        const binding = derived.address === canonical
+            ? null
+            : await walletSession.getActiveKeyBinding?.(canonical);
+        const authoritativeBoundAddress = binding?.bound_key_address || '';
+        if (derived.address !== canonical && authoritativeBoundAddress !== derived.address) {
+            throw new Error('Recovery Kit signing key does not match canonical wallet');
+        }
+        if (kit.bound_key_address && kit.bound_key_address !== derived.address) {
+            throw new Error('Recovery Kit bound signer does not match encrypted signing key');
         }
 
-        // Step 12: Unlock runtime signing material
+        // Step 9: Persist only after all identity checks pass. Keep a narrow
+        // rollback snapshot so a failed runtime unlock cannot strand the user.
+        const restoreKeys = [
+            'wallet_v1_canonical_address', 'wallet_v1_address',
+            'wallet_v1_encrypted_priv', 'wallet_v1_public_key',
+            'wallet_v1_bound_address', 'thr_address', 'wallet_pin',
+            'wallet_bound', 'wallet_locked'
+        ];
+        const previous = Object.fromEntries(restoreKeys.map((key) => [key, localStorage.getItem(key)]));
+        const rollback = () => restoreKeys.forEach((key) => {
+            if (previous[key] === null) localStorage.removeItem(key);
+            else localStorage.setItem(key, previous[key]);
+        });
+
         try {
-            if (walletSession.unlockWithPin) {
-                const unlocked = await walletSession.unlockWithPin(pin);
-                if (!unlocked) {
-                    console.warn('[RestoreKit] Runtime unlock returned false');
-                }
+            localStorage.setItem('wallet_v1_canonical_address', canonical);
+            localStorage.setItem('wallet_v1_address', canonical);
+            localStorage.setItem('wallet_v1_encrypted_priv', encryptedKeyBackup);
+            localStorage.setItem('wallet_v1_public_key', publicKey.toLowerCase());
+            if (authoritativeBoundAddress) {
+                localStorage.setItem('wallet_v1_bound_address', authoritativeBoundAddress);
+            } else {
+                localStorage.removeItem('wallet_v1_bound_address');
+            }
+            localStorage.setItem('thr_address', canonical);
+            walletSession.setPin?.(pin);
+            walletSession.setAddress?.(canonical);
+
+            // Force decryption and identity binding instead of accepting a
+            // stale already-unlocked flag from another wallet.
+            walletSession.lockWallet?.();
+            const unlocked = await walletSession.unlockWallet?.({pin, address: canonical, prompt: false});
+            if (!unlocked || !walletSession.isUnlockedFor?.(canonical)) {
+                throw new Error('Recovery Kit restored but signing key could not be unlocked');
             }
         } catch (e) {
-            console.warn('[RestoreKit] Runtime unlock failed:', e.message);
-            // Continue anyway - user can unlock separately
+            walletSession.lockWallet?.();
+            rollback();
+            throw e;
         }
 
         // Step 13: Refresh wallet UI

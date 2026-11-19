@@ -146,9 +146,19 @@ def test_signing_key_mismatch_preserves_active_canonical_address():
 
 
 def test_signing_key_mismatch_clears_runtime_signing_material():
-    assert "unlockedPrivateKeyHex = null" in STATIC_SESSION
-    # Should clear on mismatch catch
-    assert "if ((err.message || '').includes('wallet_signing_key_does_not_match_active_address')) {" in STATIC_SESSION
+    clear_pos = STATIC_SESSION.find("unlockedPrivateKeyHex = null", STATIC_SESSION.find("catch(err)"))
+    mismatch_pos = STATIC_SESSION.find("wallet_signing_key_does_not_match_active_address", clear_pos)
+    rethrow_pos = STATIC_SESSION.find("throw err", mismatch_pos)
+    assert -1 not in (clear_pos, mismatch_pos, rethrow_pos)
+    assert clear_pos < mismatch_pos < rethrow_pos
+
+
+def test_reload_unlock_requires_runtime_signing_material():
+    unlock_start = STATIC_SESSION.find("async function unlockWallet")
+    unlock_end = STATIC_SESSION.find("async function unlock(", unlock_start)
+    unlock_body = STATIC_SESSION[unlock_start:unlock_end]
+    assert "hasRuntimeSigningMaterial(options.address)" in unlock_body
+    assert "isBound() && hasSigningMaterial(options.address)" not in unlock_body
 
 
 def test_clear_local_signing_key_removes_encrypted_seed_but_keeps_active_address():

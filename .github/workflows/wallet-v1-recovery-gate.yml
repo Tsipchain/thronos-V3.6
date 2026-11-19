@@ -1,0 +1,48 @@
+name: Wallet V1 Recovery Gate
+
+on:
+  pull_request:
+    paths:
+      - "templates/base.html"
+      - "static/wallet_session.js"
+      - "tests/test_wallet_v1_*.py"
+      - ".github/workflows/wallet-v1-recovery-gate.yml"
+  workflow_dispatch:
+
+jobs:
+  wallet-v1-recovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      SCHEDULER_ENABLED: "0"
+      EDU_DB_PATH: /tmp/thronos-wallet-v1-recovery-ci.db
+      WALLET_E2E_NOBLE_MODULE: /tmp/wallet-e2e-js/node_modules/@noble/secp256k1/index.js
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest playwright
+          python -m playwright install --with-deps chromium
+          npm install --prefix /tmp/wallet-e2e-js @noble/secp256k1@2.2.3
+      - name: Run Wallet V1 recovery regression and browser acceptance
+        run: |
+          python -m pytest -q \
+            tests/test_btc_pledge_watcher_retry.py \
+            tests/test_wallet_v1_bound_signer_acceptance.py \
+            tests/test_wallet_v1_migration.py \
+            tests/test_wallet_v1_recovery_browser_e2e.py \
+            tests/test_wallet_v1_recovery_kit_restore.py \
+            tests/test_wallet_v1_safe_unlock_address_persistence.py \
+            tests/test_wallet_v1_signing_session_guards.py \
+            tests/test_wallet_v1_state_recovery.py \
+            tests/test_wallet_v1_unlock_state_sync_guards.py \
+            tests/test_wallet_v1_verified_migration_preference.py \
+            tests/test_wallet_v1_wallet_recovery_guards.py

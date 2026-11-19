@@ -12,6 +12,8 @@ import time
 from typing import Any
 import uuid
 
+from services.btc_provider_revenue import PURPOSE as PROVIDER_REVENUE_PURPOSE
+
 
 class BtcDepositOutboxError(RuntimeError):
     pass
@@ -120,10 +122,11 @@ class BtcDepositOutbox:
                    WHERE state='confirmed'
                      AND requires_reconciliation=0
                      AND confirmations>=?
+                     AND owner_ref<>?
                      AND block_hash IS NOT NULL
                      AND block_height IS NOT NULL
                    ORDER BY first_seen_at, event_id""",
-                (int(minimum_confirmations),),
+                (int(minimum_confirmations), PROVIDER_REVENUE_PURPOSE),
             ).fetchall()
 
             for row in rows:
@@ -182,11 +185,12 @@ class BtcDepositOutbox:
                    )
                      AND d.state='confirmed'
                      AND d.requires_reconciliation=0
+                     AND d.owner_ref<>?
                      AND d.block_hash IS NOT NULL
                      AND d.block_height IS NOT NULL
                    ORDER BY o.created_at, o.idempotency_key
                    LIMIT 1""",
-                (now, now),
+                (now, now, PROVIDER_REVENUE_PURPOSE),
             ).fetchone()
             if row is None:
                 return None

@@ -168,12 +168,9 @@ async function installPledgeWalletV1(addr, secret, recoveryKit, passphrase) {
       localStorage.setItem(`wallet:${addr}:send_seed`, secret);
     }
 
-    // Pledge-created V1 wallets are generated server-side. The encrypted
-    // recovery kit is protected by the user's passphrase, or by the one-time
-    // send_secret when no passphrase is provided. Cache that credential locally
-    // so the user lands in an unlocked V1 wallet immediately after pledge.
+    // Pledge-created V1 wallets are generated server-side. Use the supplied
+    // credential for this one decrypt operation only; never persist it as a PIN.
     if (unlockCredential) {
-      localStorage.setItem('wallet_pin', unlockCredential);
       if (typeof walletSession !== 'undefined' && typeof walletSession.unlockWallet === 'function') {
         try { await walletSession.unlockWallet({ pin: unlockCredential, address: addr, prompt: false }); }
         catch (unlockErr) { console.warn('[PledgeForm] Auto-unlock skipped:', unlockErr.message); }

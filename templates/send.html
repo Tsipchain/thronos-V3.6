@@ -372,7 +372,7 @@ async function doSend() {
 
   if(!from_thr || !to_thr){ alert(msg.missingAddr); return; }
   if(!walletSession.getPublicKey || !walletSession.signTransaction || !walletSession.getPublicKey()){ alert(msg.migrate); return; }
-  if(!walletSession.requirePin('sign transaction')) return;
+  if(!await walletSession.confirmUserPresence('sign transaction', {strict: true})) return;
 
   try{
     const txCore = { from: from_thr, to: to_thr, amount: Number(amount), token: 'THR', nonce: String(Date.now()), timestamp: Math.floor(Date.now()/1000) };

@@ -31,14 +31,20 @@ validation.
 
 ## Execution-route audit
 
-| Route | Current authorization | V2 result | Release decision |
+Every V2 route first creates a trusted execution object from an exact
+action-specific payload schema. Any other top-level field, mismatched `from`,
+missing required signed field or signed constraint that the handler does not
+implement is rejected before ECDSA verification and nonce consumption. The
+handler verifies the original envelope, but executes only the trusted object.
+
+| Route | Values derived from the signed envelope | Independently authoritative values | Release decision |
 |---|---|---|---|
-| `/api/swap/execute` | V2 top-level; field-bound legacy `signed_tx`; historical credential path | V2 nested token, amount, minimum output, quote/pool fields are signed; top-level shadow fields rejected | V2 path ready for staged QA; legacy contracts unchanged |
-| `/api/v1/pools` POST | V2 or explicit legacy pool auth | V2 pool pair, amounts and fee are nested and signed | Web/mobile client coverage required |
-| `/api/v1/pools/add_liquidity` | V2 or explicit legacy pool auth | V2 pool, both amounts, referral, quote and slippage fields are signed; V1 UI no longer downgrades | Web path ready for staged QA |
-| `/api/v1/pools/remove_liquidity` | V2 or explicit legacy pool auth | V2 pool, shares, minimum outputs and quote fields are signed | Client upgrade required |
-| `/api/v1/music/tip` | V2 or explicit legacy credential auth | V2 track, asset, amount and duration are signed | Web path ready for staged QA |
-| `/api/legacy/create`, `/ping`, `/claim` | V2 required by these endpoints | New top-level Wallet V1 requests require V2; claim owner and legacy definition are nested | Client upgrade and isolated regression required before release |
+| `/api/swap/execute` | canonical trader, token pair, input amount, minimum output | selected pool/route, current reserves, actual output and pool fee | V2 handler **GO for staging**; unsupported quote/pool aliases fail closed |
+| `/api/v1/pools` POST | canonical provider, token pair, both deposits, requested fee | supported-token policy and ledger balances | V2 handler **GO for staging**; mobile client coverage required |
+| `/api/v1/pools/add_liquidity` | canonical provider, pool ID, both deposits, referrer | pool record, reserves, share calculation and balances | V2 handler **GO for staging**; unsupported quote/slippage aliases fail closed |
+| `/api/v1/pools/remove_liquidity` | canonical provider, pool ID and shares | provider position, pool reserves and calculated outputs | V2 handler **GO for staging**; unsupported quote/min-output aliases fail closed |
+| `/api/v1/music/tip` | canonical sender, track ID, amount, asset, duration/GPS telemetry | track registry and its artist recipient, ledger balance and service fee | V2 handler **GO for staging**; native client upgrade required |
+| `/api/legacy/create`, `/ping`, `/claim` | canonical owner/heir, complete legacy definition, claimed owner | stored legacy record, inactivity state, percentage and ledger balance | V2 handlers **GO for staging**; client/device coverage required |
 | `/api/v1/pools/swap` | pledge mode plus legacy credential/whitelist logic | Not migrated to the V2 service-request boundary | **NO-GO** as a Wallet V1 ECDSA-authorized action |
 | `/api/v1/pools/add-liquidity` | separate Wallet Action Intent V1 plus payload hash, or explicit legacy credential | Separate signed-intent contract, not silently treated as this V2 contract | Independently review before convergence |
 | `/api/wallet/send`, `/api/wallet/internal-transfer` | separate canonical transaction / intent signatures and nonce checks | Not changed | Keep separate; regression-test before release |
@@ -71,6 +77,62 @@ routes remain version-separated and are not reinterpreted as V2 authorization.
    wallet keys, address bindings, pledge records, nonce history, recovery kits
    or ledgers. Do not add a runtime downgrade from a failed V2 request.
 
+Source audit details for native clients:
+
+- `thronos-wallet-app/src/services/api.ts` wraps swap data as `{tx: signedTx}`
+  and remove-liquidity data as `{pool_id, shares, tx}`; neither is the V2
+  envelope accepted by the reviewed routes.
+- `thronos-wallet-app/src/screens/PoolsScreen.tsx` still sends `auth_secret` to
+  the separate legacy add-liquidity route.
+- `mobile-sdk/src/api.js` forwards caller-provided swap objects and constructs
+  an unsigned legacy music-tip body. The Android and iOS SDK sources expose
+  older wallet-secret send flows and contain no V2 action builder.
+- The browser extension constructs its historical `{tx: ...}` swap envelope.
+
+Therefore Android, iOS, the standalone mobile SDK and the browser extension
+are **NO-GO for V2 financial actions** until independently reviewed client PRs
+emit this exact contract and complete device tests. Their explicit legacy
+contracts remain unchanged by this server PR; no failed V2 request may fall
+back to them.
+
+### Operator-approved deployment and rollback gate
+
+1. Approve and merge dependency order `#963 -> #964 -> #965`; do not squash or
+   reorder their security boundaries without repeating the full gate.
+2. Deploy only to an isolated environment with synthetic ledgers, the same
+   Redis topology as production and paid/broadcast execution disabled.
+3. Record reviewed server and web/PWA/native build SHAs. Confirm the client
+   emits `wallet_v1_full_payload_v2` for each action it exposes.
+4. Run recovery/unlock, pledge golden vectors, all route mutations, slippage,
+   replay/concurrency, account switch and offline/update/reload acceptance.
+5. Back up persistent application data before an operator-authorized production
+   release. This PR has no data migration and requires no database rewrite.
+6. Release compatible server and clients in one window. Monitor aggregate
+   action/version/error counters only; never log credentials or envelopes.
+7. On unexpected authorization errors, disable the affected action and roll
+   application code back to the recorded revision. Do not clear nonce storage,
+   bindings, recovery material, pledge records or ledgers, and do not enable a
+   legacy fallback for a failed V2 request.
+
+## Broad Wallet baseline: 27 remaining failures
+
+These failures were present on the dependency baseline and remain release
+evidence gaps; none is hidden or deleted by this PR.
+
+| Count | Area | Impact classification |
+|---:|---|---|
+| 5 | activation-check fixture lacks `server_module` | test-fixture/configuration failure; activation coverage unavailable |
+| 1 | crypto HMAC guard ordering expectation | stale expectation against the hardened explicit-version order |
+| 1 | execution-engine test expects an invalid signature to execute | unsafe stale expectation; production must continue to reject |
+| 3 | frontend auth source-string expectations | stale fixture assertions, not runtime execution evidence |
+| 8 | pool backend tests patch removed `wallet_v1_production_final` symbol | stale fixture; route runtime coverage is supplied separately here |
+| 8 | swap backend fixtures omit current quote legs or expect historical status bodies | stale/incomplete route fixtures; runtime V2 swap and slippage are covered separately here |
+| 1 | THR reconciliation lacks test `ADMIN_SECRET` | test-environment configuration failure (HTTP 503) |
+
+Because the activation and native-client gaps remain, the overall Wallet V1
+production decision is **NO-GO**, even though the V2 handlers above are ready
+for an isolated staging run.
+
 ## Intentionally unchanged
 
 BTC/USDT pledge addresses and watchers; historical SHA256, SHA256d-labelled and
@@ -81,10 +143,12 @@ all production data are unchanged.
 ## Activation evidence still required
 
 - Production-like staging execution through each actual financial route with
-  synthetic balances (the real Chromium builder/verifier acceptance is green).
+  synthetic balances (local real-handler tests and Chromium builder/verifier
+  acceptance are green; an independently deployed staging run is still due).
 - Installed PWA reload/offline/update test for the new precached contract.
 - Android and iOS build/device evidence for every action exposed by the app.
-- Staging concurrency and rollback exercise using the same durable nonce-store
-  topology as production.
+- Staging concurrency and rollback exercise against a real shared Redis. Unit
+  coverage proves Redis `SET NX` and shared-SQLite exactly-once semantics, but
+  does not replace a multi-process deployment test.
 - Operator approval after #963 and #964 are approved in dependency order.
 

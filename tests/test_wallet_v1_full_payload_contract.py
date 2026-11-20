@@ -273,8 +273,8 @@ def test_re_signed_false_signer_claim_is_rejected_cryptographically():
     [
         ("swap", {"token_in": "THR", "token_out": "USDT", "amount_in": "1", "min_amount_out": "0.9"}, "amount_in"),
         ("create_pool", {"token_a": "THR", "token_b": "WBTC", "amount_a": "1", "amount_b": "0.1", "fee_bps": "30"}, "amount_a"),
-        ("add_liquidity", {"pool_id": "pool-1", "amount_a": "1", "amount_b": "0.1", "max_slippage_bps": "50"}, "amount_b"),
-        ("remove_liquidity", {"pool_id": "pool-1", "shares": "0.5", "min_amount_a": "0.4", "min_amount_b": "0.04"}, "shares"),
+        ("add_liquidity", {"pool_id": "pool-1", "amount_a": "1", "amount_b": "0.1"}, "amount_b"),
+        ("remove_liquidity", {"pool_id": "pool-1", "shares": "0.5"}, "shares"),
         ("tip", {"track_id": "track-1", "amount": "2", "token_symbol": "THR"}, "amount"),
     ],
 )
@@ -302,7 +302,7 @@ def test_each_v2_execution_boundary_accepts_nested_fields_and_rejects_shadowing(
         shadowed, action, require_full_payload=True
     )
     assert ok is False
-    assert error["error"] == "financial_fields_must_be_nested"
+    assert error["error"] == "unsigned_top_level_fields"
     assert address is None
 
 
@@ -313,19 +313,20 @@ def test_financial_boundary_rejects_legacy_contract_and_top_level_shadow_fields(
         "_WALLET_V1_SIGNED_NONCES_DB",
         str(tmp_path / "wallet_v1_signed_request_nonces.sqlite3"),
     )
-    request = _request(issued_at=int(time.time()))
+    swap_payload = {"token_in": "THR", "token_out": "USDT", "amount_in": "1", "min_amount_out": "0.9"}
+    request = _request(payload=swap_payload, issued_at=int(time.time()))
     ok, error, address = server._verify_walletv1_new_format(
         request, "swap", require_full_payload=True
     )
     assert ok is True and error == {} and address == request["canonical_v1_address"]
 
-    shadowed = _request(nonce="v2-shadow", issued_at=int(time.time()))
+    shadowed = _request(payload=swap_payload, nonce="v2-shadow", issued_at=int(time.time()))
     shadowed["amount_in"] = "999"
     ok, error, address = server._verify_walletv1_new_format(
         shadowed, "swap", require_full_payload=True
     )
     assert ok is False
-    assert error["error"] == "financial_fields_must_be_nested"
+    assert error["error"] == "unsigned_top_level_fields"
     assert address is None
     shadowed.pop("amount_in")
     ok, error, address = server._verify_walletv1_new_format(
@@ -355,6 +356,45 @@ def test_financial_boundary_rejects_legacy_contract_and_top_level_shadow_fields(
     assert ok is False
     assert error["error"] == "wallet_v1_full_payload_upgrade_required"
     assert address is None
+
+
+@pytest.mark.parametrize(
+    ("action", "valid_payload", "unsupported_field"),
+    [
+        ("swap", {"token_in": "THR", "token_out": "USDT", "amount_in": "1", "min_amount_out": "0.9"}, "quote_id"),
+        ("add_liquidity", {"pool_id": "pool-1", "amount_a": "1", "amount_b": "0.1"}, "max_slippage_bps"),
+        ("remove_liquidity", {"pool_id": "pool-1", "shares": "0.5"}, "min_amount_a"),
+    ],
+)
+def test_unsupported_signed_constraints_fail_before_nonce_consumption(
+    monkeypatch, tmp_path, action, valid_payload, unsupported_field
+):
+    monkeypatch.setattr(server, "REDIS_CLIENT", None)
+    monkeypatch.setattr(
+        server,
+        "_WALLET_V1_SIGNED_NONCES_DB",
+        str(tmp_path / f"unsupported-{action}.sqlite3"),
+    )
+    now = int(time.time())
+    invalid_payload = dict(valid_payload)
+    invalid_payload[unsupported_field] = "must-not-be-ignored"
+    invalid = _request(
+        action=action, payload=invalid_payload, nonce=f"{action}-constraint", issued_at=now
+    )
+    ok, error, _ = server._verify_walletv1_new_format(
+        invalid, action, require_full_payload=True
+    )
+    assert ok is False
+    assert error["error"] == "unsupported_signed_payload_fields"
+    assert error["fields"] == [unsupported_field]
+
+    valid = _request(
+        action=action, payload=valid_payload, nonce=f"{action}-constraint", issued_at=now
+    )
+    ok, error, address = server._verify_walletv1_new_format(
+        valid, action, require_full_payload=True
+    )
+    assert ok is True and error == {} and address == valid["canonical_v1_address"]
 
 
 def test_modern_failure_cannot_downgrade_to_legacy_in_pool_ui():

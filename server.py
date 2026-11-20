@@ -30371,6 +30371,12 @@ def api_swap_execute():
                 pass
         if not isinstance(data, dict):
             return jsonify(status="error", error="invalid_request_body", message="Request body must be a JSON object"), 400
+        auth_request = data
+        if str(data.get("signature_format") or "").strip() == "wallet_v1_full_payload_v2":
+            trusted_data, shape_error = _wallet_v1_v2_trusted_execution_data(data, SWAP_EXPECTED_ACTION)
+            if shape_error:
+                return jsonify(ok=False, status="error", **shape_error), 400
+            data = trusted_data
         # Support walletV1BuildSignedRequest format where swap params are nested under "payload"
         inner = data.get("payload") or {}
         if isinstance(inner, str):
@@ -30405,7 +30411,7 @@ def api_swap_execute():
             return jsonify(status="error", error="unsupported_token", message=f"Unsupported token: {token_in} or {token_out}"), 400
 
         # Wallet V1 or legacy auth verification
-        auth_ok, auth_error, verified_trader = verify_swap_wallet_v1_or_legacy(data, SWAP_EXPECTED_ACTION)
+        auth_ok, auth_error, verified_trader = verify_swap_wallet_v1_or_legacy(auth_request, SWAP_EXPECTED_ACTION)
         if not auth_ok:
             status_code = 400
             if auth_error.get("error") in ("invalid_auth", "no_effective_pledge", "wallet_mismatch"):
@@ -30626,15 +30632,19 @@ def _save_legacies(data: dict):
 def api_legacy_create():
     """Create or update a digital legacy (last-will) for a THR wallet."""
     data = request.get_json() or {}
-    inner = data.get("payload") if isinstance(data.get("payload"), dict) else {}
+    auth_request = data
+    trusted_data, shape_error = _wallet_v1_v2_trusted_execution_data(data, "create_legacy")
+    if shape_error:
+        return jsonify(status="error", **shape_error), 400
     if data.get("canonical_v1_address") and data.get("signature") and not data.get("signed_tx"):
-        ok, err, owner = _verify_walletv1_new_format(data, "create_legacy", require_full_payload=True)
+        ok, err, owner = _verify_walletv1_new_format(auth_request, "create_legacy", require_full_payload=True)
         if not ok:
             return jsonify(status="error", message=err.get("message", "Auth failed")), 403
     else:
         return jsonify(status="error", message="V1 wallet signature required"), 403
 
-    heirs = inner.get("heirs", []) if data.get("canonical_v1_address") else data.get("heirs", [])
+    data = trusted_data
+    heirs = data.get("heirs", [])
     total_pct = sum(float(h.get("percentage", 0)) for h in heirs)
     if heirs and abs(total_pct - 100.0) > 0.01:
         return jsonify(status="error", message=f"Heir percentages must sum to 100 (got {total_pct})"), 400
@@ -30644,8 +30654,8 @@ def api_legacy_create():
     entry = legacies.get(owner, {})
     entry.update({
         "owner": owner,
-        "title": (inner.get("title") or data.get("title") or "").strip() or "My Digital Legacy",
-        "description": (inner.get("description") or data.get("description") or "").strip(),
+        "title": (data.get("title") or "").strip() or "My Digital Legacy",
+        "description": (data.get("description") or "").strip(),
         "heirs": [
             {
                 "address": h.get("address", "").strip(),
@@ -30655,7 +30665,7 @@ def api_legacy_create():
             }
             for h in heirs if h.get("address")
         ],
-        "inactivity_days": int(inner.get("inactivity_days") or data.get("inactivity_days") or 365),
+        "inactivity_days": int(data.get("inactivity_days") or 365),
         "status": entry.get("status", "active"),
         "created_at": entry.get("created_at", now),
         "updated_at": now,
@@ -30686,6 +30696,9 @@ def api_legacy_get(owner_address):
 def api_legacy_ping():
     """Owner pings to prove they're still alive (resets inactivity timer)."""
     data = request.get_json() or {}
+    trusted_data, shape_error = _wallet_v1_v2_trusted_execution_data(data, "legacy_ping")
+    if shape_error:
+        return jsonify(status="error", **shape_error), 400
     if data.get("canonical_v1_address") and data.get("signature") and not data.get("signed_tx"):
         ok, err, owner = _verify_walletv1_new_format(data, "legacy_ping", require_full_payload=True)
         if not ok:
@@ -30704,15 +30717,19 @@ def api_legacy_ping():
 def api_legacy_claim():
     """Heir claims their portion of an owner's legacy after inactivity period."""
     data = request.get_json() or {}
-    inner = data.get("payload") if isinstance(data.get("payload"), dict) else {}
+    auth_request = data
+    trusted_data, shape_error = _wallet_v1_v2_trusted_execution_data(data, "claim_legacy")
+    if shape_error:
+        return jsonify(status="error", **shape_error), 400
     if data.get("canonical_v1_address") and data.get("signature") and not data.get("signed_tx"):
-        ok, err, heir_addr = _verify_walletv1_new_format(data, "claim_legacy", require_full_payload=True)
+        ok, err, heir_addr = _verify_walletv1_new_format(auth_request, "claim_legacy", require_full_payload=True)
         if not ok:
             return jsonify(status="error", message=err.get("message", "Auth failed")), 403
     else:
         return jsonify(status="error", message="V1 signature required"), 403
 
-    owner_address = (inner.get("owner_address") or data.get("owner_address") or "").strip()
+    data = trusted_data
+    owner_address = (data.get("owner_address") or "").strip()
     if not owner_address:
         return jsonify(status="error", message="owner_address required"), 400
 
@@ -33769,15 +33786,118 @@ def _verify_ai_sig(pubkey_hex: str, signing_bytes: bytes, sig_hex: str) -> bool:
 _load_ai_registry()
 
 
-_WALLET_V1_ACTION_PAYLOAD_FIELDS = {
-    "swap": {"token_in", "token_out", "amount_in", "min_amount_out", "quote_id", "pool_id"},
-    "create_pool": {"token_a", "token_b", "amount_a", "amount_b", "fee_bps"},
-    "add_liquidity": {"pool_id", "amount_a", "amount_b", "referrer", "quote_id", "max_slippage_bps"},
-    "remove_liquidity": {"pool_id", "shares", "min_amount_a", "min_amount_b", "quote_id"},
-    "tip": {"track_id", "amount", "token_symbol", "duration_seconds"},
-    "create_legacy": {"title", "description", "heirs", "inactivity_days"},
-    "claim_legacy": {"owner_address"},
+_WALLET_V1_V2_TOP_LEVEL_FIELDS = {
+    "action", "bound_key_address", "canonical_v1_address", "chain_id", "domain",
+    "expires_at", "from", "issued_at", "nonce", "payload", "protocol_version",
+    "public_key", "signature", "signature_format", "signer_address",
+    "signing_payload_hash",
 }
+
+_WALLET_V1_V2_ACTION_SCHEMAS = {
+    "swap": {
+        "allowed": {"token_in", "token_out", "amount_in", "min_amount_out"},
+        "required": {"token_in", "token_out", "amount_in", "min_amount_out"},
+        "sender_field": "trader_thr",
+    },
+    "create_pool": {
+        "allowed": {"token_a", "token_b", "amount_a", "amount_b", "fee_bps"},
+        "required": {"token_a", "token_b", "amount_a", "amount_b"},
+        "sender_field": "provider_thr",
+    },
+    "add_liquidity": {
+        "allowed": {"pool_id", "amount_a", "amount_b", "referrer"},
+        "required": {"pool_id", "amount_a", "amount_b"},
+        "sender_field": "provider_thr",
+    },
+    "remove_liquidity": {
+        "allowed": {"pool_id", "shares"},
+        "required": {"pool_id", "shares"},
+        "sender_field": "provider_thr",
+    },
+    "tip": {
+        "allowed": {"track_id", "amount", "token_symbol", "duration_seconds", "gps_lat", "gps_lng"},
+        "required": {"track_id", "amount", "token_symbol"},
+        "sender_field": "from_address",
+    },
+    "create_legacy": {
+        "allowed": {"title", "description", "heirs", "inactivity_days"},
+        "required": set(),
+        "sender_field": "owner",
+    },
+    "legacy_ping": {
+        "allowed": set(),
+        "required": set(),
+        "sender_field": "owner",
+    },
+    "claim_legacy": {
+        "allowed": {"owner_address"},
+        "required": {"owner_address"},
+        "sender_field": "heir_address",
+    },
+}
+
+
+def _wallet_v1_v2_trusted_execution_data(data, expected_action):
+    """Return execution data derived only from a V2 signed payload.
+
+    This structural gate runs before ECDSA verification and nonce consumption.
+    The returned object contains no top-level credential aliases from the HTTP
+    request. Sender/provider fields are set from the signed canonical address.
+    """
+    if not isinstance(data, dict):
+        return None, {
+            "error": "invalid_request",
+            "message": "Wallet V1 request must be an object",
+        }
+    unexpected_top_level = sorted(set(data) - _WALLET_V1_V2_TOP_LEVEL_FIELDS)
+    if unexpected_top_level:
+        return None, {
+            "error": "unsigned_top_level_fields",
+            "message": "V2 execution fields must exist only in the signed payload",
+            "fields": unexpected_top_level,
+        }
+    canonical = str(data.get("canonical_v1_address") or "").strip()
+    claimed_from = str(data.get("from") or "").strip()
+    if claimed_from and claimed_from.upper() != canonical.upper():
+        return None, {
+            "error": "sender_alias_mismatch",
+            "message": "Top-level sender alias does not match the signed canonical sender",
+            "fields": ["from"],
+        }
+    schema = _WALLET_V1_V2_ACTION_SCHEMAS.get(expected_action)
+    if not schema:
+        return None, {
+            "error": "wallet_v1_v2_action_not_authorized",
+            "message": "No V2 execution schema exists for this action",
+        }
+    payload = data.get("payload")
+    if not isinstance(payload, dict):
+        return None, {
+            "error": "payload_must_be_object",
+            "message": "Signed V2 payload must be an object",
+        }
+    unsupported = sorted(set(payload) - schema["allowed"])
+    if unsupported:
+        return None, {
+            "error": "unsupported_signed_payload_fields",
+            "message": "Signed payload contains constraints this route does not execute",
+            "fields": unsupported,
+        }
+    missing = sorted(schema["required"] - set(payload))
+    if missing:
+        return None, {
+            "error": "missing_signed_payload_fields",
+            "message": "Signed payload is missing required execution fields",
+            "fields": missing,
+        }
+    trusted = dict(payload)
+    trusted.update({
+        "action": expected_action,
+        "canonical_v1_address": canonical,
+        "from": canonical,
+        schema["sender_field"]: canonical,
+    })
+    return trusted, None
 
 
 def _verify_walletv1_new_format(data, expected_action, *, require_full_payload=False):
@@ -33803,19 +33923,13 @@ def _verify_walletv1_new_format(data, expected_action, *, require_full_payload=F
                 "error": "wallet_v1_signature_version_not_authorized",
                 "message": "This financial action requires Wallet V1 protocol version 2",
             }, None
-        # Reject unsigned/ambiguous duplicate execution fields before signature
-        # verification so an invalid shadowed request cannot consume a nonce.
-        forbidden = sorted(
-            field
-            for field in _WALLET_V1_ACTION_PAYLOAD_FIELDS.get(expected_action, set())
-            if field in data
-        )
-        if forbidden:
+        # Reject unsigned aliases and unsupported signed constraints before
+        # signature verification so invalid requests cannot consume a nonce.
+        _trusted, shape_error = _wallet_v1_v2_trusted_execution_data(data, expected_action)
+        if shape_error:
             return False, {
                 "ok": False,
-                "error": "financial_fields_must_be_nested",
-                "message": "Operation fields must be supplied only in the signed payload",
-                "fields": forbidden,
+                **shape_error,
             }, None
 
     ok, details = verify_wallet_v1_signed_request(data, expected_action)
@@ -41283,6 +41397,12 @@ def api_v1_create_pool():
     deposits).  No trading fee logic is applied yet.
     """
     data = request.get_json() or {}
+    auth_request = data
+    if str(data.get("signature_format") or "").strip() == "wallet_v1_full_payload_v2":
+        trusted_data, shape_error = _wallet_v1_v2_trusted_execution_data(data, "create_pool")
+        if shape_error:
+            return jsonify(ok=False, status="error", **shape_error), 400
+        data = trusted_data
     inner = data.get("payload") if isinstance(data.get("payload"), dict) else {}
     token_a = (data.get("token_a") or inner.get("token_a") or "").upper().strip()
     token_b = (data.get("token_b") or inner.get("token_b") or "").upper().strip()
@@ -41305,7 +41425,7 @@ def api_v1_create_pool():
         return jsonify(status="error", message="Amounts must be positive"), 400
 
     # Wallet V1 or legacy auth verification
-    auth_ok, auth_error, verified_provider = verify_pool_wallet_v1_or_legacy(data, "create_pool")
+    auth_ok, auth_error, verified_provider = verify_pool_wallet_v1_or_legacy(auth_request, "create_pool")
     if not auth_ok:
         return jsonify(**auth_error), 400
 
@@ -41494,6 +41614,12 @@ def api_v1_add_liquidity():
     }
     """
     data = request.get_json() or {}
+    auth_request = data
+    if str(data.get("signature_format") or "").strip() == "wallet_v1_full_payload_v2":
+        trusted_data, shape_error = _wallet_v1_v2_trusted_execution_data(data, "add_liquidity")
+        if shape_error:
+            return jsonify(ok=False, status="error", **shape_error), 400
+        data = trusted_data
     # Support walletV1BuildSignedRequest format where pool params are nested under "payload"
     inner = data.get("payload") or {}
 
@@ -41516,7 +41642,7 @@ def api_v1_add_liquidity():
         return jsonify(status="error", message="Invalid input"), 400
 
     # Wallet V1 or legacy auth verification
-    auth_ok, auth_error, verified_provider = verify_pool_wallet_v1_or_legacy(data, "add_liquidity")
+    auth_ok, auth_error, verified_provider = verify_pool_wallet_v1_or_legacy(auth_request, "add_liquidity")
     if not auth_ok:
         return jsonify(**auth_error), 400
 
@@ -41758,6 +41884,12 @@ def api_v1_remove_liquidity():
     }
     """
     data = request.get_json() or {}
+    auth_request = data
+    if str(data.get("signature_format") or "").strip() == "wallet_v1_full_payload_v2":
+        trusted_data, shape_error = _wallet_v1_v2_trusted_execution_data(data, "remove_liquidity")
+        if shape_error:
+            return jsonify(ok=False, status="error", **shape_error), 400
+        data = trusted_data
     inner = data.get("payload") if isinstance(data.get("payload"), dict) else {}
     pool_id = (data.get("pool_id") or inner.get("pool_id") or "").strip()
     shares_raw = data.get("shares") or inner.get("shares") or 0
@@ -41774,7 +41906,7 @@ def api_v1_remove_liquidity():
         return jsonify(status="error", message="Invalid input"), 400
 
     # Wallet V1 or legacy auth verification
-    auth_ok, auth_error, verified_provider = verify_pool_wallet_v1_or_legacy(data, "remove_liquidity")
+    auth_ok, auth_error, verified_provider = verify_pool_wallet_v1_or_legacy(auth_request, "remove_liquidity")
     if not auth_ok:
         return jsonify(**auth_error), 400
 
@@ -45301,6 +45433,12 @@ def api_v1_music_tip():
 
 def _api_v1_music_tip_impl():
     data = request.get_json() or {}
+    auth_request = data
+    if str(data.get("signature_format") or "").strip() == "wallet_v1_full_payload_v2":
+        trusted_data, shape_error = _wallet_v1_v2_trusted_execution_data(data, "tip")
+        if shape_error:
+            return jsonify({"status": "error", **shape_error}), 400
+        data = trusted_data
     inner = data.get("payload") if isinstance(data.get("payload"), dict) else {}
     track_id = (data.get("track_id") or inner.get("track_id") or "").strip()
     from_address = (data.get("from_address") or data.get("canonical_v1_address") or "").strip()
@@ -45313,8 +45451,8 @@ def _api_v1_music_tip_impl():
     auth_secret = (data.get("auth_secret") or "").strip()
     passphrase = (data.get("passphrase") or "").strip()
 
-    gps_lat = data.get("gps_lat")
-    gps_lng = data.get("gps_lng")
+    gps_lat = data.get("gps_lat") or inner.get("gps_lat")
+    gps_lng = data.get("gps_lng") or inner.get("gps_lng")
     duration_seconds = data.get("duration_seconds") or inner.get("duration_seconds")
 
     if not track_id or not from_address or amount_dec <= Decimal("0"):
@@ -45328,8 +45466,8 @@ def _api_v1_music_tip_impl():
     artist_address = track["artist_address"]
 
     # Support walletV1BuildSignedRequest format (canonical_v1_address + signature at top level)
-    if data.get("canonical_v1_address") and data.get("signature") and not data.get("signed_tx"):
-        tip_auth_ok, tip_auth_err, tip_addr = _verify_walletv1_new_format(data, "tip", require_full_payload=True)
+    if auth_request.get("canonical_v1_address") and auth_request.get("signature") and not auth_request.get("signed_tx"):
+        tip_auth_ok, tip_auth_err, tip_addr = _verify_walletv1_new_format(auth_request, "tip", require_full_payload=True)
         if not tip_auth_ok:
             return jsonify({"status": "error", "message": tip_auth_err.get("message", "Signature verification failed")}), 403
         # Override from_address with verified canonical address

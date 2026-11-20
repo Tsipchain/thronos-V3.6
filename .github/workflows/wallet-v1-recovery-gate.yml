@@ -47,6 +47,7 @@ jobs:
             tests/test_wallet_v1_centralized_signing.py \
             tests/test_wallet_v1_credential_security.py \
             tests/test_wallet_v1_full_payload_contract.py \
+            tests/test_wallet_v1_v2_route_authorization.py \
             tests/test_wallet_v1_legacy_compatibility_vectors.py \
             tests/test_wallet_v1_migration.py \
             tests/test_wallet_v1_pledge_compatibility_routes.py \

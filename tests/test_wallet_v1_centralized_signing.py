@@ -114,17 +114,18 @@ def test_signature_format_consistency():
     base_html = Path(__file__).parent.parent / "templates" / "base.html"
     content = base_html.read_text()
 
-    # Frontend should use "secp256k1_compact"
-    assert 'signature_format: "secp256k1_compact"' in content, \
-        "Frontend must use secp256k1_compact format"
+    # New financial requests use the explicitly versioned full-payload contract.
+    assert 'signature_format: contract.SIGNATURE_FORMAT' in content, \
+        "Frontend must use the full-payload V2 signature format"
 
     # Check consistency
     server_py = Path(__file__).parent.parent / "server.py"
     server_content = server_py.read_text()
 
-    # Backend should accept secp256k1_compact
-    assert "secp256k1_compact" in server_content, \
-        "Backend must support secp256k1_compact format"
+    # Backend retains explicit legacy parsing while financial routes require V2.
+    verifier = (Path(__file__).parent.parent / "wallet_v1_signed_request_verifier.py").read_text()
+    assert "secp256k1_compact" in verifier
+    assert "wallet_v1_full_payload_v2" in verifier
 
 
 def test_bound_signer_validation():

@@ -36,7 +36,7 @@ def test_thr_token_uses_coin_image_without_altering_other_asset_icons():
 
 def test_service_worker_version_and_offline_branding_asset():
     sw = (PWA / "sw.js").read_text()
-    assert "thr-wallet-pwa-v24" in sw
+    assert "thr-wallet-pwa-v28" in sw
     assert f"'{COIN}'" in sw
     assert "if (url.pathname.startsWith('/pwa-api/') || url.pathname.startsWith('/api/')) return;" in sw
     manifest = (PWA / "manifest.json").read_text()

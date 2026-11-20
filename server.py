@@ -30246,7 +30246,7 @@ def verify_swap_wallet_v1_or_legacy(payload, expected_action=SWAP_EXPECTED_ACTIO
     """Verify swap auth before any swap state mutation."""
     # New walletV1BuildSignedRequest format: canonical_v1_address + signature at top level, no signed_tx
     if payload.get("canonical_v1_address") and payload.get("signature") and not payload.get("signed_tx"):
-        return _verify_walletv1_new_format(payload, expected_action)
+        return _verify_walletv1_new_format(payload, expected_action, require_full_payload=True)
 
     # Extract addresses from payload - normalize them
     trader_raw = (payload.get("trader_thr") or payload.get("from") or "").strip()
@@ -30626,14 +30626,15 @@ def _save_legacies(data: dict):
 def api_legacy_create():
     """Create or update a digital legacy (last-will) for a THR wallet."""
     data = request.get_json() or {}
+    inner = data.get("payload") if isinstance(data.get("payload"), dict) else {}
     if data.get("canonical_v1_address") and data.get("signature") and not data.get("signed_tx"):
-        ok, err, owner = _verify_walletv1_new_format(data, "create_legacy")
+        ok, err, owner = _verify_walletv1_new_format(data, "create_legacy", require_full_payload=True)
         if not ok:
             return jsonify(status="error", message=err.get("message", "Auth failed")), 403
     else:
         return jsonify(status="error", message="V1 wallet signature required"), 403
 
-    heirs = data.get("heirs", [])
+    heirs = inner.get("heirs", []) if data.get("canonical_v1_address") else data.get("heirs", [])
     total_pct = sum(float(h.get("percentage", 0)) for h in heirs)
     if heirs and abs(total_pct - 100.0) > 0.01:
         return jsonify(status="error", message=f"Heir percentages must sum to 100 (got {total_pct})"), 400
@@ -30643,8 +30644,8 @@ def api_legacy_create():
     entry = legacies.get(owner, {})
     entry.update({
         "owner": owner,
-        "title": (data.get("title") or "").strip() or "My Digital Legacy",
-        "description": (data.get("description") or "").strip(),
+        "title": (inner.get("title") or data.get("title") or "").strip() or "My Digital Legacy",
+        "description": (inner.get("description") or data.get("description") or "").strip(),
         "heirs": [
             {
                 "address": h.get("address", "").strip(),
@@ -30654,7 +30655,7 @@ def api_legacy_create():
             }
             for h in heirs if h.get("address")
         ],
-        "inactivity_days": int(data.get("inactivity_days") or 365),
+        "inactivity_days": int(inner.get("inactivity_days") or data.get("inactivity_days") or 365),
         "status": entry.get("status", "active"),
         "created_at": entry.get("created_at", now),
         "updated_at": now,
@@ -30686,7 +30687,7 @@ def api_legacy_ping():
     """Owner pings to prove they're still alive (resets inactivity timer)."""
     data = request.get_json() or {}
     if data.get("canonical_v1_address") and data.get("signature") and not data.get("signed_tx"):
-        ok, err, owner = _verify_walletv1_new_format(data, "legacy_ping")
+        ok, err, owner = _verify_walletv1_new_format(data, "legacy_ping", require_full_payload=True)
         if not ok:
             return jsonify(status="error", message=err.get("message", "Auth failed")), 403
     else:
@@ -30703,14 +30704,15 @@ def api_legacy_ping():
 def api_legacy_claim():
     """Heir claims their portion of an owner's legacy after inactivity period."""
     data = request.get_json() or {}
+    inner = data.get("payload") if isinstance(data.get("payload"), dict) else {}
     if data.get("canonical_v1_address") and data.get("signature") and not data.get("signed_tx"):
-        ok, err, heir_addr = _verify_walletv1_new_format(data, "claim_legacy")
+        ok, err, heir_addr = _verify_walletv1_new_format(data, "claim_legacy", require_full_payload=True)
         if not ok:
             return jsonify(status="error", message=err.get("message", "Auth failed")), 403
     else:
         return jsonify(status="error", message="V1 signature required"), 403
 
-    owner_address = (data.get("owner_address") or "").strip()
+    owner_address = (inner.get("owner_address") or data.get("owner_address") or "").strip()
     if not owner_address:
         return jsonify(status="error", message="owner_address required"), 400
 
@@ -33767,7 +33769,18 @@ def _verify_ai_sig(pubkey_hex: str, signing_bytes: bytes, sig_hex: str) -> bool:
 _load_ai_registry()
 
 
-def _verify_walletv1_new_format(data, expected_action):
+_WALLET_V1_ACTION_PAYLOAD_FIELDS = {
+    "swap": {"token_in", "token_out", "amount_in", "min_amount_out", "quote_id", "pool_id"},
+    "create_pool": {"token_a", "token_b", "amount_a", "amount_b", "fee_bps"},
+    "add_liquidity": {"pool_id", "amount_a", "amount_b", "referrer", "quote_id", "max_slippage_bps"},
+    "remove_liquidity": {"pool_id", "shares", "min_amount_a", "min_amount_b", "quote_id"},
+    "tip": {"track_id", "amount", "token_symbol", "duration_seconds"},
+    "create_legacy": {"title", "description", "heirs", "inactivity_days"},
+    "claim_legacy": {"owner_address"},
+}
+
+
+def _verify_walletv1_new_format(data, expected_action, *, require_full_payload=False):
     """
     Verify the new walletV1BuildSignedRequest format where signature/public_key are
     at the top level (not inside signed_tx). Returns (ok, error_dict, wallet_address).
@@ -33776,6 +33789,35 @@ def _verify_walletv1_new_format(data, expected_action):
       {"action":"...","canonical_v1_address":"...","nonce":"...","payload":{},"timestamp":"..."}
     Signature = secp256k1_compact_sign(sha256(signing_json_utf8), private_key)
     """
+    if require_full_payload:
+        signature_format = str(data.get("signature_format") or "secp256k1_compact").strip()
+        if signature_format in {"secp256k1_compact", "compact_secp256k1_hex"}:
+            return False, {
+                "ok": False,
+                "error": "wallet_v1_full_payload_upgrade_required",
+                "message": "This financial action requires Wallet V1 full-payload signing",
+            }, None
+        if signature_format != "wallet_v1_full_payload_v2":
+            return False, {
+                "ok": False,
+                "error": "wallet_v1_signature_version_not_authorized",
+                "message": "This financial action requires Wallet V1 protocol version 2",
+            }, None
+        # Reject unsigned/ambiguous duplicate execution fields before signature
+        # verification so an invalid shadowed request cannot consume a nonce.
+        forbidden = sorted(
+            field
+            for field in _WALLET_V1_ACTION_PAYLOAD_FIELDS.get(expected_action, set())
+            if field in data
+        )
+        if forbidden:
+            return False, {
+                "ok": False,
+                "error": "financial_fields_must_be_nested",
+                "message": "Operation fields must be supplied only in the signed payload",
+                "fields": forbidden,
+            }, None
+
     ok, details = verify_wallet_v1_signed_request(data, expected_action)
     if not ok:
         error = details.get("error", "invalid_signature")
@@ -33783,6 +33825,18 @@ def _verify_walletv1_new_format(data, expected_action):
             "ok": False,
             "error": error,
             "message": "Wallet V1 signed request verification failed",
+        }, None
+    if require_full_payload and not details.get("payload_cryptographically_bound"):
+        return False, {
+            "ok": False,
+            "error": "wallet_v1_full_payload_upgrade_required",
+            "message": "This financial action requires Wallet V1 full-payload signing",
+        }, None
+    if require_full_payload and details.get("signature_contract") != "wallet_v1_full_payload_v2":
+        return False, {
+            "ok": False,
+            "error": "wallet_v1_signature_version_not_authorized",
+            "message": "This financial action requires Wallet V1 protocol version 2",
         }, None
     return True, {}, details["canonical_v1_address"]
 
@@ -41063,7 +41117,7 @@ def verify_pool_wallet_v1_or_legacy(payload, expected_action, wallet_field='prov
     """
     # New walletV1BuildSignedRequest format: canonical_v1_address + signature at top level, no signed_tx
     if payload.get("canonical_v1_address") and payload.get("signature") and not payload.get("signed_tx"):
-        return _verify_walletv1_new_format(payload, expected_action)
+        return _verify_walletv1_new_format(payload, expected_action, require_full_payload=True)
 
     wallet_addr = (payload.get(wallet_field) or "").strip()
     credential_lookup = (payload.get("credential_lookup_address") or wallet_addr).strip()
@@ -41229,14 +41283,15 @@ def api_v1_create_pool():
     deposits).  No trading fee logic is applied yet.
     """
     data = request.get_json() or {}
-    token_a = (data.get("token_a") or "").upper().strip()
-    token_b = (data.get("token_b") or "").upper().strip()
-    amt_a_raw = data.get("amount_a", 0)
-    amt_b_raw = data.get("amount_b", 0)
-    provider = (data.get("provider_thr") or "").strip()
+    inner = data.get("payload") if isinstance(data.get("payload"), dict) else {}
+    token_a = (data.get("token_a") or inner.get("token_a") or "").upper().strip()
+    token_b = (data.get("token_b") or inner.get("token_b") or "").upper().strip()
+    amt_a_raw = data.get("amount_a") or inner.get("amount_a") or 0
+    amt_b_raw = data.get("amount_b") or inner.get("amount_b") or 0
+    provider = (data.get("provider_thr") or data.get("canonical_v1_address") or inner.get("provider_thr") or "").strip()
     auth_secret = (data.get("auth_secret") or "").strip()
     passphrase = (data.get("passphrase") or "").strip()
-    fee_bps = data.get("fee_bps", 30)
+    fee_bps = data.get("fee_bps") or inner.get("fee_bps") or 30
 
     # Basic validation
     try:
@@ -41703,9 +41758,10 @@ def api_v1_remove_liquidity():
     }
     """
     data = request.get_json() or {}
-    pool_id = (data.get("pool_id") or "").strip()
-    shares_raw = data.get("shares", 0)
-    provider = (data.get("provider_thr") or "").strip()
+    inner = data.get("payload") if isinstance(data.get("payload"), dict) else {}
+    pool_id = (data.get("pool_id") or inner.get("pool_id") or "").strip()
+    shares_raw = data.get("shares") or inner.get("shares") or 0
+    provider = (data.get("provider_thr") or data.get("canonical_v1_address") or inner.get("provider_thr") or "").strip()
     auth_secret = (data.get("auth_secret") or "").strip()
     passphrase = (data.get("passphrase") or "").strip()
 
@@ -45245,11 +45301,12 @@ def api_v1_music_tip():
 
 def _api_v1_music_tip_impl():
     data = request.get_json() or {}
-    track_id = (data.get("track_id") or "").strip()
-    from_address = (data.get("from_address") or "").strip()
-    token_symbol = (data.get("token_symbol") or "THR").strip().upper() or "THR"
+    inner = data.get("payload") if isinstance(data.get("payload"), dict) else {}
+    track_id = (data.get("track_id") or inner.get("track_id") or "").strip()
+    from_address = (data.get("from_address") or data.get("canonical_v1_address") or "").strip()
+    token_symbol = (data.get("token_symbol") or inner.get("token_symbol") or "THR").strip().upper() or "THR"
     try:
-        amount_dec = _normalize_decimal_amount(data.get("amount", 0), token_symbol)
+        amount_dec = _normalize_decimal_amount(data.get("amount") or inner.get("amount") or 0, token_symbol)
     except Exception:
         return jsonify({"status": "error", "message": "Invalid tip amount"}), 400
     amount = float(amount_dec)
@@ -45258,7 +45315,7 @@ def _api_v1_music_tip_impl():
 
     gps_lat = data.get("gps_lat")
     gps_lng = data.get("gps_lng")
-    duration_seconds = data.get("duration_seconds")
+    duration_seconds = data.get("duration_seconds") or inner.get("duration_seconds")
 
     if not track_id or not from_address or amount_dec <= Decimal("0"):
         return jsonify({"status": "error", "message": "Invalid tip parameters"}), 400
@@ -45272,7 +45329,7 @@ def _api_v1_music_tip_impl():
 
     # Support walletV1BuildSignedRequest format (canonical_v1_address + signature at top level)
     if data.get("canonical_v1_address") and data.get("signature") and not data.get("signed_tx"):
-        tip_auth_ok, tip_auth_err, tip_addr = _verify_walletv1_new_format(data, "tip")
+        tip_auth_ok, tip_auth_err, tip_addr = _verify_walletv1_new_format(data, "tip", require_full_payload=True)
         if not tip_auth_ok:
             return jsonify({"status": "error", "message": tip_auth_err.get("message", "Signature verification failed")}), 403
         # Override from_address with verified canonical address

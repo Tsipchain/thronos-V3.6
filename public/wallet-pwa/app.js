@@ -4689,12 +4689,30 @@ async function showSwap(preselectedIn = null) {
         });
       } else if (_pwaSigningCtx?.privHex) {
         const { secp256k1, sha256 } = await _loadNobleLibs();
+        const contract = window.WalletV1FullPayloadContract;
+        if (!contract) throw new Error('wallet_v1_full_payload_contract_unavailable');
         const privBytes = hexToBytes(_pwaSigningCtx.privHex.replace(/^0x/, ''));
         const pubBytes = secp256k1.getPublicKey(privBytes, true);
-        const nonce = bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
-        const ts = new Date().toISOString();
-        const sigPayload = { action: 'swap', canonical_v1_address: address, nonce, payload: {}, timestamp: ts };
-        const sigJson = JSON.stringify(sigPayload, Object.keys(sigPayload).sort());
+        const publicKey = bytesToHex(pubBytes);
+        const signerResponse = await fetch(`${API_WRITE}/api/v1/address/derive`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ public_key: publicKey, compressed_public_key: publicKey }),
+        });
+        const signerResult = await signerResponse.json().catch(() => ({}));
+        const signerAddress = signerResult.address || signerResult.thr_address;
+        if (!signerResponse.ok || !signerAddress) throw new Error('wallet_signer_address_unavailable');
+        const issuedAt = String(Math.floor(Date.now() / 1000));
+        const nonce = crypto.randomUUID ? crypto.randomUUID() : bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
+        const sigPayload = contract.buildEnvelope({
+          action: 'swap',
+          canonical_v1_address: address,
+          signer_address: signerAddress,
+          payload,
+          issued_at: issuedAt,
+          expires_at: String(Number(issuedAt) + 120),
+          nonce,
+        });
+        const sigJson = contract.canonicalJson(sigPayload);
         const hash = sha256(new TextEncoder().encode(sigJson));
         let sig;
         if (typeof secp256k1.sign === 'function') {
@@ -4703,12 +4721,17 @@ async function showSwap(preselectedIn = null) {
           sig = await secp256k1.signAsync(hash, privBytes, { lowS: true });
         }
         const sigHex = sig.toCompactHex();
+        const signingPayloadHash = bytesToHex(sha256(new TextEncoder().encode(sigJson)));
         r = await fetch(`${API_WRITE}/api/swap/execute`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            ...payload, trader_thr: address, canonical_v1_address: address,
-            action: 'swap', nonce, timestamp: ts,
-            signature: sigHex, public_key: bytesToHex(pubBytes),
+            ...sigPayload,
+            from: address,
+            signature: sigHex,
+            public_key: publicKey,
+            bound_key_address: signerAddress !== address ? signerAddress : null,
+            signature_format: contract.SIGNATURE_FORMAT,
+            signing_payload_hash: signingPayloadHash,
           }),
         });
       } else {

@@ -1716,9 +1716,10 @@ async function addLiquidity(poolId) {
                     body: JSON.stringify(signedRequest)
                 });
             } catch (e) {
-                // If new format fails, try legacy format below
-                console.warn('[AddLiquidity] Centralized format failed, trying legacy format:', e.message);
-                response = null;
+                // A V1 failure must never downgrade to weaker legacy auth.
+                console.error('[AddLiquidity] Wallet V1 full-payload signing failed:', e.message);
+                alert(`❌ Wallet V1 signing failed: ${e.message}`);
+                return;
             }
         } else if (canonicalAddr && localStorage.getItem('wallet_v1_encrypted_priv')) {
             // Wallet V1 is available but locked

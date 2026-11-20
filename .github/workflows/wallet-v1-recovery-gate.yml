@@ -5,6 +5,11 @@ on:
     paths:
       - "templates/base.html"
       - "static/wallet_session.js"
+      - "static/wallet_v1_full_payload_contract.js"
+      - "public/static/wallet_v1_full_payload_contract.js"
+      - "public/wallet-pwa/index.html"
+      - "public/wallet-pwa/app.js"
+      - "public/wallet-pwa/sw.js"
       - "server.py"
       - "wallet_v1_signed_request_verifier.py"
       - "tests/test_wallet_v1_*.py"
@@ -41,6 +46,7 @@ jobs:
             tests/test_wallet_v1_bound_signer_acceptance.py \
             tests/test_wallet_v1_centralized_signing.py \
             tests/test_wallet_v1_credential_security.py \
+            tests/test_wallet_v1_full_payload_contract.py \
             tests/test_wallet_v1_legacy_compatibility_vectors.py \
             tests/test_wallet_v1_migration.py \
             tests/test_wallet_v1_pledge_compatibility_routes.py \

@@ -71,15 +71,15 @@ class TestVerifyPoolWalletV1OrLegacy:
         }
 
         # Mock the wallet_v1_prod verification
-        with patch('server.wallet_v1_production_final') as mock_v1:
+        with patch('wallet_v1_production_final.verify_signed_transaction_core') as mock_verify:
             # Test invalid signature
-            mock_v1.verify_signed_transaction_core.return_value = (False, "Invalid signature")
+            mock_verify.return_value = (False, "Invalid signature")
             ok, err, wallet = verify_pool_wallet_v1_or_legacy(payload, "create_pool")
 
             # Should reject and call the verifier
             assert ok is False
             assert err["error"] == "invalid_signature"
-            mock_v1.verify_signed_transaction_core.assert_called_once()
+            mock_verify.assert_called_once()
 
     def test_v1_signature_verification_valid(self):
         """Verify that valid signature is accepted."""
@@ -95,14 +95,14 @@ class TestVerifyPoolWalletV1OrLegacy:
         }
 
         # Mock successful verification
-        with patch('server.wallet_v1_production_final') as mock_v1:
-            mock_v1.verify_signed_transaction_core.return_value = (True, None)
+        with patch('wallet_v1_production_final.verify_signed_transaction_core') as mock_verify:
+            mock_verify.return_value = (True, None)
             ok, err, wallet = verify_pool_wallet_v1_or_legacy(payload, "create_pool")
 
             # Should accept
             assert ok is True
             assert wallet == "THR1234567890"
-            mock_v1.verify_signed_transaction_core.assert_called_once()
+            mock_verify.assert_called_once()
 
     def test_missing_from_field_in_signed_tx_rejected(self):
         """Verify signed_tx without 'from' field is rejected."""
@@ -116,8 +116,8 @@ class TestVerifyPoolWalletV1OrLegacy:
             }
         }
 
-        with patch('server.wallet_v1_production_final') as mock_v1:
-            mock_v1.verify_signed_transaction_core.return_value = (True, None)
+        with patch('wallet_v1_production_final.verify_signed_transaction_core') as mock_verify:
+            mock_verify.return_value = (True, None)
             ok, err, wallet = verify_pool_wallet_v1_or_legacy(payload, "create_pool")
 
             # Should fail before/after signature check
@@ -137,8 +137,8 @@ class TestVerifyPoolWalletV1OrLegacy:
             }
         }
 
-        with patch('server.wallet_v1_production_final') as mock_v1:
-            mock_v1.verify_signed_transaction_core.return_value = (True, None)
+        with patch('wallet_v1_production_final.verify_signed_transaction_core') as mock_verify:
+            mock_verify.return_value = (True, None)
             ok, err, wallet = verify_pool_wallet_v1_or_legacy(payload, "create_pool")
 
             # Should reject wallet mismatch
@@ -164,8 +164,8 @@ class TestVerifyPoolWalletV1OrLegacy:
                 }
             }
 
-            with patch('server.wallet_v1_production_final') as mock_v1:
-                mock_v1.verify_signed_transaction_core.return_value = (True, None)
+            with patch('wallet_v1_production_final.verify_signed_transaction_core') as mock_verify:
+                mock_verify.return_value = (True, None)
                 ok, err, wallet = verify_pool_wallet_v1_or_legacy(payload, expected)
 
                 # Should normalize and accept
@@ -184,8 +184,8 @@ class TestVerifyPoolWalletV1OrLegacy:
             }
         }
 
-        with patch('server.wallet_v1_production_final') as mock_v1:
-            mock_v1.verify_signed_transaction_core.return_value = (True, None)
+        with patch('wallet_v1_production_final.verify_signed_transaction_core') as mock_verify:
+            mock_verify.return_value = (True, None)
             ok, err, wallet = verify_pool_wallet_v1_or_legacy(payload, "add_liquidity")
 
             # Should recognize and use 'option' field
@@ -234,8 +234,8 @@ class TestVerifyPoolWalletV1OrLegacy:
             }
         }
 
-        with patch('server.wallet_v1_production_final') as mock_v1:
-            mock_v1.verify_signed_transaction_core.side_effect = RuntimeError("secp256k1 library error")
+        with patch('wallet_v1_production_final.verify_signed_transaction_core') as mock_verify:
+            mock_verify.side_effect = RuntimeError("secp256k1 library error")
             ok, err, wallet = verify_pool_wallet_v1_or_legacy(payload, "create_pool")
 
             # Should gracefully reject with error detail
@@ -270,13 +270,13 @@ class TestVerifyPoolWalletV1OrLegacy:
             "signature": "0x789012"
         }
 
-        with patch('server.wallet_v1_production_final') as mock_v1:
-            mock_v1.verify_signed_transaction_core.return_value = (True, None)
+        with patch('wallet_v1_production_final.verify_signed_transaction_core') as mock_verify:
+            mock_verify.return_value = (True, None)
             ok, err, wallet = verify_pool_wallet_v1_or_legacy(payload, "create_pool")
 
             # Verify the verifier was called with merged signed_tx
             assert ok is True
-            called_with = mock_v1.verify_signed_transaction_core.call_args[0][0]
+            called_with = mock_verify.call_args[0][0]
             assert called_with.get("publicKey") == "0x123456"
             assert called_with.get("signature") == "0x789012"
 

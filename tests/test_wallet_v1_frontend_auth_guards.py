@@ -48,7 +48,7 @@ def test_wallet_auth_uses_active_address_and_credential_lookup():
 def test_wallet_auth_returns_signing_wrapper_fields():
     assert "getPublicKey: () =>" in AUTH_JS
     assert "window.walletSession.getPublicKey()" in AUTH_JS
-    assert "signTransaction: (txCore) =>" in AUTH_JS
+    assert "signTransaction: async (txCore) =>" in AUTH_JS
     assert "window.walletSession.signTransaction(txCore)" in AUTH_JS
 
 
@@ -57,7 +57,7 @@ def test_wallet_session_has_no_duplicate_legacy_shadow_functions():
     assert SESSION_JS.count("function setAddress(") == 1
     assert SESSION_JS.count("function getSendSeed(") == 1
     assert SESSION_JS.count("function setSendSeed(") == 1
-    assert "return localStorage.getItem(V1_ADDRESS_KEY) || localStorage.getItem(ADDRESS_KEY) || ''" in SESSION_JS
+    assert "return getActiveAddress() || localStorage.getItem(V1_ADDRESS_KEY) || localStorage.getItem(ADDRESS_KEY) || ''" in SESSION_JS
 
 
 def test_missing_signing_material_fails_closed_with_clear_error():
@@ -142,4 +142,5 @@ def test_wallet_auth_shows_clear_error_when_enrollment_fails():
 def test_wallet_auth_no_session_storage_for_auth_secret():
     """Verify wallet auth does not persist plaintext secret in sessionStorage."""
     assert "sessionStorage.setItem('thr_auth_secret')" not in AUTH_JS
-    assert "sessionStorage.removeItem('thr_auth_secret')" in AUTH_JS
+    assert "const _SESSION_SECRET_KEY = 'thr_auth_secret'" in AUTH_JS
+    assert "sessionStorage.removeItem(_SESSION_SECRET_KEY)" in AUTH_JS

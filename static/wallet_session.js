@@ -401,6 +401,12 @@
     if (bytes[0] === 0x30) return bytesToHex(bytes);
     return bytesToHex(derEncodeCompactSignature(bytes));
   }
+  function normalizeSignatureToCompactHex(sig){
+    if (sig && typeof sig.toCompactHex === 'function') return sig.toCompactHex();
+    if (sig && typeof sig.toCompactRawBytes === 'function') return bytesToHex(sig.toCompactRawBytes());
+    const bytes = bytesFromSignature(sig);
+    return bytes.length === 64 ? bytesToHex(bytes) : '';
+  }
   function getSecpContainer(secp, key){
     const container = secp && secp[key];
     return container && typeof container === 'object' ? container : null;
@@ -489,6 +495,26 @@
       } catch (_) {
         throw new Error('wallet_crypto_not_ready');
       }
+    }
+  }
+  async function signServiceRequestMessage(message, sender){
+    if (isLocked() || !isBound()) throw new Error('wallet_locked');
+    assertRuntimeSignerForSender(sender);
+    const secp = await _ensureSecpLoaded();
+    if (!secp || (!secp.sign && !secp.signAsync)) throw new Error('secp256k1_library_missing');
+    if (!unlockedPrivateKeyHex) throw new Error('wallet_locked');
+    const digestHex = await sha256Hex(String(message || ''));
+    try {
+      await ensureSecpAsyncCrypto(secp).catch(() => {});
+      const signed = typeof secp.signAsync === 'function'
+        ? await secp.signAsync(digestHex, unlockedPrivateKeyHex)
+        : await secp.sign(digestHex, unlockedPrivateKeyHex, { der: false, lowS: true });
+      const compact = normalizeSignatureToCompactHex(signed);
+      if (!/^[0-9a-f]{128}$/i.test(compact)) throw new Error('wallet_signature_format_invalid');
+      return compact.toLowerCase();
+    } catch (err) {
+      if (isSecpCryptoHelperError(err)) throw new Error('wallet_crypto_not_ready');
+      throw err;
     }
   }
   async function sha256Hex(s){ const subtle = getSubtleCrypto(); if (!subtle) throw new Error('wallet_crypto_not_ready'); const d = await subtle.digest('SHA-256', new TextEncoder().encode(s)); return bytesToHex(new Uint8Array(d)); }
@@ -1482,7 +1508,7 @@
     getAddress, getActiveAddress, setAddress,
     getMigrationInfo, isMigrated, isVerifiedMigrationInfo, getCanonicalMigrationAddress, getLegacySourceAddress,
     getWalletOrigin, getWalletIdentityStatus, isWalletV1,
-    createWalletV1, getPublicKey, canonicalTxMessage, signTransaction, signInternalTransferIntent,
+    createWalletV1, getPublicKey, canonicalTxMessage, signTransaction, signInternalTransferIntent, signServiceRequestMessage,
     buildWalletActionIntent, signWalletActionIntent, signLoginChallenge,
     migrateLegacyWallet, restoreMigratedWallet, encryptPrivateKeyHex, decryptPrivateKeyHex,
     getCredentialLookupAddress, getSendSeed, setSendSeed, getSendSecret, setSendSecret,

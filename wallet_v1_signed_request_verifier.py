@@ -23,8 +23,72 @@ from wallet_v1_address_derivation import derive_thronos_address, validate_throno
 
 LEGACY_WEB_CONTRACT = "wallet_v1_web_compact_v1"
 ADAPTER_CONTRACT = "wallet_v1_adapter_compact_v1"
+FULL_PAYLOAD_CONTRACT = "wallet_v1_full_payload_v2"
+FULL_PAYLOAD_SIGNATURE_FORMAT = "wallet_v1_full_payload_v2"
+FULL_PAYLOAD_DOMAIN = "thronos.wallet.service_request"
+FULL_PAYLOAD_PROTOCOL_VERSION = "2"
+FULL_PAYLOAD_CHAIN_ID = "thronos-mainnet"
 MAX_CLOCK_SKEW_SECONDS = 300
+MAX_REQUEST_TTL_SECONDS = 300
 _HEX_RE = re.compile(r"^[0-9a-fA-F]+$")
+
+
+def _canonical_json_value(value: Any, *, path: str = "payload", depth: int = 0) -> Any:
+    """Validate the portable V2 JSON subset and return a key-sorted value.
+
+    Financial quantities are strings.  JSON numbers inside the action payload
+    are deliberately rejected because JavaScript and Python do not serialize
+    every IEEE-754 value identically.  The browser builder normalizes finite
+    numbers to strings before signing and sends that normalized payload.
+    """
+
+    if depth > 32:
+        raise ValueError("payload_too_deep")
+    if value is None or isinstance(value, (str, bool)):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        raise ValueError("payload_numbers_must_be_strings")
+    if isinstance(value, list):
+        return [
+            _canonical_json_value(item, path=f"{path}[{index}]", depth=depth + 1)
+            for index, item in enumerate(value)
+        ]
+    if isinstance(value, Mapping):
+        normalized = {}
+        if any(not isinstance(key, str) for key in value):
+            raise ValueError("payload_keys_must_be_strings")
+        for key in sorted(value):
+            normalized[key] = _canonical_json_value(
+                value[key], path=f"{path}.{key}", depth=depth + 1
+            )
+        return normalized
+    raise ValueError("unsupported_payload_value")
+
+
+def canonical_full_payload_envelope(request_json: Mapping[str, Any]) -> dict[str, Any]:
+    payload = request_json.get("payload")
+    if not isinstance(payload, Mapping):
+        raise ValueError("payload_must_be_object")
+    envelope = {
+        "action": str(request_json.get("action") or "").strip().lower(),
+        "canonical_v1_address": str(
+            request_json.get("canonical_v1_address") or ""
+        ).strip(),
+        "chain_id": str(request_json.get("chain_id") or "").strip(),
+        "domain": str(request_json.get("domain") or "").strip(),
+        "expires_at": str(request_json.get("expires_at") or "").strip(),
+        "issued_at": str(request_json.get("issued_at") or "").strip(),
+        "nonce": str(request_json.get("nonce") or "").strip(),
+        "payload": _canonical_json_value(payload),
+        "protocol_version": str(request_json.get("protocol_version") or "").strip(),
+        "signer_address": str(request_json.get("signer_address") or "").strip(),
+    }
+    encoded = json.dumps(
+        envelope, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+    ).encode("utf-8")
+    if len(encoded) > 64 * 1024:
+        raise ValueError("signed_payload_too_large")
+    return envelope
 
 
 def normalize_secp256k1_public_key_hex(public_key: Any) -> Optional[str]:
@@ -135,6 +199,13 @@ def canonical_signed_request_bytes(request_json: Mapping[str, Any]) -> Tuple[byt
         encoded = json.dumps(signing_payload, ensure_ascii=False, separators=(",", ":"))
         return encoded.encode("utf-8"), ADAPTER_CONTRACT
 
+    if signature_format == FULL_PAYLOAD_SIGNATURE_FORMAT:
+        envelope = canonical_full_payload_envelope(request_json)
+        encoded = json.dumps(
+            envelope, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+        )
+        return encoded.encode("utf-8"), FULL_PAYLOAD_CONTRACT
+
     raise ValueError("unsupported_signature_format")
 
 
@@ -215,11 +286,34 @@ def verify_signed_request(
     if not nonce or len(nonce) > 128:
         return False, {"error": "invalid_nonce", "diagnostics": diagnostics}
 
-    timestamp = _parse_timestamp(request_json.get("timestamp"))
+    signature_format = str(
+        request_json.get("signature_format") or "secp256k1_compact"
+    ).strip()
+    if signature_format == FULL_PAYLOAD_SIGNATURE_FORMAT:
+        if request_json.get("domain") != FULL_PAYLOAD_DOMAIN:
+            return False, {"error": "domain_mismatch", "diagnostics": diagnostics}
+        if str(request_json.get("protocol_version") or "") != FULL_PAYLOAD_PROTOCOL_VERSION:
+            return False, {"error": "protocol_version_mismatch", "diagnostics": diagnostics}
+        if request_json.get("chain_id") != FULL_PAYLOAD_CHAIN_ID:
+            return False, {"error": "chain_id_mismatch", "diagnostics": diagnostics}
+        timestamp = _parse_timestamp(request_json.get("issued_at"))
+        expires_at = _parse_timestamp(request_json.get("expires_at"))
+        if timestamp is None or expires_at is None:
+            return False, {"error": "invalid_expiry", "diagnostics": diagnostics}
+        if expires_at <= timestamp or expires_at - timestamp > MAX_REQUEST_TTL_SECONDS:
+            return False, {"error": "invalid_expiry", "diagnostics": diagnostics}
+    else:
+        timestamp = _parse_timestamp(request_json.get("timestamp"))
+        expires_at = None
     if timestamp is None:
         return False, {"error": "invalid_timestamp", "diagnostics": diagnostics}
     current_time = datetime.now(timezone.utc).timestamp() if now is None else float(now)
-    if abs(current_time - timestamp) > max_clock_skew_seconds:
+    if timestamp - current_time > max_clock_skew_seconds:
+        return False, {"error": "timestamp_out_of_range", "diagnostics": diagnostics}
+    if signature_format == FULL_PAYLOAD_SIGNATURE_FORMAT:
+        if current_time > float(expires_at):
+            return False, {"error": "request_expired", "diagnostics": diagnostics}
+    elif current_time - timestamp > max_clock_skew_seconds:
         return False, {"error": "timestamp_out_of_range", "diagnostics": diagnostics}
 
     try:
@@ -235,6 +329,10 @@ def verify_signed_request(
         return False, {"error": "invalid_signature", "diagnostics": diagnostics}
 
     signer_address = derive_thr_address_from_public_key_hex(public_key)
+    if signature_contract == FULL_PAYLOAD_CONTRACT:
+        claimed_signer = str(request_json.get("signer_address") or "").strip().upper()
+        if claimed_signer != signer_address:
+            return False, {"error": "signer_address_mismatch", "diagnostics": diagnostics}
     is_bound_signer = signer_address != canonical_v1_address
     active_binding: Optional[Mapping[str, Any]] = None
     if is_bound_signer:
@@ -270,6 +368,9 @@ def verify_signed_request(
         "is_bound_signer": is_bound_signer,
         "action": action,
         "signature_contract": signature_contract,
-        "payload_cryptographically_bound": signature_contract == ADAPTER_CONTRACT,
+        "payload_cryptographically_bound": signature_contract in (
+            ADAPTER_CONTRACT,
+            FULL_PAYLOAD_CONTRACT,
+        ),
         "diagnostics": diagnostics,
     }

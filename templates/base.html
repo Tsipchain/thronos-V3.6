@@ -48,6 +48,7 @@
   })();
   </script>
   <script src="{{ url_for('static', filename='vendor/noble-secp256k1.min.js') }}?v={{ build_id }}"></script>
+  <script src="{{ url_for('static', filename='wallet_v1_full_payload_contract.js') }}?v={{ build_id }}"></script>
   <script src="{{ url_for('static', filename='wallet_session.js') }}?v={{ build_id }}"></script>
   <style>
     /* Overflow Prevention - Prevent global horizontal scroll */
@@ -4052,9 +4053,9 @@ async function walletV1BuildSignedRequest(action, payload) {
      *   canonical_v1_address,
      *   from: canonical_v1_address,
      *   public_key,
-     *   bound_key_address,  // null if direct wallet
+     *   signer_address,
      *   signature,          // 128 hex chars
-     *   signature_format,   // "secp256k1_compact"
+     *   signature_format,   // "wallet_v1_full_payload_v2"
      *   signing_payload_hash,
      *   action,
      *   payload,
@@ -4116,19 +4117,35 @@ async function walletV1BuildSignedRequest(action, payload) {
 
     publicKey = normalizedPublicKey;
 
-    // Step 4: Build canonical signing payload
-    const timestamp = new Date().toISOString();
-    const nonce = Math.random().toString(36).substring(2, 15);
+    // V2 uses a deliberately small cross-runtime JSON subset. Financial
+    // quantities become decimal strings; object keys are sorted recursively;
+    // array order is retained. Python rejects numeric payload values so no
+    // JavaScript/Python floating-point serialization ambiguity can authorize a
+    // financial mutation.
+    const contract = window.WalletV1FullPayloadContract;
+    if (!contract) throw new Error('Wallet V1 signing contract is unavailable');
+    const normalizedPayload = contract.normalizePayloadValue(payload || {});
+    const issuedAt = String(Math.floor(Date.now() / 1000));
+    const expiresAt = String(Number(issuedAt) + 120);
+    const nonce = (crypto.randomUUID ? crypto.randomUUID() : crypto.getRandomValues(new Uint32Array(4)).join('-'));
+    const binding = walletSession.getActiveKeyBinding
+        ? await walletSession.getActiveKeyBinding(canonicalAddr)
+        : null;
+    const signerAddress = String(
+        (binding && (binding.public_key_address || binding.bound_key_address)) || canonicalAddr
+    ).trim();
 
-    const signingPayload = {
-        action: action.toLowerCase(),
+    const signingPayload = contract.buildEnvelope({
+        action: String(action || '').trim().toLowerCase(),
         canonical_v1_address: canonicalAddr,
-        timestamp: timestamp,
+        expires_at: expiresAt,
+        issued_at: issuedAt,
         nonce: nonce,
-        payload: payload || {}
-    };
+        payload: normalizedPayload,
+        signer_address: signerAddress
+    });
 
-    const signingJson = JSON.stringify(signingPayload, Object.keys(signingPayload).sort());
+    const signingJson = contract.canonicalJson(signingPayload);
     const signingHash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(signingJson));
     const signingPayloadHash = Array.from(new Uint8Array(signingHash))
         .map(b => b.toString(16).padStart(2, '0'))
@@ -4136,9 +4153,9 @@ async function walletV1BuildSignedRequest(action, payload) {
 
     // Step 5: Sign with runtime private key via walletSession
     let signature = null;
-    if (walletSession.signMessage) {
+    if (walletSession.signServiceRequestMessage) {
         try {
-            signature = await walletSession.signMessage(signingJson);
+            signature = await walletSession.signServiceRequestMessage(signingJson, canonicalAddr);
         } catch (e) {
             throw new Error("Failed to sign request: " + (e.message || "Unknown error"));
         }
@@ -4151,30 +4168,17 @@ async function walletV1BuildSignedRequest(action, payload) {
         throw new Error("Invalid signature format");
     }
 
-    // Step 6: Get bound key address (for auditing)
-    let boundKeyAddress = null;
-    try {
-        const derived = walletSession.generateV1KeyPair ? await walletSession.generateV1KeyPair() : null;
-        if (derived && derived.address && derived.address !== canonicalAddr) {
-            boundKeyAddress = derived.address;
-        }
-    } catch (_) {
-        // Not available, that's ok
-    }
-
-    // Step 7: Return signed request
+    // Step 6: Return the exact normalized envelope that was signed.
     return {
+        ...signingPayload,
         canonical_v1_address: canonicalAddr,
         from: canonicalAddr,
         public_key: publicKey,
-        bound_key_address: boundKeyAddress,
+        bound_key_address: signerAddress !== canonicalAddr ? signerAddress : null,
         signature: signature,
-        signature_format: "secp256k1_compact",
+        signature_format: contract.SIGNATURE_FORMAT,
         signing_payload_hash: signingPayloadHash,
-        action: action,
-        payload: payload,
-        timestamp: timestamp,
-        nonce: nonce
+        payload: normalizedPayload
     };
 }
 
@@ -11426,8 +11430,7 @@ async function submitGlobalTip() {
         if (v1Addr && v1Unlocked) {
             try {
                 const tipPayload = { track_id: track.id || track.track_id, amount, token_symbol: asset };
-                const signedReq = await walletV1BuildSignedRequest('tip', tipPayload);
-                tipBody = { ...signedReq, track_id: track.id || track.track_id, from_address: v1Addr, amount, token_symbol: asset };
+                tipBody = await walletV1BuildSignedRequest('tip', tipPayload);
             } catch (signErr) {
                 throw new Error('Wallet V1 signing failed: ' + (signErr.message || signErr));
             }

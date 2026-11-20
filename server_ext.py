@@ -2071,3 +2071,12 @@ def _prune_probe_counts():
                     del _probe_counts[ip]
 
 _threading.Thread(target=_prune_probe_counts, daemon=True).start()
+
+# ---------------------------------------------------------------------------
+# Learn-2-Earn Student Dashboard (additive template, no server.py edits)
+# ---------------------------------------------------------------------------
+from flask import render_template as _render_template
+
+@app.route("/student-dashboard")
+def l2e_student_dashboard_page():
+    return _render_template("l2e_student_dashboard.html")

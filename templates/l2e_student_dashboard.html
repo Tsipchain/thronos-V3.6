@@ -1,0 +1,557 @@
+{% extends "base.html" %}
+{% block title %}📊 Student Dashboard — Thronos L2E{% endblock %}
+
+{% block styles %}
+<style>
+    .dash-container {
+        max-width: 1100px;
+        margin: 30px auto;
+        padding: 0 16px;
+        color: #d7ffe6;
+    }
+    .dash-header {
+        text-align: center;
+        margin-bottom: 30px;
+        padding: 24px;
+        background: linear-gradient(135deg, #07120b 0%, #0a1f14 100%);
+        border: 1px solid #1a5a2f;
+        border-radius: 16px;
+    }
+    .dash-header h1 {
+        color: #3CFF7A;
+        letter-spacing: 2px;
+        font-size: 2em;
+        margin: 0 0 6px 0;
+        text-shadow: 0 0 20px rgba(60, 255, 122, 0.3);
+    }
+    .dash-header p { opacity: 0.85; font-size: 1em; margin: 6px 0 0 0; }
+    .lang-toggle {
+        position: absolute;
+        top: 16px;
+        right: 16px;
+        display: flex;
+        gap: 6px;
+    }
+    .lang-btn {
+        padding: 4px 10px;
+        border-radius: 6px;
+        border: 1px solid #1a5a2f;
+        background: #050b07;
+        color: #d7ffe6;
+        cursor: pointer;
+        font-size: 12px;
+        transition: all 0.2s;
+    }
+    .lang-btn.active {
+        border-color: #3CFF7A;
+        background: rgba(60, 255, 122, 0.15);
+        color: #3CFF7A;
+    }
+    .stats-row {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        gap: 14px;
+        margin-bottom: 24px;
+    }
+    .stat-card {
+        background: #07120b;
+        border: 1px solid #1a5a2f;
+        border-radius: 12px;
+        padding: 16px;
+        text-align: center;
+    }
+    .stat-card .label { font-size: 0.85em; opacity: 0.7; margin-bottom: 6px; }
+    .stat-card .value { font-size: 1.8em; font-weight: bold; color: #3CFF7A; }
+    .stat-card .sub { font-size: 0.75em; opacity: 0.5; margin-top: 4px; }
+
+    .section { margin-bottom: 24px; }
+    .section-title {
+        font-size: 1.15em;
+        color: #3CFF7A;
+        margin-bottom: 12px;
+        padding-bottom: 8px;
+        border-bottom: 1px solid #1a5a2f;
+    }
+
+    .course-row {
+        background: #050b07;
+        border: 1px solid #123a22;
+        border-radius: 10px;
+        padding: 14px 16px;
+        margin-bottom: 10px;
+        transition: border-color 0.2s;
+    }
+    .course-row:hover { border-color: #3CFF7A; }
+    .course-row-top {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+    }
+    .course-name { font-weight: 700; font-size: 1.05em; }
+    .course-badges { display: flex; gap: 6px; flex-wrap: wrap; }
+    .badge {
+        display: inline-block;
+        padding: 3px 8px;
+        border-radius: 10px;
+        font-size: 10px;
+        font-weight: bold;
+    }
+    .badge-enrolled { background: rgba(60, 255, 122, 0.2); color: #3CFF7A; border: 1px solid #3CFF7A; }
+    .badge-completed { background: rgba(255, 215, 0, 0.2); color: #ffd700; border: 1px solid #ffd700; }
+    .badge-quiz-passed { background: rgba(92, 159, 255, 0.2); color: #5C9FFF; border: 1px solid #5C9FFF; }
+    .badge-quiz-failed { background: rgba(255, 107, 107, 0.15); color: #ff6b6b; border: 1px solid #ff6b6b; }
+    .badge-cert-issued { background: rgba(255, 215, 0, 0.25); color: #ffd700; border: 1px solid #ffd700; }
+    .badge-cert-pending { background: rgba(255, 165, 0, 0.2); color: #ffa500; border: 1px solid #ffa500; }
+    .badge-reward-eligible { background: rgba(60, 255, 122, 0.15); color: #3CFF7A; border: 1px solid #3CFF7A; }
+    .badge-reward-claimed { background: rgba(100, 200, 140, 0.2); color: #64c88c; border: 1px solid #64c88c; }
+
+    .progress-bar-wrap {
+        height: 6px;
+        background: #123a22;
+        border-radius: 3px;
+        margin-top: 10px;
+        overflow: hidden;
+    }
+    .progress-bar-fill {
+        height: 100%;
+        background: #3CFF7A;
+        border-radius: 3px;
+        transition: width 0.4s ease;
+    }
+    .course-details {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+        gap: 10px;
+        margin-top: 10px;
+        font-size: 0.85em;
+        opacity: 0.85;
+    }
+    .detail-item .detail-label { opacity: 0.6; font-size: 0.9em; }
+    .detail-item .detail-value { font-weight: 600; margin-top: 2px; }
+
+    .action-row {
+        display: flex;
+        gap: 8px;
+        margin-top: 10px;
+        flex-wrap: wrap;
+    }
+    .btn-sm {
+        padding: 6px 14px;
+        border-radius: 8px;
+        border: 1px solid #1a5a2f;
+        background: #06140b;
+        color: #d7ffe6;
+        cursor: pointer;
+        font-size: 0.85em;
+        transition: all 0.2s;
+    }
+    .btn-sm:hover { border-color: #3CFF7A; background: rgba(60, 255, 122, 0.1); }
+    .btn-sm.primary { border-color: #3CFF7A; color: #3CFF7A; }
+    .btn-sm.primary:hover { background: #3CFF7A; color: #000; }
+
+    .empty-state { text-align: center; padding: 40px; opacity: 0.5; }
+    .error-msg {
+        color: #ff6b6b;
+        background: rgba(255, 107, 107, 0.1);
+        padding: 10px;
+        border-radius: 8px;
+        border: 1px solid rgba(255, 107, 107, 0.3);
+        margin: 10px 0;
+    }
+    .wallet-bar {
+        background: #07120b;
+        border: 1px solid #1a5a2f;
+        border-radius: 12px;
+        padding: 14px 18px;
+        margin-bottom: 20px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+    }
+    .wallet-bar code {
+        background: rgba(60, 255, 122, 0.1);
+        padding: 3px 8px;
+        border-radius: 4px;
+        color: #3CFF7A;
+        font-size: 0.9em;
+    }
+    .cert-timeline {
+        margin-top: 8px;
+        padding-left: 16px;
+        border-left: 2px solid #1a5a2f;
+        font-size: 0.8em;
+    }
+    .cert-event {
+        padding: 4px 0;
+        opacity: 0.75;
+    }
+    .cert-event .ts { opacity: 0.5; margin-right: 8px; }
+    @media (max-width: 600px) {
+        .dash-container { padding: 0 8px; }
+        .dash-header h1 { font-size: 1.5em; }
+        .stats-row { grid-template-columns: 1fr 1fr; }
+        .course-row-top { flex-direction: column; align-items: flex-start; }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="dash-container" style="position:relative;">
+    <div class="lang-toggle">
+        <button class="lang-btn active" onclick="setLang('el')">🇬🇷 EL</button>
+        <button class="lang-btn" onclick="setLang('en')">🇬🇧 EN</button>
+    </div>
+
+    <div class="dash-header">
+        <h1>📊 <span class="lang-el">Πίνακας Μαθητή</span><span class="lang-en">Student Dashboard</span></h1>
+        <p>
+            <span class="lang-el">Παρακολουθήστε την πρόοδό σας, τα αποτελέσματα και τα πιστοποιητικά</span>
+            <span class="lang-en">Track your progress, results, and certificates</span>
+        </p>
+    </div>
+
+    <div class="wallet-bar" id="walletBar">
+        <span>🔐</span>
+        <span id="walletLabel">
+            <span class="lang-el">Πορτοφόλι:</span><span class="lang-en">Wallet:</span>
+        </span>
+        <code id="walletAddr">—</code>
+        <span style="margin-left:auto;">L2E: <strong id="l2eBalance" style="color:#3CFF7A;">0</strong></span>
+    </div>
+
+    <div class="stats-row" id="statsRow">
+        <div class="stat-card">
+            <div class="label"><span class="lang-el">Εγγραφές</span><span class="lang-en">Enrolled</span></div>
+            <div class="value" id="statEnrolled">0</div>
+        </div>
+        <div class="stat-card">
+            <div class="label"><span class="lang-el">Ολοκληρωμένα</span><span class="lang-en">Completed</span></div>
+            <div class="value" id="statCompleted">0</div>
+        </div>
+        <div class="stat-card">
+            <div class="label"><span class="lang-el">Quiz Passed</span><span class="lang-en">Quizzes Passed</span></div>
+            <div class="value" id="statQuizPassed">0</div>
+        </div>
+        <div class="stat-card">
+            <div class="label"><span class="lang-el">Πιστοποιητικά</span><span class="lang-en">Certificates</span></div>
+            <div class="value" id="statCerts">0</div>
+        </div>
+        <div class="stat-card">
+            <div class="label"><span class="lang-el">L2E Κερδισμένα</span><span class="lang-en">L2E Earned</span></div>
+            <div class="value" id="statL2E">0</div>
+        </div>
+    </div>
+
+    <div class="section">
+        <div class="section-title">
+            📚 <span class="lang-el">Τα Μαθήματά μου</span><span class="lang-en">My Courses</span>
+        </div>
+        <div id="coursesList">
+            <div class="empty-state">
+                <span class="lang-el">Φόρτωση...</span><span class="lang-en">Loading...</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="section" id="certsSection" style="display:none;">
+        <div class="section-title">
+            🏅 <span class="lang-el">Πιστοποιητικά</span><span class="lang-en">Certificates</span>
+        </div>
+        <div id="certsList"></div>
+    </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+
+let currentLang = localStorage.getItem('thronos_lang') || 'el';
+let connectedWallet = null;
+let connectedSecret = null;
+let connectedPassphrase = null;
+let allCourses = [];
+
+function setLang(lang) {
+    currentLang = lang;
+    localStorage.setItem('thronos_lang', lang);
+    document.querySelectorAll('.lang-el').forEach(el => el.style.display = lang === 'el' ? '' : 'none');
+    document.querySelectorAll('.lang-en').forEach(el => el.style.display = lang === 'en' ? '' : 'none');
+    document.querySelectorAll('.lang-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.textContent.includes(lang.toUpperCase()));
+    });
+}
+
+function syncWalletFromSession() {
+    try {
+        const earnAcct = JSON.parse(localStorage.getItem('earn_account') || 'null');
+        if (earnAcct && earnAcct.thr_address) {
+            connectedWallet = earnAcct.thr_address;
+            connectedSecret = earnAcct.auth_secret || null;
+            connectedPassphrase = earnAcct.passphrase || null;
+        }
+    } catch {}
+    if (!connectedWallet) {
+        try {
+            const w = localStorage.getItem('walletAddress') || localStorage.getItem('thr_address');
+            if (w) connectedWallet = w;
+        } catch {}
+    }
+    $('walletAddr').textContent = connectedWallet || '—';
+}
+
+async function apiGet(path) {
+    const res = await fetch(path);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+}
+
+async function apiPost(path, body) {
+    const res = await fetch(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+    });
+    return res.json();
+}
+
+function escapeHtml(str) {
+    const d = document.createElement('div');
+    d.textContent = str;
+    return d.innerHTML;
+}
+
+function progressPercent(enrollment, course) {
+    let steps = 0, done = 0;
+    steps++;
+    if (enrollment.enrolled) done++;
+    if (course.quiz) {
+        steps++;
+        if (enrollment.quiz_passed) done++;
+    }
+    if (course.certificate_enabled) {
+        steps++;
+        if (enrollment.certificate_issued) done++;
+    }
+    steps++;
+    if (enrollment.completed) done++;
+    return Math.round((done / steps) * 100);
+}
+
+function renderCourseRow(course, enrollment) {
+    const pct = progressPercent(enrollment, course);
+    const el = currentLang === 'el';
+
+    let badges = '';
+    badges += `<span class="badge badge-enrolled">${el ? 'Εγγεγραμμένος' : 'Enrolled'}</span>`;
+
+    if (enrollment.completed) {
+        badges += `<span class="badge badge-completed">${el ? 'Ολοκληρωμένο' : 'Completed'}</span>`;
+    }
+    if (enrollment.quiz_passed) {
+        const score = enrollment.quiz_score != null ? ` (${enrollment.quiz_score}%)` : '';
+        badges += `<span class="badge badge-quiz-passed">Quiz ✓${score}</span>`;
+    } else if (enrollment.quiz_attempted) {
+        const score = enrollment.quiz_score != null ? ` (${enrollment.quiz_score}%)` : '';
+        badges += `<span class="badge badge-quiz-failed">Quiz ✗${score}</span>`;
+    }
+    if (enrollment.certificate_issued) {
+        badges += `<span class="badge badge-cert-issued">🏅 ${el ? 'Πιστοποιητικό' : 'Certificate'}</span>`;
+    } else if (enrollment.certificate_requested) {
+        badges += `<span class="badge badge-cert-pending">${el ? 'Αναμονή Πιστ.' : 'Cert Pending'}</span>`;
+    }
+    if (enrollment.reward_eligible && !enrollment.reward_claimed) {
+        badges += `<span class="badge badge-reward-eligible">${el ? 'Αξίωση L2E' : 'Claim L2E'}</span>`;
+    }
+    if (enrollment.reward_claimed) {
+        badges += `<span class="badge badge-reward-claimed">${el ? 'L2E Αποδόθηκε' : 'L2E Claimed'}</span>`;
+    }
+
+    let details = '';
+    details += `<div class="detail-item"><div class="detail-label">${el ? 'Τιμή' : 'Price'}</div><div class="detail-value">${course.price_thr || 0} THR</div></div>`;
+    if (course.reward_l2e) {
+        details += `<div class="detail-item"><div class="detail-label">${el ? 'Ανταμοιβή' : 'Reward'}</div><div class="detail-value">${course.reward_l2e} L2E</div></div>`;
+    }
+    if (enrollment.quiz_score != null) {
+        details += `<div class="detail-item"><div class="detail-label">${el ? 'Βαθμός' : 'Score'}</div><div class="detail-value">${enrollment.quiz_score}%</div></div>`;
+    }
+    details += `<div class="detail-item"><div class="detail-label">${el ? 'Πρόοδος' : 'Progress'}</div><div class="detail-value">${pct}%</div></div>`;
+
+    let actions = '';
+    if (!enrollment.quiz_passed && course.quiz) {
+        actions += `<button class="btn-sm" onclick="window.location.href='/courses/${escapeHtml(course.id)}'">${el ? 'Λύσε το Quiz' : 'Take Quiz'}</button>`;
+    }
+    if (enrollment.reward_eligible && !enrollment.reward_claimed) {
+        actions += `<button class="btn-sm primary" onclick="claimReward('${escapeHtml(course.id)}')">${el ? 'Αξίωση L2E' : 'Claim L2E'}</button>`;
+    }
+    if (!enrollment.certificate_requested && enrollment.quiz_passed && course.certificate_enabled) {
+        actions += `<button class="btn-sm" onclick="requestCert('${escapeHtml(course.id)}')">${el ? 'Αίτηση Πιστοποιητικού' : 'Request Certificate'}</button>`;
+    }
+    if (!enrollment.completed) {
+        actions += `<button class="btn-sm" onclick="window.location.href='/courses/${escapeHtml(course.id)}'">${el ? 'Συνέχεια' : 'Continue'}</button>`;
+    }
+
+    return `
+        <div class="course-row">
+            <div class="course-row-top">
+                <div class="course-name">${escapeHtml(course.title || course.id)}</div>
+                <div class="course-badges">${badges}</div>
+            </div>
+            <div class="progress-bar-wrap"><div class="progress-bar-fill" style="width:${pct}%"></div></div>
+            <div class="course-details">${details}</div>
+            ${actions ? `<div class="action-row">${actions}</div>` : ''}
+        </div>`;
+}
+
+async function claimReward(courseId) {
+    if (!connectedWallet) {
+        alert(currentLang === 'el' ? 'Συνδέστε το πορτοφόλι σας πρώτα' : 'Connect your wallet first');
+        return;
+    }
+    try {
+        const result = await apiPost(`/api/v1/courses/${courseId}/claim_reward`, {
+            learner_id: connectedWallet,
+            thr_addr: connectedWallet,
+            auth_secret: connectedSecret,
+            passphrase: connectedPassphrase
+        });
+        if (result.status === 'success') {
+            alert(currentLang === 'el' ? 'L2E αξίωση επιτυχής!' : 'L2E claimed successfully!');
+            loadDashboard();
+        } else {
+            alert(`Error: ${result.message || 'Unknown error'}`);
+        }
+    } catch (e) {
+        alert(`Error: ${e.message}`);
+    }
+}
+
+async function requestCert(courseId) {
+    if (!connectedWallet) return;
+    try {
+        const result = await apiPost(`/api/v1/courses/${courseId}/certificates/${connectedWallet}/request_approval`, {
+            actor_thr: connectedWallet,
+            auth_secret: connectedSecret,
+            passphrase: connectedPassphrase
+        });
+        if (result.status === 'success') {
+            alert(currentLang === 'el' ? 'Αίτηση πιστοποιητικού υποβλήθηκε!' : 'Certificate request submitted!');
+            loadDashboard();
+        } else {
+            alert(`Error: ${result.message || 'Unknown error'}`);
+        }
+    } catch (e) {
+        alert(`Error: ${e.message}`);
+    }
+}
+
+async function loadDashboard() {
+    if (!connectedWallet) {
+        $('coursesList').innerHTML = `<div class="empty-state">
+            <span class="lang-el">Συνδέστε το πορτοφόλι σας για να δείτε τα μαθήματά σας</span>
+            <span class="lang-en">Connect your wallet to view your courses</span>
+        </div>`;
+        setLang(currentLang);
+        return;
+    }
+
+    try {
+        const data = await apiGet('/api/v1/courses');
+        const courses = data.courses || [];
+        allCourses = courses;
+        const learnerId = connectedWallet;
+
+        const enrolled = courses.filter(c => (c.students || []).includes(learnerId) || (c.enrollments || []).includes(learnerId));
+
+        if (enrolled.length === 0) {
+            $('coursesList').innerHTML = `<div class="empty-state">
+                <span class="lang-el">Δεν έχετε εγγραφεί σε κανένα μάθημα ακόμα</span>
+                <span class="lang-en">You are not enrolled in any courses yet</span>
+                <br><br>
+                <a href="/courses" style="color:#3CFF7A;">
+                    <span class="lang-el">Αναζήτηση Μαθημάτων →</span>
+                    <span class="lang-en">Browse Courses →</span>
+                </a>
+            </div>`;
+            setLang(currentLang);
+            return;
+        }
+
+        let enrolledCount = enrolled.length;
+        let completedCount = 0;
+        let quizPassedCount = 0;
+        let certsCount = 0;
+        let l2eTotal = 0;
+        let courseHTML = '';
+        let certHTML = '';
+
+        for (const course of enrolled) {
+            let enrollment = {};
+            try {
+                const eData = await apiGet(`/api/v1/courses/${course.id}/enrollment/${encodeURIComponent(learnerId)}`);
+                enrollment = eData.enrollment || eData || {};
+            } catch {
+                enrollment = { enrolled: true };
+            }
+
+            if (enrollment.completed) completedCount++;
+            if (enrollment.quiz_passed) quizPassedCount++;
+            if (enrollment.certificate_issued) certsCount++;
+            if (enrollment.reward_claimed) {
+                l2eTotal += parseFloat(course.reward_l2e || 0);
+            }
+
+            courseHTML += renderCourseRow(course, enrollment);
+
+            if (enrollment.certificate_issued || enrollment.certificate_requested) {
+                let certTimeline = '';
+                try {
+                    const histData = await apiGet(`/api/v1/courses/${course.id}/certificates/${encodeURIComponent(learnerId)}/history`);
+                    const history = histData.history || [];
+                    for (const evt of history) {
+                        const ts = evt.timestamp ? new Date(evt.timestamp).toLocaleDateString() : '';
+                        certTimeline += `<div class="cert-event"><span class="ts">${ts}</span>${escapeHtml(evt.action || evt.status || '')}</div>`;
+                    }
+                } catch {}
+                certHTML += `<div class="course-row">
+                    <div class="course-name">${escapeHtml(course.title || course.id)}</div>
+                    <div style="margin-top:6px;">
+                        ${enrollment.certificate_issued
+                            ? `<span class="badge badge-cert-issued">🏅 ${currentLang === 'el' ? 'Εκδόθηκε' : 'Issued'}</span>`
+                            : `<span class="badge badge-cert-pending">${currentLang === 'el' ? 'Σε αναμονή' : 'Pending'}</span>`}
+                    </div>
+                    ${certTimeline ? `<div class="cert-timeline">${certTimeline}</div>` : ''}
+                </div>`;
+            }
+        }
+
+        $('statEnrolled').textContent = enrolledCount;
+        $('statCompleted').textContent = completedCount;
+        $('statQuizPassed').textContent = quizPassedCount;
+        $('statCerts').textContent = certsCount;
+        $('statL2E').textContent = l2eTotal;
+        $('coursesList').innerHTML = courseHTML || `<div class="empty-state">—</div>`;
+
+        if (certHTML) {
+            $('certsSection').style.display = '';
+            $('certsList').innerHTML = certHTML;
+        }
+
+        try {
+            const bal = await apiGet(`/api/v1/l2e/balance/${encodeURIComponent(learnerId)}`);
+            $('l2eBalance').textContent = bal.balance != null ? bal.balance : (bal.l2e_balance != null ? bal.l2e_balance : '0');
+        } catch {}
+
+    } catch (e) {
+        $('coursesList').innerHTML = `<div class="error-msg">${escapeHtml(e.message)}</div>`;
+    }
+
+    setLang(currentLang);
+}
+
+setLang(currentLang);
+syncWalletFromSession();
+loadDashboard();
+</script>
+{% endblock %}

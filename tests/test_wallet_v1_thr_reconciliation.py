@@ -109,11 +109,13 @@ def test_thr_reconciliation_diagnostics_endpoint_does_not_mutate(monkeypatch):
 def test_thr_reconciliation_dry_run_repair_does_not_change_balances(monkeypatch):
     client, ledger = _install_reconciliation_fixtures(monkeypatch)
     import server
+    synthetic_admin_secret = "synthetic-reconciliation-admin-secret"
+    monkeypatch.setenv("ADMIN_SECRET", synthetic_admin_secret)
     calls = []
     monkeypatch.setattr(server, "save_json", lambda *args, **kwargs: calls.append((args, kwargs)))
     res = client.post(
         "/api/v1/wallet/thr-reconciliation/repair",
-        json={"old_address": OLD, "new_address": NEW, "dry_run": True, "secret": server.ADMIN_SECRET},
+        json={"old_address": OLD, "new_address": NEW, "dry_run": True, "secret": synthetic_admin_secret},
     )
     assert res.status_code == 200
     body = res.get_json()

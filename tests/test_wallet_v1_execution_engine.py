@@ -65,6 +65,8 @@ def test_valid_signed_tx_executes_and_persists(monkeypatch, tmp_path):
     state.ledger[from_addr] = 100.0
     install_fake_server(monkeypatch, state)
     monkeypatch.setattr(wallet_v1_prod, "verify_signed_transaction_core", lambda _tx: (True, ""))
+    import wallet_v1_handlers
+    monkeypatch.setattr(wallet_v1_handlers, "require_active_thr_address", lambda _addr: True)
 
     app = Flask(__name__)
     @app.get("/api/transfers")

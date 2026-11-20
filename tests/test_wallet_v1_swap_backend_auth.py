@@ -77,7 +77,12 @@ def swap_state(monkeypatch):
             "fee": 0.03,
             "fee_bps": 30,
             "price_impact": 1.0,
-            "route": [{"pool_id": "pool-thr-wbtc", "in_token": "THR", "out_token": "WBTC"}],
+            "route": ["THR", "WBTC"],
+            "legs": [{
+                "pool_id": "pool-thr-wbtc",
+                "token_in": "THR",
+                "token_out": "WBTC",
+            }],
         }, None
 
     def fake_load_json(path, default=None):
@@ -125,8 +130,10 @@ def test_execute_swap_alias_normalized(accept_signature, swap_state):
     assert res.get_json()["status"] == "success"
 
 
-def test_unsupported_option_returns_clear_error(accept_signature, swap_state):
-    res = post_swap(v1_payload(option="stake", signed_action="swap"))
+def test_signed_unsupported_action_cannot_be_overridden_by_top_level_option(
+    accept_signature, swap_state
+):
+    res = post_swap(v1_payload(option="swap", signed_action="stake"))
     body = res.get_json()
     assert res.status_code == 400
     assert body == {
@@ -163,8 +170,8 @@ def test_provider_from_mismatch_rejected(accept_signature, swap_state):
     payload["signed_tx"]["from"] = OTHER
     res = post_swap(payload)
     body = res.get_json()
-    assert res.status_code == 403
-    assert body["error"] == "wallet_mismatch"
+    assert res.status_code == 400
+    assert body["error"] == "signed_from_mismatch"
     assert not swap_state["tx"]
 
 
@@ -263,15 +270,15 @@ def test_swap_math_unchanged():
     assert server.compute_swap_out(10, 1000, 1000, 30) == pytest.approx((9.871580343970614, 0.03, 1.9674832023733324))
 
 
-def test_wallet_v1_swap_never_returns_legacy_option_not_supported(accept_signature, swap_state):
+def test_unsigned_legacy_option_cannot_change_the_signed_swap_operation(
+    accept_signature, swap_state
+):
     res = post_swap(v1_payload(option="stake", signed_action="swap"))
     body = res.get_json()
-    assert res.status_code == 400
-    assert body["error"] == "unsupported_swap_action"
-    assert body["expected"] == "swap"
-    assert body["got"] == "stake"
+    assert res.status_code == 200
+    assert body["status"] == "success"
     assert "option not supported" not in str(body).lower()
-    assert not swap_state["tx"]
+    assert swap_state["tx"][0]["kind"] == "swap"
 
 
 def test_server_has_no_generic_option_not_supported_swap_return():
@@ -281,8 +288,8 @@ def test_server_has_no_generic_option_not_supported_swap_return():
     assert "option not supported" not in server_source[swap_start:swap_end].lower()
 
 
-def test_swap_execute_returns_structured_errors_not_generic_500(accept_signature, swap_state, monkeypatch):
-    """Verify swap execute endpoint catches exceptions and returns structured errors."""
+def test_swap_execute_returns_structured_fail_closed_value_errors(accept_signature, swap_state, monkeypatch):
+    """Verifier value errors fail closed without a ledger mutation."""
     # Simulate an exception in the wallet verification path
     def fake_verify_fail(*args, **kwargs):
         raise ValueError("Test verification error")
@@ -292,15 +299,10 @@ def test_swap_execute_returns_structured_errors_not_generic_500(accept_signature
     res = post_swap(v1_payload())
     body = res.get_json()
 
-    # Should return 500 with structured error fields, not Flask's generic "server_error"
-    assert res.status_code == 500
-    assert body.get("error") == "swap_execution_failed"
+    assert res.status_code == 400
+    assert body.get("error") == "invalid_value"
     assert "message" in body
-    # Should include exception type for debugging
-    assert "exception_type" in body
-    # Should NOT have the generic Flask error format (error: "server_error", ok: false)
     assert body.get("error") != "server_error"
-    # State should not have been mutated due to exception
     assert not swap_state["tx"]
 
 
@@ -315,11 +317,12 @@ def test_swap_execute_validates_input_in_try_catch(accept_signature, swap_state,
     res = post_swap(v1_payload())
     body = res.get_json()
 
-    # Should catch the exception and return structured error, not Flask's generic 500
-    assert res.status_code == 500
+    # The route intentionally returns a structured 400 and performs no mutation.
+    assert res.status_code == 400
     assert body.get("error") == "swap_execution_failed"
-    assert "exception_type" in body
+    assert "RuntimeError" in body["message"]
     assert body.get("error") != "server_error"
+    assert not swap_state["tx"]
 
 
 def test_swap_signed_fields_defined():

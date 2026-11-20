@@ -94,7 +94,7 @@ def test_wallet_auth_autolock_wrapper_preserves_source_options_for_pools_and_swa
 
 def test_swap_signing_posts_execute_after_signed_envelope_is_created():
     sign_pos = SWAP_HTML.index("const signedSwap = auth.signTransaction")
-    post_pos = SWAP_HTML.index("fetch('/api/swap/execute'")
+    post_pos = SWAP_HTML.index("fetch('/api/swap/execute'", sign_pos)
     assert sign_pos < post_pos
     assert "signed_tx: signedSwapEnvelope" in SWAP_HTML
     assert "action: 'swap'" in SWAP_HTML

@@ -2049,6 +2049,13 @@ def wallet_pwa(filename='index.html'):
     return response
 
 
+# ── L2E Student Dashboard ─────────────────────────────────────────────────────
+from flask import render_template as _render_template
+
+@app.route("/student-dashboard")
+def l2e_student_dashboard_page():
+    return _render_template("l2e_student_dashboard.html")
+
 
 # ── Security: reject probe paths without banning shared proxy IPs ─────────────
 from flask import request as _req, abort as _abort

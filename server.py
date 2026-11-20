@@ -29701,6 +29701,88 @@ def _extract_signed_payload(payload_raw, field_name="signed_tx"):
 # All protected services MUST use this for signature validation.
 # Replaces ad-hoc service-specific verification.
 
+_WALLET_V1_SIGNED_NONCES_DB = os.path.join(DATA_DIR, "wallet_v1_signed_request_nonces.sqlite3")
+
+
+def _is_valid_secp256k1_public_key_hex(public_key):
+    """Compatibility wrapper used by the centralized verifier and diagnostics."""
+    from wallet_v1_signed_request_verifier import normalize_secp256k1_public_key_hex
+    return normalize_secp256k1_public_key_hex(public_key) is not None
+
+
+def derive_thr_address_from_public_key_hex(public_key):
+    """Derive an existing THR V1 address from compressed or uncompressed SEC1 hex."""
+    from wallet_v1_signed_request_verifier import derive_thr_address_from_public_key_hex as _derive
+    return _derive(public_key)
+
+
+def get_active_key_binding_for_address(canonical_v1_address):
+    """Return an active binding while preserving pre-status legacy records.
+
+    Historical binding records did not contain a status field. Absence therefore
+    means active for compatibility; an explicit non-active status fails closed.
+    """
+    store = load_json(WALLET_V1_PUBLIC_KEY_BINDINGS_FILE, {"bindings": {}})
+    bindings = store.get("bindings", {}) if isinstance(store, dict) else {}
+    canonical_v1_address = (canonical_v1_address or "").strip().upper()
+    binding = bindings.get(canonical_v1_address)
+    if binding is None:
+        binding = next(
+            (value for key, value in bindings.items() if str(key).upper() == canonical_v1_address),
+            None,
+        )
+    if not isinstance(binding, dict):
+        return None
+    status = str(binding.get("status") or "active").strip().lower()
+    return binding if status == "active" else None
+
+
+def _consume_wallet_v1_signed_request_nonce(canonical_v1_address, nonce, timestamp):
+    """Atomically consume a valid request nonce without touching wallet state."""
+    redis_client = globals().get("REDIS_CLIENT")
+    if redis_client is not None:
+        try:
+            key_hash = hashlib.sha256(f"{canonical_v1_address}:{nonce}".encode("utf-8")).hexdigest()
+            inserted = redis_client.set(
+                f"thronos:wallet:v1-request-nonce:{key_hash}", "1", ex=600, nx=True
+            )
+            return (True, "") if inserted else (False, "nonce_replay_detected")
+        except Exception:
+            return False, "nonce_store_unavailable"
+
+    # Compatibility fallback for older single-node installations without Redis.
+    # SQLite's unique primary key and BEGIN IMMEDIATE make concurrent replay
+    # attempts deterministic across worker processes on the same volume.
+    try:
+        os.makedirs(os.path.dirname(_WALLET_V1_SIGNED_NONCES_DB), exist_ok=True)
+        with sqlite3.connect(_WALLET_V1_SIGNED_NONCES_DB, timeout=10) as conn:
+            conn.execute("PRAGMA busy_timeout=10000")
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS wallet_v1_signed_nonces ("
+                "canonical_address TEXT NOT NULL, nonce TEXT NOT NULL, "
+                "signed_at REAL NOT NULL, consumed_at REAL NOT NULL, "
+                "PRIMARY KEY (canonical_address, nonce))"
+            )
+            conn.execute(
+                "DELETE FROM wallet_v1_signed_nonces WHERE consumed_at < ?",
+                (time.time() - 86400,),
+            )
+            try:
+                conn.execute(
+                    "INSERT INTO wallet_v1_signed_nonces "
+                    "(canonical_address, nonce, signed_at, consumed_at) VALUES (?, ?, ?, ?)",
+                    (canonical_v1_address, nonce, float(timestamp), time.time()),
+                )
+            except sqlite3.IntegrityError:
+                conn.rollback()
+                return False, "nonce_replay_detected"
+            conn.commit()
+        return True, ""
+    except Exception:
+        logger.exception("[V1Verify] nonce store unavailable")
+        return False, "nonce_store_unavailable"
+
 def verify_wallet_v1_signed_request(request_json, expected_action):
     """
     Universal verifier for Wallet V1 signed requests.
@@ -29722,92 +29804,33 @@ def verify_wallet_v1_signed_request(request_json, expected_action):
             'error': str (if ok=False)
           }
     """
+    diagnostics = {
+        "has_public_key": bool((request_json or {}).get("public_key")),
+        "has_signature": bool((request_json or {}).get("signature")),
+        "signature_format": str((request_json or {}).get("signature_format") or ""),
+        "has_active_binding": False,
+    }
     try:
-        # 1. Validate request structure
-        canonical = (request_json.get('canonical_v1_address') or '').strip().upper()
-        action = (request_json.get('action') or '').strip()
-        public_key = (request_json.get('public_key') or '').strip()
-        signature = (request_json.get('signature') or '').strip()
-        sig_format = (request_json.get('signature_format') or '').strip()
-        bound_key_addr = (request_json.get('bound_key_address') or '').strip().upper()
+        if not isinstance(request_json, dict):
+            return False, {"error": "invalid_request", "diagnostics": diagnostics}
 
-        # Validate required fields
-        if not canonical or not canonical.startswith('THR'):
-            return False, {'error': 'missing_canonical_v1_address'}
+        # Validate the key before attempting canonical address derivation.
+        public_key = request_json.get("public_key")
+        if public_key and not _is_valid_secp256k1_public_key_hex(public_key):
+            return False, {"error": "invalid_public_key_format", "diagnostics": diagnostics}
+        if public_key:
+            derive_thr_address_from_public_key_hex(public_key)
 
-        if action != expected_action:
-            return False, {'error': 'action_mismatch', 'expected': expected_action, 'got': action}
-
-        if not public_key:
-            return False, {'error': 'missing_public_key'}
-
-        if not signature or len(signature) != 128:  # Compact secp256k1 = 128 hex chars
-            return False, {'error': 'invalid_signature_format'}
-
-        if sig_format != 'compact_secp256k1_hex':
-            return False, {'error': 'unsupported_signature_format', 'expected': 'compact_secp256k1_hex', 'got': sig_format}
-
-        # 2. Verify binding (if bound signer, public key hash must match active binding)
-        is_bound_signer = (canonical != bound_key_addr)
-
-        if is_bound_signer:
-            # Bound signer flow: verify public_key is registered for canonical address
-            public_key_hash = hashlib.sha256(public_key.encode()).hexdigest()
-
-            # Load active bindings
-            try:
-                from wallet_v1_address_derivation import derive_thronos_address
-                derived = derive_thronos_address(public_key)
-
-                # Load public key bindings file
-                bindings_store = load_json(WALLET_V1_PUBLIC_KEY_BINDINGS_FILE, {'bindings': {}})
-                binding = bindings_store.get('bindings', {}).get(canonical, {})
-
-                if not binding:
-                    logger.warning(f"[V1Verify] No binding for canonical {_short_wallet_address(canonical)}")
-                    return False, {'error': 'signer_not_bound', 'canonical': canonical}
-
-                # Verify the public key in the binding matches
-                binding_pubkey = binding.get('public_key', '').strip()
-                if binding_pubkey.upper() != public_key.upper():
-                    logger.warning(f"[V1Verify] Public key mismatch for {_short_wallet_address(canonical)}")
-                    return False, {'error': 'public_key_mismatch'}
-
-                logger.info(f"[V1Verify] Bound signer verified: canonical={_short_wallet_address(canonical)} signer={_short_wallet_address(derived)}")
-            except Exception as e:
-                logger.error(f"[V1Verify] Binding verification failed: {e}")
-                return False, {'error': 'binding_verification_failed', 'detail': str(e)}
-        else:
-            # Direct wallet flow: signer == canonical (traditional V1 wallet)
-            try:
-                from wallet_v1_address_derivation import derive_thronos_address
-                derived = derive_thronos_address(public_key)
-
-                if derived.upper() != canonical.upper():
-                    logger.warning(f"[V1Verify] Address mismatch: public_key derives to {_short_wallet_address(derived)}, canonical={_short_wallet_address(canonical)}")
-                    return False, {'error': 'address_mismatch', 'derived': derived, 'canonical': canonical}
-
-                logger.info(f"[V1Verify] Direct V1 wallet verified: {_short_wallet_address(canonical)}")
-            except Exception as e:
-                logger.error(f"[V1Verify] Address derivation failed: {e}")
-                return False, {'error': 'address_derivation_failed', 'detail': str(e)}
-
-        # 3. Verify signature (if signature_verification_enabled)
-        # NOTE: Full ECDSA signature verification would require secp256k1 library.
-        # For now, structural validation passes; add crypto verification when needed.
-
-        # 4. Success
-        return True, {
-            'canonical_v1_address': canonical,
-            'public_key': public_key,
-            'bound_key_address': bound_key_addr,
-            'is_bound_signer': is_bound_signer,
-            'action': action
-        }
-
-    except Exception as e:
-        logger.error(f"[V1Verify] Unexpected error: {e}")
-        return False, {'error': 'verification_failed', 'detail': str(e)}
+        from wallet_v1_signed_request_verifier import verify_signed_request
+        return verify_signed_request(
+            request_json,
+            expected_action,
+            binding_lookup=get_active_key_binding_for_address,
+            nonce_guard=_consume_wallet_v1_signed_request_nonce,
+        )
+    except Exception:
+        logger.exception("[V1Verify] verification failed")
+        return False, {"error": "verification_failed", "diagnostics": diagnostics}
 
 
 @app.route("/api/wallet/v1/restore-migration", methods=["POST"])
@@ -33752,42 +33775,15 @@ def _verify_walletv1_new_format(data, expected_action):
       {"action":"...","canonical_v1_address":"...","nonce":"...","payload":{},"timestamp":"..."}
     Signature = secp256k1_compact_sign(sha256(signing_json_utf8), private_key)
     """
-    import hashlib as _hl
-    canonical_addr = (data.get("canonical_v1_address") or data.get("from") or "").strip()
-    public_key = (data.get("public_key") or "").strip()
-    signature = (data.get("signature") or "").strip()
-    action = (data.get("action") or "").lower().strip()
-    timestamp = (data.get("timestamp") or "").strip()
-    nonce = (data.get("nonce") or "").strip()
-
-    if not canonical_addr:
-        return False, {"ok": False, "error": "missing_address", "message": "Missing canonical_v1_address"}, None
-    if not public_key:
-        return False, {"ok": False, "error": "missing_public_key", "message": "Missing public_key"}, None
-    if not signature or len(signature) != 128:
-        return False, {"ok": False, "error": "invalid_signature", "message": "Invalid or missing signature (expected 128 hex chars)"}, None
-
-    action_normalized = action.replace("-", "_").replace(" ", "_")
-    expected_normalized = expected_action.replace("-", "_").replace(" ", "_")
-    if action_normalized != expected_normalized:
-        return False, {"ok": False, "error": "action_mismatch", "message": f"Expected {expected_action}, got {action}"}, None
-
-    # Reconstruct the signing JSON exactly as JS produced it.
-    # JS uses Object.keys(signingPayload).sort() as replacer array — this filters nested payload
-    # keys to {}, so the signing JSON always has payload:{} regardless of actual payload.
-    signing_payload = {
-        "action": action_normalized,
-        "canonical_v1_address": canonical_addr,
-        "nonce": nonce,
-        "payload": {},
-        "timestamp": timestamp,
-    }
-    signing_json = json.dumps(signing_payload, sort_keys=True, separators=(',', ':'))
-
-    if not _verify_ai_sig(public_key, signing_json.encode('utf-8'), signature):
-        return False, {"ok": False, "error": "invalid_signature", "message": "Signature verification failed"}, None
-
-    return True, {}, canonical_addr
+    ok, details = verify_wallet_v1_signed_request(data, expected_action)
+    if not ok:
+        error = details.get("error", "invalid_signature")
+        return False, {
+            "ok": False,
+            "error": error,
+            "message": "Wallet V1 signed request verification failed",
+        }, None
+    return True, {}, details["canonical_v1_address"]
 
 
 

@@ -128,55 +128,51 @@ def test_signature_format_consistency():
 
 
 def test_bound_signer_validation():
-    """Verify bound signer validation logic."""
+    """Verify bound signer validation is delegated to the crypto boundary."""
     server_py = Path(__file__).parent.parent / "server.py"
     content = server_py.read_text()
+    verifier = (Path(__file__).parent.parent / "wallet_v1_signed_request_verifier.py").read_text()
 
     # Extract verify function
     start = content.find("def verify_wallet_v1_signed_request")
     end = content.find("\ndef ", start + 1)
     func_code = content[start:end]
 
-    # Must check if signer != canonical
-    assert "signer_address != canonical_v1_address" in func_code, \
-        "Must detect bound signer case"
-
-    # Must get active binding
+    assert "verify_signed_request" in func_code, \
+        "Server wrapper must delegate to the cryptographic verifier"
     assert "get_active_key_binding_for_address" in func_code, \
         "Must check for active binding"
-
-    # Must verify public_key_hash
-    assert "public_key_hash" in func_code, \
-        "Must verify public_key_hash matches binding"
-
-    # Must reject unbound signer
-    assert "signer_not_bound" in func_code, \
-        "Must reject unbound signer"
+    assert "signer_address != canonical_v1_address" in verifier, \
+        "Cryptographic verifier must detect a bound signer"
+    assert '"no_active_binding"' in verifier, \
+        "Cryptographic verifier must reject an unbound signer"
+    assert '"public_key_mismatch"' in verifier, \
+        "Cryptographic verifier must reject the wrong bound key"
 
 
 def test_direct_wallet_still_works():
     """Verify direct V1 wallets (signer == canonical) still work."""
     server_py = Path(__file__).parent.parent / "server.py"
     content = server_py.read_text()
+    verifier = (Path(__file__).parent.parent / "wallet_v1_signed_request_verifier.py").read_text()
 
     # Extract verify function
     start = content.find("def verify_wallet_v1_signed_request")
     end = content.find("\ndef ", start + 1)
     func_code = content[start:end]
 
-    # Must handle case where signer == canonical (in the else branch)
-    assert "signer_address != canonical_v1_address" in func_code, \
-        "Must check for bound signer case"
-
-    # Must have else branch for direct wallet
-    assert "else:" in func_code and "Direct wallet" in func_code, \
-        "Must allow direct wallet case"
+    assert "verify_signed_request" in func_code
+    assert "signer_address != canonical_v1_address" in verifier, \
+        "Must distinguish direct and bound signers"
+    assert "Direct wallet" in verifier, \
+        "Must preserve the direct-wallet path"
 
 
 def test_error_cases():
     """Verify proper error handling."""
     server_py = Path(__file__).parent.parent / "server.py"
     content = server_py.read_text()
+    verifier = (Path(__file__).parent.parent / "wallet_v1_signed_request_verifier.py").read_text()
 
     # Extract verify function
     start = content.find("def verify_wallet_v1_signed_request")
@@ -184,21 +180,21 @@ def test_error_cases():
     func_code = content[start:end]
 
     # Must handle missing fields
-    assert "invalid_canonical_address" in func_code, \
+    assert "invalid_canonical_address" in verifier, \
         "Must reject invalid canonical address"
 
-    assert "missing_public_key" in func_code, \
+    assert "missing_public_key" in verifier, \
         "Must reject missing public key"
 
-    assert "invalid_signature_format" in func_code, \
+    assert "invalid_signature_format" in verifier, \
         "Must reject invalid signature format"
 
     # Must handle signature verification failure
-    assert "invalid_signature" in func_code, \
+    assert "invalid_signature" in verifier, \
         "Must reject invalid signatures"
 
     # Must handle missing binding
-    assert "no_active_binding" in func_code, \
+    assert "no_active_binding" in verifier, \
         "Must reject missing binding for bound signer"
 
 

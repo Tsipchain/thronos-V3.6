@@ -93,7 +93,13 @@ def _legacy_replacer_value(value: Any, allowed_keys: tuple[str, ...]) -> Any:
 def canonical_signed_request_bytes(request_json: Mapping[str, Any]) -> Tuple[bytes, str]:
     """Return the exact signed bytes and the identified compatibility contract."""
 
-    signature_format = str(request_json.get("signature_format") or "").strip()
+    # The first deployed web helper predated the signature_format field.  Its
+    # server verifier used the same legacy canonical bytes, so absence maps only
+    # to that exact contract.  It must never be guessed as the payload-binding
+    # adapter contract.
+    signature_format = str(
+        request_json.get("signature_format") or "secp256k1_compact"
+    ).strip()
     action = str(request_json.get("action") or "").strip().lower()
     canonical = str(request_json.get("canonical_v1_address") or "").strip()
     nonce = str(request_json.get("nonce") or "").strip()
@@ -264,5 +270,6 @@ def verify_signed_request(
         "is_bound_signer": is_bound_signer,
         "action": action,
         "signature_contract": signature_contract,
+        "payload_cryptographically_bound": signature_contract == ADAPTER_CONTRACT,
         "diagnostics": diagnostics,
     }

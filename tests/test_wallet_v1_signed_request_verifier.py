@@ -75,6 +75,23 @@ def test_valid_direct_wallet_legacy_web_contract():
     assert ok is True
     assert details["signature_contract"] == LEGACY_WEB_CONTRACT
     assert details["is_bound_signer"] is False
+    assert details["payload_cryptographically_bound"] is False
+
+
+def test_pre_format_field_web_request_keeps_exact_legacy_contract():
+    request, now = _direct_request()
+    request.pop("signature_format")
+    private_key, _, _ = _key_material(1)
+    _sign_request(private_key, request)
+    ok, details = verify_signed_request(
+        request,
+        "swap",
+        binding_lookup=lambda _address: None,
+        nonce_guard=NonceGuard(),
+        now=now,
+    )
+    assert ok is True
+    assert details["signature_contract"] == LEGACY_WEB_CONTRACT
 
 
 def test_valid_direct_wallet_adapter_contract():
@@ -88,6 +105,7 @@ def test_valid_direct_wallet_adapter_contract():
     )
     assert ok is True
     assert details["signature_contract"] == ADAPTER_CONTRACT
+    assert details["payload_cryptographically_bound"] is True
 
 
 def test_wrong_signature_is_rejected():
@@ -171,6 +189,17 @@ def test_modified_adapter_payload_invalidates_signature():
     )
     assert ok is False
     assert details["error"] == "signing_payload_hash_mismatch"
+
+
+def test_legacy_web_payload_limitation_is_explicit_not_misrepresented():
+    request, now = _direct_request()
+    request["payload"]["amount"] = "999"
+    ok, details = verify_signed_request(
+        request, "swap", binding_lookup=lambda _address: None, nonce_guard=NonceGuard(), now=now
+    )
+    assert ok is True
+    assert details["signature_contract"] == LEGACY_WEB_CONTRACT
+    assert details["payload_cryptographically_bound"] is False
 
 
 def test_replay_is_rejected_after_first_valid_verification():

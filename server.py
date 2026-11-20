@@ -29804,10 +29804,11 @@ def verify_wallet_v1_signed_request(request_json, expected_action):
             'error': str (if ok=False)
           }
     """
+    safe_request = request_json if isinstance(request_json, dict) else {}
     diagnostics = {
-        "has_public_key": bool((request_json or {}).get("public_key")),
-        "has_signature": bool((request_json or {}).get("signature")),
-        "signature_format": str((request_json or {}).get("signature_format") or ""),
+        "has_public_key": bool(safe_request.get("public_key")),
+        "has_signature": bool(safe_request.get("signature")),
+        "signature_format": str(safe_request.get("signature_format") or ""),
         "has_active_binding": False,
     }
     try:

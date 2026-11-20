@@ -80,3 +80,9 @@ def test_server_boundary_rejects_valid_key_claiming_an_unbound_wallet(monkeypatc
     assert ok is False
     assert error["error"] == "no_active_binding"
     assert address is None
+
+
+def test_server_boundary_fails_closed_for_non_object_request():
+    ok, error = server.verify_wallet_v1_signed_request([], "swap")
+    assert ok is False
+    assert error["error"] == "invalid_request"

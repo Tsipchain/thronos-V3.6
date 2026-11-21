@@ -72,6 +72,8 @@ const STORAGE_KEY_LAST_SYNC = '@thronos_wallet_last_sync';
 const STORAGE_KEY_PUBKEY = '@thronos_wallet_pubkey';
 const STORAGE_KEY_DERIVATION_VERSION = '@thronos_wallet_derivation_version';
 const STORAGE_KEY_ENCRYPTION_VERSION = '@thronos_wallet_encryption_version';
+const STORAGE_KEY_MIGRATION_JOURNAL = '@thronos_wallet_migration_journal_v2';
+const STORAGE_KEY_LEGACY_BACKUP = '@thronos_wallet_mnemonic_legacy_backup_v1';
 
 export const ADDRESS_DERIVATION_LEGACY_V1 = 'mobile_sdk_hex_text_v1';
 export const ADDRESS_DERIVATION_CANONICAL_V2 = 'wallet_v1_pubkey_hash160_v2';
@@ -339,26 +341,106 @@ export default class ThronosWallet {
         }
     }
 
+    async migrationCheckpoint(stage) {
+        if (typeof this.config.migrationFaultInjector === 'function') {
+            await this.config.migrationFaultInjector(stage);
+        }
+    }
+
+    async writeMigrationJournal(journal) {
+        await AsyncStorage.multiSet([[STORAGE_KEY_MIGRATION_JOURNAL, JSON.stringify(journal)]]);
+    }
+
+    async restoreLegacyBackup(backup, journal, reason) {
+        await AsyncStorage.multiRemove([
+            STORAGE_KEY_DERIVATION_VERSION,
+            STORAGE_KEY_ENCRYPTION_VERSION,
+        ]);
+        const originalRows = [
+            [STORAGE_KEY_ADDRESS, backup.address],
+            [STORAGE_KEY_MNEMONIC_ENCRYPTED, backup.encrypted],
+        ];
+        if (backup.derivationVersion) {
+            originalRows.push([STORAGE_KEY_DERIVATION_VERSION, backup.derivationVersion]);
+        }
+        if (backup.encryptionVersion) {
+            originalRows.push([STORAGE_KEY_ENCRYPTION_VERSION, backup.encryptionVersion]);
+        }
+        await AsyncStorage.multiSet(originalRows);
+        await this.writeMigrationJournal({
+            ...journal,
+            state: 'rolled_back',
+            rollbackReason: reason,
+        });
+        return { recovered: true, state: 'rolled_back', address: backup.address, reason };
+    }
+
     /**
-     * Non-destructive transition for historical ciphertext. The old record is
-     * read only after explicit opt-in, matched to its stored address, approved
-     * by an authoritative recovery callback, and then atomically overwritten
-     * with an OS-backed v2 key. Failure leaves every old value untouched.
+     * Resume or roll back a migration after process termination. The journal
+     * contains no mnemonic or key. The separately preserved backup is never
+     * removed automatically.
      */
-    async migrateLegacyMnemonicStorage(validateRecovery) {
+    async recoverLegacyMnemonicMigration() {
+        const rows = await AsyncStorage.multiGet([
+            STORAGE_KEY_MIGRATION_JOURNAL,
+            STORAGE_KEY_LEGACY_BACKUP,
+            STORAGE_KEY_ENCRYPTION_VERSION,
+        ]);
+        if (!rows[0][1] || !rows[1][1]) return { recovered: false, state: 'none' };
+
+        let journal;
+        let backup;
+        try {
+            journal = JSON.parse(rows[0][1]);
+            backup = JSON.parse(rows[1][1]);
+        } catch (_error) {
+            throw new Error('migration_recovery_record_invalid');
+        }
+        if (!backup.address || !backup.encrypted) throw new Error('migration_backup_invalid');
+        if (journal.address !== backup.address) throw new Error('migration_backup_address_mismatch');
+        if (journal.state === 'rolled_back') {
+            return { recovered: true, state: 'rolled_back', address: backup.address };
+        }
+
+        if (rows[2][1] !== MNEMONIC_ENCRYPTION_OS_KEYSTORE_V2) {
+            return this.restoreLegacyBackup(backup, journal, 'new_record_not_committed');
+        }
+
+        try {
+            const mnemonic = await this.getMnemonicForSigning();
+            const derived = await this.deriveAddressFromMnemonic(mnemonic, journal.derivationVersion);
+            if (derived !== journal.address) throw new Error('verified_record_address_mismatch');
+            const verifiedJournal = { ...journal, state: 'verified' };
+            await this.writeMigrationJournal(verifiedJournal);
+            return { recovered: true, state: 'verified', address: journal.address };
+        } catch (_error) {
+            return this.restoreLegacyBackup(backup, journal, 'new_record_verification_failed');
+        }
+    }
+
+    /**
+     * Consent-gated, crash-recoverable transition for historical ciphertext.
+     * The original encrypted record remains in a recovery slot even after the
+     * new OS-backed record has been independently decrypted and verified.
+     */
+    async migrateLegacyMnemonicStorage({ consent = false, validateRecovery } = {}) {
+        if (consent !== true) throw new Error('explicit_migration_consent_required');
         if (typeof validateRecovery !== 'function') {
             throw new Error('recovery_validation_required');
         }
         const rows = await AsyncStorage.multiGet([
             STORAGE_KEY_ADDRESS,
             STORAGE_KEY_MNEMONIC_ENCRYPTED,
-            STORAGE_KEY_ENCRYPTION_VERSION
+            STORAGE_KEY_ENCRYPTION_VERSION,
+            STORAGE_KEY_DERIVATION_VERSION,
+            STORAGE_KEY_MIGRATION_JOURNAL,
         ]);
         const address = rows[0][1];
         const encrypted = rows[1][1];
         const encryptionVersion = rows[2][1];
         if (!address || !encrypted) throw new Error('legacy_wallet_not_found');
         if (encryptionVersion === MNEMONIC_ENCRYPTION_OS_KEYSTORE_V2) {
+            if (rows[4][1]) return this.recoverLegacyMnemonicMigration();
             return { migrated: false, address, reason: 'already_current' };
         }
 
@@ -385,8 +467,45 @@ export default class ThronosWallet {
             derivationVersion,
         });
         if (verified !== true) throw new Error('recovery_validation_failed');
+
+        const migrationId = `mnemonic-v2-${Date.now()}`;
+        const backup = {
+            address,
+            encrypted,
+            encryptionVersion: encryptionVersion || null,
+            derivationVersion: rows[3][1] || null,
+        };
+        const journal = {
+            version: 1,
+            migrationId,
+            state: 'prepared',
+            address,
+            derivationVersion,
+            consentVerified: true,
+            recoveryVerified: true,
+        };
+        await AsyncStorage.multiSet([
+            [STORAGE_KEY_LEGACY_BACKUP, JSON.stringify(backup)],
+            [STORAGE_KEY_MIGRATION_JOURNAL, JSON.stringify(journal)],
+        ]);
+        await this.migrationCheckpoint('after_backup');
+
         await this.saveMnemonic(mnemonic, address, derivationVersion);
-        return { migrated: true, address, derivationVersion };
+        await this.migrationCheckpoint('after_new_record');
+        await this.writeMigrationJournal({ ...journal, state: 'new_record_written' });
+        await this.migrationCheckpoint('after_new_record_journal');
+
+        const verifiedMnemonic = await this.getMnemonicForSigning();
+        if (verifiedMnemonic !== mnemonic) throw new Error('new_record_verification_failed');
+        await this.writeMigrationJournal({ ...journal, state: 'verified' });
+        await this.migrationCheckpoint('after_verified');
+        return {
+            migrated: true,
+            state: 'verified',
+            address,
+            derivationVersion,
+            originalRecordPreserved: true,
+        };
     }
 
     async requireDeviceAuthentication(reason) {
@@ -418,7 +537,9 @@ export default class ThronosWallet {
                 STORAGE_KEY_MNEMONIC_ENCRYPTED,
                 STORAGE_KEY_PUBKEY,
                 STORAGE_KEY_DERIVATION_VERSION,
-                STORAGE_KEY_ENCRYPTION_VERSION
+                STORAGE_KEY_ENCRYPTION_VERSION,
+                STORAGE_KEY_MIGRATION_JOURNAL,
+                STORAGE_KEY_LEGACY_BACKUP
             ]);
         } catch (error) {
             throw new Error(`Failed to disconnect wallet: ${error.message}`);

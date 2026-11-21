@@ -209,3 +209,16 @@ def test_unreviewed_financial_actions_are_network_fail_closed():
 def test_mutations_are_never_retried_against_replica():
     api = (ROOT / "thronos-wallet-app/src/services/api.ts").read_text()
     assert "const baseUrls = method === 'GET' || method === 'HEAD' ? [BASE, BASE_REPLICA] : [BASE]" in api
+
+
+def test_actual_expo_host_uses_os_backed_sdk_adapters_without_device_id_keying():
+    source = (ROOT / "thronos-wallet-app/src/services/mobileSdkPlatformAdapters.ts").read_text()
+    assert "SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY" in source
+    assert "requireAuthentication: true" in source
+    assert "secp256k1.utils.randomPrivateKey()" in source
+    assert "LocalAuthentication.authenticateAsync" in source
+    assert "disableDeviceFallback: request.allowDevicePasscode !== true" in source
+    assert "deviceId" not in source
+    assert "default-device-key" not in source
+    assert "never\n    // retries" in source
+    assert "if (!storageKeyRequest) storageKeyRequest = loadOrCreateMobileSdkStorageKey()" in source

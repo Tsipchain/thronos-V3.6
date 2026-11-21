@@ -77,6 +77,49 @@ The standalone SDK also requires a caller-provided system device authenticator
 before signing or recovery export. Cancellation produces no key access and no
 network call.
 
+### Crash-recoverable migration states
+
+The Mobile SDK migration journal uses these durable states:
+
+1. `prepared`: explicit consent and recovery verification succeeded; the
+   original ciphertext and public identity are copied to a recovery slot.
+2. `new_record_written`: the OS-backed v2 ciphertext and version metadata were
+   written, while the original recovery slot remains present.
+3. `verified`: the v2 record was decrypted again, the mnemonic matched, and its
+   selected derivation reproduced the exact stored address.
+4. `rolled_back`: restart recovery could not verify a complete v2 record and
+   restored the original address, ciphertext, and version metadata.
+
+Restart recovery handles termination after the backup, during the v2 batch,
+after the new record, and before final verification. The original encrypted
+record is not automatically deleted, including after `verified`; removing it
+requires a separately reviewed cleanup/retention policy.
+
+### Historical SignedTxEnvelope authorization
+
+`mobile_sdk_hex_text_v1` is an identity derivation compatibility label, not an
+authentication bypass. Its public key derives to the canonical v2 key address,
+not to the historical address. The real backend accepts that envelope only
+when `wallet_v1_public_key_bindings.json` contains an active binding from the
+historical address to the exact public key and canonical `public_key_address`.
+Missing, revoked, unrelated, or mismatched bindings fail closed. Signature
+tampering and nonce replay also fail before execution.
+
+### Host adapter and build evidence boundary
+
+The checked-in Expo host now supplies an OS-backed adapter using
+`expo-secure-store` with `WHEN_UNLOCKED_THIS_DEVICE_ONLY` and required device
+authentication, plus `expo-local-authentication` for biometric/device-passcode
+approval. It never derives a key from a device identifier.
+
+This repository snapshot has no checked-in generated Android/iOS host project,
+Gradle wrapper, Xcode workspace, signing certificates, populated EAS project
+ID, or EAS CLI. TypeScript and contract tests are executable here; signed APK,
+AAB, and IPA evidence must therefore be produced later in the approved mobile
+build environment. Standalone Kotlin/Swift compatibility shims remain NO-GO
+for wallet creation or signing because they accept only caller-supplied signed
+envelopes and do not implement the reviewed local signer.
+
 ## Legacy SDK test-debt classification
 
 The former 31 failures were stale expectations in one pre-client-side-wallet
@@ -109,6 +152,24 @@ test file:
 5. Roll back the mobile release through the app distribution channel if a
    staging-approved action fails. Do not roll back server verification to a
    weaker legacy contract; keep the action disabled instead.
+
+## Release-candidate evidence
+
+- Historical Mobile SDK golden mnemonic restores the exact v1 address and
+  produces the reviewed SignedTxEnvelope without address conversion.
+- The actual Python backend verifier accepts that envelope only with the exact
+  active historical-to-canonical signer binding. Missing, revoked, wrong-key,
+  modified-payload, and replay cases are rejected.
+- Migration fault tests cover termination after backup, termination after the
+  new record write, an interrupted AsyncStorage batch, unavailable OS key after
+  restart, deterministic rollback, and successful resume.
+- An isolated Redis 7 container exercised 16 concurrent independent workers;
+  exactly one nonce was accepted and 15 were rejected as replay. The container
+  was removed after the test. This is local staging evidence, not a production
+  deployment.
+- Signed mobile binaries and real-device screenshots are not evidence in this
+  PR because the required native projects, signing credentials, and build
+  services are unavailable in the execution environment.
 
 No production deployment, credential migration, live signing, financial
 execution, or Railway variable change is authorized by this document.

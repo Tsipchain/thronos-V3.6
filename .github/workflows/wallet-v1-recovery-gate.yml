@@ -82,4 +82,5 @@ jobs:
             tests/test_wallet_v1_verified_migration_preference.py \
             tests/test_wallet_v1_wallet_recovery_guards.py \
             tests/test_wallet_pwa_installed_lifecycle.py \
+            tests/test_wallet_mobile_sdk_legacy_roundtrip.py \
             tests/test_native_wallet_v2_security.py

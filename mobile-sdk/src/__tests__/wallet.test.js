@@ -176,12 +176,14 @@ describe('ThronosWallet current security and compatibility contract', () => {
       storage.set('@thronos_wallet_mnemonic_encrypted', CryptoJS.AES.encrypt(MNEMONIC, legacyKey).toString());
       jest.spyOn(wallet, 'getLegacyDeviceEncryptionKey').mockResolvedValue(legacyKey);
       const validate = jest.fn().mockResolvedValue(true);
-      const result = await wallet.migrateLegacyMnemonicStorage(validate);
-      expect(result).toEqual({
+      const result = await wallet.migrateLegacyMnemonicStorage({ consent: true, validateRecovery: validate });
+      expect(result).toEqual(expect.objectContaining({
         migrated: true,
+        state: 'verified',
         address: LEGACY_ADDRESS,
         derivationVersion: ADDRESS_DERIVATION_LEGACY_V1,
-      });
+        originalRecordPreserved: true,
+      }));
       expect(validate).toHaveBeenCalledWith(expect.objectContaining({
         address: LEGACY_ADDRESS,
         legacyAddress: LEGACY_ADDRESS,
@@ -189,6 +191,19 @@ describe('ThronosWallet current security and compatibility contract', () => {
       }));
       expect(storage.get('@thronos_wallet_address')).toBe(LEGACY_ADDRESS);
       expect(storage.get('@thronos_wallet_encryption_version')).toBe(MNEMONIC_ENCRYPTION_OS_KEYSTORE_V2);
+      const backup = JSON.parse(storage.get('@thronos_wallet_mnemonic_legacy_backup_v1'));
+      expect(backup.address).toBe(LEGACY_ADDRESS);
+      expect(backup.encrypted).toBeTruthy();
+    });
+
+    test('migration requires explicit user consent before legacy decryption', async () => {
+      const legacyKey = 'synthetic-legacy-unlock-key';
+      storage.set('@thronos_wallet_address', LEGACY_ADDRESS);
+      storage.set('@thronos_wallet_mnemonic_encrypted', CryptoJS.AES.encrypt(MNEMONIC, legacyKey).toString());
+      const legacyUnlock = jest.spyOn(wallet, 'getLegacyDeviceEncryptionKey').mockResolvedValue(legacyKey);
+      await expect(wallet.migrateLegacyMnemonicStorage({ validateRecovery: async () => true }))
+        .rejects.toThrow('explicit_migration_consent_required');
+      expect(legacyUnlock).not.toHaveBeenCalled();
     });
 
     test('failed validation leaves legacy values byte-for-byte intact', async () => {
@@ -197,8 +212,119 @@ describe('ThronosWallet current security and compatibility contract', () => {
       storage.set('@thronos_wallet_address', LEGACY_ADDRESS);
       storage.set('@thronos_wallet_mnemonic_encrypted', ciphertext);
       jest.spyOn(wallet, 'getLegacyDeviceEncryptionKey').mockResolvedValue(legacyKey);
-      await expect(wallet.migrateLegacyMnemonicStorage(async () => false))
+      await expect(wallet.migrateLegacyMnemonicStorage({
+        consent: true,
+        validateRecovery: async () => false,
+      }))
         .rejects.toThrow('recovery_validation_failed');
+      expect(storage.get('@thronos_wallet_address')).toBe(LEGACY_ADDRESS);
+      expect(storage.get('@thronos_wallet_mnemonic_encrypted')).toBe(ciphertext);
+      expect(storage.has('@thronos_wallet_encryption_version')).toBe(false);
+    });
+
+    test('crash after backup preserves the original record across restart', async () => {
+      const legacyKey = 'synthetic-legacy-unlock-key';
+      const ciphertext = CryptoJS.AES.encrypt(MNEMONIC, legacyKey).toString();
+      storage.set('@thronos_wallet_address', LEGACY_ADDRESS);
+      storage.set('@thronos_wallet_mnemonic_encrypted', ciphertext);
+      jest.spyOn(wallet, 'getLegacyDeviceEncryptionKey').mockResolvedValue(legacyKey);
+      wallet.config.migrationFaultInjector = async stage => {
+        if (stage === 'after_backup') throw new Error('synthetic_app_termination');
+      };
+      await expect(wallet.migrateLegacyMnemonicStorage({
+        consent: true, validateRecovery: async () => true,
+      })).rejects.toThrow('synthetic_app_termination');
+
+      const restarted = new ThronosWallet({
+        apiUrl: 'https://api.invalid.test', autoSave: true,
+        secureKeyProvider: async () => SECURE_KEY,
+        deviceAuthenticator: authenticate,
+      });
+      const recovery = await restarted.recoverLegacyMnemonicMigration();
+      expect(recovery.state).toBe('rolled_back');
+      expect(storage.get('@thronos_wallet_address')).toBe(LEGACY_ADDRESS);
+      expect(storage.get('@thronos_wallet_mnemonic_encrypted')).toBe(ciphertext);
+    });
+
+    test('crash after new write resumes and verifies without changing address', async () => {
+      const legacyKey = 'synthetic-legacy-unlock-key';
+      const ciphertext = CryptoJS.AES.encrypt(MNEMONIC, legacyKey).toString();
+      storage.set('@thronos_wallet_address', LEGACY_ADDRESS);
+      storage.set('@thronos_wallet_mnemonic_encrypted', ciphertext);
+      jest.spyOn(wallet, 'getLegacyDeviceEncryptionKey').mockResolvedValue(legacyKey);
+      wallet.config.migrationFaultInjector = async stage => {
+        if (stage === 'after_new_record') throw new Error('synthetic_process_kill');
+      };
+      await expect(wallet.migrateLegacyMnemonicStorage({
+        consent: true, validateRecovery: async () => true,
+      })).rejects.toThrow('synthetic_process_kill');
+
+      const restarted = new ThronosWallet({
+        apiUrl: 'https://api.invalid.test', autoSave: true,
+        secureKeyProvider: async () => SECURE_KEY,
+        deviceAuthenticator: authenticate,
+      });
+      const recovery = await restarted.recoverLegacyMnemonicMigration();
+      expect(recovery).toEqual({ recovered: true, state: 'verified', address: LEGACY_ADDRESS });
+      expect(storage.get('@thronos_wallet_address')).toBe(LEGACY_ADDRESS);
+      await expect(restarted.getMnemonicForSigning()).resolves.toBe(MNEMONIC);
+      expect(JSON.parse(storage.get('@thronos_wallet_mnemonic_legacy_backup_v1')).encrypted)
+        .toBe(ciphertext);
+    });
+
+    test('unreadable interrupted new record rolls back to the preserved ciphertext', async () => {
+      const legacyKey = 'synthetic-legacy-unlock-key';
+      const ciphertext = CryptoJS.AES.encrypt(MNEMONIC, legacyKey).toString();
+      storage.set('@thronos_wallet_address', LEGACY_ADDRESS);
+      storage.set('@thronos_wallet_mnemonic_encrypted', ciphertext);
+      jest.spyOn(wallet, 'getLegacyDeviceEncryptionKey').mockResolvedValue(legacyKey);
+      wallet.config.migrationFaultInjector = async stage => {
+        if (stage === 'after_new_record') throw new Error('synthetic_power_loss');
+      };
+      await expect(wallet.migrateLegacyMnemonicStorage({
+        consent: true, validateRecovery: async () => true,
+      })).rejects.toThrow('synthetic_power_loss');
+
+      const restartedWithLostKey = new ThronosWallet({
+        apiUrl: 'https://api.invalid.test', autoSave: true,
+        secureKeyProvider: async () => { throw new Error('keystore_unavailable'); },
+        deviceAuthenticator: authenticate,
+      });
+      const recovery = await restartedWithLostKey.recoverLegacyMnemonicMigration();
+      expect(recovery.state).toBe('rolled_back');
+      expect(storage.get('@thronos_wallet_mnemonic_encrypted')).toBe(ciphertext);
+      expect(storage.has('@thronos_wallet_encryption_version')).toBe(false);
+    });
+
+    test('partial AsyncStorage batch write is recovered from the original record', async () => {
+      const legacyKey = 'synthetic-legacy-unlock-key';
+      const ciphertext = CryptoJS.AES.encrypt(MNEMONIC, legacyKey).toString();
+      storage.set('@thronos_wallet_address', LEGACY_ADDRESS);
+      storage.set('@thronos_wallet_mnemonic_encrypted', ciphertext);
+      jest.spyOn(wallet, 'getLegacyDeviceEncryptionKey').mockResolvedValue(legacyKey);
+      AsyncStorage.multiSet.mockImplementation(async pairs => {
+        const isNewRecord = pairs.some(([key]) => key === '@thronos_wallet_encryption_version');
+        if (isNewRecord) {
+          pairs.slice(0, 2).forEach(([key, value]) => storage.set(key, value));
+          throw new Error('synthetic_interrupted_batch_write');
+        }
+        pairs.forEach(([key, value]) => storage.set(key, value));
+      });
+      await expect(wallet.migrateLegacyMnemonicStorage({
+        consent: true, validateRecovery: async () => true,
+      })).rejects.toThrow('synthetic_interrupted_batch_write');
+
+      // Restore the normal adapter behavior to model the next app process.
+      AsyncStorage.multiSet.mockImplementation(async pairs => {
+        pairs.forEach(([key, value]) => storage.set(key, value));
+      });
+      const restarted = new ThronosWallet({
+        apiUrl: 'https://api.invalid.test', autoSave: true,
+        secureKeyProvider: async () => SECURE_KEY,
+        deviceAuthenticator: authenticate,
+      });
+      const recovery = await restarted.recoverLegacyMnemonicMigration();
+      expect(recovery.state).toBe('rolled_back');
       expect(storage.get('@thronos_wallet_address')).toBe(LEGACY_ADDRESS);
       expect(storage.get('@thronos_wallet_mnemonic_encrypted')).toBe(ciphertext);
       expect(storage.has('@thronos_wallet_encryption_version')).toBe(false);

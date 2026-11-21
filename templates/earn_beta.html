@@ -454,11 +454,6 @@
           <button id="earn-surveys" class="earn-action" type="button" disabled data-i18n="cpxPending">Surveys selected for your account.</button>
           <div id="cpx-status" class="earn-provider-status" aria-live="polite" data-earn-copy="cpxPending">Checking availability…</div>
         </section>
-        <section class="earn-provider is-unavailable" id="provider-bitcotasks">
-          <div class="earn-provider-heading"><span class="earn-provider-brand earn-provider-brand--bitcotasks" aria-hidden="true"><span class="earn-provider-letter">B</span><img src="https://bitcotasks.com/favicon.ico" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.hidden=true"></span><h3 data-i18n="bitcoTitle">BitcoTasks</h3></div><p id="bitcotasks-copy" data-i18n="bitcoDesc">More tasks and offers are being prepared.</p>
-          <button id="earn-bitcotasks" class="earn-action" type="button" disabled data-i18n="bitcoSoon">Coming soon</button>
-          <div id="bitcotasks-status" class="earn-provider-status" aria-live="polite" data-i18n="bitcoPending">Provider approval pending</div>
-        </section>
         <section class="earn-provider is-unavailable" id="provider-pure">
           <div class="earn-provider-heading"><span class="earn-provider-brand earn-provider-brand--pure" aria-hidden="true"><span class="earn-provider-letter">P</span><img src="https://www.purespectrum.com/favicon.ico" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.hidden=true"></span><h3 data-i18n="pureTitle">PureSpectrum</h3></div><p id="pure-copy" data-i18n="pureDesc">Additional surveys coming soon.</p>
           <button id="earn-pure" class="earn-action" type="button" disabled data-i18n="pureSoon">Coming soon</button>
@@ -985,7 +980,6 @@
   const balanceBar = $('earn-balance-bar'), balanceValue = $('earn-balance-value'), pendingValue = $('earn-pending-value');
   const historySection = $('earn-history'), historyList = $('earn-history-list');
   const activityDialog = $('earn-activity-dialog'), activityCount = $('earn-activity-count');
-  const bitcoButton = $('earn-bitcotasks'), bitcoProvider = $('provider-bitcotasks');
   const pureButton = $('earn-pure'), pureProvider = $('provider-pure');
   const timewallButton = $('earn-timewall'), timewallProvider = $('provider-timewall');
   $('earn-christmas-timewall').addEventListener('click', () => {
@@ -1001,7 +995,7 @@
 
   const promoAds = [
     { title: 'LitBits Faucet', desc: 'Earn free Bitcoin daily with the LitBits Faucet on Telegram. Claim, grow and withdraw your crypto.', url: 'https://t.me/litebits_faucet_bot/app?startapp=BPS0MGLI', badge: 'Thronos Recommends', cta: 'Open Faucet' },
-    { title: 'BitcoTasks', desc: 'Complete simple tasks and offers to earn crypto rewards instantly.', url: 'https://bitcotasks.com/promote/81663', badge: 'Sponsor', cta: 'Visit BitcoTasks' },
+    { title: 'BitcoTasks', desc: 'Sponsored external link; this is not a Thronos Earn offerwall and carries no THC credit.', url: 'https://bitcotasks.com/promote/81663', badge: 'Sponsor', cta: 'Visit BitcoTasks' },
   ];
   let promoIndex = Math.floor(Math.random() * promoAds.length);
   let _promoActive = false;
@@ -1011,7 +1005,23 @@
     _promoActive = true;
     durationSec = durationSec || 15;
     return new Promise(resolve => {
-      const ad = promoAds[promoIndex++ % promoAds.length];
+      let ad = promoAds[promoIndex++ % promoAds.length];
+      // Respect a 24h per-browser cap for this external house promotion.
+      // This is not a provider task, paid Earn click, or THC reward.
+      if (ad.title === 'BitcoTasks') {
+        const capKey = 'thronos_bitcotasks_sponsor_last_shown';
+        try {
+          const last = Number(localStorage.getItem(capKey) || 0);
+          if (Date.now() - last < 86400000) {
+            ad = promoAds[0];
+          } else {
+            localStorage.setItem(capKey, String(Date.now()));
+          }
+        } catch (_) {
+          // No storage: avoid showing a repeatedly uncapped sponsor.
+          ad = promoAds[0];
+        }
+      }
       const overlay = $('promo-overlay');
       $('promo-badge').textContent = ad.badge;
       $('promo-title').textContent = ad.title;
@@ -1210,9 +1220,6 @@
   $('earn-surveys').addEventListener('click', () => {
     openProviderWithPromo('cpx', '/api/earn/cpx/offerwall', t('surveysUnavail'));
   });
-  bitcoButton.addEventListener('click', () => {
-    openProvider('bitcotasks', '/api/earn/bitcotasks/offerwall', t('connectedBitco'), t('bitcoUnavail'));
-  });
   pureButton.addEventListener('click', () => {
     openProvider('pure', '/api/earn/pure/offerwall', t('connectedPure'), t('pureUnavail'));
   });
@@ -1349,16 +1356,6 @@
         } else {
           $('earn-surveys').disabled = true; $('earn-surveys').textContent = t('cpxPending');
           $('cpx-status').textContent = t('cpxPending'); $('provider-cpx').classList.add('is-unavailable');
-        }
-        // BitcoTasks
-        const bitco = map['bitcotasks'];
-        if (bitco && bitco.enabled) {
-          bitcoButton.disabled = false; bitcoButton.textContent = t('openBitco');
-          $('bitcotasks-copy').textContent = t('bitcoReady');
-          $('bitcotasks-status').textContent = t('bitcoAvail'); bitcoProvider.classList.remove('is-unavailable');
-        } else {
-          bitcoButton.disabled = true; bitcoButton.textContent = t('bitcoSoon');
-          $('bitcotasks-status').textContent = t('bitcoPending'); bitcoProvider.classList.add('is-unavailable');
         }
         // PureSpectrum
         const pure = map['pure'];

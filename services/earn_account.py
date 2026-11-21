@@ -111,8 +111,15 @@ _VIP_CREDIT_RATE_BPS = 50  # 0.5% per completed 1000 THC spent
 
 _AD_PRICING_DEFAULTS = {
     "cpm": {"min_bid": "0.100000", "max_bid": "50.000000", "default_bid": "1.000000"},
-    "cpc": {"min_bid": "0.500000", "max_bid": "100.000000", "default_bid": "2.000000"},
 }
+
+_AD_VIEW_PRICING_VERSION = "thronos-view-fixed-v1"
+_AD_LEGACY_CPC_PRICING_VERSION = "legacy-cpc-contract"
+_AD_MIN_VIEWABLE_MS = 1000
+_AD_MIN_VISIBLE_PERCENT = 50
+_AD_OBSERVATION_CLOCK_SKEW_MS = 250
+_AD_OBSERVATION_STARTS_PER_MINUTE = 10
+_AD_BILLABLE_VIEWS_PER_MINUTE = 5
 
 _AD_PLACEMENT_RE = re.compile(r"^[a-z][a-z0-9_]{2,79}$")
 _AD_COUNTRY_RE = re.compile(r"^[A-Z]{2}$")
@@ -120,6 +127,10 @@ _AD_IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif"})
 _AD_SCRIPT_MARKERS = (
     "<script", "javascript:", "data:text/html", "onerror=", "onload=",
     "%3cscript", "&#60;script",
+)
+_AD_MANUAL_REVIEW_MARKERS = (
+    "adult", "casino", "gambling", "weapon", "political", "medical claim",
+    "guaranteed return", "get rich", "crypto presale",
 )
 
 
@@ -673,6 +684,11 @@ class EarnAccountStore:
                     policy_status  TEXT NOT NULL DEFAULT 'pending',
                     policy_reason  TEXT,
                     policy_checked_at INTEGER,
+                    moderation_state TEXT NOT NULL DEFAULT 'none',
+                    pricing_version TEXT NOT NULL DEFAULT 'thronos-view-fixed-v1',
+                    view_target INTEGER,
+                    approved_max_cpm TEXT,
+                    migration_state TEXT NOT NULL DEFAULT 'none',
                     reject_reason  TEXT,
                     impressions    INTEGER NOT NULL DEFAULT 0,
                     clicks         INTEGER NOT NULL DEFAULT 0,
@@ -695,6 +711,7 @@ class EarnAccountStore:
                     image_url    TEXT NOT NULL,
                     target_url   TEXT NOT NULL,
                     status       TEXT NOT NULL DEFAULT 'policy_check',
+                    moderation_state TEXT NOT NULL DEFAULT 'none',
                     policy_checked_at INTEGER,
                     reject_reason TEXT,
                     created_at   INTEGER NOT NULL
@@ -808,6 +825,22 @@ class EarnAccountStore:
                 CREATE INDEX IF NOT EXISTS idx_earn_ad_delivery_proofs_viewer
                     ON earn_ad_delivery_proofs(viewer_hash, campaign_id, issued_at);
 
+                CREATE TABLE IF NOT EXISTS earn_ad_view_observations (
+                    observation_id TEXT PRIMARY KEY,
+                    proof_id       TEXT NOT NULL UNIQUE,
+                    publisher_id   TEXT NOT NULL,
+                    placement      TEXT NOT NULL,
+                    viewer_hash    TEXT NOT NULL,
+                    started_at_ms  INTEGER NOT NULL,
+                    expires_at_ms  INTEGER NOT NULL,
+                    completed_at_ms INTEGER,
+                    status         TEXT NOT NULL DEFAULT 'observing'
+                );
+                CREATE INDEX IF NOT EXISTS idx_earn_ad_observations_rate
+                    ON earn_ad_view_observations(
+                        publisher_id, viewer_hash, started_at_ms
+                    );
+
                 CREATE TABLE IF NOT EXISTS earn_ad_delivery_events (
                     event_id        TEXT PRIMARY KEY,
                     proof_id        TEXT NOT NULL,
@@ -815,6 +848,11 @@ class EarnAccountStore:
                     creative_id     TEXT NOT NULL,
                     event_type      TEXT NOT NULL,
                     charged_amount  TEXT NOT NULL DEFAULT '0.000000',
+                    pricing_version TEXT NOT NULL DEFAULT 'legacy-unversioned',
+                    viewable_ms      INTEGER,
+                    visible_percent INTEGER,
+                    page_visible    INTEGER,
+                    observation_id  TEXT,
                     viewer_hash     TEXT NOT NULL,
                     country         TEXT,
                     recorded_at     INTEGER NOT NULL,
@@ -980,6 +1018,11 @@ class EarnAccountStore:
                 ("policy_status", "TEXT NOT NULL DEFAULT 'pending'"),
                 ("policy_reason", "TEXT"),
                 ("policy_checked_at", "INTEGER"),
+                ("moderation_state", "TEXT NOT NULL DEFAULT 'none'"),
+                ("pricing_version", "TEXT NOT NULL DEFAULT 'legacy-unversioned'"),
+                ("view_target", "INTEGER"),
+                ("approved_max_cpm", "TEXT"),
+                ("migration_state", "TEXT NOT NULL DEFAULT 'none'"),
             ):
                 if column not in campaign_cols:
                     con.execute(
@@ -988,10 +1031,30 @@ class EarnAccountStore:
             creative_cols = {
                 row[1] for row in con.execute("PRAGMA table_info(earn_ad_creatives)")
             }
-            if "policy_checked_at" not in creative_cols:
-                con.execute(
-                    "ALTER TABLE earn_ad_creatives ADD COLUMN policy_checked_at INTEGER"
+            for column, definition in (
+                ("policy_checked_at", "INTEGER"),
+                ("moderation_state", "TEXT NOT NULL DEFAULT 'none'"),
+            ):
+                if column not in creative_cols:
+                    con.execute(
+                        f"ALTER TABLE earn_ad_creatives ADD COLUMN {column} {definition}"
+                    )
+            delivery_event_cols = {
+                row[1] for row in con.execute(
+                    "PRAGMA table_info(earn_ad_delivery_events)"
                 )
+            }
+            for column, definition in (
+                ("pricing_version", "TEXT NOT NULL DEFAULT 'legacy-unversioned'"),
+                ("viewable_ms", "INTEGER"),
+                ("visible_percent", "INTEGER"),
+                ("page_visible", "INTEGER"),
+                ("observation_id", "TEXT"),
+            ):
+                if column not in delivery_event_cols:
+                    con.execute(
+                        f"ALTER TABLE earn_ad_delivery_events ADD COLUMN {column} {definition}"
+                    )
             con.commit()
             now = int(time.time())
             for ctype, vals in _AD_PRICING_DEFAULTS.items():
@@ -3108,7 +3171,11 @@ class EarnAccountStore:
         name = str(campaign["name"] or "").strip()
         if not name or len(name) > 120:
             return "rejected", "invalid_name_length"
-        if campaign["campaign_type"] not in ("cpm", "cpc"):
+        if campaign["moderation_state"] == "rejected":
+            return "rejected", "manual_rejection"
+        if campaign["campaign_type"] == "cpc":
+            return "manual_review", "cpc_contract_action_required"
+        if campaign["campaign_type"] != "cpm":
             return "rejected", "invalid_campaign_type"
         bid = Decimal(campaign["bid_amount"])
         total = Decimal(campaign["total_budget"])
@@ -3125,6 +3192,14 @@ class EarnAccountStore:
             return "manual_review", "positive_total_budget_required"
         if daily < 0 or (daily > 0 and daily > total):
             return "rejected", "invalid_daily_budget"
+        view_target = campaign["view_target"]
+        if view_target is not None and int(view_target) <= 0:
+            return "rejected", "invalid_view_target"
+        approved_max_cpm = Decimal(
+            campaign["approved_max_cpm"] or campaign["bid_amount"]
+        )
+        if approved_max_cpm < bid:
+            return "rejected", "bid_exceeds_approved_max_cpm"
         starts_at = campaign["starts_at"]
         ends_at = campaign["ends_at"]
         if starts_at is not None and ends_at is not None and ends_at <= starts_at:
@@ -3203,8 +3278,12 @@ class EarnAccountStore:
         lowered = clean_title.lower()
         if any(marker in lowered for marker in _AD_SCRIPT_MARKERS):
             return "rejected", "script_payload"
+        if any(marker in lowered for marker in _AD_MANUAL_REVIEW_MARKERS):
+            return "manual_review", "content_safety_review_required"
         image_ok, image_reason = _ad_public_https_url(image_url, image=True)
         if not image_ok:
+            if image_reason == "unsupported_asset_format":
+                return "manual_review", f"image_{image_reason}"
             return "rejected", f"image_{image_reason}"
         target_ok, target_reason = _ad_public_https_url(target_url)
         if not target_ok:
@@ -3213,12 +3292,10 @@ class EarnAccountStore:
 
     @staticmethod
     def _minimum_delivery_cost(campaign: sqlite3.Row) -> Decimal:
+        if campaign["campaign_type"] != "cpm":
+            return Decimal("0").quantize(_THC_SCALE)
         bid = Decimal(campaign["bid_amount"])
-        return (
-            bid / Decimal(1000)
-            if campaign["campaign_type"] == "cpm"
-            else bid
-        ).quantize(_THC_SCALE)
+        return (bid / Decimal(1000)).quantize(_THC_SCALE)
 
     def _required_campaign_funding(self, campaign: sqlite3.Row) -> Decimal:
         total = Decimal(campaign["total_budget"])
@@ -3235,6 +3312,8 @@ class EarnAccountStore:
             raise EarnError("campaign_not_found")
         if campaign["status"] not in ("funding_required", "approved", "paused"):
             return campaign["status"]
+        if campaign["campaign_type"] != "cpm":
+            return "legacy_contract_review"
         if campaign["policy_status"] != "approved":
             return campaign["status"]
         if not self._advertiser_active_in_tx(con, campaign["advertiser_id"]):
@@ -3289,10 +3368,26 @@ class EarnAccountStore:
         placement: str = "earn",
         starts_at: int | None = None,
         ends_at: int | None = None,
+        view_target: int | None = None,
+        approved_max_cpm: str | None = None,
     ) -> dict[str, Any]:
-        if campaign_type not in ("cpm", "cpc"):
+        if campaign_type == "view":
+            campaign_type = "cpm"
+        if campaign_type == "cpc":
+            raise EarnError("cpc_campaigns_closed")
+        if campaign_type != "cpm":
             raise EarnError("invalid_campaign_type")
         bid = self._ad_decimal(bid_amount, "bid", positive=True)
+        max_cpm = self._ad_decimal(
+            approved_max_cpm if approved_max_cpm is not None else bid_amount,
+            "approved_max_cpm", positive=True,
+        )
+        if bid > max_cpm:
+            raise EarnError("bid_exceeds_approved_max_cpm")
+        if view_target is not None and (
+            isinstance(view_target, bool) or int(view_target) <= 0
+        ):
+            raise EarnError("invalid_view_target")
         daily = self._ad_decimal(daily_budget, "daily_budget")
         total = self._ad_decimal(total_budget, "total_budget")
         campaign_id = "camp_" + secrets.token_hex(8)
@@ -3315,14 +3410,16 @@ class EarnAccountStore:
                 """INSERT INTO earn_ad_campaigns
                    (campaign_id, advertiser_id, name, campaign_type,
                     bid_amount, daily_budget, total_budget,
-                    country_targets, placement, status,
+                    country_targets, placement, status, pricing_version,
+                    view_target, approved_max_cpm,
                     impressions, clicks, spent,
                     created_at, updated_at, starts_at, ends_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,'draft',
+                   VALUES (?,?,?,?,?,?,?,?,?,'draft',?,?,?,
                            0,0,'0.000000',?,?,?,?)""",
                 (campaign_id, advertiser_id, name, campaign_type,
                  str(bid), str(daily), str(total),
                  country_targets, placement,
+                 _AD_VIEW_PRICING_VERSION, view_target, str(max_cpm),
                  now, now, starts_at, ends_at),
             )
             status = self._apply_campaign_policy_in_tx(con, campaign_id)
@@ -3338,7 +3435,30 @@ class EarnAccountStore:
                 "SELECT * FROM earn_ad_campaigns WHERE campaign_id = ?",
                 (campaign_id,),
             ).fetchone()
-            return dict(row) if row else None
+            return self._campaign_dashboard_in_tx(con, row) if row else None
+
+    def _campaign_dashboard_in_tx(
+        self, con: sqlite3.Connection, row: sqlite3.Row,
+    ) -> dict[str, Any]:
+        result = dict(row)
+        escrow = self._escrow_balance_in_tx(con, row["campaign_id"])
+        reserved = self._ad_reserved_balance_in_tx(con, row["campaign_id"])
+        required = self._required_campaign_funding(row)
+        result["thc_still_reserved"] = str(reserved)
+        result["pending_reason"] = row["policy_reason"] or ""
+        result["funding_reason"] = (
+            "campaign_budget_not_fully_reserved"
+            if row["status"] == "funding_required"
+            and (reserved < required or escrow < required)
+            else ""
+        )
+        unit_cost = self._minimum_delivery_cost(row)
+        result["remaining_deliverable_views"] = (
+            max(int(row["view_target"]) - int(row["impressions"]), 0)
+            if row["view_target"] is not None
+            else int(min(reserved, escrow) / unit_cost) if unit_cost > 0 else 0
+        )
+        return result
 
     def list_advertiser_campaigns(
         self, advertiser_id: str,
@@ -3350,7 +3470,36 @@ class EarnAccountStore:
                    ORDER BY created_at DESC""",
                 (advertiser_id,),
             ).fetchall()
-            return [dict(r) for r in rows]
+            return [self._campaign_dashboard_in_tx(con, r) for r in rows]
+
+    def evaluate_campaign_policy(
+        self, campaign_id: str, *, apply: bool = False,
+    ) -> dict[str, Any]:
+        """Evaluate a pending campaign without requiring a human approval.
+
+        Dry-run is the safe operational default. Applying the deterministic
+        policy may approve a safe campaign, but manual rejections remain
+        immutable to this evaluator and funding is still required to serve.
+        """
+        with self._tx() as con:
+            row = con.execute(
+                "SELECT * FROM earn_ad_campaigns WHERE campaign_id=?",
+                (campaign_id,),
+            ).fetchone()
+            if not row:
+                raise EarnError("campaign_not_found")
+            decision, reason = self._campaign_policy_in_tx(con, row)
+            status = row["status"]
+            if apply:
+                status = self._apply_campaign_policy_in_tx(con, campaign_id)
+                status = self._maybe_activate_campaign_in_tx(con, campaign_id)
+            return {
+                "campaign_id": campaign_id,
+                "decision": decision,
+                "reason": reason,
+                "status": status,
+                "applied": apply,
+            }
 
     _CAMPAIGN_UPDATABLE = frozenset((
         "name", "bid_amount", "daily_budget", "total_budget",
@@ -3521,17 +3670,27 @@ class EarnAccountStore:
             if not row:
                 raise EarnError("campaign_not_found")
             if action == "approve":
+                campaign_type = con.execute(
+                    "SELECT campaign_type FROM earn_ad_campaigns WHERE campaign_id=?",
+                    (campaign_id,),
+                ).fetchone()["campaign_type"]
+                if campaign_type != "cpm":
+                    raise EarnError("legacy_cpc_requires_new_view_contract")
                 con.execute(
                     """UPDATE earn_ad_campaigns
                        SET status='funding_required', policy_status='approved',
-                           policy_reason='manual_override', policy_checked_at=?, updated_at=?
+                           policy_reason='manual_override', moderation_state='approved',
+                           policy_checked_at=?, updated_at=?
                        WHERE campaign_id=?""",
                     (now, now, campaign_id),
                 )
                 status = self._maybe_activate_campaign_in_tx(con, campaign_id)
                 return {"campaign_id": campaign_id, "status": status}
             con.execute(
-                "UPDATE earn_ad_campaigns SET status = 'rejected', reject_reason = ?, updated_at = ? WHERE campaign_id = ?",
+                """UPDATE earn_ad_campaigns
+                   SET status='rejected', policy_status='rejected',
+                       moderation_state='rejected', reject_reason=?, updated_at=?
+                   WHERE campaign_id=?""",
                 (reason, now, campaign_id),
             )
             return {"campaign_id": campaign_id, "status": "rejected"}
@@ -3553,13 +3712,17 @@ class EarnAccountStore:
                 raise EarnError("creative_not_found")
             if action == "approve":
                 con.execute(
-                    "UPDATE earn_ad_creatives SET status = 'approved' WHERE creative_id = ?",
+                    """UPDATE earn_ad_creatives
+                       SET status='approved', moderation_state='approved'
+                       WHERE creative_id=?""",
                     (creative_id,),
                 )
                 self._maybe_activate_campaign_in_tx(con, row["campaign_id"])
                 return {"creative_id": creative_id, "status": "approved"}
             con.execute(
-                "UPDATE earn_ad_creatives SET status = 'rejected', reject_reason = ? WHERE creative_id = ?",
+                """UPDATE earn_ad_creatives
+                   SET status='rejected', moderation_state='rejected', reject_reason=?
+                   WHERE creative_id=?""",
                 (reason, creative_id),
             )
             return {"creative_id": creative_id, "status": "rejected"}
@@ -3573,13 +3736,14 @@ class EarnAccountStore:
     #   4. Client submits signed intent to execute endpoint
     #   5. Server verifies nonce is unused, idempotency key is fresh,
     #      wallet is linked, and signature covers the exact payload
-    #   6. Atomic: debit wallet ledger → credit escrow (or reverse for refund)
+    #   6. Atomic: reserve Earn THC → credit the campaign escrow
     #
     # The server NEVER receives or stores the user's private key, PIN,
     # biometric data, send_secret, or pledge secret.
     #
-    # Pythia pool accounting remains separate — no auto-conversion of
-    # CPX/TimeWall rewards into THR, staking, or pool liquidity.
+    # Pythia/THR accounting remains separate — no auto-conversion of
+    # CPX/TimeWall rewards into THR, staking, or pool liquidity. Refunds use
+    # campaign cancellation/finalization, never a partial paused-campaign path.
     # BTC payouts are never marked paid without a real broadcast tx hash.
 
     def escrow_create_intent(
@@ -3611,9 +3775,7 @@ class EarnAccountStore:
             ).fetchone()
             wallet_address = link["wallet_address"] if link else None
             if action == "refund":
-                bal = self._escrow_balance_in_tx(con, campaign_id)
-                if amt > bal:
-                    raise EarnError("insufficient_escrow_balance")
+                raise EarnError("campaign_cancellation_required")
             con.execute(
                 "DELETE FROM earn_escrow_intents WHERE expires_at < ?",
                 (now,),
@@ -3732,11 +3894,28 @@ class EarnAccountStore:
             escrow_id = "esc_" + secrets.token_hex(8)
             bal = self._escrow_balance_in_tx(con, campaign_id)
             if action == "deposit":
+                if self._settlement_adapter:
+                    # This legacy adapter converts a signed ad deposit into a
+                    # THR wallet debit and Pythia LP position. Campaign budgets
+                    # are THC; silently crossing that asset boundary would
+                    # double-fund or mislabel the reservation.
+                    raise EarnError("legacy_thr_ad_settlement_disabled")
+                campaign = con.execute(
+                    "SELECT * FROM earn_ad_campaigns WHERE campaign_id=?",
+                    (campaign_id,),
+                ).fetchone()
+                required = self._required_campaign_funding(campaign)
+                if amt > (required - bal).quantize(_THC_SCALE):
+                    raise EarnError("amount_exceeds_campaign_funding_required")
+                if self._available_thc_for_staking(con, earn_user_id) < amt:
+                    raise EarnError("insufficient_thc_balance")
+                self._reserve_thc_in_tx(
+                    con, earn_user_id, amt, "ad_escrow", campaign_id,
+                    f"wallet_escrow_{intent['idempotency_key']}", now,
+                )
                 new_bal = (bal + amt).quantize(_THC_SCALE)
             elif action == "refund":
-                if amt > bal:
-                    raise EarnError("insufficient_escrow_balance")
-                new_bal = (bal - amt).quantize(_THC_SCALE)
+                raise EarnError("campaign_cancellation_required")
             else:
                 raise EarnError("invalid_escrow_action")
             signed_fields = {
@@ -3755,29 +3934,7 @@ class EarnAccountStore:
             wallet_tx_id = None
             pool_receipt_id = None
             pool_position_id = None
-            settlement_status = "pending"
-
-            if self._settlement_adapter and action == "deposit":
-                wallet_address = (
-                    intent["wallet_address"]
-                    or (link["wallet_address"] if intent["requires_wallet_sig"] and link else None)
-                )
-                if wallet_address:
-                    from services.wallet_settlement_adapter import (
-                        WalletInsufficientBalance, PoolCreditFailed,
-                    )
-                    try:
-                        wallet_tx, pool_receipt = self._settlement_adapter.settle(
-                            dict(intent), wallet_address, amt,
-                        )
-                        wallet_tx_id = wallet_tx.tx_id
-                        pool_receipt_id = pool_receipt.pool_event_id
-                        pool_position_id = pool_receipt.position_id
-                        settlement_status = "settled"
-                    except WalletInsufficientBalance:
-                        raise EarnError("insufficient_thr_balance")
-                    except PoolCreditFailed:
-                        raise EarnError("pool_credit_failed")
+            settlement_status = "settled"
 
             con.execute(
                 """INSERT INTO earn_ad_escrow
@@ -3822,6 +3979,19 @@ class EarnAccountStore:
             else:
                 bal -= amt
         return bal.quantize(_THC_SCALE)
+
+    def _ad_reserved_balance_in_tx(
+        self, con: sqlite3.Connection, campaign_id: str,
+    ) -> Decimal:
+        rows = con.execute(
+            """SELECT amount FROM earn_thc_reservations
+               WHERE source_ref=? AND reservation_type='ad_escrow'
+                 AND state IN ('reserved','settling')""",
+            (campaign_id,),
+        ).fetchall()
+        return sum(
+            (Decimal(row["amount"]) for row in rows), Decimal("0")
+        ).quantize(_THC_SCALE)
 
     def escrow_balance(self, campaign_id: str) -> str:
         with self._tx() as con:
@@ -3980,12 +4150,14 @@ class EarnAccountStore:
             rows = con.execute(
                 """SELECT c.campaign_id, c.advertiser_id, c.campaign_type,
                           c.bid_amount, c.total_budget, c.spent,
+                          c.pricing_version, c.approved_max_cpm,
                           c.daily_budget, c.country_targets,
                           cr.creative_id, cr.title, cr.image_url,
                           cr.target_url
                      FROM earn_ad_campaigns c
                      JOIN earn_ad_creatives cr ON cr.campaign_id = c.campaign_id
                     WHERE c.status = 'active'
+                      AND c.campaign_type = 'cpm'
                       AND c.placement = ?
                       AND cr.status = 'approved'
                       AND (c.starts_at IS NULL OR c.starts_at <= ?)
@@ -4053,7 +4225,9 @@ class EarnAccountStore:
 
     _EXCLUDED_PLACEMENTS = frozenset((
         "wallet_home", "wallet_signing", "wallet_send", "wallet_receive",
-        "wallet_staking", "wallet_confirmation",
+        "wallet_staking", "wallet_confirmation", "wallet_transaction",
+        "wallet_transfer", "wallet_approve", "wallet_signature",
+        "wallet_seed", "wallet_keys",
     ))
 
     def _delivery_secret(self) -> bytes:
@@ -4067,6 +4241,70 @@ class EarnAccountStore:
     def _verify_delivery_proof(self, proof_payload: dict[str, Any], signature: str) -> bool:
         expected = self._sign_delivery_proof(proof_payload)
         return hmac.compare_digest(expected, signature)
+
+    def _authenticate_delivery_publisher_in_tx(
+        self,
+        con: sqlite3.Connection,
+        publisher_id: str,
+        placement: str,
+        publisher_secret: str,
+    ) -> None:
+        publisher = con.execute(
+            """SELECT status, postback_secret FROM earn_publishers
+               WHERE publisher_id=?""",
+            (publisher_id,),
+        ).fetchone()
+        expected_secret = str(publisher["postback_secret"] or "") if publisher else ""
+        supplied_secret = str(publisher_secret or "")
+        if (
+            not publisher
+            or publisher["status"] != "active"
+            or not expected_secret
+            or not supplied_secret
+            or not hmac.compare_digest(expected_secret, supplied_secret)
+        ):
+            raise EarnError("publisher_auth_required")
+        placement_row = con.execute(
+            """SELECT 1 FROM earn_publisher_placements
+               WHERE publisher_id=? AND placement_type=? AND status='active'""",
+            (publisher_id, placement),
+        ).fetchone()
+        if not placement_row:
+            raise EarnError("publisher_placement_not_active")
+
+    def _observation_payload(
+        self, observation: sqlite3.Row | dict[str, Any],
+    ) -> dict[str, Any]:
+        return {
+            "observation_id": observation["observation_id"],
+            "proof_id": observation["proof_id"],
+            "publisher_id": observation["publisher_id"],
+            "placement": observation["placement"],
+            "viewer_hash": observation["viewer_hash"],
+            "started_at_ms": observation["started_at_ms"],
+            "expires_at_ms": observation["expires_at_ms"],
+        }
+
+    def _sign_observation(self, observation: sqlite3.Row | dict[str, Any]) -> str:
+        message = json.dumps(
+            self._observation_payload(observation),
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        return hmac.new(self._delivery_secret(), message, hashlib.sha256).hexdigest()
+
+    def _delivery_proof_payload(self, proof: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "proof_id": proof["proof_id"],
+            "campaign_id": proof["campaign_id"],
+            "creative_id": proof["creative_id"],
+            "placement": proof["placement"],
+            "publisher_id": proof["publisher_id"],
+            "viewer_hash": proof["viewer_hash"],
+            "country": proof["country"],
+            "issued_at": proof["issued_at"],
+            "expires_at": proof["expires_at"],
+        }
 
     def verified_serve(
         self,
@@ -4095,26 +4333,9 @@ class EarnAccountStore:
         day_start = now - (now % 86400)
 
         with self._tx() as con:
-            # Validate publisher
-            pub = con.execute(
-                "SELECT publisher_id, status, postback_secret FROM earn_publishers WHERE publisher_id = ?",
-                (publisher_id,),
-            ).fetchone()
-            if not pub or pub["status"] != "active":
-                raise EarnError("publisher_not_active")
-            expected_secret = str(pub["postback_secret"] or "")
-            supplied_secret = str(publisher_secret or "")
-            if not expected_secret or not supplied_secret or not hmac.compare_digest(
-                expected_secret, supplied_secret,
-            ):
-                raise EarnError("publisher_auth_required")
-            registered = con.execute(
-                """SELECT 1 FROM earn_publisher_placements
-                   WHERE publisher_id=? AND placement_type=? AND status='active'""",
-                (publisher_id, placement),
-            ).fetchone()
-            if not registered:
-                raise EarnError("publisher_placement_not_active")
+            self._authenticate_delivery_publisher_in_tx(
+                con, publisher_id, placement, publisher_secret,
+            )
 
             expired = con.execute(
                 """SELECT campaign_id FROM earn_ad_campaigns
@@ -4133,11 +4354,14 @@ class EarnAccountStore:
                 """SELECT c.campaign_id, c.advertiser_id, c.campaign_type,
                           c.bid_amount, c.total_budget, c.spent,
                           c.daily_budget, c.country_targets,
+                          c.pricing_version, c.approved_max_cpm,
+                          c.view_target, c.impressions,
                           cr.creative_id, cr.title, cr.image_url,
                           cr.target_url
                      FROM earn_ad_campaigns c
                      JOIN earn_ad_creatives cr ON cr.campaign_id = c.campaign_id
                     WHERE c.status = 'active'
+                      AND c.campaign_type = 'cpm'
                       AND c.placement = ?
                       AND cr.status = 'approved'
                       AND (c.starts_at IS NULL OR c.starts_at <= ?)
@@ -4160,16 +4384,20 @@ class EarnAccountStore:
                 tb = Decimal(r["total_budget"])
                 bid = Decimal(r["bid_amount"])
                 spent = Decimal(r["spent"])
+                max_cpm = Decimal(r["approved_max_cpm"] or r["bid_amount"])
+                if bid > max_cpm:
+                    continue
+                if (r["view_target"] is not None
+                        and int(r["impressions"]) >= int(r["view_target"])):
+                    continue
                 if tb > 0:
-                    unit_cost = (bid / 1000 if r["campaign_type"] == "cpm"
-                                 else bid).quantize(_THC_SCALE)
+                    unit_cost = (bid / 1000).quantize(_THC_SCALE)
                     if spent + unit_cost > tb:
                         continue
 
                 # Escrow balance check
                 bal = self._escrow_balance_in_tx(con, r["campaign_id"])
-                unit_cost = (bid / 1000 if r["campaign_type"] == "cpm"
-                             else bid).quantize(_THC_SCALE)
+                unit_cost = (bid / 1000).quantize(_THC_SCALE)
                 if bal < unit_cost:
                     continue
 
@@ -4295,6 +4523,8 @@ class EarnAccountStore:
                 "image_url": selected["image_url"],
                 "target_url": selected["target_url"],
                 "campaign_type": selected["campaign_type"],
+                "billing_model": "verified_view",
+                "pricing_version": selected["pricing_version"],
             },
             "is_house": False,
             "proof": {
@@ -4304,18 +4534,146 @@ class EarnAccountStore:
             },
         }
 
+    def verified_start_observation(
+        self,
+        proof_id: str,
+        proof_token: str,
+        publisher_secret: str,
+    ) -> dict[str, Any]:
+        """Start a server-timed viewability window for one delivery proof.
+
+        This does not prove that a browser is honest. It binds an authenticated
+        publisher, proof, placement and opaque viewer to a server clock so a
+        later browser report cannot claim more visible time than elapsed.
+        """
+        if not self._delivery_secret():
+            raise EarnError("verified_ad_event_required")
+        now_ms = int(time.time() * 1000)
+        rejection: str | None = None
+        result: dict[str, Any] | None = None
+        with self._tx() as con:
+            proof = con.execute(
+                "SELECT * FROM earn_ad_delivery_proofs WHERE proof_id=?",
+                (proof_id,),
+            ).fetchone()
+            if not proof:
+                raise EarnError("proof_not_found")
+            if now_ms > int(proof["expires_at"]) * 1000:
+                raise EarnError("proof_expired")
+            if not self._verify_delivery_proof(
+                self._delivery_proof_payload(proof), proof_token,
+            ):
+                raise EarnError("invalid_proof_signature")
+            self._authenticate_delivery_publisher_in_tx(
+                con, proof["publisher_id"], proof["placement"], publisher_secret,
+            )
+            existing = con.execute(
+                "SELECT * FROM earn_ad_view_observations WHERE proof_id=?",
+                (proof_id,),
+            ).fetchone()
+            if existing:
+                result = {
+                    **self._observation_payload(existing),
+                    "observation_token": self._sign_observation(existing),
+                    "not_before_ms": int(existing["started_at_ms"])
+                    + _AD_MIN_VIEWABLE_MS,
+                    "idempotent": True,
+                }
+            else:
+                recent = con.execute(
+                    """SELECT COUNT(*) AS cnt FROM earn_ad_view_observations
+                       WHERE publisher_id=? AND viewer_hash=?
+                         AND started_at_ms>=?""",
+                    (proof["publisher_id"], proof["viewer_hash"], now_ms - 60_000),
+                ).fetchone()
+                campaign = con.execute(
+                    "SELECT advertiser_id FROM earn_ad_campaigns WHERE campaign_id=?",
+                    (proof["campaign_id"],),
+                ).fetchone()
+                if int(recent["cnt"] or 0) >= _AD_OBSERVATION_STARTS_PER_MINUTE:
+                    rejection = "observation_rate_limited"
+                    if campaign:
+                        self._ad_audit_in_tx(
+                            con,
+                            campaign_id=proof["campaign_id"],
+                            advertiser_id=campaign["advertiser_id"],
+                            event_type="delivery_security_rejection",
+                            event_ref=(
+                                f"observation-rate:{proof['publisher_id']}:"
+                                f"{proof['viewer_hash']}:{now_ms // 60_000}"
+                            ),
+                            details={
+                                "reason": rejection,
+                                "proof_id": proof_id,
+                                "publisher_id": proof["publisher_id"],
+                                "placement": proof["placement"],
+                            },
+                        )
+                else:
+                    observation = {
+                        "observation_id": "vobs_" + secrets.token_urlsafe(18),
+                        "proof_id": proof_id,
+                        "publisher_id": proof["publisher_id"],
+                        "placement": proof["placement"],
+                        "viewer_hash": proof["viewer_hash"],
+                        "started_at_ms": now_ms,
+                        "expires_at_ms": int(proof["expires_at"]) * 1000,
+                    }
+                    con.execute(
+                        """INSERT INTO earn_ad_view_observations
+                           (observation_id, proof_id, publisher_id, placement,
+                            viewer_hash, started_at_ms, expires_at_ms)
+                           VALUES (?,?,?,?,?,?,?)""",
+                        (
+                            observation["observation_id"], proof_id,
+                            observation["publisher_id"], observation["placement"],
+                            observation["viewer_hash"], observation["started_at_ms"],
+                            observation["expires_at_ms"],
+                        ),
+                    )
+                    if campaign:
+                        self._ad_audit_in_tx(
+                            con,
+                            campaign_id=proof["campaign_id"],
+                            advertiser_id=campaign["advertiser_id"],
+                            event_type="view_observation_started",
+                            event_ref=observation["observation_id"],
+                            details={
+                                "proof_id": proof_id,
+                                "publisher_id": proof["publisher_id"],
+                                "placement": proof["placement"],
+                            },
+                        )
+                    result = {
+                        **observation,
+                        "observation_token": self._sign_observation(observation),
+                        "not_before_ms": now_ms + _AD_MIN_VIEWABLE_MS,
+                        "idempotent": False,
+                    }
+        if rejection:
+            raise EarnError(rejection)
+        assert result is not None
+        return result
+
     def verified_record_event(
         self,
         proof_id: str,
         event_type: str,
         proof_token: str,
+        publisher_secret: str = "",
+        observation_id: str | None = None,
+        observation_token: str | None = None,
+        viewable_ms: int | None = None,
+        visible_percent: int | None = None,
+        page_visible: bool | None = None,
     ) -> dict[str, Any]:
         if not self._delivery_secret():
             raise EarnError("verified_ad_event_required")
         if event_type not in ("view", "click"):
             raise EarnError("invalid_event_type")
 
-        now = int(time.time())
+        now_ms = int(time.time() * 1000)
+        now = now_ms // 1000
 
         with self._tx() as con:
             proof = con.execute(
@@ -4330,19 +4688,41 @@ class EarnAccountStore:
                 raise EarnError("proof_expired")
 
             # Verify HMAC signature
-            proof_payload = {
-                "proof_id": proof["proof_id"],
-                "campaign_id": proof["campaign_id"],
-                "creative_id": proof["creative_id"],
-                "placement": proof["placement"],
-                "publisher_id": proof["publisher_id"],
-                "viewer_hash": proof["viewer_hash"],
-                "country": proof["country"],
-                "issued_at": proof["issued_at"],
-                "expires_at": proof["expires_at"],
-            }
-            if not self._verify_delivery_proof(proof_payload, proof_token):
+            if not self._verify_delivery_proof(
+                self._delivery_proof_payload(proof), proof_token,
+            ):
                 raise EarnError("invalid_proof_signature")
+
+            self._authenticate_delivery_publisher_in_tx(
+                con, proof["publisher_id"], proof["placement"], publisher_secret,
+            )
+
+            observation = None
+            if event_type == "view":
+                if not observation_id or not observation_token:
+                    raise EarnError("observation_required")
+                observation = con.execute(
+                    """SELECT * FROM earn_ad_view_observations
+                       WHERE observation_id=? AND proof_id=?""",
+                    (observation_id, proof_id),
+                ).fetchone()
+                if not observation:
+                    raise EarnError("observation_not_found")
+                if not hmac.compare_digest(
+                    self._sign_observation(observation), str(observation_token),
+                ):
+                    raise EarnError("invalid_observation_token")
+                if (
+                    observation["publisher_id"] != proof["publisher_id"]
+                    or observation["placement"] != proof["placement"]
+                    or observation["viewer_hash"] != proof["viewer_hash"]
+                ):
+                    raise EarnError("observation_binding_mismatch")
+                if now_ms > int(observation["expires_at_ms"]):
+                    raise EarnError("observation_expired")
+                server_elapsed_ms = now_ms - int(observation["started_at_ms"])
+                if server_elapsed_ms < _AD_MIN_VIEWABLE_MS:
+                    raise EarnError("observation_too_short")
 
             # Idempotency: check if already consumed for this event_type
             existing = con.execute(
@@ -4357,6 +4737,36 @@ class EarnAccountStore:
                     "idempotent": True,
                 }
 
+            # A view is billable only when the client supplies the bounded
+            # viewability measurements collected for this signed delivery.
+            # Missing, hidden, short or off-screen observations fail closed
+            # before any event, reservation or treasury write is made.
+            if event_type == "view":
+                if (
+                    isinstance(viewable_ms, bool)
+                    or not isinstance(viewable_ms, int)
+                    or viewable_ms < _AD_MIN_VIEWABLE_MS
+                    or viewable_ms > server_elapsed_ms + _AD_OBSERVATION_CLOCK_SKEW_MS
+                    or isinstance(visible_percent, bool)
+                    or not isinstance(visible_percent, int)
+                    or visible_percent < _AD_MIN_VISIBLE_PERCENT
+                    or visible_percent > 100
+                    or page_visible is not True
+                ):
+                    raise EarnError("view_not_qualifying")
+                recent_views = con.execute(
+                    """SELECT COUNT(*) AS cnt
+                         FROM earn_ad_delivery_events e
+                         JOIN earn_ad_delivery_proofs p ON p.proof_id=e.proof_id
+                        WHERE p.publisher_id=? AND e.viewer_hash=?
+                          AND e.event_type='view' AND e.recorded_at>=?""",
+                    (proof["publisher_id"], proof["viewer_hash"], now - 60),
+                ).fetchone()
+                if int(recent_views["cnt"] or 0) >= _AD_BILLABLE_VIEWS_PER_MINUTE:
+                    raise EarnError("suspicious_view_rate")
+                if observation["completed_at_ms"] is not None:
+                    raise EarnError("observation_already_completed")
+
             # Mark proof consumed (first event of any type)
             if proof["consumed_at"] is None:
                 con.execute(
@@ -4366,19 +4776,26 @@ class EarnAccountStore:
 
             # Calculate cost
             camp = con.execute(
-                "SELECT campaign_type, bid_amount, advertiser_id, total_budget, spent, daily_budget, status FROM earn_ad_campaigns WHERE campaign_id = ?",
+                """SELECT campaign_type, bid_amount, advertiser_id,
+                          total_budget, spent, daily_budget, status,
+                          pricing_version, approved_max_cpm, view_target,
+                          impressions
+                     FROM earn_ad_campaigns WHERE campaign_id = ?""",
                 (proof["campaign_id"],),
             ).fetchone()
             if not camp:
                 raise EarnError("campaign_not_found")
             if camp["status"] != "active":
                 raise EarnError("campaign_not_active")
+            if camp["campaign_type"] != "cpm":
+                raise EarnError("legacy_cpc_contract_held")
 
             bid = Decimal(camp["bid_amount"])
-            if camp["campaign_type"] == "cpm" and event_type == "view":
+            max_cpm = Decimal(camp["approved_max_cpm"] or camp["bid_amount"])
+            if bid > max_cpm:
+                raise EarnError("price_exceeds_approved_max_cpm")
+            if event_type == "view":
                 cost = (bid / 1000).quantize(_THC_SCALE)
-            elif camp["campaign_type"] == "cpc" and event_type == "click":
-                cost = bid.quantize(_THC_SCALE)
             else:
                 cost = Decimal("0").quantize(_THC_SCALE)
 
@@ -4414,14 +4831,27 @@ class EarnAccountStore:
             con.execute(
                 """INSERT INTO earn_ad_delivery_events
                    (event_id, proof_id, campaign_id, creative_id,
-                    event_type, charged_amount, viewer_hash, country,
-                    recorded_at)
-                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                    event_type, charged_amount, pricing_version,
+                    viewable_ms, visible_percent, page_visible, observation_id,
+                    viewer_hash, country, recorded_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (event_id, proof_id, proof["campaign_id"],
                  proof["creative_id"], event_type,
-                 str(cost), proof["viewer_hash"],
+                 str(cost), camp["pricing_version"],
+                 viewable_ms if event_type == "view" else None,
+                 visible_percent if event_type == "view" else None,
+                 1 if event_type == "view" and page_visible else None,
+                 observation_id if event_type == "view" else None,
+                 proof["viewer_hash"],
                  proof["country"], now),
             )
+            if observation is not None:
+                con.execute(
+                    """UPDATE earn_ad_view_observations
+                       SET completed_at_ms=?, status='completed'
+                       WHERE observation_id=? AND completed_at_ms IS NULL""",
+                    (now_ms, observation_id),
+                )
 
             # Atomic escrow debit + campaign counter update
             if cost > 0:
@@ -4444,10 +4874,31 @@ class EarnAccountStore:
                     amount=cost,
                     details={"event_type": event_type,
                              "placement": proof["placement"],
-                             "country": proof["country"]},
+                             "country": proof["country"],
+                             "pricing_version": camp["pricing_version"]},
                 )
 
             new_spent = (Decimal(camp["spent"]) + cost).quantize(_THC_SCALE)
+            self._ad_audit_in_tx(
+                con,
+                campaign_id=proof["campaign_id"],
+                advertiser_id=camp["advertiser_id"],
+                event_type="delivery_event",
+                event_ref=event_id,
+                amount=cost,
+                details={
+                    "event_type": event_type,
+                    "proof_id": proof_id,
+                    "observation_id": observation_id if event_type == "view" else None,
+                    "publisher_id": proof["publisher_id"],
+                    "placement": proof["placement"],
+                    "viewer_hash": proof["viewer_hash"],
+                    "browser_measurement_claim": event_type == "view",
+                    "server_elapsed_ms": (
+                        server_elapsed_ms if event_type == "view" else None
+                    ),
+                },
+            )
             if event_type == "view":
                 con.execute(
                     "UPDATE earn_ad_campaigns SET impressions = impressions + 1, spent = ? WHERE campaign_id = ?",
@@ -4466,11 +4917,20 @@ class EarnAccountStore:
                     con, camp["advertiser_id"], proof["campaign_id"],
                 )
 
-            # Auto-complete when budget exhausted
+            # Auto-complete on the contracted view target or budget limit.
             tb = Decimal(camp["total_budget"])
-            if tb > 0 and new_spent >= tb:
+            reached_target = (
+                event_type == "view"
+                and camp["view_target"] is not None
+                and int(camp["impressions"]) + 1 >= int(camp["view_target"])
+            )
+            budget_exhausted = (
+                tb > 0 and (tb - new_spent) < self._minimum_delivery_cost(camp)
+            )
+            if reached_target or budget_exhausted:
                 self._finalize_campaign_in_tx(
-                    con, proof["campaign_id"], "exhausted",
+                    con, proof["campaign_id"],
+                    "completed" if reached_target else "exhausted",
                     f"finalize:{proof['campaign_id']}", now,
                 )
 
@@ -4481,6 +4941,43 @@ class EarnAccountStore:
         if vip_credit:
             result["vip_credit"] = vip_credit
         return result
+
+    def audit_delivery_rejection(
+        self, proof_id: str, event_type: str, reason: str,
+    ) -> None:
+        """Persist a secret-free security audit after a rejected API request."""
+        safe_reason = re.sub(r"[^a-z0-9_:-]", "_", str(reason).lower())[:80]
+        with self._tx() as con:
+            proof = con.execute(
+                "SELECT * FROM earn_ad_delivery_proofs WHERE proof_id=?",
+                (proof_id,),
+            ).fetchone()
+            if not proof:
+                return
+            campaign = con.execute(
+                "SELECT advertiser_id FROM earn_ad_campaigns WHERE campaign_id=?",
+                (proof["campaign_id"],),
+            ).fetchone()
+            if not campaign:
+                return
+            self._ad_audit_in_tx(
+                con,
+                campaign_id=proof["campaign_id"],
+                advertiser_id=campaign["advertiser_id"],
+                event_type="delivery_security_rejection",
+                event_ref=(
+                    f"reject:{proof_id}:{event_type}:{safe_reason}:"
+                    f"{int(time.time()) // 60}"
+                ),
+                details={
+                    "reason": safe_reason,
+                    "proof_id": proof_id,
+                    "event_type": event_type,
+                    "publisher_id": proof["publisher_id"],
+                    "placement": proof["placement"],
+                    "viewer_hash": proof["viewer_hash"],
+                },
+            )
 
     # ── Ad Marketplace — Reporting ────────────────────────────────────
 
@@ -4499,6 +4996,7 @@ class EarnAccountStore:
             clicks = camp_d["clicks"]
             ctr = round(clicks / imps * 100, 2) if imps > 0 else 0.0
             bal = str(self._escrow_balance_in_tx(con, campaign_id))
+            reserved_bal = str(self._ad_reserved_balance_in_tx(con, campaign_id))
             cutoff = int(time.time()) - 30 * 86400
             daily_rows = con.execute(
                 """SELECT (recorded_at / 86400) AS day_bucket,
@@ -4531,15 +5029,33 @@ class EarnAccountStore:
             ]
             country_rows = con.execute(
                 """SELECT COALESCE(NULLIF(country,''), 'unknown') AS cc,
-                          COUNT(*) AS cnt
+                          event_type, charged_amount
                      FROM earn_ad_delivery_events
-                    WHERE campaign_id = ?
-                 GROUP BY cc ORDER BY cnt DESC""",
+                    WHERE campaign_id = ?""",
                 (campaign_id,),
             ).fetchall()
+            country_buckets: dict[str, dict[str, Any]] = {}
+            for row in country_rows:
+                bucket = country_buckets.setdefault(
+                    row["cc"],
+                    {"verified_views": 0, "clicks": 0,
+                     "charged": Decimal("0")},
+                )
+                if row["event_type"] == "view":
+                    bucket["verified_views"] += 1
+                elif row["event_type"] == "click":
+                    bucket["clicks"] += 1
+                bucket["charged"] += Decimal(row["charged_amount"])
             events_by_country = [
-                {"country": r["cc"], "events": r["cnt"]}
-                for r in country_rows
+                {"country": country, "verified_views": bucket["verified_views"],
+                 "clicks": bucket["clicks"],
+                 "charged": str(bucket["charged"].quantize(_THC_SCALE))}
+                for country, bucket in sorted(
+                    country_buckets.items(),
+                    key=lambda item: (
+                        -item[1]["verified_views"], -item[1]["clicks"], item[0],
+                    ),
+                )
             ]
             vip_credits = con.execute(
                 """SELECT credit_id, milestone_thc, credit_amount, credited_at
@@ -4555,17 +5071,55 @@ class EarnAccountStore:
             treasury_contributed = sum(
                 (Decimal(r["amount"]) for r in treasury_rows), Decimal("0"),
             ).quantize(_THC_SCALE)
+            distribution_rows = con.execute(
+                """SELECT p.publisher_id, p.placement,
+                          COALESCE((
+                              SELECT pp.site_url
+                                FROM earn_publisher_placements pp
+                               WHERE pp.publisher_id=p.publisher_id
+                                 AND pp.placement_type=p.placement
+                               ORDER BY pp.created_at, pp.placement_id LIMIT 1
+                          ), '') AS site_url,
+                          COUNT(CASE WHEN e.event_type='view' THEN 1 END) AS views,
+                          COUNT(CASE WHEN e.event_type='click' THEN 1 END) AS clicks
+                     FROM earn_ad_delivery_events e
+                     JOIN earn_ad_delivery_proofs p ON p.proof_id=e.proof_id
+                    WHERE e.campaign_id=?
+                 GROUP BY p.publisher_id, p.placement, site_url
+                 ORDER BY p.publisher_id, p.placement, site_url""",
+                (campaign_id,),
+            ).fetchall()
+            unit_cost = self._minimum_delivery_cost(camp)
+            remaining_views = (
+                max(int(camp["view_target"]) - imps, 0)
+                if camp["view_target"] is not None
+                else int(min(Decimal(bal), Decimal(reserved_bal)) / unit_cost)
+                if unit_cost > 0 else 0
+            )
         return {
             "campaign_id": campaign_id,
             "name": camp_d["name"],
             "status": camp_d["status"],
+            "billing_model": "verified_view" if camp_d["campaign_type"] == "cpm" else "legacy_cpc_held",
+            "pricing_version": camp_d["pricing_version"],
             "impressions": imps,
+            "verified_views": imps,
             "clicks": clicks,
             "ctr": ctr,
             "spent": camp_d["spent"],
+            "thc_spent": camp_d["spent"],
             "escrow_balance": bal,
+            "thc_still_reserved": reserved_bal,
+            "remaining_deliverable_views": remaining_views,
             "events_by_day": events_by_day,
             "events_by_country": events_by_country,
+            "site_placement_distribution": [dict(r) for r in distribution_rows],
+            "completion_state": camp_d["status"],
+            "refund_state": (
+                "released" if camp_d["status"] in
+                ("completed", "cancelled", "refunded", "exhausted")
+                and Decimal(reserved_bal) == 0 else "locked"
+            ),
             "vip_credits": [dict(r) for r in vip_credits],
             "treasury_contributed": str(treasury_contributed),
         }
@@ -4644,7 +5198,20 @@ class EarnAccountStore:
             rows = con.execute(
                 "SELECT * FROM earn_ad_pricing ORDER BY campaign_type",
             ).fetchall()
-            return [dict(r) for r in rows]
+            return [
+                {
+                    **dict(r),
+                    "billing_model": "verified_view",
+                    "pricing_version": _AD_VIEW_PRICING_VERSION,
+                    "dynamic_geo_pricing_active": False,
+                    "country_weight": "1.000000",
+                    "region_weight": "1.000000",
+                    "publisher_category_weight": "1.000000",
+                    "demand_weight": "1.000000",
+                    "quote_formula": "cpm/1000 per qualifying view",
+                }
+                for r in rows if r["campaign_type"] == "cpm"
+            ]
 
     # ── Ad Marketplace — Walletless Escrow ────────────────────────────
 
@@ -4702,11 +5269,7 @@ class EarnAccountStore:
                 if (hour_count["cnt"] or 0) >= _WALLETLESS_RATE_LIMIT_PER_HOUR:
                     raise EarnError("walletless_rate_limited")
             elif action == "refund":
-                if camp["status"] == "active":
-                    raise EarnError("campaign_must_be_paused_before_refund")
-                bal = self._escrow_balance_in_tx(con, campaign_id)
-                if amt > bal:
-                    raise EarnError("insufficient_escrow_balance")
+                raise EarnError("campaign_cancellation_required")
             con.execute(
                 "DELETE FROM earn_walletless_intents WHERE expires_at < ?",
                 (now,),
@@ -4798,12 +5361,7 @@ class EarnAccountStore:
                     raise EarnError("insufficient_thc_balance")
                 new_bal = (bal + amt).quantize(_THC_SCALE)
             elif action == "refund":
-                if amt > bal:
-                    raise EarnError("insufficient_escrow_balance")
-                self._release_ad_reservation_amount_in_tx(
-                    con, campaign_id, earn_user_id, amt, now,
-                )
-                new_bal = (bal - amt).quantize(_THC_SCALE)
+                raise EarnError("campaign_cancellation_required")
             else:
                 raise EarnError("invalid_escrow_action")
             payload_hash = hashlib.sha256(
@@ -4877,7 +5435,6 @@ class EarnAccountStore:
     def activate_campaign(
         self, campaign_id: str, advertiser_id: str,
     ) -> dict[str, Any]:
-        now = int(time.time())
         with self._tx() as con:
             camp = con.execute(
                 "SELECT * FROM earn_ad_campaigns WHERE campaign_id = ? AND advertiser_id = ?",
@@ -4885,6 +5442,21 @@ class EarnAccountStore:
             ).fetchone()
             if not camp:
                 raise EarnError("campaign_not_found")
+            if camp["policy_status"] != "approved":
+                raise EarnError("campaign_must_be_approved")
+            approved_creative = con.execute(
+                """SELECT 1 FROM earn_ad_creatives
+                   WHERE campaign_id=? AND status='approved' LIMIT 1""",
+                (campaign_id,),
+            ).fetchone()
+            if not approved_creative:
+                raise EarnError("no_approved_creatives")
+            required = self._required_campaign_funding(camp)
+            if (
+                self._escrow_balance_in_tx(con, campaign_id) < required
+                or self._ad_reserved_balance_in_tx(con, campaign_id) < required
+            ):
+                raise EarnError("insufficient_escrow_for_activation")
             status = self._maybe_activate_campaign_in_tx(con, campaign_id)
             if status != "active":
                 raise EarnError("campaign_not_eligible_for_activation")
@@ -4922,7 +5494,7 @@ class EarnAccountStore:
             ).fetchone()
             if not camp:
                 raise EarnError("campaign_not_found")
-            if camp["status"] not in ("completed", "cancelled", "paused", "exhausted"):
+            if camp["status"] not in ("completed", "cancelled", "exhausted"):
                 raise EarnError("campaign_not_refundable")
             bal = self._finalize_campaign_in_tx(
                 con, campaign_id, "refunded", f"finalize:{campaign_id}", now,
@@ -6894,8 +7466,28 @@ def register_earn_account_routes(
                 placement=str(data.get("placement", "earn")).strip(),
                 starts_at=int(data["starts_at"]) if data.get("starts_at") else None,
                 ends_at=int(data["ends_at"]) if data.get("ends_at") else None,
+                view_target=int(data["view_target"]) if data.get("view_target") else None,
+                approved_max_cpm=(
+                    str(data["approved_max_cpm"]).strip()
+                    if data.get("approved_max_cpm") is not None else None
+                ),
             )
         except (EarnError, InvalidOperation, ValueError) as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        return jsonify(ok=True, **result)
+
+    @app.post("/api/earn/ads/campaign/<campaign_id>/policy/evaluate")
+    def earn_campaign_policy_evaluate(campaign_id):
+        expected = os.getenv("EARN_MGMT_TOKEN", "").strip()
+        supplied = request.headers.get("X-Admin-Key", "").strip()
+        if not expected or not supplied or not hmac.compare_digest(expected, supplied):
+            return jsonify(ok=False, error="unauthorized"), 403
+        body = request.get_json(silent=True) or {}
+        try:
+            result = store.evaluate_campaign_policy(
+                campaign_id, apply=body.get("apply") is True,
+            )
+        except EarnError as exc:
             return jsonify(ok=False, error=str(exc)), 400
         return jsonify(ok=True, **result)
 
@@ -7222,17 +7814,47 @@ def register_earn_account_routes(
                 proof_id=proof_id,
                 event_type=event_type,
                 proof_token=proof_token,
+                publisher_secret=request.headers.get("X-Publisher-Key", ""),
+                observation_id=body.get("observation_id"),
+                observation_token=body.get("observation_token"),
+                viewable_ms=body.get("viewable_ms"),
+                visible_percent=body.get("visible_percent"),
+                page_visible=body.get("page_visible"),
             )
             return jsonify(ok=True, **result)
         except EarnError as exc:
             code = 400
             err = str(exc)
+            store.audit_delivery_rejection(proof_id, event_type, err)
             if err in ("proof_expired", "proof_not_found"):
                 code = 410
             elif err in ("total_budget_exhausted", "daily_budget_exhausted",
                          "insufficient_escrow_balance"):
                 code = 402
             return jsonify(ok=False, error=err), code
+
+    @app.post("/api/earn/ads/serve/observation")
+    def earn_ads_serve_observation():
+        if not os.getenv("EARN_DELIVERY_SECRET", ""):
+            return jsonify(ok=False, error="verified_ad_event_required"), 503
+        body = request.get_json(silent=True) or {}
+        proof_id = str(body.get("proof_id", "")).strip()
+        proof_token = str(body.get("proof_token", "")).strip()
+        if not proof_id or not proof_token:
+            return jsonify(ok=False, error="missing_params"), 400
+        try:
+            result = store.verified_start_observation(
+                proof_id,
+                proof_token,
+                request.headers.get("X-Publisher-Key", ""),
+            )
+            return jsonify(ok=True, **result)
+        except EarnError as exc:
+            err = str(exc)
+            store.audit_delivery_rejection(proof_id, "observation", err)
+            return jsonify(ok=False, error=err), (
+                410 if err in ("proof_expired", "proof_not_found") else 400
+            )
 
     @app.get("/api/earn/ads/campaign/<campaign_id>/report")
     def earn_campaign_report(campaign_id):

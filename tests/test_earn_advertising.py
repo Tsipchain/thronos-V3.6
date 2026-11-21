@@ -149,15 +149,56 @@ def _make_session_token_hash(store, earn_user_id):
     return token_hash
 
 
+def _activate_publisher(store, publisher, owner_id):
+    store.publisher_add_placement(
+        publisher["publisher_id"], owner_id, "earn",
+        "https://earn.thronoschain.org",
+    )
+    store.publisher_update_postback(
+        publisher["publisher_id"], owner_id,
+        "https://earn.thronoschain.org/api/ad-event", "publisher-secret",
+    )
+    store.publisher_moderate(publisher["publisher_id"], "approve")
+
+
+def _verified_view(store, served):
+    observation = store.verified_start_observation(
+        served["proof"]["proof_id"], served["proof"]["proof_token"],
+        "publisher-secret",
+    )
+    with store._tx() as con:
+        con.execute(
+            """UPDATE earn_ad_view_observations
+               SET started_at_ms=started_at_ms-1200 WHERE observation_id=?""",
+            (observation["observation_id"],),
+        )
+        row = con.execute(
+            "SELECT * FROM earn_ad_view_observations WHERE observation_id=?",
+            (observation["observation_id"],),
+        ).fetchone()
+        observation_token = store._sign_observation(row)
+    return store.verified_record_event(
+        proof_id=served["proof"]["proof_id"],
+        event_type="view",
+        proof_token=served["proof"]["proof_token"],
+        publisher_secret="publisher-secret",
+        observation_id=observation["observation_id"],
+        observation_token=observation_token,
+        viewable_ms=1200,
+        visible_percent=80,
+        page_visible=True,
+    )
+
+
 # ── Pricing Tests ────────────────────────────────────────────────────
 
 class TestAdPricing:
 
     def test_default_pricing_seeded(self, store):
         pricing = store.get_ad_pricing()
-        assert len(pricing) == 2
+        assert len(pricing) == 1
         types = {p["campaign_type"] for p in pricing}
-        assert types == {"cpm", "cpc"}
+        assert types == {"cpm"}
         for p in pricing:
             assert Decimal(p["min_bid"]) > 0
             assert Decimal(p["max_bid"]) > Decimal(p["min_bid"])
@@ -212,6 +253,11 @@ class TestWalletlessEscrow:
         _credit_thc(store, uid, "50000.000000")
         store.moderate_campaign(campaign["campaign_id"], "approve")
         token_hash = _make_session_token_hash(store, uid)
+        with store._tx() as con:
+            con.execute(
+                "UPDATE earn_ad_campaigns SET total_budget='6000.000000' WHERE campaign_id=?",
+                (campaign["campaign_id"],),
+            )
 
         for i in range(5):
             intent = store.escrow_create_intent_walletless(
@@ -290,7 +336,7 @@ class TestWalletlessEscrow:
         token_hash = _make_session_token_hash(store, uid)
 
         dep_intent = store.escrow_create_intent_walletless(
-            uid, campaign["campaign_id"], "deposit", "200.000000",
+            uid, campaign["campaign_id"], "deposit", "100.000000",
             session_token_hash=token_hash,
         )
         store.escrow_execute_walletless(
@@ -298,16 +344,12 @@ class TestWalletlessEscrow:
             dep_intent["csrf_token"], session_token_hash=token_hash,
         )
 
-        ref_intent = store.escrow_create_intent_walletless(
-            uid, campaign["campaign_id"], "refund", "50.000000",
-            session_token_hash=token_hash,
-        )
-        result = store.escrow_execute_walletless(
-            ref_intent["intent_id"], uid, ref_intent["nonce"],
-            ref_intent["csrf_token"], session_token_hash=token_hash,
-        )
-        assert result["action"] == "refund"
-        assert result["balance_after"] == "150.000000"
+        with pytest.raises(EarnError, match="campaign_cancellation_required"):
+            store.escrow_create_intent_walletless(
+                uid, campaign["campaign_id"], "refund", "50.000000",
+                session_token_hash=token_hash,
+            )
+        assert Decimal(store.escrow_balance(campaign["campaign_id"])) == Decimal("100.000000")
 
 
 # ── Campaign Activation Tests ────────────────────────────────────────
@@ -326,14 +368,14 @@ class TestCampaignActivation:
         )
         store.moderate_creative(creative["creative_id"], "approve")
 
-        _escrow_via_intent(store, uid, campaign["campaign_id"], "deposit", "50.000000")
+        _escrow_via_intent(store, uid, campaign["campaign_id"], "deposit", "100.000000")
 
         result = store.activate_campaign(campaign["campaign_id"], uid)
         assert result["status"] == "active"
 
     def test_activate_unapproved_fails(self, store, advertiser, campaign):
         uid = advertiser["earn_user_id"]
-        with pytest.raises(EarnError, match="campaign_must_be_approved"):
+        with pytest.raises(EarnError, match="no_approved_creatives"):
             store.activate_campaign(campaign["campaign_id"], uid)
 
     def test_activate_no_creatives_fails(self, store, advertiser, campaign):
@@ -369,13 +411,11 @@ class TestCampaignRefund:
             "Ad", "https://img.test/ad.png", "https://test.com",
         )
         store.moderate_creative(creative["creative_id"], "approve")
-        _escrow_via_intent(store, uid, campaign["campaign_id"], "deposit", "50.000000")
+        _escrow_via_intent(store, uid, campaign["campaign_id"], "deposit", "100.000000")
         store.activate_campaign(campaign["campaign_id"], uid)
-        store.pause_campaign(campaign["campaign_id"], uid)
-
-        result = store.process_campaign_refund(campaign["campaign_id"], uid)
-        assert result["status"] == "refunded"
-        assert Decimal(result["refunded"]) == Decimal("50.000000")
+        result = store.cancel_campaign(campaign["campaign_id"], uid)
+        assert result["status"] == "cancelled"
+        assert Decimal(result["refunded"]) == Decimal("100.000000")
 
         bal = store.escrow_balance(campaign["campaign_id"])
         assert Decimal(bal) == Decimal("0")
@@ -390,7 +430,7 @@ class TestCampaignRefund:
             "Ad", "https://img.test/ad.png", "https://test.com",
         )
         store.moderate_creative(creative["creative_id"], "approve")
-        _escrow_via_intent(store, uid, campaign["campaign_id"], "deposit", "50.000000")
+        _escrow_via_intent(store, uid, campaign["campaign_id"], "deposit", "100.000000")
         store.activate_campaign(campaign["campaign_id"], uid)
 
         with pytest.raises(EarnError, match="campaign_not_refundable"):
@@ -422,30 +462,23 @@ class TestPythiaTreasury:
             "Ad", "https://img.test/ad.png", "https://test.com",
         )
         store.moderate_creative(creative["creative_id"], "approve")
-        _escrow_via_intent(store, uid, campaign["campaign_id"], "deposit", "50.000000")
+        _escrow_via_intent(store, uid, campaign["campaign_id"], "deposit", "100.000000")
         store.activate_campaign(campaign["campaign_id"], uid)
 
         pub = store.publisher_register(uid, "test_provider", "Test Pub")
-        with store._tx() as con:
-            con.execute(
-                "UPDATE earn_publishers SET status = 'active' WHERE publisher_id = ?",
-                (pub["publisher_id"],),
-            )
+        _activate_publisher(store, pub, uid)
 
         viewer_hash = hashlib.sha256(b"viewer1").hexdigest()
         serve_result = store.verified_serve(
             placement="earn",
             publisher_id=pub["publisher_id"],
             viewer_hash=viewer_hash,
+            publisher_secret="publisher-secret",
         )
         assert serve_result["ad"] is not None
         assert serve_result["is_house"] is False
 
-        event_result = store.verified_record_event(
-            proof_id=serve_result["proof"]["proof_id"],
-            event_type="view",
-            proof_token=serve_result["proof"]["proof_token"],
-        )
+        event_result = _verified_view(store, serve_result)
         assert Decimal(event_result["charged_amount"]) > 0
 
         summary = store.treasury_summary()
@@ -474,9 +507,9 @@ class TestVIPLoyaltyCredits:
         camp = store.create_campaign(
             advertiser_id=uid,
             name="VIP Test Campaign",
-            campaign_type="cpc",
-            bid_amount="10.000000",
-            total_budget="5000.000000",
+            campaign_type="cpm",
+            bid_amount="50.000000",
+            total_budget="1000.000000",
         )
         store.moderate_campaign(camp["campaign_id"], "approve")
         creative = store.add_creative(
@@ -484,31 +517,29 @@ class TestVIPLoyaltyCredits:
             "VIP Ad", "https://img.test/vip.png", "https://test.com",
         )
         store.moderate_creative(creative["creative_id"], "approve")
-        _escrow_via_intent(store, uid, camp["campaign_id"], "deposit", "2000.000000")
+        _escrow_via_intent(store, uid, camp["campaign_id"], "deposit", "1000.000000")
         store.activate_campaign(camp["campaign_id"], uid)
-
-        pub = store.publisher_register(uid, "test_provider", "VIP Pub")
         with store._tx() as con:
             con.execute(
-                "UPDATE earn_publishers SET status = 'active' WHERE publisher_id = ?",
-                (pub["publisher_id"],),
+                "UPDATE earn_ad_campaigns SET spent='999.950000' WHERE campaign_id=?",
+                (camp["campaign_id"],),
             )
 
+        pub = store.publisher_register(uid, "test_provider", "VIP Pub")
+        _activate_publisher(store, pub, uid)
+
         credits_found = []
-        for i in range(120):
+        for i in range(1):
             viewer_hash = hashlib.sha256(f"vip_viewer_{i}".encode()).hexdigest()
             serve = store.verified_serve(
                 placement="earn",
                 publisher_id=pub["publisher_id"],
                 viewer_hash=viewer_hash,
+                publisher_secret="publisher-secret",
             )
             if not serve.get("ad") or serve.get("is_house"):
                 break
-            event = store.verified_record_event(
-                proof_id=serve["proof"]["proof_id"],
-                event_type="click",
-                proof_token=serve["proof"]["proof_token"],
-            )
+            event = _verified_view(store, serve)
             if event.get("vip_credit"):
                 credits_found.append(event["vip_credit"])
 
@@ -538,28 +569,21 @@ class TestEnhancedReports:
             "Report Ad", "https://img.test/rpt.png", "https://test.com",
         )
         store.moderate_creative(creative["creative_id"], "approve")
-        _escrow_via_intent(store, uid, campaign["campaign_id"], "deposit", "50.000000")
+        _escrow_via_intent(store, uid, campaign["campaign_id"], "deposit", "100.000000")
         store.activate_campaign(campaign["campaign_id"], uid)
 
         pub = store.publisher_register(uid, "test_provider", "Report Pub")
-        with store._tx() as con:
-            con.execute(
-                "UPDATE earn_publishers SET status = 'active' WHERE publisher_id = ?",
-                (pub["publisher_id"],),
-            )
+        _activate_publisher(store, pub, uid)
 
         viewer_hash = hashlib.sha256(b"report_viewer").hexdigest()
         serve = store.verified_serve(
             placement="earn",
             publisher_id=pub["publisher_id"],
             viewer_hash=viewer_hash,
+            publisher_secret="publisher-secret",
         )
         if serve.get("ad") and not serve.get("is_house"):
-            store.verified_record_event(
-                proof_id=serve["proof"]["proof_id"],
-                event_type="view",
-                proof_token=serve["proof"]["proof_token"],
-            )
+            _verified_view(store, serve)
 
         report = store.campaign_report(campaign["campaign_id"], uid)
         assert "vip_credits" in report
@@ -577,28 +601,21 @@ class TestEnhancedReports:
             "Daily Ad", "https://img.test/d.png", "https://test.com",
         )
         store.moderate_creative(creative["creative_id"], "approve")
-        _escrow_via_intent(store, uid, campaign["campaign_id"], "deposit", "50.000000")
+        _escrow_via_intent(store, uid, campaign["campaign_id"], "deposit", "100.000000")
         store.activate_campaign(campaign["campaign_id"], uid)
 
         pub = store.publisher_register(uid, "test_provider", "Daily Pub")
-        with store._tx() as con:
-            con.execute(
-                "UPDATE earn_publishers SET status = 'active' WHERE publisher_id = ?",
-                (pub["publisher_id"],),
-            )
+        _activate_publisher(store, pub, uid)
 
         viewer_hash = hashlib.sha256(b"daily_viewer").hexdigest()
         serve = store.verified_serve(
             placement="earn",
             publisher_id=pub["publisher_id"],
             viewer_hash=viewer_hash,
+            publisher_secret="publisher-secret",
         )
         if serve.get("ad") and not serve.get("is_house"):
-            store.verified_record_event(
-                proof_id=serve["proof"]["proof_id"],
-                event_type="view",
-                proof_token=serve["proof"]["proof_token"],
-            )
+            _verified_view(store, serve)
 
         daily = store.campaign_report_daily(campaign["campaign_id"], uid)
         assert isinstance(daily, list)
@@ -710,33 +727,25 @@ class TestEndToEndWalletless:
 
         pub_user = store.register("publisher@prod-test.com", "SecurePass123!")
         pub = store.publisher_register(pub_user["earn_user_id"], "test_provider", "WL Pub")
-        with store._tx() as con:
-            con.execute(
-                "UPDATE earn_publishers SET status = 'active' WHERE publisher_id = ?",
-                (pub["publisher_id"],),
-            )
+        _activate_publisher(store, pub, pub_user["earn_user_id"])
 
         viewer_hash = hashlib.sha256(b"wl_viewer").hexdigest()
         serve = store.verified_serve(
             placement="earn",
             publisher_id=pub["publisher_id"],
             viewer_hash=viewer_hash,
+            publisher_secret="publisher-secret",
         )
         assert serve["ad"] is not None
         assert serve["is_house"] is False
 
-        event = store.verified_record_event(
-            proof_id=serve["proof"]["proof_id"],
-            event_type="view",
-            proof_token=serve["proof"]["proof_token"],
-        )
+        event = _verified_view(store, serve)
         assert Decimal(event["charged_amount"]) > 0
 
         treasury = store.treasury_summary()
         assert Decimal(treasury["total_balance"]) > 0
 
-        store.pause_campaign(camp["campaign_id"], uid)
-        refund = store.process_campaign_refund(camp["campaign_id"], uid)
+        refund = store.cancel_campaign(camp["campaign_id"], uid)
         assert Decimal(refund["refunded"]) > 0
 
         report = store.campaign_report(camp["campaign_id"], uid)

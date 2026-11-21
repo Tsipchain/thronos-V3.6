@@ -1741,24 +1741,44 @@
     return btn;
   }
 
-  async function fundCampaign(campaignId, detailEl) {
+  async function fundCampaign(campaignId, detailEl, initialQuote) {
     const existing = detailEl.querySelector('.earn-fund-inline');
     if (existing) { existing.remove(); return; }
+    if (!initialQuote?.fundable) {
+      setFeedback('Funding requires approved campaign, creative, and reconciled escrow.', true);
+      return;
+    }
     const wrap = document.createElement('div');
     wrap.className = 'earn-fund-inline';
     const inp = document.createElement('input');
     inp.type = 'number'; inp.min = '0.000001'; inp.step = '0.000001';
     inp.placeholder = localized('fundAmount'); inp.required = true;
+    inp.value = String(initialQuote.funding_due || '');
+    const hint = document.createElement('small');
+    hint.textContent = 'Remaining budget: ' + String(initialQuote.remaining_budget) +
+      ' THC · Reserved: ' + String(initialQuote.reserved_thc) +
+      ' THC · Available: ' + String(initialQuote.available_thc) + ' THC';
     const btn = document.createElement('button');
     btn.type = 'button'; btn.textContent = localized('fundConfirm');
-    wrap.appendChild(inp); wrap.appendChild(btn);
+    wrap.appendChild(hint); wrap.appendChild(inp); wrap.appendChild(btn);
     detailEl.appendChild(wrap);
     inp.focus();
     btn.addEventListener('click', async () => {
       const amount = inp.value.trim();
-      if (!amount || Number(amount) <= 0) return;
+      if (!/^\\d+(?:\\.\\d{1,6})?$/.test(amount) || Number(amount) <= 0) return;
       btn.disabled = true; btn.textContent = localized('funding');
       try {
+        // Never submit a stale legacy charge: re-check owner, budget and
+        // escrow/reservation equality immediately before authorizing it.
+        const quote = await readApi('/api/earn/ads/campaign/' +
+          encodeURIComponent(campaignId) + '/funding-quote');
+        if (!quote.fundable || Number(amount) > Number(quote.funding_due)) {
+          throw new Error('Funding quote changed. Refresh the campaign.');
+        }
+        if (!window.confirm('Reserve ' + amount + ' THC from your Earn available balance for campaign ' +
+              campaignId + '? This is not a THR wallet transaction.')) {
+          btn.disabled = false; btn.textContent = localized('fundConfirm'); return;
+        }
         const intent = await post('/api/earn/ads/escrow/walletless/intent', {
           campaign_id: campaignId, action: 'deposit', amount,
         });
@@ -1896,8 +1916,24 @@
           }).catch(() => { escrowSpan.textContent = localized('escrowBal') + ': —'; });
           const actions = document.createElement('div');
           actions.className = 'earn-campaign-actions';
-          if (status === 'funding_required') {
-            actions.appendChild(makeBtn('act-fund', localized('fundBtn'), () => fundCampaign(id, detail)));
+          if (['funding_required', 'approved', 'active', 'paused'].includes(status)) {
+            readApi('/api/earn/ads/campaign/' + encodeURIComponent(id) + '/funding-quote')
+              .then(quote => {
+                const funding = addText(detail, 'small',
+                  'THC funding due: ' + String(quote.funding_due) +
+                  ' · Escrow: ' + String(quote.escrow_balance) +
+                  ' · Reserved: ' + String(quote.reserved_thc));
+                funding.className = 'earn-campaign-funding-snapshot';
+                if (quote.fundable) {
+                  actions.prepend(makeBtn('act-fund', localized('fundBtn'),
+                    () => fundCampaign(id, detail, quote)));
+                } else if (quote.reason === 'escrow_reservation_mismatch') {
+                  addText(detail, 'small',
+                    'Funding review required: escrow/reservation records differ. No new charge.');
+                }
+              }).catch(() => {
+                addText(detail, 'small', 'Funding status unavailable; no charge permitted.');
+              });
           }
           if (status === 'active') {
             actions.appendChild(makeBtn('act-pause', localized('pauseBtn'),

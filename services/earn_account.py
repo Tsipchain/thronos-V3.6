@@ -7397,6 +7397,33 @@ def register_earn_account_routes(
         refs = store.referral_list(uid)
         return jsonify(ok=True, **stats, referrals=refs)
 
+    def _t2e_discovery_url() -> str:
+        """Operator configured HTTPS-only link to the independent gym SaaS.
+
+        This is a navigation handoff, never a provider payment or THC credit.
+        """
+        if os.getenv("T2E_OFFERWALL_ENABLED", "0") != "1":
+            return ""
+        target = os.getenv("T2E_PUBLIC_URL", "").strip()
+        try:
+            parsed = urlsplit(target)
+            hostname = parsed.hostname or ""
+            if (parsed.scheme != "https" or not hostname or
+                    parsed.username or parsed.password or parsed.fragment or
+                    hostname.lower() in {"localhost", "localhost.localdomain"} or
+                    hostname.lower().endswith(".local")):
+                return ""
+            try:
+                address = ipaddress.ip_address(hostname)
+            except ValueError:
+                pass
+            else:
+                if not address.is_global:
+                    return ""
+            return target
+        except ValueError:
+            return ""
+
     @app.get("/api/earn/providers")
     def earn_providers():
         """Return public availability only; provider credentials stay server-side."""
@@ -7417,7 +7444,24 @@ def register_earn_account_routes(
                 {"id": "timewall", "label": "TimeWall", "kind": "tasks",
                  "enabled": os.getenv("TIMEWALL_ENABLED", "0") == "1"
                  and bool(os.getenv("TIMEWALL_PLACEMENT_URL", "").strip())},
+                {"id": "train2earn", "label": "Train2Earn · Gym",
+                 "kind": "verified_gym_challenges",
+                 "enabled": bool(_t2e_discovery_url())},
             ],
+        )
+
+    @app.get("/api/earn/t2e/discovery")
+    def earn_t2e_discovery():
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        url = _t2e_discovery_url()
+        if not url:
+            return jsonify(ok=False, error="gym_offerwall_not_enabled"), 503
+        return jsonify(
+            ok=True, provider="train2earn", url=url,
+            reward_mode="eligibility_only", thc_credit_enabled=False,
+            wallet_required=False,
         )
 
     @app.get("/api/earn/cpx/offerwall")

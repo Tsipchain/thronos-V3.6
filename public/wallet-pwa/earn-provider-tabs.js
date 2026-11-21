@@ -16,7 +16,7 @@
   }
 
   function open(provider, loadUrl, scope = 'session') {
-    if (!/^(cpx|pure|timewall)$/.test(provider)) {
+    if (!/^(cpx|pure|timewall|train2earn)$/.test(provider)) {
       return Promise.reject(new Error('provider_unavailable'));
     }
     if (activeScope !== undefined && activeScope !== scope) reset();

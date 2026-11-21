@@ -2589,7 +2589,7 @@ def test_earn_sponsor_visit_uses_native_link_without_blank_popup():
 def test_wallet_pwa_shell_cache_advanced_for_earn_release():
     from pathlib import Path
     sw = (Path(__file__).parent.parent / "public/wallet-pwa/sw.js").read_text()
-    assert "thr-wallet-pwa-v28" in sw
+    assert "thr-wallet-pwa-v29" in sw
     assert "'/wallet-pwa/app.js'" in sw
     assert "'/wallet-pwa/goblins-wood-christmas.webp'" in sw
 
@@ -3016,3 +3016,57 @@ class TestExternalBtcCashoutReservations:
         )
         with pytest.raises(EarnError, match="btc_cashout_reconciliation_required"):
             store.release_external_btc_cashout(uid, second["cashout_id"])
+
+
+# Gym offerwall discovery is navigation-only, never an Earn ledger credit.
+def test_t2e_gym_discovery_requires_earn_authentication(client):
+    with patch.dict(os.environ, {
+        "T2E_OFFERWALL_ENABLED": "1",
+        "T2E_PUBLIC_URL": "https://gym.example.org/challenges",
+    }, clear=False):
+        assert client.get("/api/earn/t2e/discovery").status_code == 401
+
+
+def test_t2e_gym_discovery_is_eligibility_only_and_feature_gated(client, user_a):
+    token = _login(client)
+    auth = _auth(token)
+    with patch.dict(os.environ, {
+        "T2E_OFFERWALL_ENABLED": "1",
+        "T2E_PUBLIC_URL": "https://gym.example.org/challenges",
+    }, clear=False):
+        providers = client.get("/api/earn/providers", headers=auth).get_json()["providers"]
+        gym = next(p for p in providers if p["id"] == "train2earn")
+        assert gym["enabled"] is True
+        result = client.get("/api/earn/t2e/discovery", headers=auth)
+        assert result.status_code == 200
+        payload = result.get_json()
+        assert payload["url"] == "https://gym.example.org/challenges"
+        assert payload["reward_mode"] == "eligibility_only"
+        assert payload["thc_credit_enabled"] is False
+        assert payload["wallet_required"] is False
+    with patch.dict(os.environ, {
+        "T2E_OFFERWALL_ENABLED": "0",
+        "T2E_PUBLIC_URL": "https://gym.example.org/challenges",
+    }, clear=False):
+        result = client.get("/api/earn/t2e/discovery", headers=auth)
+        assert result.status_code == 503
+        assert result.get_json()["error"] == "gym_offerwall_not_enabled"
+
+
+@pytest.mark.parametrize("unsafe_url", [
+    "http://gym.example.org/challenges",
+    "https://localhost/challenges",
+    "https://127.0.0.1/challenges",
+    "https://internal.local/challenges",
+    "https://alice:password@gym.example.org/challenges",
+    "https://gym.example.org/challenges#secret",
+])
+def test_t2e_gym_discovery_rejects_unsafe_urls(client, user_a, unsafe_url):
+    token = _login(client)
+    with patch.dict(os.environ, {
+        "T2E_OFFERWALL_ENABLED": "1", "T2E_PUBLIC_URL": unsafe_url,
+    }, clear=False):
+        result = client.get("/api/earn/t2e/discovery", headers=_auth(token))
+        assert result.status_code == 503
+        providers = client.get("/api/earn/providers", headers=_auth(token)).get_json()["providers"]
+        assert not next(p["enabled"] for p in providers if p["id"] == "train2earn")

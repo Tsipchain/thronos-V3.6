@@ -2337,6 +2337,10 @@ async function showEarn(options = {}) {
             <span style="display:flex;align-items:center;gap:6px"><img src="https://timewall.io/favicon.ico" alt="" width="18" height="18" style="border-radius:4px" onerror="this.style.display='none'"><strong>TimeWall</strong></span>
             <small class="provider-state" style="display:block;color:var(--muted);margin-top:3px">Tasks, clicks &amp; surveys</small>
           </button>
+          <button class="btn earn-provider-btn" data-earn-provider="train2earn" type="button" disabled style="padding:10px;text-align:left">
+            <strong>Train2Earn · Gym</strong>
+            <small class="provider-state" style="display:block;color:var(--muted);margin-top:3px">Gym challenges · eligibility only</small>
+          </button>
         </div>
       </div>
       </section>
@@ -2529,6 +2533,7 @@ async function showEarn(options = {}) {
       cpx: { endpoint: '/api/earn/cpx/offerwall', label: 'CPX Research' },
       pure: { endpoint: '/api/earn/pure/offerwall', label: 'PureSpectrum' },
       timewall: { endpoint: '/api/earn/timewall/offerwall', label: 'TimeWall' },
+      train2earn: { endpoint: '/api/earn/t2e/discovery', label: 'Train2Earn · Gym' },
     };
     const openEarnProvider = async (provider, definition) => {
       const message = document.getElementById('earnPwaMessage');
@@ -2585,7 +2590,8 @@ async function showEarn(options = {}) {
         const state = button.querySelector('.provider-state');
         if (provider.enabled) {
           button.disabled = false;
-          if (state && provider.id !== 'timewall') state.textContent = 'Available';
+          if (state && provider.id === 'train2earn') state.textContent = 'Gym challenges · no automatic THC credit';
+          else if (state && provider.id !== 'timewall') state.textContent = 'Available';
         } else {
           button.disabled = true;
           if (state) state.textContent = provider.id === 'pure' ? 'Provider pending' : 'Coming soon';

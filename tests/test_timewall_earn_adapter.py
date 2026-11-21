@@ -336,10 +336,11 @@ class TestTimeWallTemplate:
                        "earn-timewall", "/api/earn/timewall/offerwall"):
             assert marker in html
         pwa = (Path(__file__).parent.parent / "public" / "wallet-pwa" / "app.js").read_text()
-        for marker in ("CPX Research", "BitcoTasks", "PureSpectrum", "TimeWall",
+        for marker in ("CPX Research", "PureSpectrum", "TimeWall",
                        "data-earn-provider", "/api/earn/providers",
                        "/api/earn/timewall/offerwall"):
             assert marker in pwa
+        assert 'data-earn-provider="bitcotasks"' not in pwa
         assert "TIMEWALL_SECRET_KEY" not in html
 
 

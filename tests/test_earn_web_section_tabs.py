@@ -16,7 +16,7 @@ def test_web_tabs_are_accessible_and_have_all_four_sections():
 
 
 def test_existing_provider_buttons_and_account_functionality_remain():
-    for value in ("earn-surveys", "earn-timewall", "earn-bitcotasks",
+    for value in ("earn-surveys", "earn-timewall",
                   "earn-pure", "earn-submit", "earn-balance-value",
                   "earn-pending-value", "earn-logout", "earn-referral",
                   "earn-leaderboard", "lb-staking", "earn-history",
@@ -24,6 +24,9 @@ def test_existing_provider_buttons_and_account_functionality_remain():
         assert f'id="{value}"' in HTML
     assert "function earnAuthHeaders()" in HTML
     assert "async function refreshDashboard()" in HTML
+    assert 'id="provider-bitcotasks"' not in HTML
+    assert 'id="earn-bitcotasks"' not in HTML
+    assert "https://bitcotasks.com/promote/81663" in HTML
 
 
 def test_tab_view_does_not_touch_provider_auth_apis():

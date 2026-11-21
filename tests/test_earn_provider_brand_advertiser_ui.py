@@ -1,6 +1,6 @@
 """Earn frontend presentation and advertiser CTA regression guards.
 
-Ad-approval/escrow/payout code and all provider journeys must remain unchanged.
+Ad-approval/escrow/payout code and approved provider journeys must remain unchanged.
 """
 from pathlib import Path
 
@@ -12,7 +12,6 @@ def test_provider_names_and_official_domain_icons_with_text_fallback():
     expected = {
         "cpx": ("CPX Research", "www.cpx-research.com"),
         "timewall": ("TimeWall", "timewall.io"),
-        "bitcotasks": ("BitcoTasks", "bitcotasks.com"),
         "pure": ("PureSpectrum", "www.purespectrum.com"),
     }
     for provider, (name, origin) in expected.items():
@@ -29,7 +28,7 @@ def test_provider_names_and_official_domain_icons_with_text_fallback():
 
 
 def test_existing_provider_open_ids_and_ad_impression_flow_retained():
-    for provider in ("earn-surveys", "earn-timewall", "earn-bitcotasks", "earn-pure"):
+    for provider in ("earn-surveys", "earn-timewall", "earn-pure"):
         assert PAGE.count(f'id="{provider}"') == 1
     for marker in (
         'id="earn-ad-banner"', "window.ThronosEarnTabs.open(provider",
@@ -38,6 +37,9 @@ def test_existing_provider_open_ids_and_ad_impression_flow_retained():
         'id="earn-referral"', 'id="earn-leaderboard"'
     ):
         assert marker in PAGE
+    assert 'id="provider-bitcotasks"' not in PAGE
+    assert 'id="earn-bitcotasks"' not in PAGE
+    assert "https://bitcotasks.com/promote/81663" in PAGE
     # Gym reward and real ad funding must stay closed until verified.
     assert 'id="provider-train2earn"' in PAGE
     assert 'Coming soon</button>' in PAGE

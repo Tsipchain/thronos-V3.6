@@ -468,7 +468,7 @@
           <div class="earn-provider-heading"><span class="earn-provider-brand earn-provider-brand--gym" aria-hidden="true">T2E</span><h3>Train2Earn · Gym</h3></div>
           <p data-earn-copy="gymDescription">Verified training and gym challenges. Independent application in preparation.</p>
           <div class="earn-provider-status" data-earn-copy="gymStatus">No THC rewards yet · Verified integration pending</div>
-          <button type="button" class="earn-action" disabled>Coming soon</button>
+          <button type="button" id="earn-gym-open" class="earn-action" disabled>Gym challenges · coming soon</button>
         </section>
       </div>
       <div id="earn-checkin-bar" class="earn-checkin-bar" style="display:none;margin-top:14px;padding:10px 12px;background:#1a3148;border-radius:8px;display:none">
@@ -1226,6 +1226,20 @@
   timewallButton.addEventListener('click', () => {
     openProviderWithPromo('timewall', '/api/earn/timewall/offerwall', t('twUnavail'));
   });
+  $('earn-gym-open').addEventListener('click', () => {
+    window.ThronosEarnTabs.open('train2earn', async () => {
+      const res = await fetch('/api/earn/t2e/discovery', { headers: earnAuthHeaders() });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok || !data.url) {
+        throw new Error(data.error || 'gym_offerwall_unavailable');
+      }
+      return data.url;
+    }, token || 'earn-session').then(() => {
+      setStatus('Train2Earn gym challenges opened. No automatic THC credit.');
+    }).catch(error => {
+      setStatus((error.message || 'gym_offerwall_unavailable').replace(/_/g, ' '), true);
+    });
+  });
 
   function closeSurvey() {
     frame.style.display = 'none';
@@ -1246,6 +1260,20 @@
 
   async function refreshDashboard() {
     const progressToken = token;
+    try {
+      const available = await fetch('/api/earn/providers', { headers: earnAuthHeaders() });
+      const body = await available.json().catch(() => ({}));
+      const gymReady = !!(available.ok && body.ok &&
+        body.providers?.some(item => item.id === 'train2earn' && item.enabled === true));
+      $('earn-gym-open').disabled = !gymReady;
+      const gymStatus = $('provider-train2earn').querySelector('.earn-provider-status');
+      if (gymStatus) gymStatus.textContent = gymReady
+        ? 'Gym challenges available · eligibility only, no THC credited automatically'
+        : 'Gym integration pending · no THC credited';
+    } catch (_) {
+      $('earn-gym-open').disabled = true;
+    }
+
     try {
       const progressRes = await fetch('/api/earn/goblins-wood/progress', { headers: earnAuthHeaders() });
       const progress = await progressRes.json();

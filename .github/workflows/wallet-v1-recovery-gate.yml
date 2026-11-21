@@ -45,7 +45,12 @@ jobs:
           npm ci --prefix thronos-wallet-app --ignore-scripts
           npm install --prefix mobile-sdk --ignore-scripts
       - name: Typecheck native wallet and run full SDK security/compatibility gate
+        env:
+          # Schema-only CI value. Release builds must supply the genuine Expo UUID.
+          EAS_PROJECT_ID: 00000000-0000-4000-8000-000000000001
+          NATIVE_CONFIG_SCHEMA_ONLY: "1"
         run: |
+          npm run --prefix thronos-wallet-app native:config:check
           ./thronos-wallet-app/node_modules/.bin/tsc --noEmit -p thronos-wallet-app/tsconfig.json
           node tests/test_wallet_swap_device_approval.mjs
           cd mobile-sdk

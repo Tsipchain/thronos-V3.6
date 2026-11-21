@@ -120,6 +120,14 @@ build environment. Standalone Kotlin/Swift compatibility shims remain NO-GO
 for wallet creation or signing because they accept only caller-supplied signed
 envelopes and do not implement the reviewed local signer.
 
+The managed Expo application has an explicit internal-build profile. It uses
+remote EAS credentials, produces an Android APK and a physical-device iOS
+build, disables Android cleartext traffic and backup, and keeps financial
+actions disabled. `EAS_PROJECT_ID` is intentionally not committed. The build
+preflight rejects an absent, placeholder, or malformed project UUID before a
+build request is submitted. `.easignore` excludes environment files, signing
+artifacts, credentials, databases, and secret-bearing files from build upload.
+
 ## Legacy SDK test-debt classification
 
 The former 31 failures were stale expectations in one pre-client-side-wallet
@@ -152,6 +160,93 @@ test file:
 5. Roll back the mobile release through the app distribution channel if a
    staging-approved action fails. Do not roll back server verification to a
    weaker legacy contract; keep the action disabled instead.
+
+### Operator acceptance checklist
+
+No box below may be inferred from unit tests or a successful cloud build.
+
+**Before build**
+
+- [ ] Record the reviewed Git SHA and confirm the Draft dependency chain is
+  `#963 -> #964 -> #965 -> #966 -> #968`.
+- [ ] Authenticate the approved EAS operator and set the genuine
+  `EAS_PROJECT_ID` without writing it to source control.
+- [ ] Confirm EAS owns the intended `com.thronos.wallet` Android package and
+  iOS bundle identifier.
+- [ ] Confirm the approved remote Android keystore and Apple distribution
+  certificate/provisioning profile. Never export their private material into
+  repository files or CI logs.
+- [ ] Run `npm run native:config:check`, TypeScript, Wallet V1, pledge, Mobile
+  SDK, backend-binding, migration-fault, and shared-Redis replay gates at the
+  same SHA.
+
+**Build evidence**
+
+- [ ] Run `npm run build:rc:android` and record the EAS build ID, artifact
+  SHA-256, application ID, version/build number, Git SHA, and signer
+  certificate fingerprint.
+- [ ] Run `npm run build:rc:ios` and record the EAS build ID, artifact SHA-256,
+  bundle ID, version/build number, Git SHA, Team ID, and provisioning profile
+  identity.
+- [ ] Verify both artifacts are internal-distribution builds and that no
+  production financial-action flag is enabled.
+
+**Physical-device acceptance**
+
+- [ ] On supported Android versions, test a clean install and an upgrade over
+  a copy of historical encrypted SDK storage.
+- [ ] On supported iOS versions, test a clean install and an upgrade over a
+  copy of historical encrypted SDK storage.
+- [ ] Confirm the exact historical and canonical THR addresses, BTC/USDT
+  pledge identities, recovery-kit access, read-only balances, and transaction
+  history remain unchanged.
+- [ ] Confirm Keychain/Keystore creation, retrieval after restart, device-only
+  access, lockout, deletion only after explicit wallet removal, and absence
+  from backup/restore onto another device.
+- [ ] Test biometric approval, explicit cancellation, denial, lockout,
+  device-passcode fallback within the same OS prompt, timeout, backgrounding,
+  account switching, and signing cancellation. Cancellation must cause no key
+  read and no network request.
+- [ ] Exercise migration interruptions after journal creation and after new
+  ciphertext write. Restart the app and prove recovery of the original record
+  or verified completion without address change.
+- [ ] Validate historical and canonical signer bindings against the actual
+  isolated backend; reject unrelated keys, stale accounts, altered envelopes,
+  duplicate nonces, and cross-instance replays.
+
+**Release and rollback**
+
+- [ ] Keep swaps, withdrawals, pools, staking, bridge, settlement, governance,
+  token/NFT mutations, and every other non-reviewed action disabled.
+- [ ] Obtain explicit operator sign-off on the build IDs and device matrix.
+- [ ] Distribute only to the approved internal cohort; do not submit to public
+  stores from this gate.
+- [ ] If acceptance fails, stop distribution and revoke the affected internal
+  build. Keep strict backend verification enabled and the affected action
+  disabled; never restore a weaker legacy authorization fallback.
+- [ ] For an interrupted credential migration, use the durable journal and
+  preserved original encrypted record. Do not rewrite server identity,
+  bindings, balances, pledge history, or transaction history.
+- [ ] Preserve failed artifacts and sanitized logs for review. Do not delete
+  the original encrypted record until a separately approved retention policy
+  has completed verified recovery evidence.
+
+### Evidence register for this revision
+
+| Evidence | State |
+|---|---|
+| EAS operator authentication | **BLOCKED** — execution environment is not logged in |
+| Genuine Expo project UUID | **BLOCKED** — not available in the execution environment |
+| Android signing credentials | **BLOCKED** — not available to this review |
+| Apple signing/provisioning credentials | **BLOCKED** — not available to this review |
+| Android internal build ID/artifact | **NOT PRODUCED** |
+| iOS internal build ID/artifact | **NOT PRODUCED** |
+| Physical Android device matrix | **NOT RUN** |
+| Physical iOS device matrix | **NOT RUN** |
+
+These blocked entries are release evidence requirements, not test failures.
+They must not be replaced with fabricated identifiers, simulator screenshots,
+or unsigned artifacts.
 
 ## Release-candidate evidence
 

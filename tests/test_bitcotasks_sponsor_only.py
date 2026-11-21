@@ -38,3 +38,18 @@ def test_other_provider_buttons_and_advertiser_funding_are_preserved():
     for marker in ('id="earn-surveys"', 'id="earn-timewall"', 'id="earn-pure"',
                    'id="earn-advertiser-form"', 'id="earn-advertiser-refresh"'):
         assert marker in PAGE
+
+
+def test_wallet_pwa_exposes_train2earn_only_inside_earn_providers():
+    assert 'data-earn-provider="train2earn"' in PWA
+    assert "'/api/earn/t2e/discovery'" in PWA
+    assert 'data-earn-provider="bitcotasks"' not in PWA
+    assert 'data-earn-provider="train2earn"' not in PWA[:PWA.index('id="earnProviderGrid"')]
+    assert "wallet-pwa-v29" in (ROOT / "public" / "wallet-pwa" / "sw.js").read_text()
+
+
+def test_web_gym_offerwall_requires_server_flag_and_never_promises_thc():
+    assert 'id="earn-gym-open"' in PAGE
+    assert "'/api/earn/t2e/discovery'" in PAGE
+    assert "No automatic THC credit" in PWA or "no automatic THC credit" in PWA
+    assert 'id="provider-bitcotasks"' not in PAGE

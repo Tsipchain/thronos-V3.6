@@ -322,7 +322,7 @@ export default function BridgeScreen({ navigation }: { navigation: any }) {
         to: wallet.chainAddresses?.[destChain] || creds.address,
         amount: parsedAmount,
         token: selectedToken,
-        nonce: Math.floor(Date.now() / 1000),
+        nonce: String(Math.floor(Date.now() / 1000)),
       });
 
       const result = await executeBridgeSigned({

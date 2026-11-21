@@ -16,8 +16,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS } from '../constants/theme';
 import { useStore } from '../store/useStore';
-import { getNfts, mintNft, buyNft, ThronosNft } from '../services/api';
-import { getWallet, getPrivateKey } from '../services/wallet';
+import { getNfts, mintNftV2, buyNftV2, ThronosNft } from '../services/api';
+import { signWalletV1FullPayloadRequest } from '../services/signing';
 import { CONFIG } from '../constants/config';
 
 function shortenAddr(addr: string): string {
@@ -31,6 +31,7 @@ export default function NFTScreen({ navigation }: { navigation: any }) {
   const [buyingId, setBuyingId] = useState<string | null>(null);
   const [showMint, setShowMint] = useState(false);
   const [minting, setMinting] = useState(false);
+  const [mintFee, setMintFee] = useState<number | null>(null);
 
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -41,6 +42,7 @@ export default function NFTScreen({ navigation }: { navigation: any }) {
     try {
       const res = await getNfts();
       setNfts(res.nfts || []);
+      setMintFee(typeof res.mint_fee === 'number' ? res.mint_fee : null);
     } catch (err) {
       console.warn('NFTs: failed to load', err);
     } finally {
@@ -58,13 +60,11 @@ export default function NFTScreen({ navigation }: { navigation: any }) {
         onPress: async () => {
           setBuyingId(nft.id);
           try {
-            const creds = await getWallet();
-            const privHex = await getPrivateKey();
-            if (!creds?.address || !privHex) {
-              Alert.alert('Error', 'Wallet credentials not found.');
-              return;
-            }
-            const result = await buyNft({ from: creds.address, nft_id: nft.id, private_key_hex: privHex });
+            const signedRequest = await signWalletV1FullPayloadRequest('nft_buy', {
+              nft_id: nft.id,
+              max_price: nft.price,
+            });
+            const result = await buyNftV2(signedRequest);
             if (result.ok) {
               Alert.alert('Purchased', `You now own "${nft.name}".`);
               load();
@@ -93,22 +93,21 @@ export default function NFTScreen({ navigation }: { navigation: any }) {
       Alert.alert('Invalid form', 'Enter a name for your NFT.');
       return;
     }
+    if (mintFee === null) {
+      Alert.alert('Unavailable', 'The authoritative NFT mint fee could not be loaded. Minting remains disabled.');
+      return;
+    }
     setMinting(true);
     try {
-      const creds = await getWallet();
-      const privHex = await getPrivateKey();
-      if (!creds?.address || !privHex) {
-        Alert.alert('Error', 'Wallet credentials not found.');
-        return;
-      }
-      const result = await mintNft({
-        from: creds.address,
+      const signedRequest = await signWalletV1FullPayloadRequest('nft_mint', {
         name: name.trim(),
         description: description.trim(),
+        category: 'art',
         price: parseFloat(price) || 0,
         royalties: parseInt(royalties, 10) || 0,
-        private_key_hex: privHex,
+        max_mint_fee: mintFee,
       });
+      const result = await mintNftV2(signedRequest);
       if (result.ok) {
         setShowMint(false);
         resetMintForm();
@@ -122,7 +121,7 @@ export default function NFTScreen({ navigation }: { navigation: any }) {
     } finally {
       setMinting(false);
     }
-  }, [name, description, price, royalties, load]);
+  }, [name, description, price, royalties, mintFee, load]);
 
   const renderItem = ({ item }: { item: ThronosNft }) => {
     const isMine = item.owner === wallet.address;

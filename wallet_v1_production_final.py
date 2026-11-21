@@ -321,6 +321,12 @@ def verify_publickey_matches_address(signed_tx: Dict[str, Any]) -> Tuple[bool, s
 
                 binding = (store or {}).get('bindings', {}).get(from_address)
                 if binding:
+                    # Historical records predate the status field; absence is
+                    # active for compatibility. Explicitly disabled/revoked
+                    # bindings must never authorize a SignedTxEnvelope.
+                    binding_status = str(binding.get('status') or 'active').strip().lower()
+                    if binding_status != 'active':
+                        return False, f"binding_inactive:{binding_status}"
                     bound_pubkey = (binding.get('public_key') or '').strip().lower()
                     if bound_pubkey == public_key_hex.strip().lower():
                         bound_key_address = binding.get('public_key_address', '')

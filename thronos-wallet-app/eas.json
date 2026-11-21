@@ -1,19 +1,43 @@
 {
   "cli": {
-    "version": ">= 7.0.0"
+    "version": ">= 16.0.0",
+    "requireCommit": true,
+    "appVersionSource": "local"
   },
   "build": {
+    "base": {
+      "node": "20.19.4",
+      "credentialsSource": "remote",
+      "env": {
+        "EXPO_PUBLIC_WALLET_RELEASE_CHANNEL": "internal-staging",
+        "EXPO_PUBLIC_WALLET_FINANCIAL_ACTIONS": "disabled"
+      }
+    },
     "development": {
+      "extends": "base",
       "developmentClient": true,
-      "distribution": "internal"
+      "distribution": "internal",
+      "ios": {
+        "simulator": false
+      }
     },
     "preview": {
+      "extends": "base",
       "distribution": "internal",
       "android": {
         "buildType": "apk"
+      },
+      "ios": {
+        "simulator": false
       }
     },
     "production": {
+      "extends": "base",
+      "distribution": "store",
+      "env": {
+        "EXPO_PUBLIC_WALLET_RELEASE_CHANNEL": "production-disabled",
+        "EXPO_PUBLIC_WALLET_FINANCIAL_ACTIONS": "disabled"
+      },
       "ios": {
         "resourceClass": "m-medium"
       },
@@ -21,5 +45,6 @@
         "buildType": "app-bundle"
       }
     }
-  }
+  },
+  "submit": {}
 }

@@ -59,15 +59,21 @@ import ThronosSDK from 'thronos-mobile-sdk';
 const thronos = new ThronosSDK({
     apiUrl: 'http://localhost:5000',
     network: 'mainnet',
-    autoSave: true
+    autoSave: true,
+    // Implement these adapters with iOS Keychain / Android Keystore and the
+    // platform system-authentication dialog. Do not use a device ID as a key.
+    secureKeyProvider: async () => osKeychain.getOrCreateWalletKey(),
+    deviceAuthenticator: async ({ reason, allowDevicePasscode }) =>
+        systemAuthentication.authenticate({ reason, allowDevicePasscode })
 });
 
 // Create a new wallet
 const wallet = await thronos.createWallet();
 console.log('Wallet created:', wallet.address);
 
-// Or import existing wallet
-await thronos.importWallet('THR...', 'secret_key');
+// Or restore from a BIP39 recovery phrase. Existing stored addresses are
+// preserved only when an explicit historical derivation matches.
+await thronos.importWallet(recoveryPhrase);
 
 // Get balances
 const balances = await thronos.getBalances();
@@ -164,33 +170,34 @@ GlobalScope.launch {
 #### `createWallet()`
 Creates a new Thronos wallet.
 
-**Returns:** `Promise<{address: string, secret: string}>`
+**Returns:** `Promise<{address: string, mnemonic: string}>`. Display the
+mnemonic once for verified backup; never log or transmit it.
 
 **Example:**
 ```javascript
 const wallet = await thronos.createWallet();
 console.log('Address:', wallet.address);
-console.log('Secret:', wallet.secret);
 ```
 
-#### `importWallet(address, secret)`
-Imports an existing wallet.
+#### `importWallet(mnemonic, options?)`
+Restores a BIP39 wallet. Raw address/secret import is not accepted by the
+JavaScript SDK.
 
 **Parameters:**
-- `address` (string): Wallet address starting with "THR"
-- `secret` (string): Wallet secret key
+- `mnemonic` (string): 12- or 24-word BIP39 recovery phrase
+- `options` (object, optional): independently authoritative identity validator
 
-**Returns:** `Promise<{address: string, secret: string}>`
+**Returns:** `Promise<{address: string, derivationVersion: string}>`
 
 **Example:**
 ```javascript
-await thronos.importWallet('THR79ca94a7eb70a6aa99d12d7fdb01446ef246301a', 'your_secret_key');
+await thronos.importWallet(recoveryPhrase);
 ```
 
 #### `getWallet()`
 Gets the currently connected wallet.
 
-**Returns:** `Promise<{address: string, secret: string}|null>`
+**Returns:** `Promise<{address: string, derivationVersion: string|null}|null>`
 
 #### `isConnected()`
 Checks if a wallet is connected.
@@ -268,7 +275,8 @@ Gets transaction history for a wallet.
 ### Cryptography
 
 #### `signMessage(message)`
-Signs a message with the current wallet's secret key.
+Disabled until a reviewed domain-separated message contract is selected.
+Financial signing uses device-approved transaction or Wallet V1 V2 envelopes.
 
 **Parameters:**
 - `message` (string): Message to sign
@@ -412,7 +420,9 @@ musicTxs.forEach(tx => {
 const thronos = new ThronosSDK({
     apiUrl: 'https://api.thronos.network',
     network: 'mainnet',
-    autoSave: true
+    autoSave: true,
+    secureKeyProvider: async () => osKeychain.getOrCreateWalletKey(),
+    deviceAuthenticator: async request => systemAuthentication.authenticate(request)
 });
 ```
 
@@ -481,17 +491,19 @@ export default function App() {
 
 ## Security Best Practices
 
-1. **Never hardcode secret keys**: Always store them securely using the SDK's built-in storage
+1. **Never hardcode secret keys**: supply an OS Keychain/Keystore-backed
+   `secureKeyProvider`; the SDK rejects predictable fallback keys
 2. **Use HTTPS**: In production, always use HTTPS for API communication
 3. **Validate addresses**: Always validate recipient addresses before sending transactions
-4. **Backup wallets**: Implement backup functionality for users to save their secret keys
+4. **Backup wallets**: verify the recovery phrase before any legacy storage migration
 5. **Test transactions**: Test with small amounts first before sending large transactions
 
 ## Platform-Specific Notes
 
 ### React Native
-- Requires `@react-native-async-storage/async-storage` for secure storage
-- Ensure you've linked the native modules
+- AsyncStorage holds ciphertext and public metadata only
+- Key material must come from an application-supplied OS Keychain/Keystore adapter
+- Signing and recovery export require an application-supplied system authenticator
 
 ### iOS
 - Uses iOS Keychain for secure storage

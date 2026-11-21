@@ -13,6 +13,7 @@ import { secp256k1 } from '@noble/curves/secp256k1';
 import { generateMnemonic as _genMnemonic, mnemonicToSeedSync, validateMnemonic as _validateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english';
 import { HDKey } from '@scure/bip32';
+import { approveMobileSdkOperation } from './mobileSdkPlatformAdapters';
 
 const KEY_ADDRESS   = 'thr_address_v1';
 const KEY_PRIV      = 'thr_private_key_v1';
@@ -66,17 +67,11 @@ export async function isBiometricAvailable(): Promise<boolean> {
 }
 
 export async function authenticateWithBiometrics(prompt = 'Unlock Thronos Wallet'): Promise<boolean> {
-  try {
-    const r = await LocalAuthentication.authenticateAsync({
-      promptMessage: prompt,
-      fallbackLabel: 'Use Passcode',
-      disableDeviceFallback: false,
-      cancelLabel: 'Cancel',
-    });
-    return r.success;
-  } catch {
-    return false;
-  }
+  const result = await approveMobileSdkOperation({
+    reason: prompt,
+    allowDevicePasscode: true,
+  });
+  return result.success;
 }
 
 export async function isBiometricEnabled(): Promise<boolean> {

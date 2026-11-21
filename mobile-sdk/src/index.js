@@ -21,25 +21,29 @@ export default class ThronosSDK {
 
     /**
      * Create a new wallet
-     * @returns {Promise<{address: string, secret: string}>}
+     * Requires secureKeyProvider backed by the OS Keychain/Keystore when
+     * autoSave is enabled.
+     * @returns {Promise<{address: string, mnemonic: string}>}
      */
     async createWallet() {
         return await this.wallet.create();
     }
 
     /**
-     * Import an existing wallet
-     * @param {string} address - Wallet address
-     * @param {string} secret - Wallet secret key
-     * @returns {Promise<{address: string, secret: string}>}
+     * Import or restore a BIP39 wallet. Historical stored addresses are
+     * retained when they match an explicitly supported derivation version.
+     * Raw address/secret import is intentionally not accepted here.
+     * @param {string} mnemonic - BIP39 recovery phrase
+     * @param {object} options - Optional authoritative identity validator
+     * @returns {Promise<{address: string, derivationVersion: string}>}
      */
-    async importWallet(address, secret) {
-        return await this.wallet.import(address, secret);
+    async importWallet(mnemonic, options = {}) {
+        return await this.wallet.import(mnemonic, options);
     }
 
     /**
      * Get current wallet
-     * @returns {Promise<{address: string, secret: string}|null>}
+     * @returns {Promise<{address: string, derivationVersion: string|null}|null>}
      */
     async getWallet() {
         return await this.wallet.get();
@@ -94,22 +98,21 @@ export default class ThronosSDK {
      * @param {string} to - Recipient address
      * @param {number} amount - Amount to send
      * @param {string} token - Token symbol (default: 'THR')
-     * @param {object} options - Optional: { speed: 'slow'|'fast', passphrase: string }
+     * @param {object} options - Optional: { speed: 'slow'|'fast', nonce: string }
      * @returns {Promise<{success: boolean, transaction: object}>}
      */
     async sendTransaction(to, amount, token = 'THR', options = {}) {
         const wallet = await this.wallet.get();
         if (!wallet) throw new Error('No wallet connected');
 
-        return await this.api.sendTransaction({
+        const signedTx = await this.wallet.signTransaction({
             from: wallet.address,
             to,
             amount,
             token,
-            secret: wallet.secret,
-            speed: options.speed || 'fast',
-            passphrase: options.passphrase
+            nonce: options.nonce
         });
+        return await this.api.sendTransaction(signedTx);
     }
 
     /**
@@ -126,13 +129,18 @@ export default class ThronosSDK {
             throw new Error('Transfers must be a non-empty array');
         }
 
-        return await this.api.sendMultipleTokens({
-            from: wallet.address,
-            transfers,
-            secret: wallet.secret,
-            speed: options.speed || 'fast',
-            passphrase: options.passphrase
-        });
+        const signedTransfers = [];
+        for (const transfer of transfers) {
+            const signedTx = await this.wallet.signTransaction({
+                from: wallet.address,
+                to: transfer.to,
+                amount: transfer.amount,
+                token: transfer.token || 'THR',
+                nonce: transfer.nonce
+            });
+            signedTransfers.push({ ...transfer, signedTx });
+        }
+        return await this.api.sendMultipleTokens({ transfers: signedTransfers });
     }
 
     /**
@@ -184,7 +192,7 @@ export default class ThronosSDK {
         const wallet = await this.wallet.get();
         if (!wallet) throw new Error('No wallet connected');
 
-        return await this.wallet.signMessage(message, wallet.secret);
+        throw new Error('Generic message signing is disabled until a domain-separated SDK contract is selected');
     }
 
     /**

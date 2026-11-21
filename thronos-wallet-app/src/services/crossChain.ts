@@ -2,6 +2,9 @@
 // Mirrors public/wallet-pwa/app.js's _fetchBtcAddress / _fetchAllChainBalances
 // so the mobile and PWA wallets show identical per-network data.
 
+import { secp256k1 } from '@noble/curves/secp256k1';
+import { sha256 } from '@noble/hashes/sha256';
+import { ripemd160 } from '@noble/hashes/ripemd160';
 import { CONFIG } from '../constants/config';
 
 const USDT_BNB = '0x55d398326f99059fF775485246999027B3197955';   // 18 dec
@@ -11,13 +14,24 @@ const USDC_ARB = '0xaf88d065e77c8cC2239327C5EDb3A432268e5831';  // 6 dec — nat
 
 export async function fetchBtcAddress(privateKeyHex: string): Promise<string> {
   try {
-    const r = await fetch(`${CONFIG.API_URL}/api/wallet/v1/btc-address-from-key`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ private_key_hex: privateKeyHex }),
-    });
-    const d = await r.json();
-    return d.ok && d.btc_address ? d.btc_address : '';
+    const key = Uint8Array.from((privateKeyHex.replace(/^0x/, '').match(/.{2}/g) || []).map(b => parseInt(b, 16)));
+    const publicKey = secp256k1.getPublicKey(key, true);
+    const payload = new Uint8Array(21);
+    payload[0] = 0x00; // Bitcoin mainnet P2PKH.
+    payload.set(ripemd160(sha256(publicKey)), 1);
+    const checksum = sha256(sha256(payload)).slice(0, 4);
+    const bytes = new Uint8Array(payload.length + checksum.length);
+    bytes.set(payload);
+    bytes.set(checksum, payload.length);
+    const alphabet = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+    let value = BigInt('0x' + Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join(''));
+    let encoded = '';
+    while (value > 0n) {
+      encoded = alphabet[Number(value % 58n)] + encoded;
+      value /= 58n;
+    }
+    for (const byte of bytes) { if (byte === 0) encoded = '1' + encoded; else break; }
+    return encoded;
   } catch {
     return '';
   }

@@ -8,10 +8,13 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "build:apk": "eas build --platform android --profile preview",
-    "build:android": "eas build --platform android --profile production",
-    "build:ios": "eas build --platform ios --profile production",
-    "build:all": "eas build --platform all --profile production"
+    "build:apk": "npm run native:config:check && eas build --platform android --profile preview",
+    "build:android": "npm run native:config:check && eas build --platform android --profile production",
+    "build:ios": "npm run native:config:check && eas build --platform ios --profile production",
+    "build:all": "npm run native:config:check && eas build --platform all --profile production",
+    "native:config:check": "node scripts/validate-native-release-config.mjs",
+    "build:rc:android": "npm run native:config:check && eas build --platform android --profile preview --non-interactive",
+    "build:rc:ios": "npm run native:config:check && eas build --platform ios --profile preview --non-interactive"
   },
   "dependencies": {
     "@expo/vector-icons": "^14.0.0",
@@ -59,6 +62,7 @@
   },
   "devDependencies": {
     "@babel/core": "^7.20.0",
+    "@types/jest": "^29.5.14",
     "@types/react": "~18.2.45",
     "typescript": "~5.3.3"
   },

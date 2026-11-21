@@ -2049,6 +2049,35 @@ def wallet_pwa(filename='index.html'):
     return response
 
 
+# ── L2E Student Dashboard ─────────────────────────────────────────────────────
+from flask import render_template as _render_template
+
+@app.route("/student-dashboard")
+def l2e_student_dashboard_page():
+    server_wallet = None
+    server_learner_id = None
+    token = (_request.cookies.get('thr_session') or '').strip()
+    if token:
+        sess = _LOGIN_SESSION_STORE.get(token)
+        if sess and sess.get('expires_at', 0) >= _time_wa.time():
+            server_wallet = sess.get('address')
+            server_learner_id = sess.get('learner_id') or sess.get('address')
+    if not server_learner_id:
+        import server as _server_mod_l2e
+        _earn_store = getattr(_server_mod_l2e, '_earn_acct_store', None)
+        if _earn_store is not None:
+            _earn_tok = (_request.cookies.get('thr_earn_session') or '').strip()
+            if _earn_tok:
+                _earn_user = _earn_store.user_for_session(_earn_tok)
+                if _earn_user:
+                    server_learner_id = _earn_user['earn_user_id']
+                    wl = _earn_store.wallet_link_for_user(server_learner_id)
+                    if wl:
+                        server_wallet = wl['wallet_address']
+    return _render_template("l2e_student_dashboard.html",
+                           server_wallet=server_wallet,
+                           server_learner_id=server_learner_id)
+
 
 # ── Security: reject probe paths without banning shared proxy IPs ─────────────
 from flask import request as _req, abort as _abort

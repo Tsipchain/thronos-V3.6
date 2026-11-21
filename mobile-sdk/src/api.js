@@ -201,6 +201,13 @@ export default class ThronosAPI {
      * @returns {Promise<{success: boolean, transaction: object}>}
      */
     async executeSwap(swapDetails) {
+        if (!swapDetails || swapDetails.signature_format !== 'wallet_v1_full_payload_v2') {
+            throw new Error('Wallet V1 V2 full-payload signature required');
+        }
+        const forbidden = ['private_key_hex', 'privateKey', 'secret', 'send_secret', 'auth_secret', 'seed', 'mnemonic', 'pin'];
+        if (forbidden.some(field => swapDetails[field] !== undefined)) {
+            throw new Error('Raw signing material is forbidden');
+        }
         return await this.request('/api/swap/execute', {
             method: 'POST',
             body: JSON.stringify(swapDetails)

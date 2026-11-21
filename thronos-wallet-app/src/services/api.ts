@@ -3,12 +3,17 @@
 // Node 1 (master) primary, Node 2 (replica) fallback
 
 import { CONFIG } from '../constants/config';
+import type { WalletV1FullPayloadRequest } from './signing';
 
 const BASE = CONFIG.API_URL;
 const BASE_REPLICA = CONFIG.API_URL_REPLICA;
 
 async function request<T = any>(endpoint: string, options?: RequestInit): Promise<T> {
-  for (const baseUrl of [BASE, BASE_REPLICA]) {
+  const method = String(options?.method || 'GET').toUpperCase();
+  // A mutation may have committed even when its response was lost. Never
+  // resubmit it to another node; the caller must retry the same signed nonce.
+  const baseUrls = method === 'GET' || method === 'HEAD' ? [BASE, BASE_REPLICA] : [BASE];
+  for (const baseUrl of baseUrls) {
     try {
       const url = `${baseUrl}${endpoint}`;
       const res = await fetch(url, {
@@ -21,7 +26,7 @@ async function request<T = any>(endpoint: string, options?: RequestInit): Promis
       }
       return res.json();
     } catch (err) {
-      if (baseUrl === BASE_REPLICA) throw err;
+      if (baseUrl === baseUrls[baseUrls.length - 1]) throw err;
       continue;
     }
   }
@@ -134,7 +139,8 @@ export async function getPledgeInfo(address: string): Promise<{ pledged_amount: 
 }
 
 export async function pledgeTokensSigned(params: { signedTx: SignedTxEnvelope }): Promise<{ success: boolean; txHash?: string }> {
-  return request('/api/pledge/stake', { method: 'POST', body: JSON.stringify({ tx: params.signedTx }) });
+  void params;
+  throw new Error('wallet_v1_v2_staking_contract_required');
 }
 
 export async function getSwapQuote(from: string, to: string, amount: number): Promise<{ rate: number; amount_out: number; fee: number }> {
@@ -145,8 +151,8 @@ export async function getSwapQuote(from: string, to: string, amount: number): Pr
   return { rate, amount_out: amountOut, fee };
 }
 
-export async function executeSwapSigned(params: { signedTx: SignedTxEnvelope }): Promise<{ success: boolean; txHash?: string; error?: string }> {
-  return request('/api/swap/execute', { method: 'POST', body: JSON.stringify({ tx: params.signedTx }) });
+export async function executeSwapV2(signedRequest: WalletV1FullPayloadRequest): Promise<{ success?: boolean; ok?: boolean; txHash?: string; error?: string }> {
+  return request('/api/swap/execute', { method: 'POST', body: JSON.stringify(signedRequest) });
 }
 
 export async function verifySignature(message: string, signature: string, address: string): Promise<{ valid: boolean }> {
@@ -176,8 +182,8 @@ export async function recordPlay(trackId: string, address: string): Promise<{ su
   return request(`/api/v1/music/play/${trackId}`, { method: 'POST', body: JSON.stringify({ address }) });
 }
 
-export async function tipArtist(params: { address: string; track_id: string; artist: string; amount: number }): Promise<{ success: boolean; tx_hash?: string }> {
-  return request('/api/v1/music/tip', { method: 'POST', body: JSON.stringify(params) });
+export async function tipArtistV2(signedRequest: WalletV1FullPayloadRequest): Promise<{ success?: boolean; status?: string; tx_hash?: string }> {
+  return request('/api/v1/music/tip', { method: 'POST', body: JSON.stringify(signedRequest) });
 }
 
 export async function getMusicPlaylists(address: string): Promise<{ playlists: MusicPlaylist[] }> {
@@ -217,7 +223,8 @@ export async function getGovernanceProposals(): Promise<{ proposals: any[] }> {
 }
 
 export async function voteOnProposalSigned(params: { proposal_id: string; vote: 'yes' | 'no' | 'abstain'; signedVote: SignedTxEnvelope }): Promise<{ success: boolean }> {
-  return request('/api/v1/governance/vote', { method: 'POST', body: JSON.stringify({ proposal_id: params.proposal_id, vote: params.vote, tx: params.signedVote }) });
+  void params;
+  throw new Error('wallet_v1_v2_governance_contract_required');
 }
 
 export async function getAiSessionHistory(address: string): Promise<{ sessions: any[] }> {
@@ -259,7 +266,8 @@ export async function getBridgeQuote(params: { from_chain: string; to_chain: str
 }
 
 export async function executeBridgeSigned(params: { from_chain: string; to_chain: string; signedTx: SignedTxEnvelope }): Promise<{ success: boolean; transfer?: BridgeTransfer; error?: string }> {
-  return request('/api/bridge/execute', { method: 'POST', body: JSON.stringify({ from_chain: params.from_chain, to_chain: params.to_chain, tx: params.signedTx }) });
+  void params;
+  throw new Error('wallet_v1_v2_bridge_contract_required');
 }
 
 export async function getBridgeHistory(address: string): Promise<{ transfers: BridgeTransfer[] }> {
@@ -267,7 +275,8 @@ export async function getBridgeHistory(address: string): Promise<{ transfers: Br
 }
 
 export async function bridgeBurnSigned(params: { btc_destination: string; signedTx: SignedTxEnvelope }): Promise<{ success: boolean; tx_hash?: string; btc_amount?: number; error?: string }> {
-  return request('/api/bridge/burn', { method: 'POST', body: JSON.stringify({ btc_destination: params.btc_destination, tx: params.signedTx }) });
+  void params;
+  throw new Error('wallet_v1_v2_bridge_withdrawal_contract_required');
 }
 
 export async function getBridgeStats(): Promise<{ total_burned_thr: number; total_locked_btc: number; transaction_count: number; exchange_rate: number }> {
@@ -352,13 +361,13 @@ export interface WithdrawResult {
 
 export async function requestWithdrawal(params: {
   address: string;
-  send_secret: string;
   amount: number;
   token: 'USDT' | 'USDC';
   dest_chain: string;
   dest_address: string;
 }): Promise<WithdrawResult> {
-  return request('/api/v1/withdraw', { method: 'POST', body: JSON.stringify(params) });
+  void params;
+  throw new Error('wallet_v1_v2_withdrawal_contract_required');
 }
 
 export interface WithdrawChain {
@@ -402,8 +411,8 @@ export async function getLPPositions(address: string): Promise<{ positions: Arra
   return request(`/api/v1/pools/positions/${address}`);
 }
 
-export async function addLiquidity(params: { from: string; pool_id: string; amount_a: number; amount_b: number; private_key_hex: string }): Promise<{ ok: boolean; status?: string; shares_minted?: number; error?: string }> {
-  return request('/api/wallet/v1/add_liquidity', { method: 'POST', body: JSON.stringify({ from: params.from, pool_id: params.pool_id, amount_a: params.amount_a, amount_b: params.amount_b, private_key_hex: params.private_key_hex }) });
+export async function addLiquidityV2(signedRequest: WalletV1FullPayloadRequest): Promise<{ ok?: boolean; status?: string; shares_minted?: number; error?: string }> {
+  return request('/api/v1/pools/add_liquidity', { method: 'POST', body: JSON.stringify(signedRequest) });
 }
 
 export interface ExternalChainInfo {
@@ -473,26 +482,8 @@ export interface CrossChainAddLiquidityResult {
   error?: string;
 }
 
-export async function addLiquidityCrossChain(params: {
-  pool_id: string;
-  amount_a: number;
-  amount_b: number;
-  chain: string;
-  token_contract: string;
-  decimals: number;
-  provider_thr: string;
-  evm_address: string;
-  auth_secret: string;
-  passphrase?: string;
-}): Promise<CrossChainAddLiquidityResult> {
-  return request('/api/v1/pools/add-liquidity', {
-    method: 'POST',
-    body: JSON.stringify(params),
-  });
-}
-
-export async function removeLiquiditySigned(params: { pool_id: string; shares: number; signedTx: SignedTxEnvelope }): Promise<{ success: boolean; amount_a?: number; amount_b?: number; error?: string }> {
-  return request('/api/v1/pools/remove_liquidity', { method: 'POST', body: JSON.stringify({ pool_id: params.pool_id, shares: params.shares, tx: params.signedTx }) });
+export async function removeLiquidityV2(signedRequest: WalletV1FullPayloadRequest): Promise<{ success?: boolean; status?: string; amount_a?: number; amount_b?: number; error?: string }> {
+  return request('/api/v1/pools/remove_liquidity', { method: 'POST', body: JSON.stringify(signedRequest) });
 }
 
 export interface HalvingEntry {
@@ -546,8 +537,8 @@ export interface ThronosToken {
   total_supply: number;
 }
 
-export async function createToken(params: { from: string; name: string; symbol: string; total_supply: number; decimals: number; private_key_hex: string }): Promise<{ ok: boolean; status?: string; token?: ThronosToken; error?: string }> {
-  return request('/api/wallet/v1/create_token', { method: 'POST', body: JSON.stringify(params) });
+export async function createTokenV2(signedRequest: WalletV1FullPayloadRequest): Promise<{ ok: boolean; status?: string; token?: ThronosToken; error?: string }> {
+  return request('/api/wallet/v1/create_token', { method: 'POST', body: JSON.stringify(signedRequest) });
 }
 
 export interface ThronosNft {
@@ -564,16 +555,16 @@ export interface ThronosNft {
   created_at?: string;
 }
 
-export async function getNfts(): Promise<{ nfts: ThronosNft[] }> {
+export async function getNfts(): Promise<{ nfts: ThronosNft[]; mint_fee?: number }> {
   return request('/api/v1/nfts');
 }
 
-export async function mintNft(params: { from: string; name: string; description?: string; category?: string; price?: number; royalties?: number; image_data_url?: string; private_key_hex: string }): Promise<{ ok: boolean; status?: string; nft?: ThronosNft; error?: string }> {
-  return request('/api/wallet/v1/nfts/mint', { method: 'POST', body: JSON.stringify(params) });
+export async function mintNftV2(signedRequest: WalletV1FullPayloadRequest): Promise<{ ok: boolean; status?: string; nft?: ThronosNft; error?: string }> {
+  return request('/api/wallet/v1/nfts/mint', { method: 'POST', body: JSON.stringify(signedRequest) });
 }
 
-export async function buyNft(params: { from: string; nft_id: string; private_key_hex: string }): Promise<{ ok: boolean; status?: string; nft?: ThronosNft; error?: string }> {
-  return request('/api/wallet/v1/nfts/buy', { method: 'POST', body: JSON.stringify(params) });
+export async function buyNftV2(signedRequest: WalletV1FullPayloadRequest): Promise<{ ok: boolean; status?: string; nft?: ThronosNft; error?: string }> {
+  return request('/api/wallet/v1/nfts/buy', { method: 'POST', body: JSON.stringify(signedRequest) });
 }
 
 export async function getMiningInfo(address: string): Promise<{ hashrate: number; pending_reward: number; total_mined: number; blocks_found: number; last_payout: string }> {
@@ -681,10 +672,8 @@ export interface PythiaDepositResult {
 }
 
 export async function depositToPythiaPool(params: PythiaDepositParams): Promise<PythiaDepositResult> {
-  return request('/api/pools/deposit', {
-    method: 'POST',
-    body: JSON.stringify(params),
-  });
+  void params;
+  throw new Error('wallet_v1_v2_pythia_deposit_contract_required');
 }
 
 export interface PythiaWithdrawIntentParams {
@@ -704,10 +693,8 @@ export interface PythiaWithdrawIntentResult {
 }
 
 export async function createPythiaPoolWithdrawIntent(params: PythiaWithdrawIntentParams): Promise<PythiaWithdrawIntentResult> {
-  return request('/api/pools/withdraw-intent', {
-    method: 'POST',
-    body: JSON.stringify(params),
-  });
+  void params;
+  throw new Error('wallet_v1_v2_pythia_withdrawal_contract_required');
 }
 
 export interface PythiaWithdrawalQuoteParams {

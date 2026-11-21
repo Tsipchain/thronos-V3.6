@@ -20,16 +20,14 @@ export default function CreateWalletScreen() {
   const navigation = useNavigation<Nav>();
   const { setWallet } = useStore();
   const [loading, setLoading] = useState(false);
-  const [wallet, setCreatedWallet] = useState<{ address: string; secret: string; mnemonic?: string } | null>(null);
-  const [secretCopied, setSecretCopied] = useState(false);
+  const [wallet, setCreatedWallet] = useState<{ address: string; mnemonic: string } | null>(null);
   const [addressCopied, setAddressCopied] = useState(false);
   const [mnemonicCopied, setMnemonicCopied] = useState(false);
 
   const handleCreate = async () => {
     setLoading(true);
     try {
-      const mnemonic = generateMnemonic();
-      const result = await createNewWallet(mnemonic);
+      const result = await createNewWallet();
       setCreatedWallet(result);
     } catch (error: any) {
       Alert.alert('Error', error.message || 'Failed to create wallet. Check your connection.');
@@ -43,14 +41,6 @@ export default function CreateWalletScreen() {
       await Clipboard.setStringAsync(wallet.mnemonic);
       setMnemonicCopied(true);
       setTimeout(() => setMnemonicCopied(false), 3000);
-    }
-  };
-
-  const copySecret = async () => {
-    if (wallet) {
-      await Clipboard.setStringAsync(wallet.secret);
-      setSecretCopied(true);
-      setTimeout(() => setSecretCopied(false), 3000);
     }
   };
 
@@ -95,7 +85,7 @@ export default function CreateWalletScreen() {
             </View>
             <Text style={styles.title}>Create Your Thronos Wallet</Text>
             <Text style={styles.desc}>
-              Your wallet will be created on the Thronos blockchain. You'll receive a unique address and a secret key that you must keep safe.
+              Your wallet is created locally on this device. Save the recovery phrase; signing keys are never sent to the server.
             </Text>
 
             <TouchableOpacity style={styles.createBtn} onPress={handleCreate} disabled={loading}>
@@ -141,18 +131,6 @@ export default function CreateWalletScreen() {
             </View>
           </TouchableOpacity>
 
-          {/* Secret */}
-          <TouchableOpacity style={[styles.credBox, styles.secretBox]} onPress={copySecret}>
-            <Text style={styles.credLabel}>
-              <Ionicons name="key" size={14} color={COLORS.warning} /> Secret Key
-            </Text>
-            <Text style={styles.credValue} selectable>{wallet.secret}</Text>
-            <View style={styles.copyRow}>
-              <Ionicons name={secretCopied ? 'checkmark' : 'copy-outline'} size={16} color={COLORS.warning} />
-              <Text style={[styles.copyText, { color: COLORS.warning }]}>{secretCopied ? 'Copied!' : 'Tap to copy'}</Text>
-            </View>
-          </TouchableOpacity>
-
           {/* Recovery Phrase */}
           {wallet.mnemonic && (
             <TouchableOpacity style={[styles.credBox, styles.mnemonicBox]} onPress={copyMnemonic}>
@@ -188,7 +166,7 @@ export default function CreateWalletScreen() {
           <TouchableOpacity style={styles.continueBtn} onPress={handleContinue}>
             <LinearGradient colors={[COLORS.success, '#059669']} style={styles.btnGradient}>
               <Ionicons name="checkmark-circle" size={24} color={COLORS.text} />
-              <Text style={[styles.btnText, { color: COLORS.text }]}>I've Saved My Key - Continue</Text>
+              <Text style={[styles.btnText, { color: COLORS.text }]}>I've Saved My Recovery Phrase</Text>
             </LinearGradient>
           </TouchableOpacity>
 

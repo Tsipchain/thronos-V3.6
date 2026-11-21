@@ -94,22 +94,21 @@ export default class ThronosSDK {
      * @param {string} to - Recipient address
      * @param {number} amount - Amount to send
      * @param {string} token - Token symbol (default: 'THR')
-     * @param {object} options - Optional: { speed: 'slow'|'fast', passphrase: string }
+     * @param {object} options - Optional: { speed: 'slow'|'fast', nonce: string }
      * @returns {Promise<{success: boolean, transaction: object}>}
      */
     async sendTransaction(to, amount, token = 'THR', options = {}) {
         const wallet = await this.wallet.get();
         if (!wallet) throw new Error('No wallet connected');
 
-        return await this.api.sendTransaction({
+        const signedTx = await this.wallet.signTransaction({
             from: wallet.address,
             to,
             amount,
             token,
-            secret: wallet.secret,
-            speed: options.speed || 'fast',
-            passphrase: options.passphrase
+            nonce: options.nonce
         });
+        return await this.api.sendTransaction(signedTx);
     }
 
     /**
@@ -126,13 +125,18 @@ export default class ThronosSDK {
             throw new Error('Transfers must be a non-empty array');
         }
 
-        return await this.api.sendMultipleTokens({
-            from: wallet.address,
-            transfers,
-            secret: wallet.secret,
-            speed: options.speed || 'fast',
-            passphrase: options.passphrase
-        });
+        const signedTransfers = [];
+        for (const transfer of transfers) {
+            const signedTx = await this.wallet.signTransaction({
+                from: wallet.address,
+                to: transfer.to,
+                amount: transfer.amount,
+                token: transfer.token || 'THR',
+                nonce: transfer.nonce
+            });
+            signedTransfers.push({ ...transfer, signedTx });
+        }
+        return await this.api.sendMultipleTokens({ transfers: signedTransfers });
     }
 
     /**
@@ -184,7 +188,7 @@ export default class ThronosSDK {
         const wallet = await this.wallet.get();
         if (!wallet) throw new Error('No wallet connected');
 
-        return await this.wallet.signMessage(message, wallet.secret);
+        throw new Error('Generic message signing is disabled until a domain-separated SDK contract is selected');
     }
 
     /**

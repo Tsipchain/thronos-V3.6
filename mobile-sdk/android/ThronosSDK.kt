@@ -53,25 +53,7 @@ class ThronosSDK(
      * Create a new wallet
      */
     suspend fun createWallet(): Result<Wallet> = withContext(Dispatchers.IO) {
-        try {
-            val request = Request.Builder()
-                .url("$apiUrl/api/wallet/create")
-                .post("".toRequestBody("application/json".toMediaTypeOrNull()))
-                .build()
-
-            val response = client.newCall(request).execute()
-            if (!response.isSuccessful) {
-                return@withContext Result.failure(Exception("Failed to create wallet"))
-            }
-
-            val wallet = gson.fromJson(response.body?.string(), Wallet::class.java)
-            currentWallet = wallet
-            saveWalletToStorage(wallet)
-
-            Result.success(wallet)
-        } catch (e: Exception) {
-            Result.failure(e)
-        }
+        Result.failure(SecurityException("Native wallet creation must be implemented on-device; server-generated secrets are disabled"))
     }
 
     /**
@@ -158,36 +140,19 @@ class ThronosSDK(
         amount: Double,
         token: String = "THR"
     ): Result<TransactionResponse> = withContext(Dispatchers.IO) {
+        Result.failure(SecurityException("Use sendSignedTransaction after local secp256k1 signing"))
+    }
+
+    suspend fun sendSignedTransaction(signedTx: SignedTransaction): Result<TransactionResponse> = withContext(Dispatchers.IO) {
         try {
-            val wallet = currentWallet
-                ?: return@withContext Result.failure(Exception("No wallet connected"))
-
-            val transaction = TransactionRequest(
-                from = wallet.address,
-                to = to,
-                amount = amount,
-                token = token,
-                secret = wallet.secret
-            )
-
-            val requestBody = gson.toJson(transaction)
+            require(signedTx.signature.isNotBlank() && signedTx.publicKey.isNotBlank())
+            val body = gson.toJson(SignedTransactionRequest(signedTx))
                 .toRequestBody("application/json".toMediaTypeOrNull())
-
-            val request = Request.Builder()
-                .url("$apiUrl/api/wallet/send")
-                .post(requestBody)
-                .build()
-
+            val request = Request.Builder().url("$apiUrl/api/v1/tx/send").post(body).build()
             val response = client.newCall(request).execute()
-            if (!response.isSuccessful) {
-                return@withContext Result.failure(Exception("Transaction failed"))
-            }
-
-            val txResponse = gson.fromJson(response.body?.string(), TransactionResponse::class.java)
-            Result.success(txResponse)
-        } catch (e: Exception) {
-            Result.failure(e)
-        }
+            if (!response.isSuccessful) return@withContext Result.failure(Exception("Transaction failed"))
+            Result.success(gson.fromJson(response.body?.string(), TransactionResponse::class.java))
+        } catch (e: Exception) { Result.failure(e) }
     }
 
     /**
@@ -269,13 +234,18 @@ class ThronosSDK(
         @SerializedName("last_updated") val lastUpdated: String
     )
 
-    data class TransactionRequest(
+    data class SignedTransaction(
         val from: String,
         val to: String,
         val amount: Double,
         val token: String,
-        val secret: String
+        val nonce: String,
+        val timestamp: Long,
+        val signature: String,
+        val publicKey: String
     )
+
+    data class SignedTransactionRequest(val tx: SignedTransaction)
 
     data class TransactionResponse(
         val success: Boolean,

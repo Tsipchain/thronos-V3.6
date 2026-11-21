@@ -47,7 +47,8 @@ function isThrAddress(value: string): boolean {
 
 export default function ScanScreen() {
   const navigation = useNavigation<any>();
-  const { address: walletAddress } = useStore();
+  const { wallet } = useStore();
+  const walletAddress = wallet.address;
   const [permission, requestPermission] = useCameraPermissions();
   const [scanned, setScanned] = useState(false);
   const [pairing, setPairing] = useState(false);
@@ -163,7 +164,7 @@ export default function ScanScreen() {
           </TouchableOpacity>
         </View>
         <View style={styles.center}>
-          <Ionicons name="camera-off-outline" size={64} color={COLORS.textMuted} />
+          <Ionicons name="camera-outline" size={64} color={COLORS.textMuted} />
           <Text style={styles.title}>Camera Access Required</Text>
           <Text style={styles.sub}>
             Thronos Wallet needs camera permission to scan QR codes.

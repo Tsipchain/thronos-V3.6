@@ -31160,23 +31160,12 @@ def api_wallet_pool_deposit_intent():
 
 @app.route("/api/wallet/v1/btc-address-from-key", methods=["POST"])
 def api_wallet_v1_btc_address_from_key():
-    """PWA/mobile: derive BTC address directly from private_key_hex (same trust model as /api/wallet/v1/transfer)."""
-    data = request.get_json() or {}
-    priv_hex = (data.get("private_key_hex") or "").strip()
-    if not priv_hex:
-        return jsonify(ok=False, error="missing_private_key_hex"), 400
-    try:
-        from cryptography.hazmat.primitives.asymmetric import ec as _ec
-        from cryptography.hazmat.primitives.serialization import Encoding as _Enc, PublicFormat as _PF
-        from cryptography.hazmat.backends import default_backend as _backend
-        priv_int = int(priv_hex, 16)
-        priv_key = _ec.derive_private_key(priv_int, _ec.SECP256K1(), _backend())
-        pub_bytes = priv_key.public_key().public_bytes(_Enc.X962, _PF.CompressedPoint)
-        pubkey_hex = pub_bytes.hex()
-        btc_addr = pubkey_hex_to_btc_address(pubkey_hex)
-        return jsonify(ok=True, btc_address=btc_addr, pubkey=pubkey_hex, network="mainnet", type="P2PKH")
-    except Exception as exc:
-        return jsonify(ok=False, error="invalid_private_key", detail=str(exc)), 400
+    """Retired: address derivation must happen on-device from the public key."""
+    return jsonify(
+        ok=False,
+        error="private_key_input_retired",
+        message="Derive the Bitcoin address locally; private keys are never accepted",
+    ), 410
 
 
 # ─── Token Balances API (NEW) ─────────────────────────────────────
@@ -33833,6 +33822,21 @@ _WALLET_V1_V2_ACTION_SCHEMAS = {
         "allowed": {"owner_address"},
         "required": {"owner_address"},
         "sender_field": "heir_address",
+    },
+    "token_create": {
+        "allowed": {"name", "symbol", "total_supply", "decimals"},
+        "required": {"name", "symbol", "total_supply", "decimals"},
+        "sender_field": "owner",
+    },
+    "nft_mint": {
+        "allowed": {"name", "description", "category", "price", "royalties", "max_mint_fee"},
+        "required": {"name", "price", "royalties", "max_mint_fee"},
+        "sender_field": "creator",
+    },
+    "nft_buy": {
+        "allowed": {"nft_id", "max_price"},
+        "required": {"nft_id", "max_price"},
+        "sender_field": "buyer",
     },
 }
 
@@ -47337,7 +47341,7 @@ def api_v1_nfts():
                 nfts = data.get("nfts", [])
                 for nft in nfts:
                     nft["image_url"] = normalize_media_url(nft.get("image_url") or nft.get("image"))
-                return jsonify({"status": "success", "nfts": nfts}), 200
+                return jsonify({"status": "success", "nfts": nfts, "mint_fee": NFT_MINT_FEE}), 200
         except Exception as exc:
             logger.warning("[NFT] Failed to fetch from master: %s", exc)
 
@@ -47345,7 +47349,7 @@ def api_v1_nfts():
     nfts = registry.get("nfts", [])
     for nft in nfts:
         nft["image_url"] = normalize_media_url(nft.get("image_url") or nft.get("image"))
-    return jsonify({"status": "success", "nfts": nfts}), 200
+    return jsonify({"status": "success", "nfts": nfts, "mint_fee": NFT_MINT_FEE}), 200
 
 
 NFT_MINT_FEE = float(_strip_env_quotes(os.getenv("NFT_MINT_FEE", "1.0")))  # 1 THR mint fee

@@ -179,7 +179,7 @@ export default class ThronosWallet {
             // Derive address from compressed public key using canonical Bitcoin-style algorithm
             // 1. SHA256 of compressed public key
             const publicKeyHex = child.publicKey.toString('hex');
-            const sha256Hash = CryptoJS.SHA256(publicKeyHex).toString();
+            const sha256Hash = CryptoJS.SHA256(CryptoJS.enc.Hex.parse(publicKeyHex));
 
             // 2. RIPEMD160 of SHA256 result
             const ripemd160Hash = CryptoJS.RIPEMD160(sha256Hash).toString();

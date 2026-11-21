@@ -42,6 +42,8 @@ interface ArchitectProject {
 const EARNING_TYPE_META: Record<EarningEntry['type'], { icon: keyof typeof Ionicons.glyphMap; color: string; label: string }> = {
   training: { icon: 'hardware-chip', color: COLORS.primary, label: 'Training' },
   rating: { icon: 'star', color: COLORS.gold, label: 'Rating' },
+  contribution: { icon: 'git-commit', color: COLORS.info, label: 'Contribution' },
+  architect: { icon: 'construct', color: COLORS.primary, label: 'Architect' },
   data: { icon: 'cloud-upload', color: COLORS.info, label: 'Data' },
   bonus: { icon: 'gift', color: COLORS.success, label: 'Bonus' },
 };

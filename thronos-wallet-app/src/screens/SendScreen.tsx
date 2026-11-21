@@ -61,7 +61,7 @@ const NETWORK_PLACEHOLDERS: Record<Network, string> = {
 // ── Component ────────────────────────────────────────────────────────────────
 
 export default function SendScreen() {
-  const navigation = useNavigation();
+  const navigation = useNavigation<any>();
   const route = useRoute<RouteProp<RootStackParamList, 'Send'>>();
   const { wallet, tokens } = useStore();
   const [selectedNetwork, setSelectedNetwork] = useState<Network>('thronos');
@@ -148,7 +148,7 @@ export default function SendScreen() {
                 to: recipient.trim(),
                 amount: amt,
                 token: selectedToken,
-                nonce: Math.floor(Date.now() / 1000),
+                nonce: String(Math.floor(Date.now() / 1000)),
               });
 
               const result = selectedToken === 'THR'

@@ -11,6 +11,7 @@ import { useStore } from '../store/useStore';
 import { getTransactionHistory, getNormalizedWalletHistory } from '../services/api';
 
 const { width: SCREEN_W } = Dimensions.get('window');
+function isNonNull<T>(value: T | null): value is T { return value !== null; }
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -758,7 +759,7 @@ export default function HistoryScreen() {
                   { label: 'Fee', value: selectedTx.fee != null && selectedTx.fee > 0 ? `${formatAmountExact(selectedTx.fee)} THR` : selectedTx.fee === null ? '—' : 'Free' },
                   { label: 'Time', value: formatFullDate(selectedTx.timestampMs) },
                   { label: 'TX Hash', value: selectedTx.hash || 'Pending...', mono: true },
-                ].filter((r): r is { label: string; value: string; mono?: boolean } => r !== null).map((row) => (
+                ].filter(isNonNull).map((row) => (
                   <View key={row.label} style={styles.detailRow}>
                     <Text style={styles.detailRowLabel}>{row.label}</Text>
                     <Text style={[styles.detailRowValue, row.mono && styles.monoText]} numberOfLines={1}>

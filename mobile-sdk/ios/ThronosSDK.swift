@@ -28,35 +28,7 @@ public class ThronosSDK {
 
     /// Create a new wallet
     public func createWallet(completion: @escaping (Result<Wallet, Error>) -> Void) {
-        guard let url = URL(string: "\(apiUrl)/api/wallet/create") else {
-            completion(.failure(ThronosError.invalidURL))
-            return
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
-            if let error = error {
-                completion(.failure(error))
-                return
-            }
-
-            guard let data = data else {
-                completion(.failure(ThronosError.noData))
-                return
-            }
-
-            do {
-                let wallet = try JSONDecoder().decode(Wallet.self, from: data)
-                self?.currentWallet = wallet
-                self?.saveWalletToKeychain(wallet)
-                completion(.success(wallet))
-            } catch {
-                completion(.failure(error))
-            }
-        }.resume()
+        completion(.failure(ThronosError.localSigningRequired))
     }
 
     /// Import an existing wallet
@@ -126,30 +98,23 @@ public class ThronosSDK {
 
     /// Send transaction
     public func sendTransaction(to: String, amount: Double, token: String = "THR", completion: @escaping (Result<TransactionResponse, Error>) -> Void) {
-        guard let wallet = currentWallet else {
-            completion(.failure(ThronosError.noWallet))
-            return
-        }
+        completion(.failure(ThronosError.localSigningRequired))
+    }
 
-        guard let url = URL(string: "\(apiUrl)/api/wallet/send") else {
-            completion(.failure(ThronosError.invalidURL))
-            return
+    public func sendSignedTransaction(_ transaction: SignedTransaction, completion: @escaping (Result<TransactionResponse, Error>) -> Void) {
+        guard !transaction.signature.isEmpty, !transaction.publicKey.isEmpty else {
+            completion(.failure(ThronosError.localSigningRequired)); return
         }
-
-        let transaction = TransactionRequest(
-            from: wallet.address,
-            to: to,
-            amount: amount,
-            token: token,
-            secret: wallet.secret
-        )
+        guard let url = URL(string: "\(apiUrl)/api/v1/tx/send") else {
+            completion(.failure(ThronosError.invalidURL)); return
+        }
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
         do {
-            request.httpBody = try JSONEncoder().encode(transaction)
+            request.httpBody = try JSONEncoder().encode(SignedTransactionRequest(tx: transaction))
         } catch {
             completion(.failure(error))
             return
@@ -275,13 +240,18 @@ public struct TokensResponse: Codable {
     public let last_updated: String
 }
 
-public struct TransactionRequest: Codable {
+public struct SignedTransaction: Codable {
     public let from: String
     public let to: String
     public let amount: Double
     public let token: String
-    public let secret: String
+    public let nonce: String
+    public let timestamp: Int64
+    public let signature: String
+    public let publicKey: String
 }
+
+public struct SignedTransactionRequest: Codable { public let tx: SignedTransaction }
 
 public struct TransactionResponse: Codable {
     public let success: Bool
@@ -304,6 +274,7 @@ public enum ThronosError: Error {
     case noData
     case noWallet
     case invalidAddress
+    case localSigningRequired
 
     var localizedDescription: String {
         switch self {
@@ -315,6 +286,8 @@ public enum ThronosError: Error {
             return "No wallet connected"
         case .invalidAddress:
             return "Invalid wallet address"
+        case .localSigningRequired:
+            return "Local secp256k1 signing is required"
         }
     }
 }

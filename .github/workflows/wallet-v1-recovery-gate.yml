@@ -11,6 +11,9 @@ on:
       - "public/wallet-pwa/app.js"
       - "public/wallet-pwa/sw.js"
       - "server.py"
+      - "server_ext.py"
+      - "thronos-wallet-app/**"
+      - "mobile-sdk/**"
       - "wallet_v1_signed_request_verifier.py"
       - "tests/test_wallet_v1_*.py"
       - ".github/workflows/wallet-v1-recovery-gate.yml"
@@ -39,6 +42,13 @@ jobs:
           python -m pip install -r requirements.txt pytest playwright
           python -m playwright install --with-deps chromium
           npm install --prefix /tmp/wallet-e2e-js @noble/secp256k1@2.2.3
+          npm ci --prefix thronos-wallet-app --ignore-scripts
+          npm install --prefix mobile-sdk --ignore-scripts
+      - name: Typecheck native wallet and run SDK security gate
+        run: |
+          ./thronos-wallet-app/node_modules/.bin/tsc --noEmit -p thronos-wallet-app/tsconfig.json
+          cd mobile-sdk
+          npm exec -- jest src/__tests__/native-v2-security.test.js --runInBand
       - name: Run Wallet V1 recovery regression and browser acceptance
         run: |
           python -m pytest -q \
@@ -70,4 +80,5 @@ jobs:
             tests/test_wallet_v1_unlock_state_sync_guards.py \
             tests/test_wallet_v1_verified_migration_preference.py \
             tests/test_wallet_v1_wallet_recovery_guards.py \
-            tests/test_wallet_pwa_installed_lifecycle.py
+            tests/test_wallet_pwa_installed_lifecycle.py \
+            tests/test_native_wallet_v2_security.py

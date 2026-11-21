@@ -2063,9 +2063,17 @@ def l2e_student_dashboard_page():
             server_wallet = sess.get('address')
             server_learner_id = sess.get('learner_id') or sess.get('address')
     if not server_learner_id:
-        earn_id = (_request.cookies.get('earn_learner_id') or '').strip()
-        if earn_id and len(earn_id) <= 128:
-            server_learner_id = earn_id
+        import server as _server_mod_l2e
+        _earn_store = getattr(_server_mod_l2e, '_earn_acct_store', None)
+        if _earn_store is not None:
+            _earn_tok = (_request.cookies.get('thr_earn_session') or '').strip()
+            if _earn_tok:
+                _earn_user = _earn_store.user_for_session(_earn_tok)
+                if _earn_user:
+                    server_learner_id = _earn_user['earn_user_id']
+                    wl = _earn_store.wallet_link_for_user(server_learner_id)
+                    if wl:
+                        server_wallet = wl['wallet_address']
     return _render_template("l2e_student_dashboard.html",
                            server_wallet=server_wallet,
                            server_learner_id=server_learner_id)

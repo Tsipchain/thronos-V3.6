@@ -3401,8 +3401,10 @@ class EarnAccountStore:
             can_fund = bool(
                 total > 0 and due > 0 and not mismatch and
                 policy_approved and creative and approved_state and not_expired
+                and camp["campaign_type"] == "cpm"
             )
             reason = (
+                "legacy_cpc_contract_held" if camp["campaign_type"] != "cpm" else
                 "escrow_reservation_mismatch" if mismatch else
                 "policy_or_creative_not_approved" if not policy_approved or not creative else
                 "campaign_not_fundable" if not approved_state or not not_expired else

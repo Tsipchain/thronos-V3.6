@@ -7320,8 +7320,10 @@ def register_earn_account_routes(
             providers=[
                 {"id": "cpx", "label": "CPX Research", "kind": "surveys",
                  "enabled": os.getenv("CPX_SURVEYS_BETA_ENABLED", "0") == "1"},
+                # Retired as an Earn offerwall after provider rejection. Keep
+                # historical receipt identities and ledger processing intact.
                 {"id": "bitcotasks", "label": "BitcoTasks", "kind": "offers",
-                 "enabled": os.getenv("BITCOTASKS_ENABLED", "0") == "1"},
+                 "enabled": False},
                 {"id": "pure", "label": "PureSpectrum", "kind": "surveys",
                  "enabled": os.getenv("PURE_ENABLED", "0") == "1"},
                 {"id": "timewall", "label": "TimeWall", "kind": "tasks",
@@ -7348,19 +7350,9 @@ def register_earn_account_routes(
         user, _ = _current_user()
         if not user:
             return jsonify(ok=False, error="earn_auth_required"), 401
-        if os.getenv("BITCOTASKS_ENABLED", "0") != "1":
-            return jsonify(ok=False, error="bitcotasks_not_enabled"), 503
-        try:
-            provider_user_id = store.provider_user_id(
-                user["earn_user_id"], "bitcotasks",
-            )
-            return jsonify(
-                ok=True,
-                provider="bitcotasks",
-                url=build_bitcotasks_offerwall_url(provider_user_id),
-            )
-        except EarnError as exc:
-            return jsonify(ok=False, error=str(exc)), 503
+        # No new BitcoTasks offerwall traffic, even if an old deployment
+        # still has BITCOTASKS_ENABLED=1. Direct-link sponsor ads are separate.
+        return jsonify(ok=False, error="bitcotasks_offerwall_retired"), 410
 
     @app.route("/api/earn/cpx/postback", methods=["GET", "POST"])
     def earn_cpx_postback():

@@ -150,6 +150,19 @@
     .btn-sm:hover { border-color: #3CFF7A; background: rgba(60, 255, 122, 0.1); }
     .btn-sm.primary { border-color: #3CFF7A; color: #3CFF7A; }
     .btn-sm.primary:hover { background: #3CFF7A; color: #000; }
+    .btn-sm:disabled, .btn-sm.primary:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+        border-color: #1a5a2f;
+        background: #050b07;
+        color: #888;
+    }
+    .btn-sm.primary:disabled:hover { background: #050b07; color: #888; }
+    .wallet-required-hint {
+        font-size: 0.8em;
+        color: #ffa500;
+        margin-top: 4px;
+    }
 
     .empty-state { text-align: center; padding: 40px; opacity: 0.5; }
     .error-msg {
@@ -221,6 +234,10 @@
         <code id="walletAddr">—</code>
         <span style="margin-left:auto;">L2E: <strong id="l2eBalance" style="color:#3CFF7A;">0</strong></span>
     </div>
+    <div id="walletlessNotice" style="display:none;" class="wallet-required-hint" role="status">
+        <span class="lang-el">⚠️ Συνδέστε πορτοφόλι THR για να αξιώσετε ανταμοιβές L2E</span>
+        <span class="lang-en">⚠️ Connect a THR wallet to claim L2E rewards</span>
+    </div>
 
     <div class="stats-row" id="statsRow">
         <div class="stat-card">
@@ -269,9 +286,12 @@ const $ = id => document.getElementById(id);
 
 let currentLang = localStorage.getItem('thronos_lang') || 'el';
 let connectedWallet = null;
-let connectedSecret = null;
-let connectedPassphrase = null;
+let serverVerifiedWallet = {{ server_wallet | tojson }};
 let allCourses = [];
+
+function sanitizeId(id) {
+    return String(id).replace(/[^a-zA-Z0-9_\-]/g, '');
+}
 
 function setLang(lang) {
     currentLang = lang;
@@ -284,14 +304,17 @@ function setLang(lang) {
 }
 
 function syncWalletFromSession() {
-    try {
-        const earnAcct = JSON.parse(localStorage.getItem('earn_account') || 'null');
-        if (earnAcct && earnAcct.thr_address) {
-            connectedWallet = earnAcct.thr_address;
-            connectedSecret = earnAcct.auth_secret || null;
-            connectedPassphrase = earnAcct.passphrase || null;
-        }
-    } catch {}
+    if (serverVerifiedWallet) {
+        connectedWallet = serverVerifiedWallet;
+    }
+    if (!connectedWallet) {
+        try {
+            const earnAcct = JSON.parse(localStorage.getItem('earn_account') || 'null');
+            if (earnAcct && earnAcct.thr_address) {
+                connectedWallet = earnAcct.thr_address;
+            }
+        } catch {}
+    }
     if (!connectedWallet) {
         try {
             const w = localStorage.getItem('walletAddress') || localStorage.getItem('thr_address');
@@ -299,6 +322,9 @@ function syncWalletFromSession() {
         } catch {}
     }
     $('walletAddr').textContent = connectedWallet || '—';
+    if (!connectedWallet) {
+        $('walletlessNotice').style.display = '';
+    }
 }
 
 async function apiGet(path) {
@@ -342,6 +368,7 @@ function progressPercent(enrollment, course) {
 function renderCourseRow(course, enrollment) {
     const pct = progressPercent(enrollment, course);
     const el = currentLang === 'el';
+    const safeId = sanitizeId(course.id);
 
     let badges = '';
     badges += `<span class="badge badge-enrolled">${el ? 'Εγγεγραμμένος' : 'Enrolled'}</span>`;
@@ -380,16 +407,20 @@ function renderCourseRow(course, enrollment) {
 
     let actions = '';
     if (!enrollment.quiz_passed && course.quiz) {
-        actions += `<button class="btn-sm" onclick="window.location.href='/courses/${escapeHtml(course.id)}'">${el ? 'Λύσε το Quiz' : 'Take Quiz'}</button>`;
+        actions += `<button class="btn-sm" data-course-id="${safeId}" data-action="quiz">${el ? 'Λύσε το Quiz' : 'Take Quiz'}</button>`;
     }
     if (enrollment.reward_eligible && !enrollment.reward_claimed) {
-        actions += `<button class="btn-sm primary" onclick="claimReward('${escapeHtml(course.id)}')">${el ? 'Αξίωση L2E' : 'Claim L2E'}</button>`;
+        if (connectedWallet) {
+            actions += `<button class="btn-sm primary" data-course-id="${safeId}" data-action="claim">${el ? 'Αξίωση L2E' : 'Claim L2E'}</button>`;
+        } else {
+            actions += `<button class="btn-sm primary" disabled title="${el ? 'Απαιτείται επαληθευμένο πορτοφόλι' : 'Verified wallet required'}">${el ? 'Αξίωση L2E' : 'Claim L2E'}</button>`;
+        }
     }
     if (!enrollment.certificate_requested && enrollment.quiz_passed && course.certificate_enabled) {
-        actions += `<button class="btn-sm" onclick="requestCert('${escapeHtml(course.id)}')">${el ? 'Αίτηση Πιστοποιητικού' : 'Request Certificate'}</button>`;
+        actions += `<button class="btn-sm" data-course-id="${safeId}" data-action="cert">${el ? 'Αίτηση Πιστοποιητικού' : 'Request Certificate'}</button>`;
     }
     if (!enrollment.completed) {
-        actions += `<button class="btn-sm" onclick="window.location.href='/courses/${escapeHtml(course.id)}'">${el ? 'Συνέχεια' : 'Continue'}</button>`;
+        actions += `<button class="btn-sm" data-course-id="${safeId}" data-action="continue">${el ? 'Συνέχεια' : 'Continue'}</button>`;
     }
 
     return `
@@ -404,17 +435,32 @@ function renderCourseRow(course, enrollment) {
         </div>`;
 }
 
+document.addEventListener('click', function(e) {
+    const btn = e.target.closest('[data-action]');
+    if (!btn) return;
+    const courseId = btn.getAttribute('data-course-id');
+    if (!courseId) return;
+    const action = btn.getAttribute('data-action');
+    if (action === 'quiz' || action === 'continue') {
+        window.location.href = '/courses/' + encodeURIComponent(courseId);
+    } else if (action === 'claim') {
+        claimReward(courseId);
+    } else if (action === 'cert') {
+        requestCert(courseId);
+    }
+});
+
 async function claimReward(courseId) {
+    const safeId = sanitizeId(courseId);
     if (!connectedWallet) {
         alert(currentLang === 'el' ? 'Συνδέστε το πορτοφόλι σας πρώτα' : 'Connect your wallet first');
         return;
     }
     try {
-        const result = await apiPost(`/api/v1/courses/${courseId}/claim_reward`, {
+        // Wallet signing authorization will be added when Wallet V1 signing is available
+        const result = await apiPost(`/api/v1/courses/${encodeURIComponent(safeId)}/claim_reward`, {
             learner_id: connectedWallet,
-            thr_addr: connectedWallet,
-            auth_secret: connectedSecret,
-            passphrase: connectedPassphrase
+            thr_addr: connectedWallet
         });
         if (result.status === 'success') {
             alert(currentLang === 'el' ? 'L2E αξίωση επιτυχής!' : 'L2E claimed successfully!');
@@ -428,12 +474,14 @@ async function claimReward(courseId) {
 }
 
 async function requestCert(courseId) {
-    if (!connectedWallet) return;
+    const safeId = sanitizeId(courseId);
+    if (!connectedWallet) {
+        alert(currentLang === 'el' ? 'Συνδέστε το πορτοφόλι σας πρώτα' : 'Connect your wallet first');
+        return;
+    }
     try {
-        const result = await apiPost(`/api/v1/courses/${courseId}/certificates/${connectedWallet}/request_approval`, {
-            actor_thr: connectedWallet,
-            auth_secret: connectedSecret,
-            passphrase: connectedPassphrase
+        const result = await apiPost(`/api/v1/courses/${encodeURIComponent(safeId)}/certificates/${encodeURIComponent(connectedWallet)}/request_approval`, {
+            actor_thr: connectedWallet
         });
         if (result.status === 'success') {
             alert(currentLang === 'el' ? 'Αίτηση πιστοποιητικού υποβλήθηκε!' : 'Certificate request submitted!');
@@ -446,21 +494,38 @@ async function requestCert(courseId) {
     }
 }
 
+function showDashboardError(msg) {
+    $('coursesList').innerHTML = `<div class="error-msg">${escapeHtml(msg)}</div>`;
+    setLang(currentLang);
+}
+
 async function loadDashboard() {
-    if (!connectedWallet) {
+    const learnerId = connectedWallet || serverVerifiedWallet;
+    if (!learnerId) {
         $('coursesList').innerHTML = `<div class="empty-state">
-            <span class="lang-el">Συνδέστε το πορτοφόλι σας για να δείτε τα μαθήματά σας</span>
-            <span class="lang-en">Connect your wallet to view your courses</span>
+            <span class="lang-el">Συνδέστε το πορτοφόλι σας ή συνδεθείτε για να δείτε τα μαθήματά σας</span>
+            <span class="lang-en">Connect your wallet or sign in to view your courses</span>
+            <br><br>
+            <a href="/courses" style="color:#3CFF7A;">
+                <span class="lang-el">Αναζήτηση Μαθημάτων →</span>
+                <span class="lang-en">Browse Courses →</span>
+            </a>
         </div>`;
         setLang(currentLang);
         return;
     }
 
+    let data;
     try {
-        const data = await apiGet('/api/v1/courses');
-        const courses = data.courses || [];
+        data = await apiGet('/api/v1/courses');
+    } catch (e) {
+        showDashboardError(currentLang === 'el' ? 'Αποτυχία φόρτωσης δεδομένων μαθημάτων' : 'Failed to load course data');
+        return;
+    }
+
+    try {
+        const courses = (data && data.courses) ? data.courses : [];
         allCourses = courses;
-        const learnerId = connectedWallet;
 
         const enrolled = courses.filter(c => (c.students || []).includes(learnerId) || (c.enrollments || []).includes(learnerId));
 
@@ -489,7 +554,7 @@ async function loadDashboard() {
         for (const course of enrolled) {
             let enrollment = {};
             try {
-                const eData = await apiGet(`/api/v1/courses/${course.id}/enrollment/${encodeURIComponent(learnerId)}`);
+                const eData = await apiGet(`/api/v1/courses/${encodeURIComponent(sanitizeId(course.id))}/enrollment/${encodeURIComponent(learnerId)}`);
                 enrollment = eData.enrollment || eData || {};
             } catch {
                 enrollment = { enrolled: true };
@@ -507,7 +572,7 @@ async function loadDashboard() {
             if (enrollment.certificate_issued || enrollment.certificate_requested) {
                 let certTimeline = '';
                 try {
-                    const histData = await apiGet(`/api/v1/courses/${course.id}/certificates/${encodeURIComponent(learnerId)}/history`);
+                    const histData = await apiGet(`/api/v1/courses/${encodeURIComponent(sanitizeId(course.id))}/certificates/${encodeURIComponent(learnerId)}/history`);
                     const history = histData.history || [];
                     for (const evt of history) {
                         const ts = evt.timestamp ? new Date(evt.timestamp).toLocaleDateString() : '';
@@ -544,7 +609,7 @@ async function loadDashboard() {
         } catch {}
 
     } catch (e) {
-        $('coursesList').innerHTML = `<div class="error-msg">${escapeHtml(e.message)}</div>`;
+        showDashboardError(currentLang === 'el' ? 'Αποτυχία φόρτωσης δεδομένων' : 'Failed to load dashboard data');
     }
 
     setLang(currentLang);

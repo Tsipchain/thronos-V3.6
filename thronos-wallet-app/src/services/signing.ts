@@ -111,15 +111,19 @@ export async function signWalletV1FullPayloadRequest(
 ): Promise<WalletV1FullPayloadRequest> {
   const wallet = await getWallet();
   if (!wallet?.address) throw new Error('Wallet not initialized');
-  const privateKeyHex = await getPrivKeyHex();
-  const privateKey = hexToBytes(privateKeyHex);
-  const publicKey = secp256k1.getPublicKey(privateKey, true);
-  const signerAddress = thrAddressFromPublicKey(publicKey);
 
   if (options.requireDeviceApproval !== false) {
     const approved = await authenticateWithBiometrics(`Approve ${action.replace(/_/g, ' ')}`);
     if (!approved) throw new Error('signing_cancelled');
   }
+
+  // Do not decrypt or retrieve signing material until the operating-system
+  // approval gate succeeds. The key remains device-local for the short-lived
+  // signing operation and is never serialized into a request.
+  const privateKeyHex = await getPrivKeyHex();
+  const privateKey = hexToBytes(privateKeyHex);
+  const publicKey = secp256k1.getPublicKey(privateKey, true);
+  const signerAddress = thrAddressFromPublicKey(publicKey);
 
   const issuedAt = Math.floor(options.now ?? Date.now() / 1000);
   const ttl = Math.max(1, Math.min(300, options.ttlSeconds ?? 120));

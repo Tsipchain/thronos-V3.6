@@ -131,3 +131,21 @@ def test_funding_quote_http_requires_valid_earn_session(store, approved_legacy):
     assert response.status_code == 200
     assert response.get_json()["funding_due"] == "100.000000"
     assert response.get_json()["currency"] == "THC"
+
+
+def test_legacy_cpc_is_not_offered_funding_until_view_only_billing_is_reviewed(store):
+    user = store.register("legacy-cpc@example.com", "SecurePass123!")
+    uid = user["earn_user_id"]
+    campaign = store.create_campaign(
+        uid, "Legacy cost-per-click", campaign_type="cpc",
+        bid_amount="1.000000", total_budget="100.000000",
+    )
+    store.add_creative(
+        campaign["campaign_id"], uid, "Legacy CPC creative",
+        "https://cdn.example.com/cpc.png",
+        "https://tranfermarktbasket.com/",
+    )
+    quote = store.campaign_funding_quote(campaign["campaign_id"], uid)
+    assert quote["currency"] == "THC"
+    assert quote["fundable"] is False
+    assert quote["reason"] == "legacy_cpc_contract_held"

@@ -305,19 +305,8 @@ function setLang(lang) {
 }
 
 function syncWalletFromSession() {
-    displayWallet = serverVerifiedWallet;
-    if (!displayWallet) {
-        try {
-            const earnAcct = JSON.parse(localStorage.getItem('earn_account') || 'null');
-            if (earnAcct && earnAcct.thr_address) displayWallet = earnAcct.thr_address;
-        } catch {}
-    }
-    if (!displayWallet) {
-        try {
-            const w = localStorage.getItem('walletAddress') || localStorage.getItem('thr_address');
-            if (w) displayWallet = w;
-        } catch {}
-    }
+    // Display-only: localStorage wallet is NEVER used for auth or API calls
+    displayWallet = serverVerifiedWallet || null;
     $('walletAddr').textContent = displayWallet || '—';
     if (!serverVerifiedWallet) {
         $('walletlessNotice').style.display = '';
@@ -368,7 +357,11 @@ function renderCourseRow(course, enrollment) {
     const safeId = sanitizeId(course.id);
 
     let badges = '';
-    badges += `<span class="badge badge-enrolled">${el ? 'Εγγεγραμμένος' : 'Enrolled'}</span>`;
+    if (enrollment.enrollment_pending) {
+        badges += `<span class="badge" style="background:#f59e0b22;color:#f59e0b;border:1px solid #f59e0b44;">${el ? 'Εγγραφή σε εκκρεμότητα' : 'Enrollment Pending'}</span>`;
+    } else {
+        badges += `<span class="badge badge-enrolled">${el ? 'Εγγεγραμμένος' : 'Enrolled'}</span>`;
+    }
 
     if (enrollment.completed) {
         badges += `<span class="badge badge-completed">${el ? 'Ολοκληρωμένο' : 'Completed'}</span>`;
@@ -491,7 +484,7 @@ async function requestCert(courseId) {
 }
 
 function showDashboardError(msg) {
-    $('coursesList').innerHTML = `<div class="error-msg">${escapeHtml(msg)}</div>`;
+    $('coursesList').innerHTML = `<div class="empty-state" data-state="api-failure"><div class="error-msg">${escapeHtml(msg)}</div></div>`;
     setLang(currentLang);
 }
 
@@ -514,7 +507,11 @@ async function loadDashboard() {
     try {
         data = await apiGet('/api/v1/courses');
     } catch (e) {
-        showDashboardError(currentLang === 'el' ? 'Αποτυχία φόρτωσης δεδομένων μαθημάτων' : 'Failed to load course data');
+        $('coursesList').innerHTML = `<div class="empty-state" data-state="api-failure">
+            <span class="lang-el">Αποτυχία φόρτωσης δεδομένων μαθημάτων. Δοκιμάστε ξανά αργότερα.</span>
+            <span class="lang-en">Failed to load course data. Please try again later.</span>
+        </div>`;
+        setLang(currentLang);
         return;
     }
 
@@ -548,9 +545,18 @@ async function loadDashboard() {
 
         for (const course of enrolled) {
             let enrollment = {};
+            let enrollmentPending = false;
             try {
-                const eData = await apiGet(`/api/v1/courses/${encodeURIComponent(sanitizeId(course.id))}/enrollment/${encodeURIComponent(serverLearnerId)}`);
-                enrollment = eData.enrollment || eData || {};
+                const eRes = await fetch(`/api/v1/courses/${encodeURIComponent(sanitizeId(course.id))}/enrollment/${encodeURIComponent(serverLearnerId)}`);
+                if (eRes.ok) {
+                    const eData = await eRes.json();
+                    enrollment = eData.enrollment || eData || {};
+                } else if (eRes.status === 404) {
+                    enrollmentPending = true;
+                    enrollment = { enrolled: false, enrollment_pending: true };
+                } else {
+                    enrollment = { enrolled: true };
+                }
             } catch {
                 enrollment = { enrolled: true };
             }

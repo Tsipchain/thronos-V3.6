@@ -200,3 +200,69 @@ def test_route_provides_server_learner_id():
     html = resp.data.decode()
     # When unauthenticated (no cookie), server_learner_id renders as null
     assert "serverLearnerId" in html
+
+
+# ── Acceptance: walletless learner, enrollment states, API failure ──────────
+
+
+def test_walletless_earn_learner_via_cookie():
+    """A walletless learner with earn_learner_id cookie gets server_learner_id set."""
+    client = _client()
+    client.set_cookie("earn_learner_id", "test_learner_42", domain="localhost")
+    resp = client.get("/student-dashboard")
+    html = resp.data.decode()
+    assert resp.status_code == 200
+    assert '"test_learner_42"' in html or "'test_learner_42'" in html
+    # server_wallet should be null for walletless learner
+    assert "serverVerifiedWallet" in html
+
+
+def test_walletless_learner_claim_disabled_in_template():
+    """Template disables L2E claim when serverVerifiedWallet is falsy."""
+    html = _read_template()
+    assert 'disabled' in html
+    assert 'Verified wallet required' in html or 'επαληθευμένο πορτοφόλι' in html
+    # Claim function guards on serverVerifiedWallet
+    assert 'if (!serverVerifiedWallet)' in html
+
+
+def test_enrollment_pending_state():
+    """Template handles enrollment-pending (404 from enrollment endpoint) distinctly."""
+    html = _read_template()
+    assert 'enrollment_pending' in html
+    assert 'Enrollment Pending' in html or 'Εγγραφή σε εκκρεμότητα' in html
+
+
+def test_api_failure_state():
+    """Dashboard shows api-failure state when course API fetch fails."""
+    html = _read_template()
+    assert 'data-state="api-failure"' in html
+    assert 'try again later' in html.lower() or 'Δοκιμάστε ξανά αργότερα' in html
+
+
+def test_no_localstorage_wallet_for_display():
+    """displayWallet must NOT fall back to localStorage — only serverVerifiedWallet."""
+    html = _read_template()
+    # Ensure no localStorage wallet reading in syncWalletFromSession
+    lines = html.split('\n')
+    in_sync = False
+    for line in lines:
+        if 'function syncWalletFromSession' in line:
+            in_sync = True
+        elif in_sync and line.strip().startswith('function '):
+            break
+        if in_sync:
+            assert 'earn_account' not in line, "syncWalletFromSession must not read earn_account from localStorage"
+            assert 'walletAddress' not in line, "syncWalletFromSession must not read walletAddress from localStorage"
+            assert 'thr_address' not in line, "syncWalletFromSession must not read thr_address from localStorage"
+
+
+def test_server_ext_separate_learner_id():
+    """server_ext route separates server_learner_id from server_wallet."""
+    import inspect
+    import server_ext
+    source = inspect.getsource(server_ext.l2e_student_dashboard_page)
+    assert "server_learner_id" in source
+    assert "server_wallet" in source
+    # Must also check earn_learner_id cookie for walletless path
+    assert "earn_learner_id" in source

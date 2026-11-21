@@ -2061,7 +2061,11 @@ def l2e_student_dashboard_page():
         sess = _LOGIN_SESSION_STORE.get(token)
         if sess and sess.get('expires_at', 0) >= _time_wa.time():
             server_wallet = sess.get('address')
-            server_learner_id = sess.get('address')
+            server_learner_id = sess.get('learner_id') or sess.get('address')
+    if not server_learner_id:
+        earn_id = (_request.cookies.get('earn_learner_id') or '').strip()
+        if earn_id and len(earn_id) <= 128:
+            server_learner_id = earn_id
     return _render_template("l2e_student_dashboard.html",
                            server_wallet=server_wallet,
                            server_learner_id=server_learner_id)

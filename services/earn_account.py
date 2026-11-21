@@ -3352,6 +3352,81 @@ class EarnAccountStore:
             ).fetchall()
             return [dict(r) for r in rows]
 
+    def campaign_funding_quote(
+        self, campaign_id: str, advertiser_id: str,
+    ) -> dict[str, Any]:
+        """Read-only funding gap for an existing campaign, including legacy approved.
+
+        Never debits THC, re-approves a creative, or changes campaign status.
+        Legacy escrow and reservations must reconcile before new funding.
+        """
+        with self._tx() as con:
+            camp = con.execute(
+                "SELECT * FROM earn_ad_campaigns WHERE campaign_id=? AND advertiser_id=?",
+                (campaign_id, advertiser_id),
+            ).fetchone()
+            if not camp:
+                raise EarnError("campaign_not_found")
+            total = Decimal(camp["total_budget"])
+            spent = Decimal(camp["spent"])
+            remaining = max(Decimal("0"), total - spent).quantize(_THC_SCALE)
+            balance = self._escrow_balance_in_tx(con, campaign_id)
+            reserves = con.execute(
+                """SELECT amount FROM earn_thc_reservations
+                   WHERE source_ref=? AND earn_user_id=?
+                     AND reservation_type='ad_escrow'
+                     AND state IN ('reserved','settling','settled')""",
+                (campaign_id, advertiser_id),
+            ).fetchall()
+            reserved = sum(
+                (Decimal(r["amount"]) for r in reserves), Decimal("0")
+            ).quantize(_THC_SCALE)
+            mismatch = balance != reserved
+            due = max(
+                Decimal("0"), remaining - min(balance, reserved)
+            ).quantize(_THC_SCALE)
+            creative = con.execute(
+                """SELECT 1 FROM earn_ad_creatives
+                   WHERE campaign_id=? AND status='approved' LIMIT 1""",
+                (campaign_id,),
+            ).fetchone()
+            status = str(camp["status"])
+            policy_approved = camp["policy_status"] == "approved"
+            approved_state = status in (
+                "funding_required", "approved", "active", "paused",
+            )
+            not_expired = (
+                camp["ends_at"] is None or int(camp["ends_at"]) > int(time.time())
+            )
+            can_fund = bool(
+                total > 0 and due > 0 and not mismatch and
+                policy_approved and creative and approved_state and not_expired
+                and camp["campaign_type"] == "cpm"
+            )
+            reason = (
+                "legacy_cpc_contract_held" if camp["campaign_type"] != "cpm" else
+                "escrow_reservation_mismatch" if mismatch else
+                "policy_or_creative_not_approved" if not policy_approved or not creative else
+                "campaign_not_fundable" if not approved_state or not not_expired else
+                "positive_budget_required" if total <= 0 else
+                "fully_funded" if due <= 0 else
+                "funding_available"
+            )
+            return {
+                "campaign_id": campaign_id,
+                "currency": "THC",
+                "status": status,
+                "total_budget": str(total.quantize(_THC_SCALE)),
+                "spent": str(spent.quantize(_THC_SCALE)),
+                "remaining_budget": str(remaining),
+                "escrow_balance": str(balance),
+                "reserved_thc": str(reserved),
+                "funding_due": str(due),
+                "fundable": can_fund,
+                "reason": reason,
+                "available_thc": str(self._available_thc_for_staking(con, advertiser_id)),
+            }
+
     _CAMPAIGN_UPDATABLE = frozenset((
         "name", "bid_amount", "daily_budget", "total_budget",
         "country_targets", "starts_at", "ends_at",
@@ -6916,6 +6991,19 @@ def register_earn_account_routes(
         if not camp or camp["advertiser_id"] != user["earn_user_id"]:
             return jsonify(ok=False, error="campaign_not_found"), 404
         return jsonify(ok=True, campaign=camp)
+
+    @app.get("/api/earn/ads/campaign/<campaign_id>/funding-quote")
+    def earn_campaign_funding_quote(campaign_id):
+        user, _ = _current_user()
+        if not user:
+            return jsonify(ok=False, error="earn_auth_required"), 401
+        try:
+            quote = store.campaign_funding_quote(
+                campaign_id, user["earn_user_id"],
+            )
+        except EarnError as exc:
+            return jsonify(ok=False, error=str(exc)), 404
+        return jsonify(ok=True, **quote)
 
     @app.post("/api/earn/ads/campaign/<campaign_id>/update")
     def earn_campaign_update(campaign_id):

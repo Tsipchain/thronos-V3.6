@@ -1,0 +1,2058 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<meta name="theme-color" content="#10b981"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<link rel="manifest" href="manifest.json"/>
+<link rel="apple-touch-icon" href="icons/icon-192.svg"/>
+<title>Crypto Hunters</title>
+<style>
+/* ── Reset & Base ───────────────────────────────────────────────── */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0b1020;--bg2:#141a33;--bg3:#1a2240;
+  --green:#10b981;--gold:#ffd700;--red:#ef4444;
+  --text:#e5e7eb;--dim:#6b7280;--border:#2d3a5c;
+  --mono:'Courier New',Courier,monospace;
+  --sans:system-ui,-apple-system,sans-serif;
+}
+html{font-size:16px}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);min-height:100vh;overflow-x:hidden}
+a{color:var(--green);text-decoration:none}
+button{font-family:inherit;cursor:pointer;border:none;border-radius:8px;font-weight:700;transition:all .2s}
+button:disabled{opacity:.4;cursor:not-allowed}
+input{font-family:var(--mono);background:#000;color:var(--green);border:1px solid var(--border);border-radius:8px;padding:12px 16px;width:100%;font-size:1rem}
+input:focus{outline:none;border-color:var(--green);box-shadow:0 0 8px rgba(16,185,129,.3)}
+
+/* ── Layout ─────────────────────────────────────────────────────── */
+.app{max-width:860px;margin:0 auto;padding:16px 16px 80px}
+.topbar{display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--border);margin-bottom:20px}
+.logo{font-family:var(--mono);font-size:1.3rem;font-weight:900;color:var(--green);text-transform:uppercase;letter-spacing:2px}
+.logo span{color:var(--gold)}
+.btn-sm{padding:6px 14px;font-size:.75rem;background:var(--bg3);color:var(--text);border:1px solid var(--border)}
+.btn-sm:hover{border-color:var(--green)}
+
+/* ── Screens ────────────────────────────────────────────────────── */
+.screen{display:none;animation:fadeIn .35s ease}
+.screen.active{display:block}
+
+/* ── Login ──────────────────────────────────────────────────────── */
+#login-screen{text-align:center;padding-top:15vh}
+#login-screen h1{font-family:var(--mono);font-size:2.4rem;color:var(--green);text-transform:uppercase;letter-spacing:4px;margin-bottom:8px;text-shadow:0 0 20px rgba(16,185,129,.4)}
+#login-screen h1 span{color:var(--gold)}
+#login-screen .subtitle{color:var(--dim);margin-bottom:32px;font-size:.9rem}
+.login-box{max-width:400px;margin:0 auto}
+.login-box input{margin-bottom:16px}
+.btn-enter{width:100%;padding:14px;font-size:1.1rem;background:linear-gradient(135deg,var(--green),#059669);color:#000;text-transform:uppercase;letter-spacing:2px}
+.btn-enter:hover{box-shadow:0 0 20px rgba(16,185,129,.5)}
+.login-hint{color:var(--dim);font-size:.75rem;margin-top:12px}
+
+/* ── Dashboard ──────────────────────────────────────────────────── */
+.player-card{background:linear-gradient(135deg,var(--bg2),var(--bg3));border:1px solid var(--border);border-radius:16px;padding:24px;margin-bottom:20px;position:relative;overflow:hidden}
+.player-card::before{content:'';position:absolute;top:-50%;right:-50%;width:100%;height:100%;background:radial-gradient(circle,rgba(16,185,129,.06) 0%,transparent 70%);pointer-events:none}
+.player-wallet{font-family:var(--mono);color:var(--green);font-size:.85rem;margin-bottom:4px}
+.player-balance{font-size:2rem;font-weight:900;color:var(--gold);text-shadow:0 0 10px rgba(255,215,0,.3)}
+.player-balance small{font-size:.9rem;color:var(--dim);font-weight:400}
+.tier-badge{display:inline-block;padding:4px 14px;border-radius:20px;font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-top:8px}
+.tier-Easy{background:#10b98133;color:var(--green);box-shadow:0 0 8px rgba(16,185,129,.3)}
+.tier-Normal{background:#3b82f633;color:#60a5fa;box-shadow:0 0 8px rgba(59,130,246,.3)}
+.tier-Expert{background:#a855f733;color:#c084fc;box-shadow:0 0 8px rgba(168,85,247,.3)}
+.tier-Genius{background:#ffd70033;color:var(--gold);box-shadow:0 0 8px rgba(255,215,0,.3)}
+
+.stats-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;margin-bottom:20px}
+.stat-card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px;text-align:center}
+.stat-val{font-size:1.5rem;font-weight:900;color:var(--green)}
+.stat-label{font-size:.7rem;color:var(--dim);text-transform:uppercase;letter-spacing:1px;margin-top:4px}
+
+.nav-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.nav-btn{padding:16px;font-size:1rem;background:var(--bg2);color:var(--text);border:1px solid var(--border);text-transform:uppercase;letter-spacing:1px;transition:all .2s}
+.nav-btn:hover{border-color:var(--green);box-shadow:0 0 12px rgba(16,185,129,.2)}
+.nav-btn .icon{font-size:1.4rem;display:block;margin-bottom:4px}
+.welcome-back{background:var(--bg2);border:1px solid var(--green);border-radius:12px;padding:12px 16px;margin-bottom:16px;font-size:.85rem;color:var(--green);animation:fadeIn .5s}
+
+/* ── Missions ───────────────────────────────────────────────────── */
+.tier-group{margin-bottom:24px}
+.tier-header{font-size:1.1rem;font-weight:700;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--border)}
+.mission-card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:10px;position:relative;transition:all .3s}
+.mission-card.locked{opacity:.4;filter:grayscale(.7)}
+.mission-card.available{animation:pulse-available 2s infinite}
+.mission-card.in_progress{border-color:#3b82f6}
+.mission-card.completed{border-color:var(--green);opacity:.8}
+.mission-state{font-size:1.2rem;float:right}
+.mission-title{font-weight:700;margin-bottom:4px}
+.mission-obj{color:var(--dim);font-size:.85rem;margin-bottom:8px}
+.mission-reward{font-family:var(--mono);color:var(--gold);font-size:.85rem}
+.mission-btn{padding:8px 16px;font-size:.8rem;margin-top:8px}
+.btn-start{background:var(--green);color:#000}
+.btn-complete{background:linear-gradient(135deg,var(--gold),#d4a800);color:#000}
+
+.tier-unlock-banner{display:none;background:linear-gradient(135deg,var(--gold),#d4a800);color:#000;text-align:center;padding:16px;border-radius:12px;margin-bottom:16px;font-weight:900;font-size:1.1rem;text-transform:uppercase;letter-spacing:2px;animation:tier-fanfare .6s ease}
+
+/* ── Story ──────────────────────────────────────────────────────── */
+.timeline{position:relative;padding-left:32px}
+.timeline::before{content:'';position:absolute;left:12px;top:0;bottom:0;width:2px;background:var(--border)}
+.act-card{position:relative;background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:20px;transition:all .3s}
+.act-card::before{content:'';position:absolute;left:-26px;top:24px;width:12px;height:12px;border-radius:50%;background:var(--border);border:2px solid var(--bg)}
+.act-card.unlocked::before{background:var(--green);box-shadow:0 0 8px var(--green)}
+.act-card.locked{opacity:.5;filter:blur(1px)}
+.act-card.locked .act-body{display:none}
+.act-card.just-unlocked{animation:chapter-reveal .6s ease}
+.act-title{font-size:1.1rem;font-weight:700;margin-bottom:4px}
+.act-subtitle{color:var(--dim);font-size:.8rem;margin-bottom:12px}
+.act-body{color:var(--text);font-size:.9rem;line-height:1.6}
+.act-body p{margin-bottom:8px}
+.lock-msg{color:var(--gold);font-size:.8rem;margin-top:8px}
+.char-row{display:flex;gap:12px;flex-wrap:wrap;margin-top:12px}
+.char-avatar{width:40px;height:40px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.75rem;font-weight:900;color:#000}
+
+/* ── Items Shop ─────────────────────────────────────────────────── */
+.item-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px}
+.item-card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px;transition:all .3s}
+.item-card.purchased{animation:item-glow .5s ease}
+.item-icon{font-size:2rem;margin-bottom:8px}
+.item-name{font-weight:700;margin-bottom:4px}
+.item-desc{color:var(--dim);font-size:.8rem;margin-bottom:8px}
+.item-price{font-family:var(--mono);color:var(--gold);font-size:.9rem;margin-bottom:8px}
+.btn-buy{padding:8px 16px;font-size:.8rem;background:var(--gold);color:#000;width:100%}
+
+/* ── Inventory ──────────────────────────────────────────────────── */
+.inv-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:12px}
+.inv-item{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px;text-align:center}
+.inv-item .icon{font-size:2rem;margin-bottom:4px}
+.empty-state{text-align:center;padding:60px 20px;color:var(--dim)}
+.empty-state .icon{font-size:3rem;margin-bottom:12px}
+
+/* ── Skeleton Loader ────────────────────────────────────────────── */
+.skeleton{background:linear-gradient(90deg,var(--bg2) 25%,var(--bg3) 50%,var(--bg2) 75%);background-size:200% 100%;animation:skeleton-pulse 1.5s infinite;border-radius:8px}
+.skeleton-line{height:16px;margin-bottom:8px}
+.skeleton-card{height:100px;border-radius:12px;margin-bottom:12px}
+.skeleton-block{height:60px;margin-bottom:12px;border-radius:12px}
+
+/* ── Error Banner ───────────────────────────────────────────────── */
+.error-banner{background:var(--bg2);border:2px solid var(--red);border-radius:12px;padding:16px;margin-bottom:16px;display:none}
+.error-banner.visible{display:flex;align-items:center;gap:12px;animation:fadeIn .3s}
+.error-banner .msg{flex:1;color:var(--red);font-size:.9rem}
+.btn-retry{padding:8px 16px;font-size:.8rem;background:var(--red);color:#fff}
+
+/* ── Reward Popup ───────────────────────────────────────────────── */
+.reward-popup{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:100;pointer-events:none;display:none}
+.reward-popup.show{display:block}
+.reward-text{font-family:var(--mono);font-size:2rem;font-weight:900;color:var(--gold);text-shadow:0 0 20px rgba(255,215,0,.6);animation:float-up 1.5s ease forwards}
+.reward-particles{position:absolute;top:50%;left:50%;width:0;height:0}
+.particle{position:absolute;width:6px;height:6px;background:var(--gold);border-radius:50%;animation:reward-burst 1s ease forwards}
+
+/* ── Back button row ────────────────────────────────────────────── */
+.back-row{margin-bottom:16px}
+.btn-back{padding:8px 16px;font-size:.85rem;background:var(--bg3);color:var(--text);border:1px solid var(--border)}
+.btn-back:hover{border-color:var(--green)}
+.screen-title{font-size:1.4rem;font-weight:900;margin-bottom:16px;text-transform:uppercase;letter-spacing:1px}
+
+/* ── Animations ─────────────────────────────────────────────────── */
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes pulse-available{0%,100%{border-color:var(--border);box-shadow:none}50%{border-color:var(--green);box-shadow:0 0 12px rgba(16,185,129,.25)}}
+@keyframes tier-fanfare{0%{transform:scale(.8);opacity:0}50%{transform:scale(1.05)}100%{transform:scale(1);opacity:1}}
+@keyframes chapter-reveal{from{opacity:0;transform:translateX(-20px)}to{opacity:1;transform:translateX(0)}}
+@keyframes item-glow{0%{box-shadow:0 0 0 rgba(255,215,0,0)}50%{box-shadow:0 0 20px rgba(255,215,0,.5)}100%{box-shadow:0 0 0 rgba(255,215,0,0)}}
+@keyframes float-up{0%{opacity:1;transform:translateY(0) scale(1)}100%{opacity:0;transform:translateY(-80px) scale(1.3)}}
+@keyframes reward-burst{0%{transform:translate(0,0) scale(1);opacity:1}100%{opacity:0}}
+@keyframes skeleton-pulse{0%{background-position:200% 0}100%{background-position:-200% 0}}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ── PWA Update Banner ─────────────────────────────────────────── */
+.update-banner{position:fixed;top:0;left:0;right:0;z-index:9999;background:#059669;color:#000;text-align:center;padding:10px;font-weight:700;font-size:.85rem;animation:fadeIn .3s}
+.update-banner button{margin-left:12px;padding:4px 12px;background:#000;color:#10b981;border:none;border-radius:6px;font-weight:700;cursor:pointer}
+
+/* ── Puzzle Screens ────────────────────────────────────────────── */
+.puzzle-header{text-align:center;margin-bottom:24px}
+.puzzle-header h3{font-family:var(--mono);font-size:1.2rem;color:var(--green);text-transform:uppercase;letter-spacing:2px;margin-bottom:4px}
+.puzzle-header p{color:var(--dim);font-size:.85rem}
+.puzzle-instruction{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:16px;font-size:.9rem;line-height:1.6}
+.puzzle-instruction code{font-family:var(--mono);color:var(--green);background:rgba(16,185,129,.1);padding:2px 6px;border-radius:4px}
+.puzzle-field{margin-bottom:12px}
+.puzzle-field label{display:block;font-size:.75rem;color:var(--dim);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px}
+.puzzle-field input{font-size:.95rem}
+.puzzle-output{font-family:var(--mono);background:#000;border:1px solid var(--border);border-radius:8px;padding:12px;font-size:.8rem;color:var(--green);word-break:break-all;min-height:40px;margin-bottom:12px}
+.puzzle-output.error{color:var(--red);border-color:var(--red)}
+.puzzle-output.success{color:var(--gold);border-color:var(--gold)}
+.btn-puzzle{padding:12px 24px;font-size:.95rem;background:linear-gradient(135deg,var(--green),#059669);color:#000;text-transform:uppercase;letter-spacing:1px;width:100%;margin-bottom:8px}
+.btn-puzzle:disabled{background:var(--bg3);color:var(--dim)}
+.btn-puzzle-alt{padding:10px 20px;font-size:.85rem;background:var(--bg3);color:var(--text);border:1px solid var(--border);width:100%}
+.btn-puzzle-alt:hover{border-color:var(--green)}
+.puzzle-progress{display:flex;gap:8px;justify-content:center;margin-bottom:16px}
+.puzzle-pip{width:24px;height:24px;border-radius:50%;background:var(--bg3);border:2px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:.65rem;font-weight:700;transition:all .3s}
+.puzzle-pip.done{background:var(--green);border-color:var(--green);color:#000}
+.puzzle-stats{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px}
+.puzzle-stat{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center}
+.puzzle-stat .val{font-family:var(--mono);font-size:1.2rem;font-weight:900;color:var(--green)}
+.puzzle-stat .lbl{font-size:.65rem;color:var(--dim);text-transform:uppercase;letter-spacing:1px;margin-top:2px}
+.hash-display{font-family:var(--mono);font-size:.7rem;color:var(--dim);word-break:break-all;padding:8px;background:rgba(0,0,0,.4);border-radius:6px;margin-top:8px}
+.nonce-controls{display:flex;gap:8px;margin-bottom:12px}
+.nonce-controls input{flex:1}
+.nonce-controls button{flex-shrink:0;padding:12px 20px}
+.mining-anim{text-align:center;padding:20px;display:none}
+.mining-anim.active{display:block}
+.mining-anim .spinner{display:inline-block;width:32px;height:32px;border:3px solid var(--border);border-top-color:var(--green);border-radius:50%;animation:spin .8s linear infinite}
+.mining-anim p{color:var(--dim);font-size:.8rem;margin-top:8px}
+
+/* ── Character Creation ───────────────────────────────────────── */
+.char-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-bottom:20px}
+.char-card{background:var(--bg2);border:2px solid var(--border);border-radius:16px;padding:20px 16px;text-align:center;cursor:pointer;transition:all .3s}
+.char-card:hover{border-color:var(--green);transform:translateY(-2px)}
+.char-card .portrait{width:64px;height:64px;border-radius:50%;margin:0 auto 10px;display:flex;align-items:center;justify-content:center;font-size:1.5rem;font-weight:900;color:#000;font-family:var(--mono)}
+.char-card .cname{font-weight:700;font-size:.9rem;margin-bottom:4px}
+.char-card .crole{color:var(--dim);font-size:.7rem}
+.char-detail{max-width:500px;margin:0 auto;text-align:center}
+.char-detail-portrait{width:96px;height:96px;border-radius:50%;margin:0 auto 16px;display:flex;align-items:center;justify-content:center;font-size:2.2rem;font-weight:900;color:#000;font-family:var(--mono);border:3px solid var(--green)}
+.stat-bar-row{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.stat-bar-label{width:100px;text-align:right;font-size:.75rem;color:var(--dim);text-transform:uppercase}
+.stat-bar-track{flex:1;height:8px;background:var(--bg3);border-radius:4px;overflow:hidden}
+.stat-bar-fill{height:100%;border-radius:4px;transition:width .5s ease}
+
+/* ── Dialogue / Story Mode ────────────────────────────────────── */
+.dialogue-card{background:var(--bg2);border:1px solid var(--border);border-radius:16px;padding:24px;margin-bottom:16px;animation:fadeIn .4s ease}
+.dialogue-portrait{width:56px;height:56px;border-radius:50%;margin:0 auto 12px;display:flex;align-items:center;justify-content:center;font-size:1.3rem;font-weight:900;color:#000;font-family:var(--mono)}
+.dialogue-speaker{font-family:var(--mono);font-size:.8rem;color:var(--green);text-transform:uppercase;letter-spacing:1px;text-align:center;margin-bottom:8px}
+.dialogue-text{font-size:.95rem;line-height:1.7;text-align:center;color:var(--text)}
+.dialogue-choices{display:flex;flex-direction:column;gap:8px;margin-bottom:12px}
+.dialogue-choice{padding:14px 20px;background:var(--bg3);border:1px solid var(--border);border-radius:12px;color:var(--text);font-size:.9rem;text-align:left;transition:all .2s;cursor:pointer}
+.dialogue-choice:hover{border-color:var(--green);background:rgba(16,185,129,.08)}
+.dialogue-choice .effect-hint{font-size:.7rem;color:var(--green);margin-top:4px;font-family:var(--mono)}
+
+/* ── XP Bar / Level Badge ─────────────────────────────────────── */
+.xp-bar-container{margin:12px 0}
+.xp-bar-label{font-size:.7rem;color:var(--dim);text-transform:uppercase;margin-bottom:4px;display:flex;justify-content:space-between}
+.xp-bar-track{height:6px;background:var(--bg3);border-radius:3px;overflow:hidden}
+.xp-bar-fill{height:100%;background:linear-gradient(90deg,var(--green),#06b6d4);border-radius:3px;transition:width .5s ease}
+.level-badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:.7rem;font-weight:700;background:rgba(6,182,212,.15);color:#06b6d4;margin-left:8px}
+
+/* ── Avatar Builder ──────────────────────────────────────────── */
+.avatar-builder{max-width:520px;margin:0 auto}
+.avatar-row{display:flex;align-items:center;gap:12px;margin-bottom:14px}
+.avatar-row label{width:100px;text-align:right;font-size:.75rem;color:var(--dim);text-transform:uppercase;letter-spacing:1px;flex-shrink:0}
+.avatar-options{display:flex;flex-wrap:wrap;gap:6px;flex:1}
+.av-opt{padding:6px 12px;font-size:.75rem;background:var(--bg3);border:2px solid var(--border);border-radius:8px;color:var(--text);cursor:pointer;transition:all .2s}
+.av-opt:hover{border-color:var(--green)}
+.av-opt.selected{border-color:var(--green);background:rgba(16,185,129,.15);color:var(--green)}
+.class-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;margin-bottom:20px}
+.class-card{background:var(--bg2);border:2px solid var(--border);border-radius:12px;padding:14px 12px;text-align:center;cursor:pointer;transition:all .3s}
+.class-card:hover{border-color:var(--green);transform:translateY(-2px)}
+.class-card.selected{border-color:var(--green);box-shadow:0 0 12px rgba(16,185,129,.3)}
+.class-card .class-icon{width:48px;height:48px;border-radius:50%;margin:0 auto 8px;display:flex;align-items:center;justify-content:center;font-size:1.2rem;font-weight:900;color:#000;font-family:var(--mono)}
+.class-card .class-name{font-weight:700;font-size:.85rem;margin-bottom:2px}
+.class-card .class-desc{color:var(--dim);font-size:.7rem}
+.avatar-preview{width:96px;height:96px;border-radius:50%;margin:0 auto 16px;display:flex;align-items:center;justify-content:center;font-size:2.2rem;font-weight:900;color:#000;font-family:var(--mono);border:3px solid var(--green);position:relative}
+.avatar-preview .av-badge{position:absolute;bottom:-4px;right:-4px;width:28px;height:28px;border-radius:50%;background:var(--gold);display:flex;align-items:center;justify-content:center;font-size:.7rem;font-weight:900;border:2px solid var(--bg)}
+.color-swatch{width:28px;height:28px;border-radius:6px;cursor:pointer;border:2px solid transparent;transition:all .2s}
+.color-swatch:hover,.color-swatch.selected{border-color:#fff;transform:scale(1.15)}
+
+/* ── Character Sheet ─────────────────────────────────────────── */
+.sheet-portrait{width:120px;height:120px;border-radius:50%;margin:0 auto 16px;display:flex;align-items:center;justify-content:center;font-size:3rem;font-weight:900;color:#000;font-family:var(--mono);border:4px solid var(--green);position:relative}
+.sheet-portrait .sheet-level{position:absolute;bottom:-6px;right:-6px;width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,#06b6d4,var(--green));display:flex;align-items:center;justify-content:center;font-size:.85rem;font-weight:900;color:#000;border:3px solid var(--bg)}
+.sheet-header{text-align:center;margin-bottom:20px}
+.sheet-callsign{font-family:var(--mono);font-size:1.3rem;font-weight:900;color:var(--green)}
+.sheet-class{font-size:.8rem;color:var(--dim);margin-top:2px}
+.sheet-section{margin-bottom:20px}
+.sheet-section-title{font-size:.75rem;color:var(--dim);text-transform:uppercase;letter-spacing:2px;margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border)}
+.equip-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px}
+.equip-slot{background:var(--bg2);border:1px dashed var(--border);border-radius:12px;padding:14px 10px;text-align:center;position:relative;min-height:80px;transition:all .2s}
+.equip-slot.filled{border-style:solid;border-color:var(--green)}
+.equip-slot .slot-label{font-size:.65rem;color:var(--dim);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px}
+.equip-slot .slot-icon{font-size:1.5rem;margin-bottom:4px}
+.equip-slot .slot-item{font-size:.75rem;color:var(--green);font-weight:700}
+.equip-slot .slot-empty{font-size:.7rem;color:var(--dim);font-style:italic}
+.equip-slot .btn-unequip{position:absolute;top:4px;right:4px;width:20px;height:20px;border-radius:50%;background:var(--red);color:#fff;font-size:.6rem;display:flex;align-items:center;justify-content:center;border:none;cursor:pointer;opacity:0;transition:opacity .2s}
+.equip-slot:hover .btn-unequip{opacity:1}
+.skill-row{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.skill-name{width:120px;text-align:right;font-size:.75rem;color:var(--dim);text-transform:uppercase}
+.skill-bar{flex:1;height:8px;background:var(--bg3);border-radius:4px;overflow:hidden}
+.skill-bar-fill{height:100%;border-radius:4px;transition:width .5s ease}
+.skill-val{width:30px;font-size:.75rem;font-weight:700;color:var(--green);text-align:center}
+.trust-meter{display:flex;align-items:center;gap:8px;margin-bottom:12px}
+.trust-track{flex:1;height:10px;background:var(--bg3);border-radius:5px;overflow:hidden}
+.trust-fill{height:100%;background:linear-gradient(90deg,#06b6d4,var(--green));border-radius:5px;transition:width .5s}
+.trust-val{font-family:var(--mono);font-size:.9rem;font-weight:700;color:#06b6d4}
+.anim-state{display:inline-block;padding:4px 12px;border-radius:20px;font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:1px;background:rgba(16,185,129,.15);color:var(--green);margin-top:4px}
+.asset-id-tag{font-family:var(--mono);font-size:.65rem;color:var(--dim);margin-top:4px;word-break:break-all}
+
+/* ── Player card additions ────────────────────────────────────── */
+.player-identity{display:flex;align-items:center;gap:12px;margin-bottom:8px}
+.player-portrait-sm{width:48px;height:48px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:1.2rem;font-weight:900;color:#000;font-family:var(--mono);flex-shrink:0}
+.player-info{flex:1}
+.player-callsign{font-family:var(--mono);font-size:1rem;font-weight:700;color:var(--green)}
+.player-char-role{font-size:.7rem;color:var(--dim)}
+
+/* ── Chapter play button in story ─────────────────────────────── */
+.act-play-btn{display:inline-block;margin-top:12px;padding:8px 16px;font-size:.8rem;background:var(--green);color:#000;border:none;border-radius:8px;font-weight:700;cursor:pointer}
+.act-play-btn:hover{box-shadow:0 0 12px rgba(16,185,129,.4)}
+.act-play-btn.completed-ch{background:var(--bg3);color:var(--dim);cursor:default}
+
+/* ── Responsive ─────────────────────────────────────────────────── */
+@media(max-width:500px){
+  .nav-grid{grid-template-columns:1fr}
+  .stats-row{grid-template-columns:1fr 1fr}
+  .item-grid{grid-template-columns:1fr}
+  #login-screen h1{font-size:1.6rem}
+  .player-balance{font-size:1.5rem}
+  .char-grid{grid-template-columns:repeat(auto-fill,minmax(130px,1fr))}
+}
+@media(max-width:480px){
+  .app{padding:8px 8px 80px}
+  .nav-grid{grid-template-columns:1fr}
+  .player-balance{font-size:1.5rem}
+  .stats-row{grid-template-columns:repeat(2,1fr)}
+  .item-grid{grid-template-columns:1fr}
+  .char-grid{grid-template-columns:1fr 1fr}
+}
+</style>
+</head>
+<body>
+<div class="app" id="app">
+
+  <!-- ── Login Screen ──────────────────────────────────────────── -->
+  <div id="login-screen" class="screen active">
+    <h1>Crypto <span>Hunters</span></h1>
+    <p class="subtitle">Defend the decentralised future</p>
+    <div class="login-box">
+      <input id="callsign-input" type="text" placeholder="Choose your callsign..." maxlength="24" autocomplete="off"/>
+      <button class="btn-enter" onclick="enterGame()">Enter The Source</button>
+      <p class="login-hint">Pick any name to start playing</p>
+      <button class="btn-wallet-connect" onclick="toggleWalletConnect()" style="margin-top:16px;padding:10px 20px;font-size:.8rem;background:transparent;color:var(--dim);border:1px solid var(--border);width:100%;border-radius:8px">Connect Thronos Wallet (optional)</button>
+      <div id="wallet-connect-box" style="display:none;margin-top:12px">
+        <input id="thr-wallet-input" type="text" placeholder="THR wallet address..." maxlength="64" autocomplete="off" style="margin-bottom:8px"/>
+        <p style="color:var(--dim);font-size:.7rem">Optional — connect later from your profile</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Avatar Creation ──────────────────────────────────────── -->
+  <div id="charcreate-screen" class="screen">
+    <div class="topbar">
+      <div class="logo">Crypto <span>Hunters</span></div>
+    </div>
+
+    <!-- Step 1: Choose class -->
+    <div id="avatar-step1">
+      <h2 class="screen-title" style="text-align:center;margin-bottom:4px">Create Your Hunter</h2>
+      <p style="text-align:center;color:var(--dim);margin-bottom:24px;font-size:.85rem">Choose a class to define your starting skills</p>
+      <div id="class-grid" class="class-grid"></div>
+      <button class="btn-enter" id="btn-to-step2" onclick="avatarStep2()" style="width:100%;max-width:400px;margin:20px auto;display:block" disabled>Customise Appearance</button>
+    </div>
+
+    <!-- Step 2: Customise appearance -->
+    <div id="avatar-step2" style="display:none">
+      <h2 class="screen-title" style="text-align:center;margin-bottom:4px">Customise Your Hunter</h2>
+      <p style="text-align:center;color:var(--dim);margin-bottom:20px;font-size:.85rem">Make your avatar unique</p>
+      <div class="avatar-preview" id="av-preview"></div>
+      <div class="avatar-builder" id="avatar-builder"></div>
+      <button class="btn-enter" onclick="confirmAvatar()" style="width:100%;max-width:400px;margin:20px auto;display:block">Create Hunter</button>
+      <button class="btn-puzzle-alt" onclick="avatarBackToStep1()" style="margin-top:8px;max-width:400px;margin-left:auto;margin-right:auto;display:block">Change Class</button>
+    </div>
+  </div>
+
+  <!-- ── Character Sheet ──────────────────────────────────────── -->
+  <div id="sheet-screen" class="screen">
+    <div class="topbar">
+      <div class="logo">Crypto <span>Hunters</span></div>
+      <button class="btn-sm" onclick="showScreen('dashboard')">Dashboard</button>
+    </div>
+    <div class="back-row"><button class="btn-back" onclick="showScreen('dashboard')">&larr; Back</button></div>
+    <div class="sheet-header">
+      <div class="sheet-portrait" id="sheet-portrait"><span class="sheet-level" id="sheet-level-badge"></span></div>
+      <div class="sheet-callsign" id="sheet-callsign"></div>
+      <div class="sheet-class" id="sheet-class"></div>
+      <div class="anim-state" id="sheet-anim-state">idle</div>
+      <div class="asset-id-tag" id="sheet-asset-id"></div>
+    </div>
+
+    <div class="sheet-section">
+      <div class="sheet-section-title">XP &amp; Trust</div>
+      <div class="xp-bar-container">
+        <div class="xp-bar-label"><span id="sheet-xp-text">0 / 100 XP</span><span id="sheet-xp-pct">0%</span></div>
+        <div class="xp-bar-track"><div class="xp-bar-fill" id="sheet-xp-bar" style="width:0%"></div></div>
+      </div>
+      <div class="trust-meter">
+        <span style="font-size:.75rem;color:var(--dim);text-transform:uppercase">Trust</span>
+        <div class="trust-track"><div class="trust-fill" id="sheet-trust-bar" style="width:0%"></div></div>
+        <div class="trust-val" id="sheet-trust-val">0</div>
+      </div>
+    </div>
+
+    <div class="sheet-section">
+      <div class="sheet-section-title">Skills</div>
+      <div id="sheet-skills"></div>
+    </div>
+
+    <div class="sheet-section">
+      <div class="sheet-section-title">Equipment</div>
+      <div id="sheet-equipment" class="equip-grid"></div>
+    </div>
+
+    <div class="sheet-section">
+      <div class="sheet-section-title">Inventory</div>
+      <div id="sheet-inventory" class="inv-grid"></div>
+    </div>
+  </div>
+
+  <!-- ── Dashboard ─────────────────────────────────────────────── -->
+  <div id="dashboard-screen" class="screen">
+    <div class="topbar">
+      <div class="logo">Crypto <span>Hunters</span></div>
+      <button class="btn-sm" onclick="logout()">Disconnect</button>
+    </div>
+    <div id="welcome-msg" class="welcome-back" style="display:none"></div>
+    <div class="player-card">
+      <div class="player-identity">
+        <div class="player-portrait-sm" id="dash-portrait"></div>
+        <div class="player-info">
+          <div class="player-callsign" id="dash-callsign"></div>
+          <div class="player-char-role" id="dash-char-role"></div>
+        </div>
+      </div>
+      <div class="player-balance"><span id="dash-balance">0</span> <small>DRX</small></div>
+      <div><span class="tier-badge" id="dash-tier">Easy</span> <span class="level-badge" id="dash-level">LVL 1</span></div>
+      <div class="xp-bar-container">
+        <div class="xp-bar-label"><span id="dash-xp-text">0 / 100 XP</span><span id="dash-xp-pct">0%</span></div>
+        <div class="xp-bar-track"><div class="xp-bar-fill" id="dash-xp-bar" style="width:0%"></div></div>
+      </div>
+    </div>
+    <div class="stats-row">
+      <div class="stat-card"><div class="stat-val" id="stat-missions">0/12</div><div class="stat-label">Missions</div></div>
+      <div class="stat-card"><div class="stat-val" id="stat-drx">0</div><div class="stat-label">Total DRX</div></div>
+      <div class="stat-card"><div class="stat-val" id="stat-items">0</div><div class="stat-label">Items</div></div>
+      <div class="stat-card"><div class="stat-val" id="stat-quests">0</div><div class="stat-label">Active</div></div>
+    </div>
+    <div class="nav-grid">
+      <button class="nav-btn" onclick="showScreen('sheet')"><span class="icon">&#128100;</span>Character</button>
+      <button class="nav-btn" onclick="showScreen('story')"><span class="icon">&#128214;</span>Story</button>
+      <button class="nav-btn" onclick="showScreen('missions')"><span class="icon">&#9889;</span>Missions</button>
+      <button class="nav-btn" onclick="showScreen('items')"><span class="icon">&#128722;</span>Items Shop</button>
+      <button class="nav-btn" onclick="showScreen('inventory')"><span class="icon">&#127890;</span>Inventory</button>
+      <button class="nav-btn" onclick="showScreen('npcs')"><span class="icon">&#129333;</span>NPCs</button>
+    </div>
+  </div>
+
+  <!-- ── Missions Screen ───────────────────────────────────────── -->
+  <div id="missions-screen" class="screen">
+    <div class="topbar">
+      <div class="logo">Crypto <span>Hunters</span></div>
+      <button class="btn-sm" onclick="showScreen('dashboard')">Dashboard</button>
+    </div>
+    <div class="back-row"><button class="btn-back" onclick="showScreen('dashboard')">&larr; Back</button></div>
+    <h2 class="screen-title">Missions</h2>
+    <div id="tier-unlock-banner" class="tier-unlock-banner"></div>
+    <div id="error-missions" class="error-banner"><span class="msg"></span><button class="btn-retry" onclick="loadMissions()">Retry</button></div>
+    <div id="missions-loading">
+      <div class="skeleton skeleton-card"></div>
+      <div class="skeleton skeleton-card"></div>
+      <div class="skeleton skeleton-card"></div>
+    </div>
+    <div id="missions-list"></div>
+  </div>
+
+  <!-- ── Story Screen ──────────────────────────────────────────── -->
+  <div id="story-screen" class="screen">
+    <div class="topbar">
+      <div class="logo">Crypto <span>Hunters</span></div>
+      <button class="btn-sm" onclick="showScreen('dashboard')">Dashboard</button>
+    </div>
+    <div class="back-row"><button class="btn-back" onclick="showScreen('dashboard')">&larr; Back</button></div>
+    <h2 class="screen-title">Story</h2>
+    <div id="story-timeline" class="timeline"></div>
+  </div>
+
+  <!-- ── Items Shop Screen ─────────────────────────────────────── -->
+  <div id="items-screen" class="screen">
+    <div class="topbar">
+      <div class="logo">Crypto <span>Hunters</span></div>
+      <button class="btn-sm" onclick="showScreen('dashboard')">Dashboard</button>
+    </div>
+    <div class="back-row"><button class="btn-back" onclick="showScreen('dashboard')">&larr; Back</button></div>
+    <h2 class="screen-title">Items Shop</h2>
+    <p style="color:var(--dim);margin-bottom:16px;font-family:var(--mono);font-size:.85rem">Balance: <span id="shop-balance" style="color:var(--gold)">0</span> DRX</p>
+    <div id="error-items" class="error-banner"><span class="msg"></span><button class="btn-retry" onclick="loadItems()">Retry</button></div>
+    <div id="items-loading">
+      <div class="skeleton skeleton-card"></div>
+      <div class="skeleton skeleton-card"></div>
+    </div>
+    <div id="items-grid" class="item-grid"></div>
+  </div>
+
+  <!-- ── Inventory Screen ──────────────────────────────────────── -->
+  <div id="inventory-screen" class="screen">
+    <div class="topbar">
+      <div class="logo">Crypto <span>Hunters</span></div>
+      <button class="btn-sm" onclick="showScreen('dashboard')">Dashboard</button>
+    </div>
+    <div class="back-row"><button class="btn-back" onclick="showScreen('dashboard')">&larr; Back</button></div>
+    <h2 class="screen-title">Inventory</h2>
+    <div id="inv-content"></div>
+  </div>
+
+  <!-- ── NPCs / Companions ──────────────────────────────────────── -->
+  <div id="npcs-screen" class="screen">
+    <div class="topbar">
+      <div class="logo">Crypto <span>Hunters</span></div>
+      <button class="btn-sm" onclick="showScreen('dashboard')">Dashboard</button>
+    </div>
+    <div class="back-row"><button class="btn-back" onclick="showScreen('dashboard')">&larr; Back</button></div>
+    <h2 class="screen-title">NPCs &amp; Companions</h2>
+    <p style="color:var(--dim);margin-bottom:20px;font-size:.85rem">The canonical Crypto Hunters — allies you meet throughout the story</p>
+    <div id="npc-grid" class="char-grid"></div>
+    <div id="npc-detail" class="char-detail" style="display:none">
+      <div class="char-detail-portrait" id="npc-portrait"></div>
+      <h3 id="npc-detail-name" style="font-size:1.2rem;margin-bottom:2px"></h3>
+      <p id="npc-detail-role" style="color:var(--dim);font-size:.8rem;margin-bottom:8px"></p>
+      <p id="npc-detail-desc" style="font-size:.85rem;line-height:1.5;margin-bottom:16px"></p>
+      <div id="npc-stats-bars"></div>
+      <p id="npc-passive" style="color:var(--gold);font-size:.8rem;margin-top:12px;margin-bottom:16px"></p>
+      <button class="btn-puzzle-alt" onclick="backToNpcGrid()">Back to NPCs</button>
+    </div>
+  </div>
+
+  <!-- ── Story Mode: Chapter Player ──────────────────────────────── -->
+  <div id="chapter-screen" class="screen">
+    <div class="topbar">
+      <div class="logo">Crypto <span>Hunters</span></div>
+      <button class="btn-sm" onclick="showScreen('story')">Story</button>
+    </div>
+    <div class="back-row"><button class="btn-back" onclick="showScreen('story')">&larr; Back to Story</button></div>
+    <div id="chapter-title-bar" style="text-align:center;margin-bottom:20px">
+      <h3 id="chapter-title" style="font-family:var(--mono);color:var(--green);margin-bottom:4px"></h3>
+      <p id="chapter-subtitle" style="color:var(--dim);font-size:.85rem"></p>
+    </div>
+    <div id="dialogue-area">
+      <div id="dialogue-card" class="dialogue-card">
+        <div id="dialogue-portrait" class="dialogue-portrait"></div>
+        <div class="dialogue-speaker" id="dialogue-speaker"></div>
+        <div class="dialogue-text" id="dialogue-text"></div>
+      </div>
+      <div id="dialogue-choices" class="dialogue-choices"></div>
+      <button id="dialogue-next-btn" class="btn-puzzle" onclick="advanceDialogue()" style="display:none">Continue</button>
+    </div>
+    <div id="chapter-complete-box" style="display:none;text-align:center;padding:40px 20px">
+      <div style="font-size:3rem;margin-bottom:12px">&#127942;</div>
+      <h3 style="color:var(--gold);margin-bottom:8px" id="chapter-complete-title"></h3>
+      <p style="color:var(--dim);margin-bottom:20px" id="chapter-complete-summary"></p>
+      <div id="chapter-rewards" style="margin-bottom:20px"></div>
+      <button class="btn-enter" onclick="showScreen('story')" style="width:100%;max-width:300px">Back to Story</button>
+    </div>
+  </div>
+
+  <!-- ── Puzzle E1: Hello Hash ──────────────────────────────────── -->
+  <div id="puzzle-e1-screen" class="screen">
+    <div class="topbar">
+      <div class="logo">Crypto <span>Hunters</span></div>
+      <button class="btn-sm" onclick="showScreen('missions')">Missions</button>
+    </div>
+    <div class="back-row"><button class="btn-back" onclick="showScreen('missions')">&larr; Back to Missions</button></div>
+    <div class="puzzle-header">
+      <h3>[E1] Hello Hash</h3>
+      <p>Learn SHA-256 hashing — the building block of blockchain</p>
+    </div>
+    <div class="puzzle-instruction">
+      Type any word below and compute its <code>SHA-256</code> hash. The hash is a unique fingerprint of the input. Even a tiny change produces a completely different hash. Get <strong>3 correct hashes</strong> to complete the mission.
+    </div>
+    <div class="puzzle-progress" id="e1-pips"></div>
+    <div class="puzzle-field">
+      <label>Input text</label>
+      <input id="e1-input" type="text" placeholder="Type a word (e.g. blockchain)" autocomplete="off"/>
+    </div>
+    <div class="puzzle-field">
+      <label>Your SHA-256 answer</label>
+      <input id="e1-answer" type="text" placeholder="Paste or type the hex hash" autocomplete="off"/>
+    </div>
+    <button class="btn-puzzle" onclick="e1ComputeHash()">Compute Hash For Me</button>
+    <button class="btn-puzzle-alt" onclick="e1CheckAnswer()">Check Answer</button>
+    <div class="puzzle-output" id="e1-output"></div>
+    <button class="btn-puzzle" id="e1-complete-btn" onclick="e1Complete()" disabled>Complete Mission (need 3 correct)</button>
+  </div>
+
+  <!-- ── Puzzle E2: Nonce Nudge ───────────────────────────────────── -->
+  <div id="puzzle-e2-screen" class="screen">
+    <div class="topbar">
+      <div class="logo">Crypto <span>Hunters</span></div>
+      <button class="btn-sm" onclick="showScreen('missions')">Missions</button>
+    </div>
+    <div class="back-row"><button class="btn-back" onclick="showScreen('missions')">&larr; Back to Missions</button></div>
+    <div class="puzzle-header">
+      <h3>[E2] Nonce Nudge</h3>
+      <p>Find the nonce that produces a hash starting with zeros — this is mining!</p>
+    </div>
+    <div class="puzzle-instruction">
+      A block has data: <code id="e2-block-data">—</code><br>
+      Find a number (nonce) so that <code>SHA-256(data + nonce)</code> starts with <strong id="e2-target-display">00</strong>. This is proof-of-work mining.
+    </div>
+    <div class="puzzle-stats" id="e2-stats">
+      <div class="puzzle-stat"><div class="val" id="e2-attempts">0</div><div class="lbl">Attempts</div></div>
+      <div class="puzzle-stat"><div class="val" id="e2-difficulty">2</div><div class="lbl">Difficulty</div></div>
+    </div>
+    <div class="nonce-controls">
+      <input id="e2-nonce" type="number" placeholder="Enter nonce" min="0" autocomplete="off"/>
+      <button class="btn-puzzle" style="width:auto" onclick="e2CheckNonce()">Check</button>
+    </div>
+    <button class="btn-puzzle-alt" onclick="e2AutoMine()">Auto-Mine (brute force)</button>
+    <div class="mining-anim" id="e2-mining"><div class="spinner"></div><p>Mining...</p></div>
+    <div class="puzzle-output" id="e2-output"></div>
+    <div class="hash-display" id="e2-hash"></div>
+    <button class="btn-puzzle" id="e2-complete-btn" onclick="e2Complete()" disabled>Complete Mission</button>
+  </div>
+
+  <!-- ── Reward Popup ──────────────────────────────────────────── -->
+  <div id="reward-popup" class="reward-popup">
+    <div class="reward-text" id="reward-text"></div>
+    <div class="reward-particles" id="reward-particles"></div>
+  </div>
+
+</div>
+
+<script>
+/* ================================================================
+   Crypto Hunters — Game Client
+   Talks to backend at API_BASE. DRX is placeholder game currency.
+   No real wallet, mint, payout, or economic connection.
+   ================================================================ */
+
+const API_BASE = 'http://localhost:3000';
+
+/* ── Character color map (loaded from server, fallback here) ──── */
+const CHAR_COLORS = {safa:'#10b981',niva:'#a855f7',nato:'#3b82f6',kyra:'#ec4899',luna:'#06b6d4',zayne:'#f59e0b'};
+const STAT_COLORS = {hack:'#10b981',shield:'#3b82f6',intel:'#a855f7',stamina:'#f59e0b',charisma:'#ec4899'};
+
+/* ── Game State ──────────────────────────────────────────────────── */
+const state = {
+  wallet: '',
+  callsign: '',
+  character: null,
+  avatar: null,
+  hunterClass: null,
+  equipment: { head:null, outfit:null, accessory:null, tool:null, badge:null },
+  animationState: 'idle',
+  assetId: null,
+  balance: 0,
+  inventory: [],
+  missions: [],
+  items: [],
+  missionStates: {},
+  completedMissions: new Set(),
+  totalDrxEarned: 0,
+  isReturning: false,
+  xp: 0,
+  level: 1,
+  skills: {},
+  trust: 0,
+  thrWallet: null,
+  storyCompleted: [],
+  characters: [],
+  avatarOptions: null,
+  classes: null,
+};
+
+/* ── XP / Level helpers ─────────────────────────────────────────── */
+function xpForLevel(lvl){ return lvl * 100; }
+function calcLevel(xp){
+  let lvl = 1;
+  let total = 0;
+  while(total + xpForLevel(lvl) <= xp){ total += xpForLevel(lvl); lvl++; }
+  return { level: lvl, currentXp: xp - total, needed: xpForLevel(lvl) };
+}
+
+/* ── Tier / Story unlock definitions ─────────────────────────────── */
+const TIERS = ['Easy','Normal','Expert','Genius'];
+const TIER_COLORS = {Easy:'#10b981',Normal:'#60a5fa',Expert:'#c084fc',Genius:'#ffd700'};
+const TIER_PREFIXES = {Easy:'E',Normal:'N',Expert:'X',Genius:'G'};
+const STORY_ACTS = [
+  {
+    id:'act1', actNum:1, chapterId:'ch1', title:'Act I — Spark', subtitle:'2012: First contact with blockchain',
+    unlockTier: null,
+    chars:[{name:'SAfA',color:'#10b981'},{name:'Nato',color:'#3b82f6'}],
+    body:'<p>Greece, 2012. Amidst financial turmoil, a disillusioned hacker named SAfA discovers a whitepaper by Satoshi Nakamoto. He sets up a rudimentary mining operation and mines his first block — a taste of true financial sovereignty.</p><p>The 2013 bull run makes him a fortune. Then Mt. Gox collapses and wipes him out. Devastated, he seeks out his old friend Nato Saka, realising the fight must be waged on both software and hardware fronts.</p>'
+  },
+  {
+    id:'act2', actNum:2, chapterId:null, title:'Act II — Formation', subtitle:'The team assembles',
+    unlockTier: 'Easy',
+    chars:[{name:'Niva',color:'#a855f7'},{name:'Kyra',color:'#ec4899'},{name:'Luna',color:'#06b6d4'}],
+    body:'<p>The Dark Node orchestrates a 51% attack on a promising altcoin. The attack draws attention from others fighting the same shadow war.</p><p>Niva, an ex-intelligence operative, sees a pattern. Kyra traces ghost funds through mixers. Luna rallies the developer community. SAfA and Nato find them, and the five unite. The Crypto Hunters are born.</p><p>They thwart phishing campaigns, expose smart contract vulnerabilities, and secure community nodes.</p>'
+  },
+  {
+    id:'act3', actNum:3, chapterId:null, title:'Act III — Revelation', subtitle:'Zayne Nexus appears',
+    unlockTier: 'Normal',
+    chars:[{name:'Zayne',color:'#f59e0b'}],
+    body:'<p>The Dark Node\'s attacks evolve — disinformation campaigns designed to destroy trust in the system itself. The Hunters hit a wall.</p><p>An encrypted message arrives from an unknown source: Zayne Nexus, a former Dark Node architect. He provides a partial schematic of their infrastructure and warns that the next target is not a coin, but a country: Greece\'s experimental "Agora Project" for decentralised governance.</p>'
+  },
+  {
+    id:'act4', actNum:4, chapterId:null, title:'Act IV — Uplift', subtitle:'The siege of Agora',
+    unlockTier: 'Expert',
+    chars:[{name:'SAfA',color:'#10b981'},{name:'Niva',color:'#a855f7'},{name:'Kyra',color:'#ec4899'},{name:'Luna',color:'#06b6d4'},{name:'Nato',color:'#3b82f6'},{name:'Zayne',color:'#f59e0b'}],
+    body:'<p>The Dark Node launches a multi-pronged assault: DDoS combined with a smart contract exploit, a state-sponsored FUD campaign, and a physical saboteur targeting the server facility.</p><p>The Hunters split up. SAfA and Luna race to patch the code live. Kyra and Zayne counter the FUD with on-chain proof. Niva and Nato intercept the saboteur.</p><p>They succeed. The Agora pilot makes international headlines. But Zayne warns: "You\'ve cut off the head of a hydra. The Dark Node in Greece was just one of them." The fight has gone global.</p>'
+  }
+];
+
+const ITEM_ICONS = {
+  I_SEC_BOOST: '&#128737;',
+  I_HASH_TOOL: '&#128295;',
+  I_DBL_REWARD: '&#10024;',
+  I_NFT_SHARD: '&#128142;',
+  I_COS_SKIN1: '&#128085;',
+};
+
+/* ── Helpers ─────────────────────────────────────────────────────── */
+function truncWallet(w){ return w.length > 12 ? w.slice(0,6)+'...'+w.slice(-4) : w; }
+function $(id){ return document.getElementById(id); }
+function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
+
+/* ── Screen navigation ───────────────────────────────────────────── */
+function showScreen(name){
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+  const el = $(name+'-screen');
+  if(el) el.classList.add('active');
+
+  if(name==='dashboard') refreshDashboard();
+  if(name==='missions') loadMissions();
+  if(name==='story') renderStory();
+  if(name==='items') loadItems();
+  if(name==='inventory') loadInventory();
+  if(name==='puzzle-e1') e1UpdatePips();
+  if(name==='charcreate') loadAvatarOptions();
+  if(name==='sheet') loadCharacterSheet();
+  if(name==='npcs') loadNpcs();
+}
+
+/* ── API fetch with error handling ───────────────────────────────── */
+async function apiFetch(path, opts){
+  const res = await fetch(API_BASE + path, opts);
+  if(!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+function showError(bannerId, msg){
+  const el = $(bannerId);
+  if(!el) return;
+  el.querySelector('.msg').textContent = msg;
+  el.classList.add('visible');
+}
+function hideError(bannerId){
+  const el = $(bannerId);
+  if(el) el.classList.remove('visible');
+}
+
+/* ── Save / Load from localStorage ───────────────────────────────── */
+function saveLocal(){
+  try{
+    localStorage.setItem('ch_callsign', state.callsign);
+    localStorage.setItem('ch_wallet', state.wallet);
+    localStorage.setItem('ch_state_'+state.wallet, JSON.stringify({
+      completedMissions: [...state.completedMissions],
+      missionStates: state.missionStates,
+      totalDrxEarned: state.totalDrxEarned,
+      character: state.character,
+      avatar: state.avatar,
+      hunterClass: state.hunterClass,
+      equipment: state.equipment,
+      animationState: state.animationState,
+      assetId: state.assetId,
+      xp: state.xp,
+      level: state.level,
+      skills: state.skills,
+      trust: state.trust,
+      thrWallet: state.thrWallet,
+      storyCompleted: state.storyCompleted,
+    }));
+  }catch(e){}
+}
+function loadLocal(wallet){
+  try{
+    const raw = localStorage.getItem('ch_state_'+wallet);
+    if(!raw) return false;
+    const d = JSON.parse(raw);
+    state.completedMissions = new Set(d.completedMissions||[]);
+    state.missionStates = d.missionStates||{};
+    state.totalDrxEarned = d.totalDrxEarned||0;
+    state.character = d.character||null;
+    state.avatar = d.avatar||null;
+    state.hunterClass = d.hunterClass||null;
+    state.equipment = d.equipment||{head:null,outfit:null,accessory:null,tool:null,badge:null};
+    state.animationState = d.animationState||'idle';
+    state.assetId = d.assetId||null;
+    state.xp = d.xp||0;
+    state.level = d.level||1;
+    state.skills = d.skills||{};
+    state.trust = d.trust||0;
+    state.thrWallet = d.thrWallet||null;
+    state.storyCompleted = d.storyCompleted||[];
+    return true;
+  }catch(e){ return false; }
+}
+
+/* ── Toggle wallet connect ──────────────────────────────────────── */
+function toggleWalletConnect(){
+  const box = $('wallet-connect-box');
+  box.style.display = box.style.display === 'none' ? 'block' : 'none';
+}
+
+/* ── Enter Game ──────────────────────────────────────────────────── */
+async function enterGame(){
+  const cs = $('callsign-input').value.trim();
+  if(!cs) return;
+  state.callsign = cs;
+  state.wallet = cs;
+
+  const thrInput = $('thr-wallet-input');
+  if(thrInput && thrInput.value.trim()){
+    state.thrWallet = thrInput.value.trim();
+  }
+
+  state.isReturning = loadLocal(cs);
+  loadPuzzleLocal(cs);
+
+  // Try fetching player from server
+  try{
+    const player = await apiFetch('/api/player/'+encodeURIComponent(cs));
+    if(player && player.callsign){
+      state.balance = player.balance || 0;
+      state.inventory = player.inventory || [];
+      state.character = player.character || state.character;
+      state.avatar = player.avatar || state.avatar;
+      state.hunterClass = player.hunterClass || state.hunterClass;
+      state.equipment = player.equipment || state.equipment;
+      state.animationState = player.animationState || 'idle';
+      state.assetId = player.assetId || state.assetId;
+      state.xp = player.xp || state.xp;
+      state.level = player.level || state.level;
+      state.skills = player.skills || state.skills;
+      state.trust = player.trust || state.trust;
+      state.thrWallet = player.thrWallet || state.thrWallet;
+      state.storyCompleted = player.storyCompleted || state.storyCompleted;
+      if(player.completedMissions){
+        player.completedMissions.forEach(id => state.completedMissions.add(id));
+      }
+      state.isReturning = true;
+      showScreen('dashboard');
+      return;
+    }
+  }catch(e){
+    // Player doesn't exist on server or server down
+  }
+
+  // Fallback: try old dashboard endpoint
+  try{
+    const dash = await apiFetch('/api/dashboard/'+encodeURIComponent(cs));
+    if(dash.balance !== undefined) state.balance = dash.balance;
+    if(dash.inventory) state.inventory = dash.inventory;
+    if(dash.completedMissions){
+      dash.completedMissions.forEach(id => state.completedMissions.add(id));
+    }
+  }catch(e){}
+
+  // If we have a character from localStorage, go to dashboard
+  if(state.character){
+    showScreen('dashboard');
+    return;
+  }
+
+  // New player — go to character creation
+  showScreen('charcreate');
+}
+
+/* ── Logout ──────────────────────────────────────────────────────── */
+function logout(){
+  saveLocal();
+  state.wallet = '';
+  state.callsign = '';
+  state.character = null;
+  state.avatar = null;
+  state.hunterClass = null;
+  state.equipment = {head:null,outfit:null,accessory:null,tool:null,badge:null};
+  state.animationState = 'idle';
+  state.assetId = null;
+  state.balance = 0;
+  state.inventory = [];
+  state.missions = [];
+  state.completedMissions = new Set();
+  state.missionStates = {};
+  state.xp = 0;
+  state.level = 1;
+  state.skills = {};
+  state.trust = 0;
+  state.thrWallet = null;
+  state.storyCompleted = [];
+  showScreen('login');
+}
+
+/* ── Avatar Creation ────────────────────────────────────────────── */
+let selectedClass = null;
+let avatarChoice = { bodyType:'athletic', face:'angular', hair:'cyber_cut', eyes:'green', skinTone:'medium', outfit:'hacker_hoodie', accentColors:{ primary:'#10b981', secondary:'#06b6d4' } };
+const ACCENT_PRESETS = ['#10b981','#3b82f6','#a855f7','#ec4899','#f59e0b','#06b6d4','#ef4444','#8b5cf6'];
+const CLASS_ICONS = {hacker:'H',defender:'D',engineer:'E',analyst:'A',infiltrator:'I'};
+
+async function loadAvatarOptions(){
+  $('avatar-step1').style.display = '';
+  $('avatar-step2').style.display = 'none';
+  selectedClass = null;
+  $('btn-to-step2').disabled = true;
+
+  try{
+    const opts = await apiFetch('/api/avatar-options');
+    state.avatarOptions = opts;
+    state.classes = opts.classes || {};
+    renderClassGrid(opts.classes);
+  }catch(e){
+    const fallbackClasses = {
+      hacker:{label:'Hacker',startSkill:'cryptography',color:'#10b981',desc:'Breaks codes and exploits vulnerabilities'},
+      defender:{label:'Defender',startSkill:'network_security',color:'#3b82f6',desc:'Protects networks and infrastructure'},
+      engineer:{label:'Engineer',startSkill:'smart_contracts',color:'#f59e0b',desc:'Builds and audits smart contracts'},
+      analyst:{label:'Analyst',startSkill:'data_analysis',color:'#ec4899',desc:'Reads data and spots anomalies'},
+      infiltrator:{label:'Infiltrator',startSkill:'social_engineering',color:'#a855f7',desc:'Masters deception and social engineering'}
+    };
+    state.classes = fallbackClasses;
+    renderClassGrid(fallbackClasses);
+  }
+}
+
+function renderClassGrid(classes){
+  const grid = $('class-grid');
+  grid.innerHTML = '';
+  for(const [id, cls] of Object.entries(classes)){
+    const card = document.createElement('div');
+    card.className = 'class-card';
+    card.id = 'class-'+id;
+    card.onclick = () => selectClass(id);
+    card.innerHTML =
+      '<div class="class-icon" style="background:'+cls.color+'">'+(CLASS_ICONS[id]||id[0].toUpperCase())+'</div>'+
+      '<div class="class-name">'+cls.label+'</div>'+
+      '<div class="class-desc">'+cls.desc+'</div>';
+    grid.appendChild(card);
+  }
+}
+
+function selectClass(id){
+  selectedClass = id;
+  document.querySelectorAll('.class-card').forEach(c => c.classList.remove('selected'));
+  const el = $('class-'+id);
+  if(el) el.classList.add('selected');
+  $('btn-to-step2').disabled = false;
+  avatarChoice.accentColors.primary = (state.classes[id]||{}).color || '#10b981';
+}
+
+function avatarStep2(){
+  if(!selectedClass) return;
+  $('avatar-step1').style.display = 'none';
+  $('avatar-step2').style.display = '';
+  renderAvatarBuilder();
+  updateAvatarPreview();
+}
+
+function avatarBackToStep1(){
+  $('avatar-step1').style.display = '';
+  $('avatar-step2').style.display = 'none';
+}
+
+function renderAvatarBuilder(){
+  const builder = $('avatar-builder');
+  const opts = state.avatarOptions || {};
+  let html = '';
+
+  const rows = [
+    { label:'Body', key:'bodyType', options: opts.bodyTypes || ['athletic','slim','muscular','average'] },
+    { label:'Face', key:'face', options: opts.faces || ['round','angular','sharp','soft'] },
+    { label:'Hair', key:'hair', options: opts.hairStyles || ['short_dark','long_light','mohawk','braids','bald','cyber_cut','wild_curls'] },
+    { label:'Eyes', key:'eyes', options: opts.eyeColors || ['blue','green','brown','amber','cyber_red','violet'] },
+    { label:'Skin', key:'skinTone', options: opts.skinTones || ['light','medium','dark','olive','cyber_pale'] },
+    { label:'Outfit', key:'outfit', options: opts.outfits || ['hacker_hoodie','tactical_vest','lab_coat','street_tech','cyber_suit'] },
+  ];
+
+  rows.forEach(r => {
+    html += '<div class="avatar-row"><label>'+r.label+'</label><div class="avatar-options">';
+    r.options.forEach(o => {
+      const sel = avatarChoice[r.key] === o ? ' selected' : '';
+      const display = o.replace(/_/g,' ');
+      html += '<button class="av-opt'+sel+'" onclick="setAvatar(\''+r.key+'\',\''+o+'\',this)">'+display+'</button>';
+    });
+    html += '</div></div>';
+  });
+
+  html += '<div class="avatar-row"><label>Accent</label><div class="avatar-options">';
+  ACCENT_PRESETS.forEach(c => {
+    const sel = avatarChoice.accentColors.primary === c ? ' selected' : '';
+    html += '<div class="color-swatch'+sel+'" style="background:'+c+'" onclick="setAccent(\''+c+'\',this)"></div>';
+  });
+  html += '</div></div>';
+
+  builder.innerHTML = html;
+}
+
+function setAvatar(key, val, el){
+  avatarChoice[key] = val;
+  el.parentElement.querySelectorAll('.av-opt').forEach(b => b.classList.remove('selected'));
+  el.classList.add('selected');
+  updateAvatarPreview();
+}
+
+function setAccent(color, el){
+  avatarChoice.accentColors.primary = color;
+  el.parentElement.querySelectorAll('.color-swatch').forEach(s => s.classList.remove('selected'));
+  el.classList.add('selected');
+  updateAvatarPreview();
+}
+
+function updateAvatarPreview(){
+  const preview = $('av-preview');
+  const cls = state.classes[selectedClass] || {};
+  preview.style.background = avatarChoice.accentColors.primary;
+  preview.style.borderColor = avatarChoice.accentColors.primary;
+  preview.innerHTML = state.callsign.slice(0,2).toUpperCase() +
+    '<div class="av-badge">'+(CLASS_ICONS[selectedClass]||'?')+'</div>';
+}
+
+async function confirmAvatar(){
+  if(!selectedClass) return;
+  try{
+    const data = await apiFetch('/api/player/create', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        callsign: state.callsign,
+        hunterClass: selectedClass,
+        avatar: avatarChoice,
+        thrWallet: state.thrWallet || undefined
+      })
+    });
+    state.character = data.character;
+    state.avatar = data.avatar || avatarChoice;
+    state.hunterClass = data.hunterClass || selectedClass;
+    state.assetId = data.assetId || null;
+    state.animationState = data.animationState || 'idle';
+    state.xp = data.xp || 0;
+    state.level = data.level || 1;
+    state.skills = data.skills || {};
+    state.balance = data.balance || 0;
+    state.trust = data.trust || 0;
+    saveLocal();
+    showScreen('dashboard');
+  }catch(e){
+    const cls = state.classes[selectedClass] || {};
+    state.character = { id:selectedClass, handle:state.callsign, name:state.callsign, role:cls.label||selectedClass, color:cls.color||'#10b981' };
+    state.avatar = avatarChoice;
+    state.hunterClass = selectedClass;
+    state.assetId = 'hunter_'+state.callsign+'_'+Date.now();
+    state.skills[cls.startSkill||'cryptography'] = 10;
+    saveLocal();
+    showScreen('dashboard');
+  }
+}
+
+/* ── NPCs ───────────────────────────────────────────────────────── */
+let npcList = [];
+
+async function loadNpcs(){
+  const grid = $('npc-grid');
+  const detail = $('npc-detail');
+  detail.style.display = 'none';
+  grid.style.display = '';
+  grid.innerHTML = '<div class="skeleton skeleton-card"></div>';
+
+  try{
+    const npcs = await apiFetch('/api/npcs');
+    npcList = npcs;
+    grid.innerHTML = '';
+    npcs.forEach(c => {
+      const card = document.createElement('div');
+      card.className = 'char-card';
+      if(!c.unlocked) card.style.opacity = '0.5';
+      card.onclick = () => selectNpc(c.id);
+      card.innerHTML =
+        '<div class="portrait" style="background:'+c.color+'">'+c.handle[0]+c.handle[1]+'</div>'+
+        '<div class="cname">'+c.handle+(c.unlocked?'':' &#128274;')+'</div>'+
+        '<div class="crole">'+c.role+'</div>';
+      grid.appendChild(card);
+    });
+  }catch(e){
+    grid.innerHTML = '<p style="color:var(--red);text-align:center">Failed to load NPCs.</p>';
+  }
+}
+
+function selectNpc(id){
+  const c = npcList.find(ch => ch.id === id);
+  if(!c) return;
+
+  $('npc-grid').style.display = 'none';
+  $('npc-detail').style.display = '';
+
+  $('npc-portrait').style.background = c.color;
+  $('npc-portrait').textContent = c.handle[0]+c.handle[1];
+  $('npc-detail-name').textContent = c.name;
+  $('npc-detail-role').textContent = c.role+' — '+c.origin;
+  $('npc-detail-desc').textContent = c.desc;
+  $('npc-passive').textContent = (c.unlocked?'':'&#128274; Locked — ') + c.passive;
+
+  const barsEl = $('npc-stats-bars');
+  barsEl.innerHTML = '';
+  ['hack','shield','intel','stamina','charisma'].forEach(s => {
+    const val = c.stats[s] || 0;
+    const pct = (val / 10) * 100;
+    barsEl.innerHTML +=
+      '<div class="stat-bar-row">'+
+        '<div class="stat-bar-label">'+s+'</div>'+
+        '<div class="stat-bar-track"><div class="stat-bar-fill" style="width:'+pct+'%;background:'+(STAT_COLORS[s]||'var(--green)')+'"></div></div>'+
+        '<div style="width:24px;text-align:center;font-size:.8rem;font-weight:700;color:'+(STAT_COLORS[s]||'var(--green)')+'">'+val+'</div>'+
+      '</div>';
+  });
+}
+
+function backToNpcGrid(){
+  $('npc-grid').style.display = '';
+  $('npc-detail').style.display = 'none';
+}
+
+/* ── Character Sheet ────────────────────────────────────────────── */
+async function loadCharacterSheet(){
+  try{
+    const sheet = await apiFetch('/api/player/'+encodeURIComponent(state.callsign)+'/sheet');
+    if(sheet.avatar) state.avatar = sheet.avatar;
+    if(sheet.hunterClass) state.hunterClass = sheet.hunterClass;
+    if(sheet.equipment) state.equipment = sheet.equipment;
+    if(sheet.animationState) state.animationState = sheet.animationState;
+    if(sheet.assetId) state.assetId = sheet.assetId;
+    if(sheet.xp !== undefined) state.xp = sheet.xp;
+    if(sheet.skills) state.skills = sheet.skills;
+    if(sheet.trust !== undefined) state.trust = sheet.trust;
+    if(sheet.inventory) state.inventory = sheet.inventory;
+  }catch(e){}
+
+  renderCharacterSheet();
+}
+
+function renderCharacterSheet(){
+  const portrait = $('sheet-portrait');
+  const accentColor = (state.avatar && state.avatar.accentColors && state.avatar.accentColors.primary) ||
+    (state.character && state.character.color) || 'var(--green)';
+  portrait.style.background = accentColor;
+  portrait.style.borderColor = accentColor;
+  const initials = state.callsign.slice(0,2).toUpperCase();
+  const lvlInfo = calcLevel(state.xp);
+  portrait.innerHTML = initials + '<span class="sheet-level" id="sheet-level-badge">'+lvlInfo.level+'</span>';
+
+  $('sheet-callsign').textContent = state.callsign;
+  const clsLabel = state.hunterClass ?
+    ((state.classes && state.classes[state.hunterClass]) || {}).label || state.hunterClass :
+    (state.character && state.character.role) || '';
+  $('sheet-class').textContent = clsLabel;
+  $('sheet-anim-state').textContent = state.animationState || 'idle';
+  $('sheet-asset-id').textContent = state.assetId ? 'Asset: '+state.assetId : '';
+
+  const pct = Math.min(100, Math.round((lvlInfo.currentXp / lvlInfo.needed) * 100));
+  $('sheet-xp-text').textContent = lvlInfo.currentXp+' / '+lvlInfo.needed+' XP';
+  $('sheet-xp-pct').textContent = pct+'%';
+  $('sheet-xp-bar').style.width = pct+'%';
+
+  const trustMax = 50;
+  const trustPct = Math.min(100, Math.round((state.trust / trustMax) * 100));
+  $('sheet-trust-bar').style.width = trustPct+'%';
+  $('sheet-trust-val').textContent = state.trust;
+
+  const skillsEl = $('sheet-skills');
+  const SKILL_NAMES = ['cryptography','network_security','smart_contracts','data_analysis','social_engineering'];
+  const SKILL_COLORS = {cryptography:'#10b981',network_security:'#3b82f6',smart_contracts:'#f59e0b',data_analysis:'#ec4899',social_engineering:'#a855f7'};
+  skillsEl.innerHTML = '';
+  SKILL_NAMES.forEach(sk => {
+    const val = state.skills[sk] || 0;
+    const maxSk = 100;
+    const pctSk = Math.min(100, Math.round((val/maxSk)*100));
+    skillsEl.innerHTML +=
+      '<div class="skill-row">'+
+        '<div class="skill-name">'+sk.replace(/_/g,' ')+'</div>'+
+        '<div class="skill-bar"><div class="skill-bar-fill" style="width:'+pctSk+'%;background:'+(SKILL_COLORS[sk]||'var(--green)')+'"></div></div>'+
+        '<div class="skill-val">'+val+'</div>'+
+      '</div>';
+  });
+
+  const equipEl = $('sheet-equipment');
+  const SLOT_ICONS = {head:'&#128081;',outfit:'&#128085;',accessory:'&#128142;',tool:'&#128295;',badge:'&#127942;'};
+  equipEl.innerHTML = '';
+  ['head','outfit','accessory','tool','badge'].forEach(slot => {
+    const itemId = state.equipment[slot];
+    const filled = !!itemId;
+    const itemObj = (state.items||[]).find(i=>i.id===itemId);
+    const itemName = itemObj ? itemObj.name : (itemId || '');
+    const icon = ITEM_ICONS[itemId] || SLOT_ICONS[slot] || '&#128230;';
+
+    let html = '<div class="equip-slot'+(filled?' filled':'')+'">'+
+      '<div class="slot-label">'+slot+'</div>'+
+      '<div class="slot-icon">'+icon+'</div>';
+    if(filled){
+      html += '<div class="slot-item">'+itemName+'</div>'+
+        '<button class="btn-unequip" onclick="unequipSlot(\''+slot+'\')" title="Unequip">x</button>';
+    }else{
+      html += '<div class="slot-empty">Empty</div>';
+    }
+    html += '</div>';
+    equipEl.innerHTML += html;
+  });
+
+  const invEl = $('sheet-inventory');
+  if(!state.inventory.length){
+    invEl.innerHTML = '<div class="empty-state" style="padding:20px"><p style="color:var(--dim)">No items yet</p></div>';
+  }else{
+    const itemMap = {};
+    (state.items||[]).forEach(i=>itemMap[i.id]=i);
+    let invHtml = '';
+    state.inventory.forEach(id => {
+      const item = itemMap[id];
+      const name = item ? item.name : id;
+      const icon = ITEM_ICONS[id] || '&#128230;';
+      const equipped = Object.values(state.equipment).includes(id);
+      invHtml += '<div class="inv-item" style="cursor:pointer;'+(equipped?'border-color:var(--green);':'')+'">'+
+        '<div class="icon">'+icon+'</div><div>'+name+'</div>'+
+        (equipped ? '<div style="font-size:.6rem;color:var(--green);margin-top:4px">EQUIPPED</div>' : '')+
+      '</div>';
+    });
+    invEl.innerHTML = invHtml;
+  }
+}
+
+async function unequipSlot(slot){
+  try{
+    await apiFetch('/api/player/unequip', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ callsign: state.callsign, slot })
+    });
+  }catch(e){}
+  state.equipment[slot] = null;
+  saveLocal();
+  renderCharacterSheet();
+}
+
+/* ── Dashboard ───────────────────────────────────────────────────── */
+function refreshDashboard(){
+  const portrait = $('dash-portrait');
+  const callsignEl = $('dash-callsign');
+  const roleEl = $('dash-char-role');
+
+  if(state.character){
+    portrait.style.background = state.character.color || 'var(--green)';
+    portrait.textContent = (state.character.handle||'??').slice(0,2);
+    callsignEl.textContent = state.callsign;
+    roleEl.textContent = (state.character.handle||'')+' — '+(state.character.role||'');
+  }else{
+    portrait.style.background = 'var(--green)';
+    portrait.textContent = state.callsign.slice(0,2).toUpperCase();
+    callsignEl.textContent = state.callsign;
+    roleEl.textContent = '';
+  }
+
+  $('dash-balance').textContent = state.balance;
+  const tier = getCurrentTier();
+  const badge = $('dash-tier');
+  badge.textContent = tier;
+  badge.className = 'tier-badge tier-'+tier;
+
+  // Level / XP
+  const lvlInfo = calcLevel(state.xp);
+  state.level = lvlInfo.level;
+  $('dash-level').textContent = 'LVL '+lvlInfo.level;
+  const pct = Math.min(100, Math.round((lvlInfo.currentXp / lvlInfo.needed) * 100));
+  $('dash-xp-text').textContent = lvlInfo.currentXp+' / '+lvlInfo.needed+' XP';
+  $('dash-xp-pct').textContent = pct+'%';
+  $('dash-xp-bar').style.width = pct+'%';
+
+  const total = state.missions.length || 12;
+  const done = state.completedMissions.size;
+  $('stat-missions').textContent = done+'/'+total;
+  $('stat-drx').textContent = state.totalDrxEarned;
+  $('stat-items').textContent = state.inventory.length;
+  const active = Object.values(state.missionStates).filter(s=>s==='in_progress').length;
+  $('stat-quests').textContent = active;
+
+  const welcome = $('welcome-msg');
+  if(state.isReturning){
+    welcome.style.display = 'block';
+    welcome.textContent = 'Welcome back, Hunter. Your progress has been restored.';
+    state.isReturning = false;
+  }else{
+    welcome.style.display = 'none';
+  }
+}
+
+function getCurrentTier(){
+  const done = state.completedMissions;
+  const genius = ['G1','G2','G3'].every(id=>done.has(id));
+  if(genius) return 'Genius';
+  const expert = ['X1','X2','X3'].every(id=>done.has(id));
+  if(expert) return 'Expert';
+  const normal = ['N1','N2','N3'].every(id=>done.has(id));
+  if(normal) return 'Normal';
+  return 'Easy';
+}
+
+function isTierUnlocked(tier){
+  const idx = TIERS.indexOf(tier);
+  if(idx <= 0) return true;
+  const prevTier = TIERS[idx-1];
+  const prefix = TIER_PREFIXES[prevTier];
+  return [1,2,3].every(n => state.completedMissions.has(prefix+n));
+}
+
+/* ── Missions ────────────────────────────────────────────────────── */
+async function loadMissions(){
+  const loading = $('missions-loading');
+  const list = $('missions-list');
+  loading.style.display = 'block';
+  list.innerHTML = '';
+  hideError('error-missions');
+
+  try{
+    const missions = await apiFetch('/api/missions');
+    state.missions = missions;
+    loading.style.display = 'none';
+
+    missions.forEach(m => {
+      if(state.completedMissions.has(m.id)){
+        state.missionStates[m.id] = 'completed';
+      }else if(!state.missionStates[m.id] || state.missionStates[m.id]==='locked'){
+        state.missionStates[m.id] = isTierUnlocked(m.tier) ? 'available' : 'locked';
+      }
+    });
+
+    renderMissions(missions, list);
+  }catch(e){
+    loading.style.display = 'none';
+    showError('error-missions','Failed to load missions: '+e.message);
+  }
+}
+
+function renderMissions(missions, container){
+  const grouped = {};
+  TIERS.forEach(t=>grouped[t]=[]);
+  missions.forEach(m=>{
+    if(grouped[m.tier]) grouped[m.tier].push(m);
+  });
+
+  container.innerHTML = '';
+  TIERS.forEach(tier=>{
+    if(!grouped[tier].length) return;
+    const group = document.createElement('div');
+    group.className = 'tier-group';
+    const tierDone = grouped[tier].every(m=>state.completedMissions.has(m.id));
+
+    group.innerHTML = '<div class="tier-header" style="color:'+TIER_COLORS[tier]+'">'+tier+' Tier'+(tierDone?' &#10003;':'')+'</div>';
+    grouped[tier].forEach(m=>{
+      const st = state.missionStates[m.id] || 'locked';
+      const stateIcon = {locked:'&#128274;',available:'&#9889;',in_progress:'&#128260;',completed:'&#9989;'}[st];
+      const card = document.createElement('div');
+      card.className = 'mission-card '+st;
+      card.id = 'mission-'+m.id;
+      let btnHtml = '';
+      if(st==='available') btnHtml = '<button class="mission-btn btn-start" onclick="startMission(\''+m.id+'\')">Start Mission</button>';
+      if(st==='in_progress'){
+        if(m.id==='E1') btnHtml = '<button class="mission-btn btn-start" onclick="e1UpdatePips();showScreen(\'puzzle-e1\')">Continue Puzzle</button>';
+        else if(m.id==='E2') btnHtml = '<button class="mission-btn btn-start" onclick="e2Generate();showScreen(\'puzzle-e2\')">Continue Puzzle</button>';
+        else btnHtml = '<button class="mission-btn btn-complete" onclick="completeMission(\''+m.id+'\','+m.reward_drx+')">Complete Mission</button>';
+      }
+
+      card.innerHTML = '<span class="mission-state">'+stateIcon+'</span>'+
+        '<div class="mission-title">['+m.id+'] '+m.title+'</div>'+
+        '<div class="mission-obj">'+m.objective+'</div>'+
+        '<div class="mission-reward">Reward: '+m.reward_drx+' DRX</div>'+
+        btnHtml;
+      group.appendChild(card);
+    });
+    container.appendChild(group);
+  });
+}
+
+function startMission(id){
+  state.missionStates[id] = 'in_progress';
+  saveLocal();
+  if(id==='E1'){
+    apiFetch('/api/missions/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({wallet:state.wallet,missionId:'E1'})}).catch(()=>{});
+    e1UpdatePips();
+    showScreen('puzzle-e1');
+    return;
+  }
+  if(id==='E2'){
+    apiFetch('/api/missions/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({wallet:state.wallet,missionId:'E2'})}).catch(()=>{});
+    e2Generate();
+    showScreen('puzzle-e2');
+    return;
+  }
+  loadMissions();
+}
+
+async function completeMission(id, reward){
+  try{
+    const data = await apiFetch('/api/missions/complete',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({wallet:state.wallet, missionId:id})
+    });
+    state.balance = data.balance;
+    state.completedMissions.add(id);
+    state.missionStates[id] = 'completed';
+    state.totalDrxEarned += reward;
+
+    const mission = state.missions.find(m=>m.id===id);
+    if(mission){
+      const prefix = TIER_PREFIXES[mission.tier];
+      const tierIds = [1,2,3].map(n=>prefix+n);
+      const tierDone = tierIds.every(tid=>state.completedMissions.has(tid));
+      if(tierDone){
+        const nextIdx = TIERS.indexOf(mission.tier)+1;
+        if(nextIdx < TIERS.length){
+          state.missions.forEach(m=>{
+            if(m.tier===TIERS[nextIdx] && state.missionStates[m.id]==='locked'){
+              state.missionStates[m.id] = 'available';
+            }
+          });
+          showTierUnlock(TIERS[nextIdx]);
+        }
+      }
+    }
+
+    saveLocal();
+    showReward('+'+reward+' DRX');
+    await sleep(800);
+    loadMissions();
+  }catch(e){
+    showError('error-missions','Failed: '+e.message);
+  }
+}
+
+function showTierUnlock(tier){
+  const banner = $('tier-unlock-banner');
+  banner.textContent = tier+' Tier Unlocked!';
+  banner.style.display = 'block';
+  banner.style.color = TIER_COLORS[tier];
+  banner.style.animation = 'none';
+  banner.offsetHeight;
+  banner.style.animation = 'tier-fanfare .6s ease';
+  setTimeout(()=>{ banner.style.display='none'; }, 4000);
+}
+
+/* ── Reward animation ────────────────────────────────────────────── */
+function showReward(text){
+  const popup = $('reward-popup');
+  const txt = $('reward-text');
+  const particles = $('reward-particles');
+  txt.textContent = text;
+  particles.innerHTML = '';
+
+  for(let i=0;i<12;i++){
+    const p = document.createElement('div');
+    p.className = 'particle';
+    const angle = (i/12)*360;
+    const dist = 40+Math.random()*60;
+    const tx = Math.cos(angle*Math.PI/180)*dist;
+    const ty = Math.sin(angle*Math.PI/180)*dist;
+    p.style.cssText = 'animation:reward-burst .8s ease forwards;transform:translate('+tx+'px,'+ty+'px) scale(0);animation-delay:'+(i*30)+'ms';
+    p.animate([
+      {transform:'translate(0,0) scale(1)',opacity:1},
+      {transform:'translate('+tx+'px,'+ty+'px) scale(0)',opacity:0}
+    ], {duration:800,delay:i*30,easing:'ease-out',fill:'forwards'});
+    particles.appendChild(p);
+  }
+
+  popup.classList.add('show');
+  txt.style.animation = 'none';
+  txt.offsetHeight;
+  txt.style.animation = 'float-up 1.5s ease forwards';
+  setTimeout(()=>popup.classList.remove('show'), 1600);
+}
+
+/* ── Story ───────────────────────────────────────────────────────── */
+function renderStory(){
+  const container = $('story-timeline');
+  container.innerHTML = '';
+
+  STORY_ACTS.forEach(act=>{
+    const unlocked = !act.unlockTier || isTierUnlocked(act.unlockTier);
+    const card = document.createElement('div');
+    card.className = 'act-card '+(unlocked?'unlocked':'locked');
+
+    let charHtml = '';
+    if(unlocked && act.chars.length){
+      charHtml = '<div class="char-row">';
+      act.chars.forEach(c=>{
+        charHtml += '<div class="char-avatar" style="background:'+c.color+'" title="'+c.name+'">'+c.name[0]+'</div>';
+      });
+      charHtml += '</div>';
+    }
+
+    let lockHtml = '';
+    if(!unlocked){
+      lockHtml = '<div class="lock-msg">&#128274; Complete '+act.unlockTier+' tier missions to unlock</div>';
+    }
+
+    let chapterBtn = '';
+    if(unlocked && act.chapterId){
+      const completed = state.storyCompleted.includes(act.chapterId);
+      if(completed){
+        chapterBtn = '<button class="act-play-btn completed-ch" disabled>&#10003; Chapter Completed</button>';
+      }else{
+        chapterBtn = '<button class="act-play-btn" onclick="loadChapter(\''+act.chapterId+'\')">&#9654; Play Chapter</button>';
+      }
+    }
+
+    card.innerHTML = '<div class="act-title">'+act.title+'</div>'+
+      '<div class="act-subtitle">'+act.subtitle+'</div>'+
+      (unlocked ? '<div class="act-body">'+act.body+charHtml+chapterBtn+'</div>' : lockHtml);
+
+    container.appendChild(card);
+  });
+}
+
+/* ── Story Mode: Chapter Dialogue ───────────────────────────────── */
+let currentChapter = null;
+let currentSceneIdx = 0;
+let chapterScenes = [];
+let chapterXpGained = 0;
+let chapterSkillsGained = {};
+let chapterTrustGained = 0;
+
+async function loadChapter(chapterId){
+  try{
+    const data = await apiFetch('/api/story/chapter/'+encodeURIComponent(chapterId)+'?wallet='+encodeURIComponent(state.wallet));
+    currentChapter = data;
+    chapterScenes = data.scenes || [];
+    currentSceneIdx = 0;
+    chapterXpGained = 0;
+    chapterSkillsGained = {};
+    chapterTrustGained = 0;
+
+    $('chapter-title').textContent = data.title;
+    $('chapter-subtitle').textContent = data.subtitle;
+    $('dialogue-area').style.display = '';
+    $('chapter-complete-box').style.display = 'none';
+
+    showScreen('chapter');
+    renderScene();
+  }catch(e){
+    // Fallback if server doesn't have chapter endpoint yet
+    alert('Story chapters coming soon!');
+  }
+}
+
+function renderScene(){
+  if(currentSceneIdx >= chapterScenes.length){
+    finishChapter();
+    return;
+  }
+
+  const scene = chapterScenes[currentSceneIdx];
+  if(scene.id === 'end' || scene.speaker === 'system'){
+    finishChapter();
+    return;
+  }
+
+  const card = $('dialogue-card');
+  const portrait = $('dialogue-portrait');
+  const speaker = $('dialogue-speaker');
+  const text = $('dialogue-text');
+  const choices = $('dialogue-choices');
+  const nextBtn = $('dialogue-next-btn');
+
+  // Portrait
+  if(scene.portrait && CHAR_COLORS[scene.portrait]){
+    portrait.style.background = CHAR_COLORS[scene.portrait];
+    portrait.style.display = '';
+    portrait.textContent = scene.portrait.slice(0,2).toUpperCase();
+  }else if(scene.speaker === 'narrator'){
+    portrait.style.background = 'var(--border)';
+    portrait.style.display = '';
+    portrait.textContent = '✎';
+  }else{
+    portrait.style.display = 'none';
+  }
+
+  // Speaker name
+  speaker.textContent = scene.speaker === 'narrator' ? 'Narrator' : scene.speaker;
+
+  // Text
+  text.textContent = scene.text;
+
+  // Animate in
+  card.style.animation = 'none';
+  card.offsetHeight;
+  card.style.animation = 'fadeIn .4s ease';
+
+  // Choices or continue
+  choices.innerHTML = '';
+  if(scene.choices && scene.choices.length){
+    nextBtn.style.display = 'none';
+    scene.choices.forEach((ch, idx) => {
+      const btn = document.createElement('button');
+      btn.className = 'dialogue-choice';
+      let hint = '';
+      if(ch.effects){
+        const parts = [];
+        if(ch.effects.xp) parts.push('+'+ch.effects.xp+' XP');
+        if(ch.effects.skill) parts.push(ch.effects.skill);
+        if(ch.effects.trust) parts.push('+'+ch.effects.trust+' trust');
+        hint = '<div class="effect-hint">'+parts.join(' · ')+'</div>';
+      }
+      btn.innerHTML = ch.text + hint;
+      btn.onclick = () => makeChoice(idx);
+      choices.appendChild(btn);
+    });
+  }else{
+    nextBtn.style.display = '';
+  }
+}
+
+function makeChoice(idx){
+  const scene = chapterScenes[currentSceneIdx];
+  const choice = scene.choices[idx];
+
+  if(choice.effects){
+    if(choice.effects.xp){
+      chapterXpGained += choice.effects.xp;
+    }
+    if(choice.effects.skill){
+      chapterSkillsGained[choice.effects.skill] = (chapterSkillsGained[choice.effects.skill]||0) + 1;
+    }
+    if(choice.effects.trust){
+      chapterTrustGained += choice.effects.trust;
+    }
+  }
+
+  // Try to post choice to server
+  apiFetch('/api/story/choice', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({
+      wallet:state.wallet,
+      chapterId:currentChapter.id,
+      sceneId:scene.id,
+      choiceIndex:idx
+    })
+  }).catch(()=>{});
+
+  // Advance to next scene — use choice.next or just increment
+  if(choice.next){
+    const targetIdx = chapterScenes.findIndex(s => s.id === choice.next);
+    if(targetIdx >= 0){
+      currentSceneIdx = targetIdx;
+    }else{
+      currentSceneIdx++;
+    }
+  }else{
+    currentSceneIdx++;
+  }
+  renderScene();
+}
+
+function advanceDialogue(){
+  currentSceneIdx++;
+  renderScene();
+}
+
+async function finishChapter(){
+  $('dialogue-area').style.display = 'none';
+  $('chapter-complete-box').style.display = '';
+
+  $('chapter-complete-title').textContent = currentChapter.title + ' Complete!';
+  $('chapter-complete-summary').textContent = 'You witnessed the events that shaped the Crypto Hunters.';
+
+  // Apply rewards
+  state.xp += chapterXpGained;
+  state.trust += chapterTrustGained;
+  for(const [sk, val] of Object.entries(chapterSkillsGained)){
+    state.skills[sk] = (state.skills[sk]||0) + val;
+  }
+  if(!state.storyCompleted.includes(currentChapter.id)){
+    state.storyCompleted.push(currentChapter.id);
+  }
+  state.level = calcLevel(state.xp).level;
+  saveLocal();
+
+  // Render rewards
+  const rewardsEl = $('chapter-rewards');
+  let rHtml = '';
+  if(chapterXpGained) rHtml += '<div style="color:var(--green);font-family:var(--mono);margin-bottom:4px">+'+chapterXpGained+' XP</div>';
+  if(chapterTrustGained) rHtml += '<div style="color:#06b6d4;font-family:var(--mono);margin-bottom:4px">+'+chapterTrustGained+' Trust</div>';
+  for(const [sk, val] of Object.entries(chapterSkillsGained)){
+    rHtml += '<div style="color:var(--gold);font-family:var(--mono);margin-bottom:4px">'+sk+' +'+val+'</div>';
+  }
+  rewardsEl.innerHTML = rHtml || '<div style="color:var(--dim)">No bonus rewards this chapter</div>';
+
+  // Notify server
+  apiFetch('/api/story/complete-chapter', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({
+      wallet:state.wallet,
+      chapterId:currentChapter.id,
+      xpGained:chapterXpGained,
+      skillsGained:chapterSkillsGained,
+      trustGained:chapterTrustGained
+    })
+  }).catch(()=>{});
+}
+
+/* ── Items Shop ──────────────────────────────────────────────────── */
+async function loadItems(){
+  const loading = $('items-loading');
+  const grid = $('items-grid');
+  loading.style.display = 'block';
+  grid.innerHTML = '';
+  hideError('error-items');
+  $('shop-balance').textContent = state.balance;
+
+  try{
+    const items = await apiFetch('/api/items');
+    state.items = items;
+    loading.style.display = 'none';
+    renderItems(items, grid);
+  }catch(e){
+    loading.style.display = 'none';
+    showError('error-items','Failed to load items: '+e.message);
+  }
+}
+
+function renderItems(items, container){
+  container.innerHTML = '';
+  items.forEach(item=>{
+    const card = document.createElement('div');
+    card.className = 'item-card';
+    card.id = 'item-'+item.id;
+    const canBuy = state.balance >= item.price_drx;
+    const icon = ITEM_ICONS[item.id] || '&#128230;';
+
+    card.innerHTML = '<div class="item-icon">'+icon+'</div>'+
+      '<div class="item-name">'+item.name+'</div>'+
+      '<div class="item-desc">'+item.desc+'</div>'+
+      '<div class="item-price">'+item.price_drx+' DRX</div>'+
+      '<button class="btn-buy" '+(canBuy?'':'disabled')+' onclick="buyItem(\''+item.id+'\')">Buy</button>';
+    container.appendChild(card);
+  });
+}
+
+async function buyItem(id){
+  try{
+    const data = await apiFetch('/api/items/buy/'+id,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({wallet:state.wallet})
+    });
+    state.balance = data.balance;
+    state.inventory = data.inventory;
+    saveLocal();
+    $('shop-balance').textContent = state.balance;
+
+    const card = $('item-'+id);
+    if(card){
+      card.classList.add('purchased');
+      setTimeout(()=>card.classList.remove('purchased'),600);
+    }
+    showReward('Item acquired!');
+    await sleep(500);
+    loadItems();
+  }catch(e){
+    showError('error-items','Purchase failed: '+e.message);
+  }
+}
+
+/* ── Inventory ───────────────────────────────────────────────────── */
+async function loadInventory(){
+  const container = $('inv-content');
+  try{
+    const data = await apiFetch('/api/status/'+encodeURIComponent(state.wallet));
+    state.inventory = data.inventory || [];
+    state.balance = data.balance || state.balance;
+  }catch(e){}
+
+  if(!state.inventory.length){
+    container.innerHTML = '<div class="empty-state"><div class="icon">&#127890;</div><p>No items yet. Visit the shop!</p></div>';
+    return;
+  }
+
+  const itemMap = {};
+  state.items.forEach(i=>itemMap[i.id]=i);
+
+  let html = '<div class="inv-grid">';
+  state.inventory.forEach(id=>{
+    const item = itemMap[id];
+    const name = item ? item.name : id;
+    const icon = ITEM_ICONS[id] || '&#128230;';
+    html += '<div class="inv-item"><div class="icon">'+icon+'</div><div>'+name+'</div></div>';
+  });
+  html += '</div>';
+  container.innerHTML = html;
+}
+
+/* ── Puzzle E1: Hello Hash ───────────────────────────────────────── */
+let e1CorrectCount = 0;
+
+function e1UpdatePips(){
+  const container = $('e1-pips');
+  container.innerHTML = '';
+  for(let i=0;i<3;i++){
+    const pip = document.createElement('div');
+    pip.className = 'puzzle-pip'+(i<e1CorrectCount?' done':'');
+    pip.textContent = i<e1CorrectCount ? '✓' : (i+1);
+    container.appendChild(pip);
+  }
+  const btn = $('e1-complete-btn');
+  if(e1CorrectCount>=3){
+    btn.disabled = false;
+    btn.textContent = 'Complete Mission — Claim 100 DRX!';
+  }else{
+    btn.disabled = true;
+    btn.textContent = 'Complete Mission (need '+(3-e1CorrectCount)+' more)';
+  }
+}
+
+async function e1ComputeHash(){
+  const input = $('e1-input').value.trim();
+  if(!input){ $('e1-output').textContent = 'Enter some text first'; $('e1-output').className='puzzle-output error'; return; }
+  const encoded = new TextEncoder().encode(input);
+  const buf = await crypto.subtle.digest('SHA-256', encoded);
+  const hex = Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+  $('e1-answer').value = hex;
+  $('e1-output').textContent = 'SHA-256("'+input+'") = '+hex;
+  $('e1-output').className = 'puzzle-output';
+}
+
+async function e1CheckAnswer(){
+  const input = $('e1-input').value.trim();
+  const answer = $('e1-answer').value.trim();
+  if(!input||!answer){ $('e1-output').textContent='Fill both fields'; $('e1-output').className='puzzle-output error'; return; }
+  try{
+    const data = await apiFetch('/api/puzzles/e1/check',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({wallet:state.wallet,input,answer})
+    });
+    if(data.correct){
+      e1CorrectCount = data.correctCount;
+      $('e1-output').textContent = '✅ Correct! Hash verified. ('+e1CorrectCount+'/3)';
+      $('e1-output').className = 'puzzle-output success';
+      $('e1-input').value = '';
+      $('e1-answer').value = '';
+    }else{
+      $('e1-output').textContent = '❌ Wrong hash. Expected: '+data.expected;
+      $('e1-output').className = 'puzzle-output error';
+    }
+    e1UpdatePips();
+    savePuzzleLocal();
+  }catch(e){
+    $('e1-output').textContent = 'Error: '+e.message;
+    $('e1-output').className = 'puzzle-output error';
+  }
+}
+
+async function e1Complete(){
+  try{
+    const data = await apiFetch('/api/puzzles/e1/complete',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({wallet:state.wallet})
+    });
+    state.balance = data.balance;
+    state.completedMissions.add('E1');
+    state.missionStates['E1'] = 'completed';
+    state.totalDrxEarned += data.reward_drx;
+    saveLocal();
+    showReward('+'+data.reward_drx+' DRX');
+    await sleep(1200);
+    showScreen('missions');
+  }catch(e){
+    $('e1-output').textContent = 'Error: '+e.message;
+    $('e1-output').className = 'puzzle-output error';
+  }
+}
+
+/* ── Puzzle E2: Nonce Nudge ─────────────────────────────────────── */
+let e2Data = { blockData:'', target:'00', difficulty:2 };
+let e2AttemptCount = 0;
+let e2Solved = false;
+
+async function e2Generate(){
+  try{
+    const data = await apiFetch('/api/puzzles/e2/generate',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({wallet:state.wallet})
+    });
+    e2Data = data;
+    e2AttemptCount = 0;
+    e2Solved = false;
+    $('e2-block-data').textContent = data.blockData;
+    $('e2-target-display').textContent = data.target;
+    $('e2-difficulty').textContent = data.difficulty;
+    $('e2-attempts').textContent = '0';
+    $('e2-output').textContent = 'Enter a nonce and check, or auto-mine.';
+    $('e2-output').className = 'puzzle-output';
+    $('e2-hash').textContent = '';
+    $('e2-complete-btn').disabled = true;
+    $('e2-nonce').value = '';
+  }catch(e){
+    $('e2-output').textContent = 'Error: '+e.message;
+    $('e2-output').className = 'puzzle-output error';
+  }
+}
+
+async function e2CheckNonce(){
+  const nonce = parseInt($('e2-nonce').value, 10);
+  if(isNaN(nonce)||nonce<0){ $('e2-output').textContent='Enter a valid nonce (number >= 0)'; $('e2-output').className='puzzle-output error'; return; }
+  e2AttemptCount++;
+  $('e2-attempts').textContent = e2AttemptCount;
+  try{
+    const data = await apiFetch('/api/puzzles/e2/check',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({wallet:state.wallet,nonce})
+    });
+    $('e2-hash').textContent = 'Hash: '+data.hash;
+    if(data.correct){
+      e2Solved = true;
+      $('e2-output').textContent = '⛏ Nonce '+nonce+' works! Hash starts with "'+e2Data.target+'"';
+      $('e2-output').className = 'puzzle-output success';
+      $('e2-complete-btn').disabled = false;
+      savePuzzleLocal();
+    }else{
+      $('e2-output').textContent = '❌ Nonce '+nonce+' - hash doesn\'t start with "'+e2Data.target+'"';
+      $('e2-output').className = 'puzzle-output error';
+    }
+  }catch(e){
+    $('e2-output').textContent = 'Error: '+e.message;
+    $('e2-output').className = 'puzzle-output error';
+  }
+}
+
+async function e2AutoMine(){
+  if(e2Solved) return;
+  const anim = $('e2-mining');
+  anim.classList.add('active');
+  $('e2-output').textContent = 'Mining...';
+  $('e2-output').className = 'puzzle-output';
+
+  await sleep(50);
+
+  const bd = e2Data.blockData;
+  const target = e2Data.target;
+  let nonce = 0;
+  let hash = '';
+  const encoder = new TextEncoder();
+
+  for(; nonce < 200000; nonce++){
+    const buf = await crypto.subtle.digest('SHA-256', encoder.encode(bd + nonce.toString()));
+    hash = Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+    if(hash.startsWith(target)) break;
+    if(nonce % 500 === 0){
+      e2AttemptCount = nonce;
+      $('e2-attempts').textContent = nonce;
+      $('e2-hash').textContent = 'Trying nonce '+nonce+'... Hash: '+hash;
+      await sleep(0);
+    }
+  }
+
+  anim.classList.remove('active');
+  e2AttemptCount = nonce + 1;
+  $('e2-attempts').textContent = e2AttemptCount;
+  $('e2-nonce').value = nonce;
+  $('e2-hash').textContent = 'Hash: '+hash;
+
+  try{
+    const data = await apiFetch('/api/puzzles/e2/check',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({wallet:state.wallet,nonce})
+    });
+    if(data.correct){
+      e2Solved = true;
+      $('e2-output').textContent = '⛏ Found! Nonce '+nonce+' produces a valid hash after '+e2AttemptCount+' attempts';
+      $('e2-output').className = 'puzzle-output success';
+      $('e2-complete-btn').disabled = false;
+      savePuzzleLocal();
+    }
+  }catch(e){
+    $('e2-output').textContent = 'Mining error: '+e.message;
+    $('e2-output').className = 'puzzle-output error';
+  }
+}
+
+async function e2Complete(){
+  try{
+    const data = await apiFetch('/api/puzzles/e2/complete',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({wallet:state.wallet})
+    });
+    state.balance = data.balance;
+    state.completedMissions.add('E2');
+    state.missionStates['E2'] = 'completed';
+    state.totalDrxEarned += data.reward_drx;
+    saveLocal();
+    showReward('+'+data.reward_drx+' DRX');
+    await sleep(1200);
+    showScreen('missions');
+  }catch(e){
+    $('e2-output').textContent = 'Error: '+e.message;
+    $('e2-output').className = 'puzzle-output error';
+  }
+}
+
+/* ── Puzzle save/restore for localStorage ───────────────────────── */
+function savePuzzleLocal(){
+  try{
+    localStorage.setItem('ch_puzzle_'+state.wallet, JSON.stringify({
+      e1CorrectCount,
+      e2Solved,
+      e2AttemptCount,
+    }));
+  }catch(e){}
+}
+function loadPuzzleLocal(wallet){
+  try{
+    const raw = localStorage.getItem('ch_puzzle_'+wallet);
+    if(!raw) return;
+    const d = JSON.parse(raw);
+    e1CorrectCount = d.e1CorrectCount || 0;
+    e2Solved = d.e2Solved || false;
+    e2AttemptCount = d.e2AttemptCount || 0;
+  }catch(e){}
+}
+
+/* ── Network offline detection ───────────────────────────────────── */
+window.addEventListener('offline', ()=>{
+  document.querySelectorAll('.error-banner').forEach(el=>{
+    el.querySelector('.msg').textContent = 'You are offline. Check your connection.';
+    el.classList.add('visible');
+  });
+});
+window.addEventListener('online', ()=>{
+  document.querySelectorAll('.error-banner').forEach(el=>el.classList.remove('visible'));
+});
+
+/* ── Init: restore callsign from localStorage ──────────────────── */
+(function init(){
+  try{
+    const saved = localStorage.getItem('ch_callsign') || localStorage.getItem('ch_wallet');
+    if(saved){
+      const input = $('callsign-input');
+      if(input) input.value = saved;
+    }
+  }catch(e){}
+})();
+
+/* ── PWA Service Worker ────────────────────────────────────────── */
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('./sw.js').then(reg => {
+    if (!navigator.serviceWorker.controller) return;
+    reg.addEventListener('updatefound', () => {
+      const nw = reg.installing;
+      if (!nw) return;
+      nw.addEventListener('statechange', () => {
+        if (nw.state === 'activated') {
+          showUpdateBanner();
+        }
+      });
+    });
+  });
+}
+function showUpdateBanner(){
+  const b = document.createElement('div');
+  b.className = 'update-banner';
+  b.innerHTML = 'New version available! <button onclick="location.reload()">Reload</button>';
+  document.body.prepend(b);
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,121 @@
+[
+  {
+    "id": "ch1",
+    "act": 1,
+    "title": "The Genesis Block",
+    "subtitle": "Athens, 2012 — Where it all began",
+    "prereq": null,
+    "scenes": [
+      {
+        "id": "s1",
+        "speaker": "narrator",
+        "portrait": null,
+        "text": "Athens, 2012. The financial crisis has left Greece in turmoil. Banks are failing, trust in institutions has collapsed. Amidst the chaos, a signal emerges from the noise — a whitepaper describing something called 'Bitcoin'.",
+        "choices": null
+      },
+      {
+        "id": "s2",
+        "speaker": "SAfA",
+        "portrait": "safa",
+        "text": "I found something incredible. A peer-to-peer electronic cash system — no banks, no middlemen. It uses cryptographic proof instead of trust. This could change everything.",
+        "choices": [
+          {
+            "text": "Study the cryptography behind it",
+            "next": "s3a",
+            "effects": { "xp": 20, "skill": "cryptography", "trust": 1 }
+          },
+          {
+            "text": "Set up a mining rig immediately",
+            "next": "s3b",
+            "effects": { "xp": 15, "skill": "smart_contracts", "trust": 0 }
+          }
+        ]
+      },
+      {
+        "id": "s3a",
+        "speaker": "narrator",
+        "portrait": null,
+        "text": "You dive deep into the whitepaper. SHA-256 hash functions, Merkle trees, proof-of-work — each concept clicks into place like pieces of a puzzle. The mathematics is elegant. The implications are revolutionary.",
+        "choices": null
+      },
+      {
+        "id": "s3b",
+        "speaker": "narrator",
+        "portrait": null,
+        "text": "You scavenge parts from the electronics market in Monastiraki and assemble a rudimentary mining rig in your apartment. The fans whir, the GPU heats up, and blocks start flowing. You're mining your first cryptocurrency.",
+        "choices": null
+      },
+      {
+        "id": "s4",
+        "speaker": "SAfA",
+        "portrait": "safa",
+        "text": "The 2013 bull run — I made a small fortune. It felt like validation, like the revolution was already here. I invested everything in new altcoins and exchanges... including Mt. Gox.",
+        "choices": null
+      },
+      {
+        "id": "s5",
+        "speaker": "narrator",
+        "portrait": null,
+        "text": "Then it happened. Mt. Gox collapsed. 850,000 Bitcoin vanished. Your savings — gone. The lesson was brutal but clear: decentralisation means nothing without security.",
+        "choices": [
+          {
+            "text": "We need to build better defences",
+            "next": "s6a",
+            "effects": { "xp": 20, "skill": "network_security", "trust": 2 }
+          },
+          {
+            "text": "I need allies — I can't do this alone",
+            "next": "s6b",
+            "effects": { "xp": 15, "skill": "data_analysis", "trust": 3 }
+          }
+        ]
+      },
+      {
+        "id": "s6a",
+        "speaker": "SAfA",
+        "portrait": "safa",
+        "text": "Security first. I started studying every exploit, every vulnerability. But I soon realised — the fight must be waged on both software AND hardware fronts. I needed my old friend.",
+        "choices": null
+      },
+      {
+        "id": "s6b",
+        "speaker": "SAfA",
+        "portrait": "safa",
+        "text": "I couldn't rebuild alone. I reached out to someone I trusted — Nato Saka, a hardware genius. Together, we could secure both the code and the machines running it.",
+        "choices": null
+      },
+      {
+        "id": "s7",
+        "speaker": "Nato",
+        "portrait": "nato",
+        "text": "SAfA, you idealistic fool. But you're right — if we don't protect these networks, nobody will. I've got a warehouse in Piraeus. Solar panels, cooling rigs, the works. Let's build something they can't break.",
+        "choices": [
+          {
+            "text": "Let's call it 'The Source'",
+            "next": "s8",
+            "effects": { "xp": 25, "skill": "cryptography", "trust": 2 }
+          },
+          {
+            "text": "First, we need a plan of attack",
+            "next": "s8",
+            "effects": { "xp": 25, "skill": "network_security", "trust": 1 }
+          }
+        ]
+      },
+      {
+        "id": "s8",
+        "speaker": "narrator",
+        "portrait": null,
+        "text": "And so it began. In a hidden workshop beneath a forgotten library in Athens, two friends laid the foundations of something much bigger than either of them imagined. The Crypto Hunters were about to be born.",
+        "choices": null
+      },
+      {
+        "id": "end",
+        "speaker": "system",
+        "portrait": null,
+        "text": "Chapter 1 Complete! You've witnessed the spark that ignited the Crypto Hunters. The team is about to grow...",
+        "choices": null
+      }
+    ]
+  }
+]

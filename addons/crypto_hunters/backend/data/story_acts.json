@@ -1,0 +1,6 @@
+[
+  { "id": 1, "title": "Act I — Spark", "subtitle": "The Genesis", "prerequisite_tier": null, "content": "Greece, 2012. SAfA discovers blockchain during financial turmoil. He sets up his first mining rig, rides a bull run, gets crushed by Mt. Gox. He realises: decentralisation needs guardians." },
+  { "id": 2, "title": "Act II — Formation", "subtitle": "The Team Assembles", "prerequisite_tier": "Easy", "content": "Niva brings cryptography expertise. Kyra builds digital shields. Luna keeps infrastructure alive. Together they thwart the Dark Node's first attacks on promising altcoins." },
+  { "id": 3, "title": "Act III — Revelation", "subtitle": "The Defector", "prerequisite_tier": "Normal", "content": "Zayne Nexus appears with critical intelligence: the Dark Node is not just attacking coins — they're targeting Greece's experimental decentralised civic stack. The threat is bigger than anyone imagined." },
+  { "id": 4, "title": "Act IV — Uplift", "subtitle": "The Siege of Agora", "prerequisite_tier": "Expert", "content": "The final battle. DDoS attacks on the voting protocol. Media FUD campaigns. Physical sabotage attempts. The Hunters must split up and defend all fronts simultaneously. Victory is hard-won, but Zayne warns: this was just one node of the hydra." }
+]

@@ -378,11 +378,14 @@ class TestProviderAvailability:
         assert providers["bitcotasks"]["enabled"] is False
 
     @patch.dict(os.environ, {"BITCOTASKS_ENABLED": "1"}, clear=False)
-    def test_bitcotasks_enabled_only_when_flag_is_one(self, client, user_a):
+    def test_bitcotasks_offerwall_stays_retired_even_with_old_flag(self, client, user_a):
         token = _login(client)
         resp = client.get("/api/earn/providers", headers=_auth(token))
         providers = {p["id"]: p for p in resp.get_json()["providers"]}
-        assert providers["bitcotasks"]["enabled"] is True
+        assert providers["bitcotasks"]["enabled"] is False
+        blocked = client.get("/api/earn/bitcotasks/offerwall", headers=_auth(token))
+        assert blocked.status_code == 410
+        assert blocked.get_json()["error"] == "bitcotasks_offerwall_retired"
 
     def test_bitcotasks_disabled_when_env_unset(self, client, user_a):
         with patch.dict(os.environ, {}, clear=False):

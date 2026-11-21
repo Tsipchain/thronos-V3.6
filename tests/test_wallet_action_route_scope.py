@@ -23,6 +23,10 @@ EXPECTED = {
 def _isolated_handler(name, action):
     tree = ast.parse((ROOT / "server_ext.py").read_text())
     fn = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == name)
+    helper = next(
+        n for n in tree.body
+        if isinstance(n, ast.FunctionDef) and n.name == "_authorize_wallet_service_action"
+    )
     fn.decorator_list = []
     calls = []
 
@@ -37,7 +41,14 @@ def _isolated_handler(name, action):
         "_jsonify": lambda **kwargs: kwargs,
         "_verify_wallet_action_intent": verifier,
     }
-    exec(compile(ast.fix_missing_locations(ast.Module(body=[fn], type_ignores=[])), str(ROOT / "server_ext.py"), "exec"), scope)
+    exec(
+        compile(
+            ast.fix_missing_locations(ast.Module(body=[helper, fn], type_ignores=[])),
+            str(ROOT / "server_ext.py"),
+            "exec",
+        ),
+        scope,
+    )
     return scope[name], calls
 
 

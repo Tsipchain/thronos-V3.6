@@ -8,9 +8,9 @@ import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS } from '../constants/theme';
 import { useStore } from '../store/useStore';
-import { getSwapQuote, executeSwapSigned } from '../services/api';
-import { getWallet, authenticateWithBiometrics } from '../services/wallet';
-import { signThronosTransaction } from '../services/signing';
+import { getSwapQuote, executeSwapV2 } from '../services/api';
+import { getWallet } from '../services/wallet';
+import { signWalletV1FullPayloadRequest } from '../services/signing';
 
 export default function SwapScreen() {
   const navigation = useNavigation();
@@ -43,26 +43,16 @@ export default function SwapScreen() {
     const creds = await getWallet();
     if (!creds) { Alert.alert('Error', 'Wallet not found.'); return; }
 
-    // Device approval must happen immediately before any signing material is used.
-    // The helper invokes the enrolled biometric authenticator (or the device
-    // passcode fallback configured by the operating system).
-    const approved = await authenticateWithBiometrics('Approve Thronos swap');
-    if (!approved) {
-      Alert.alert('Swap cancelled', 'Biometric or device approval is required before signing.');
-      return;
-    }
-
     setLoading(true);
     try {
-      const signedTx = await signThronosTransaction({
-        from: creds.address,
-        to: creds.address,
-        amount: parseFloat(amount),
-        token: fromToken,
-        nonce: String(Math.floor(Date.now() / 1000)),
+      const signedRequest = await signWalletV1FullPayloadRequest('swap', {
+        token_in: fromToken,
+        token_out: toToken,
+        amount_in: parseFloat(amount),
+        min_amount_out: quote.amount_out,
       });
-      const result = await executeSwapSigned({ signedTx });
-      if (result.success) {
+      const result = await executeSwapV2(signedRequest);
+      if (result.success || result.ok) {
         Alert.alert('Success', `Swapped ${amount} ${fromToken} to ${toToken}!`, [
           { text: 'OK', onPress: () => navigation.goBack() },
         ]);

@@ -9,7 +9,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS } from '../constants/theme';
 import { useStore } from '../store/useStore';
-import { deleteWallet, getWallet, shortenAddress } from '../services/wallet';
+import { deleteWallet, shortenAddress } from '../services/wallet';
 import { CONFIG } from '../constants/config';
 import type { RootStackParamList } from '../../App';
 
@@ -20,29 +20,16 @@ export default function SettingsScreen() {
   const { wallet, settings, updateSettings, disconnect } = useStore();
 
   const handleExportKey = async () => {
-    const creds = await getWallet();
-    if (!creds) { Alert.alert('Error', 'No wallet found.'); return; }
-
     Alert.alert(
-      'Export Secret Key',
-      'Your secret key will be displayed. Make sure no one is watching your screen.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Show Key',
-          style: 'destructive',
-          onPress: () => {
-            Alert.alert('Secret Key', creds.secret, [{ text: 'OK' }]);
-          },
-        },
-      ],
+      'Recovery backup required',
+      'Raw signing keys are never displayed. Use your encrypted Recovery Kit or saved recovery phrase to restore this wallet.',
     );
   };
 
   const handleDisconnect = () => {
     Alert.alert(
       'Delete Wallet',
-      'This will remove the wallet from this device. Make sure you have your secret key backed up!',
+      'This removes the wallet from this device. Verify your encrypted Recovery Kit or recovery phrase first.',
       [
         { text: 'Cancel', style: 'cancel' },
         {

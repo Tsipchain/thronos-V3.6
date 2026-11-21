@@ -126,7 +126,6 @@ export default function WithdrawScreen() {
     try {
       const res = await requestWithdrawal({
         address,
-        send_secret: activeSecret,
         amount: amt,
         token: token as 'USDT' | 'USDC',
         dest_chain: destChain,

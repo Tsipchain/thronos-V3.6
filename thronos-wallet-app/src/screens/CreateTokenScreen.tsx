@@ -14,8 +14,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS } from '../constants/theme';
 import { useStore } from '../store/useStore';
-import { createToken } from '../services/api';
-import { getWallet, getPrivateKey } from '../services/wallet';
+import { createTokenV2 } from '../services/api';
+import { signWalletV1FullPayloadRequest } from '../services/signing';
 
 export default function CreateTokenScreen({ navigation }: { navigation: any }) {
   const { wallet } = useStore();
@@ -38,20 +38,13 @@ export default function CreateTokenScreen({ navigation }: { navigation: any }) {
     }
     setSubmitting(true);
     try {
-      const creds = await getWallet();
-      const privHex = await getPrivateKey();
-      if (!creds?.address || !privHex) {
-        Alert.alert('Error', 'Wallet credentials not found.');
-        return;
-      }
-      const result = await createToken({
-        from: creds.address,
+      const signedRequest = await signWalletV1FullPayloadRequest('token_create', {
         name: name.trim(),
         symbol: symbol.trim().toUpperCase(),
         total_supply: parseFloat(totalSupply),
         decimals: parseInt(decimals, 10) || 8,
-        private_key_hex: privHex,
       });
+      const result = await createTokenV2(signedRequest);
       if (result.ok) {
         Alert.alert('Token Created', `${symbol.trim().toUpperCase()} has been created on Thronos.`, [
           { text: 'OK', onPress: () => navigation.goBack() },

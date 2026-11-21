@@ -18,10 +18,9 @@ import { useStore } from '../store/useStore';
 import {
   getLiquidityPools,
   getLPPositions,
-  addLiquidity,
+  addLiquidityV2,
   getAvailablePools,
   quoteAddLiquidity,
-  addLiquidityCrossChain,
   getPythiaPoolsStatus,
   depositToPythiaPool,
   createPythiaPoolWithdrawIntent,
@@ -32,7 +31,7 @@ import {
   type PythiaPoolStatus,
   type PythiaWithdrawalQuoteResult,
 } from '../services/api';
-import { getWallet, getPrivateKey, getAuthSecret } from '../services/wallet';
+import { signWalletV1FullPayloadRequest } from '../services/signing';
 
 interface Pool {
   id: string;
@@ -81,27 +80,23 @@ export default function PoolsScreen({ navigation }: { navigation: any }) {
   const [evmAddress, setEvmAddress] = useState('');
   const [amountA, setAmountA] = useState('');
   const [amountB, setAmountB] = useState('');
-  const [manualSecret, setManualSecret] = useState('');
   const [quoteInfo, setQuoteInfo] = useState<string>('');
-  const [cachedSecret, setCachedSecret] = useState<string | null>(null);
 
   const quoteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const loadData = useCallback(async () => {
     if (!wallet.address) return;
     try {
-      const [poolsRes, posRes, availRes, secret, pythiaRes, liqRes] = await Promise.allSettled([
+      const [poolsRes, posRes, availRes, pythiaRes, liqRes] = await Promise.allSettled([
         getLiquidityPools(),
         getLPPositions(wallet.address),
         getAvailablePools(),
-        getAuthSecret(),
         getPythiaPoolsStatus(),
         getPythiaLiquidityHistory(wallet.address),
       ]);
       if (poolsRes.status === 'fulfilled') setPools(poolsRes.value.pools || []);
       if (posRes.status === 'fulfilled') setPositions(posRes.value.positions || []);
       if (availRes.status === 'fulfilled') setAvailablePools(availRes.value.pools || []);
-      if (secret.status === 'fulfilled') setCachedSecret(secret.value);
       if (pythiaRes.status === 'fulfilled') setPythiaPools(pythiaRes.value.pools || []);
       if (liqRes.status === 'fulfilled') setLiqHistory(liqRes.value.history || []);
     } catch (err) {
@@ -121,7 +116,6 @@ export default function PoolsScreen({ navigation }: { navigation: any }) {
     setAmountA('');
     setAmountB('');
     setEvmAddress('');
-    setManualSecret('');
     setQuoteInfo('');
     setSelectedChainIdx(0);
     const avail = availablePools.find(p => p.pool_id === pool.id) || null;
@@ -186,64 +180,18 @@ export default function PoolsScreen({ navigation }: { navigation: any }) {
     setSubmitting(true);
     try {
       if (isCrossChainPool(selectedPool) && selectedAvailable) {
-        // Cross-chain path: THR + USDT/USDC
-        const chainInfo: ExternalChainInfo = selectedAvailable.external_chains[selectedChainIdx];
-        if (!chainInfo) {
-          Alert.alert('Error', 'No external chain selected.');
-          return;
-        }
-        if (!evmAddress.trim()) {
-          Alert.alert('Error', `Enter your EVM address holding ${selectedPool.token_b}.`);
-          return;
-        }
-        const secret = cachedSecret || manualSecret.trim();
-        if (!secret) {
-          Alert.alert('Error', 'Auth secret required. Enter your pledge send_secret.');
-          return;
-        }
-        if (!wallet.address) {
-          Alert.alert('Error', 'No active wallet.');
-          return;
-        }
-        const result = await addLiquidityCrossChain({
-          pool_id: selectedPool.id,
-          amount_a: a,
-          amount_b: b,
-          chain: chainInfo.chain,
-          token_contract: chainInfo.token_contract,
-          decimals: chainInfo.decimals,
-          provider_thr: wallet.address,
-          evm_address: evmAddress.trim(),
-          auth_secret: secret,
-        });
-        if (result.ok) {
-          Alert.alert(
-            'Intent Created',
-            `Send ${b} ${selectedPool.token_b} to:\n\n${result.vault_address}\n\non ${chainInfo.label}\n\nIntent expires: ${new Date(result.expires_at * 1000).toLocaleString()}`,
-            [
-              { text: 'Copy Address', onPress: () => { /* TODO: clipboard */ } },
-              { text: 'OK', onPress: () => { setSelectedPool(null); loadData(); } },
-            ]
-          );
-        } else {
-          Alert.alert('Failed', result.message || result.error || 'Add liquidity failed.');
-        }
+        Alert.alert(
+          'Secure upgrade required',
+          'Cross-chain liquidity is disabled in this app until the server supports the shared Wallet V1 V2 nonce and authorization contract. No credential was sent.',
+        );
       } else {
-        // Legacy internal path (WBTC/L2E pairs)
-        const creds = await getWallet();
-        const privHex = await getPrivateKey();
-        if (!creds?.address || !privHex) {
-          Alert.alert('Error', 'Wallet credentials not found.');
-          return;
-        }
-        const result = await addLiquidity({
-          from: creds.address,
+        const signedRequest = await signWalletV1FullPayloadRequest('add_liquidity', {
           pool_id: selectedPool.id,
           amount_a: a,
           amount_b: b,
-          private_key_hex: privHex,
         });
-        if (result.ok) {
+        const result = await addLiquidityV2(signedRequest);
+        if (result.ok || result.status === 'success') {
           Alert.alert('Liquidity Added', `Added ${a} ${selectedPool.token_a} + ${b} ${selectedPool.token_b}.`);
           setSelectedPool(null);
           loadData();
@@ -256,7 +204,7 @@ export default function PoolsScreen({ navigation }: { navigation: any }) {
     } finally {
       setSubmitting(false);
     }
-  }, [selectedPool, selectedAvailable, selectedChainIdx, amountA, amountB, evmAddress, manualSecret, cachedSecret, wallet.address, loadData]);
+  }, [selectedPool, selectedAvailable, amountA, amountB, wallet.address, loadData]);
 
   const handlePythiaDeposit = async (pool: PythiaPoolStatus) => {
     const amt = parseFloat(pythiaAmount) || 0;
@@ -784,21 +732,10 @@ export default function PoolsScreen({ navigation }: { navigation: any }) {
                     </View>
                   )}
 
-                  {/* Auth secret — only shown if not cached */}
-                  {isCrossChainPool(selectedPool) && !cachedSecret && (
-                    <>
-                      <Text style={styles.inputLabel}>Auth Secret (send_secret from pledge)</Text>
-                      <TextInput
-                        style={styles.input}
-                        placeholder="Enter your auth secret"
-                        placeholderTextColor={COLORS.textMuted}
-                        value={manualSecret}
-                        onChangeText={setManualSecret}
-                        secureTextEntry
-                        autoCapitalize="none"
-                        autoCorrect={false}
-                      />
-                    </>
+                  {isCrossChainPool(selectedPool) && (
+                    <Text style={styles.quoteText}>
+                      Mobile cross-chain liquidity is read-only until its server route uses the shared Wallet V1 V2 replay store.
+                    </Text>
                   )}
 
                   <View style={styles.modalActions}>

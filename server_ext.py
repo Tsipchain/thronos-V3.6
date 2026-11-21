@@ -1709,21 +1709,37 @@ def wallet_v1_add_liquidity():
                     added_a=amt_a, added_b=amt_b), 200
 
 
-def _wallet_v1_verify_owner(from_addr, priv_hex):
-    """Shared helper: derive THR address from private_key_hex, confirm it matches from_addr."""
-    try:
-        from cryptography.hazmat.primitives.asymmetric import ec as _ec
-        from cryptography.hazmat.primitives.serialization import Encoding as _Enc, PublicFormat as _PF
-        from cryptography.hazmat.backends import default_backend as _backend
-        from wallet_v1_address_derivation import derive_thronos_address as _derive
-        priv_key = _ec.derive_private_key(int(priv_hex, 16), _ec.SECP256K1(), _backend())
-        pub_bytes = priv_key.public_key().public_bytes(_Enc.X962, _PF.CompressedPoint)
-        derived = _derive(pub_bytes.hex())
-        if derived.upper() != from_addr.upper():
-            return False, None
-        return True, derived
-    except Exception:
-        return False, None
+def _authorize_wallet_service_action(data, action, server_module):
+    """Authorize V2 or the existing explicit legacy signed-intent contract."""
+    if str(data.get('signature_format') or '').strip() == 'wallet_v1_full_payload_v2':
+        _trusted, shape_error = server_module._wallet_v1_v2_trusted_execution_data(data, action)
+        if shape_error:
+            return False, None, None, (_jsonify(ok=False, **shape_error), 400)
+        ok, auth_error, owner = server_module._verify_walletv1_new_format(
+            data, action, require_full_payload=True)
+        if not ok:
+            return False, None, None, (_jsonify(**auth_error), 400)
+        return True, owner, data.get('payload') or {}, None
+
+    intent_raw = data.get('intent')
+    signature = (data.get('signature') or '').strip()
+    public_key = (data.get('public_key') or '').strip()
+    if not (intent_raw and signature and public_key):
+        return False, None, None, (
+            _jsonify(ok=False, error='signed_wallet_action_required',
+                     detail='Wallet V1 V2 or legacy signed intent required'), 401)
+    intent = intent_raw if isinstance(intent_raw, dict) else {}
+    if intent.get('action') != action:
+        return False, None, None, (_jsonify(ok=False, error='wrong_wallet_action'), 400)
+    ok, err_code, err_detail = _verify_wallet_action_intent(intent, signature, public_key)
+    if not ok:
+        return False, None, None, (_jsonify(ok=False, error=err_code, detail=err_detail), 400)
+    payload = data.get('payload') or {}
+    if not _verify_action_payload_hash(intent.get('payload_hash', ''), payload):
+        return False, None, None, (
+            _jsonify(ok=False, error='payload_hash_mismatch',
+                     detail='payload does not match signed intent'), 400)
+    return True, str(intent.get('from_thr', '')).strip().upper(), payload, None
 
 
 @app.route('/api/wallet/v1/create_token', methods=['POST'])
@@ -1741,28 +1757,14 @@ def wallet_v1_create_token():
     import uuid as _uuid3
 
     data = _request.get_json() or {}
-    intent_raw = data.get('intent')
-    signature  = (data.get('signature')  or '').strip()
-    public_key = (data.get('public_key') or '').strip()
-
-    if not (intent_raw and signature and public_key):
-        return _jsonify(ok=False, error='signed_wallet_action_required',
-                        detail='intent, signature, and public_key are required'), 401
-
-    intent = intent_raw if isinstance(intent_raw, dict) else {}
-    if intent.get('action') != 'token_create':
-        return _jsonify(ok=False, error='wrong_wallet_action'), 400
-    ok, err_code, err_detail = _verify_wallet_action_intent(intent, signature, public_key)
+    ok, from_addr, payload, error_response = _authorize_wallet_service_action(
+        data, 'token_create', _srv3)
     if not ok:
-        return _jsonify(ok=False, error=err_code, detail=err_detail), 400
-    payload = data.get('payload') or {}
-    if not _verify_action_payload_hash(intent.get('payload_hash', ''), payload):
-        return _jsonify(ok=False, error='payload_hash_mismatch',
-                        detail='payload does not match signed intent'), 400
-    from_addr    = str(intent.get('from_thr', '')).strip().upper()
+        return error_response
+    legacy_intent = data.get('intent') if isinstance(data.get('intent'), dict) else {}
     name         = str(payload.get('name') or '').strip()
-    symbol       = str(payload.get('symbol') or intent.get('asset') or '').strip().upper()
-    total_raw    = payload.get('total_supply') or intent.get('amount') or 0
+    symbol       = str(payload.get('symbol') or legacy_intent.get('asset') or '').strip().upper()
+    total_raw    = payload.get('total_supply') or legacy_intent.get('amount') or 0
     decimals_raw = payload.get('decimals', 0)
 
     if not from_addr or not name or not symbol:
@@ -1839,31 +1841,19 @@ def wallet_v1_nfts_mint():
     import re as _re4
 
     data = _request.get_json() or {}
-    intent_raw = data.get('intent')
-    signature  = (data.get('signature')  or '').strip()
-    public_key = (data.get('public_key') or '').strip()
-
-    if not (intent_raw and signature and public_key):
-        return _jsonify(ok=False, error='signed_wallet_action_required',
-                        detail='intent, signature, and public_key are required'), 401
-
-    intent = intent_raw if isinstance(intent_raw, dict) else {}
-    if intent.get('action') != 'nft_mint':
-        return _jsonify(ok=False, error='wrong_wallet_action'), 400
-    ok, err_code, err_detail = _verify_wallet_action_intent(intent, signature, public_key)
+    ok, from_addr, payload, error_response = _authorize_wallet_service_action(
+        data, 'nft_mint', _srv4)
     if not ok:
-        return _jsonify(ok=False, error=err_code, detail=err_detail), 400
-    payload = data.get('payload') or {}
-    if not _verify_action_payload_hash(intent.get('payload_hash', ''), payload):
-        return _jsonify(ok=False, error='payload_hash_mismatch',
-                        detail='payload does not match signed intent'), 400
-    from_addr      = str(intent.get('from_thr', '')).strip().upper()
+        return error_response
     name           = str(payload.get('name') or '').strip()
     description    = str(payload.get('description') or '').strip()
     category       = str(payload.get('category') or 'art').strip()
     price_raw      = payload.get('price', 0)
     royalties_raw  = payload.get('royalties', 10)
-    image_data_url = (data.get('image_data_url') or '').strip()  # not hashed — too large
+    # V2 rejects unsigned top-level image bytes. Legacy signed-intent clients
+    # retain their existing behavior until a separately reviewed upload-hash contract exists.
+    image_data_url = '' if data.get('signature_format') == 'wallet_v1_full_payload_v2' else (
+        data.get('image_data_url') or '').strip()
 
     if not from_addr or not name:
         return _jsonify(ok=False, error='missing_required_fields'), 400
@@ -1878,6 +1868,13 @@ def wallet_v1_nfts_mint():
         return _jsonify(ok=False, error='invalid_royalties'), 400
 
     mint_fee = _srv4.NFT_MINT_FEE
+    if data.get('signature_format') == 'wallet_v1_full_payload_v2':
+        try:
+            max_mint_fee = float(payload.get('max_mint_fee'))
+        except (TypeError, ValueError):
+            return _jsonify(ok=False, error='invalid_max_mint_fee'), 400
+        if mint_fee > max_mint_fee:
+            return _jsonify(ok=False, error='nft_mint_fee_exceeds_signed_maximum'), 409
     ledger = _srv4.load_json(_srv4.LEDGER_FILE, {})
     balance = float(ledger.get(from_addr, 0.0))
     if balance < mint_fee:
@@ -1946,26 +1943,12 @@ def wallet_v1_nfts_buy():
     import time as _t5
 
     data = _request.get_json() or {}
-    intent_raw = data.get('intent')
-    signature  = (data.get('signature')  or '').strip()
-    public_key = (data.get('public_key') or '').strip()
-
-    if not (intent_raw and signature and public_key):
-        return _jsonify(ok=False, error='signed_wallet_action_required',
-                        detail='intent, signature, and public_key are required'), 401
-
-    intent = intent_raw if isinstance(intent_raw, dict) else {}
-    if intent.get('action') != 'nft_buy':
-        return _jsonify(ok=False, error='wrong_wallet_action'), 400
-    ok, err_code, err_detail = _verify_wallet_action_intent(intent, signature, public_key)
+    ok, from_addr, payload, error_response = _authorize_wallet_service_action(
+        data, 'nft_buy', _srv5)
     if not ok:
-        return _jsonify(ok=False, error=err_code, detail=err_detail), 400
-    payload = data.get('payload') or {}
-    if not _verify_action_payload_hash(intent.get('payload_hash', ''), payload):
-        return _jsonify(ok=False, error='payload_hash_mismatch',
-                        detail='payload does not match signed intent'), 400
-    from_addr = str(intent.get('from_thr', '')).strip().upper()
-    nft_id    = str(payload.get('nft_id') or intent.get('asset') or '').strip()
+        return error_response
+    legacy_intent = data.get('intent') if isinstance(data.get('intent'), dict) else {}
+    nft_id = str(payload.get('nft_id') or legacy_intent.get('asset') or '').strip()
 
     if not from_addr or not nft_id:
         return _jsonify(ok=False, error='missing_required_fields'), 400
@@ -1983,6 +1966,13 @@ def wallet_v1_nfts_buy():
     price = float(nft.get('price', 0))
     if price <= 0:
         return _jsonify(ok=False, error='nft_has_no_price'), 400
+    if data.get('signature_format') == 'wallet_v1_full_payload_v2':
+        try:
+            max_price = float(payload.get('max_price'))
+        except (TypeError, ValueError):
+            return _jsonify(ok=False, error='invalid_max_price'), 400
+        if price > max_price:
+            return _jsonify(ok=False, error='nft_price_exceeds_signed_maximum'), 409
 
     ledger = _srv5.load_json(_srv5.LEDGER_FILE, {})
     buyer_balance = float(ledger.get(buyer, 0.0))

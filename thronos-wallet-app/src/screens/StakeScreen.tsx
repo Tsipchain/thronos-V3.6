@@ -45,7 +45,7 @@ export default function StakeScreen() {
         to: creds.address,
         amount: amt,
         token: 'THR',
-        nonce: Math.floor(Date.now() / 1000),
+        nonce: String(Math.floor(Date.now() / 1000)),
       });
       const result = await pledgeTokensSigned({ signedTx });
       if (result.success) {

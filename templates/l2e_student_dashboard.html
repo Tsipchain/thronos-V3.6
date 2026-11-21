@@ -285,8 +285,9 @@
 const $ = id => document.getElementById(id);
 
 let currentLang = localStorage.getItem('thronos_lang') || 'el';
-let connectedWallet = null;
+let serverLearnerId = {{ server_learner_id | tojson }};
 let serverVerifiedWallet = {{ server_wallet | tojson }};
+let displayWallet = null;
 let allCourses = [];
 
 function sanitizeId(id) {
@@ -304,25 +305,21 @@ function setLang(lang) {
 }
 
 function syncWalletFromSession() {
-    if (serverVerifiedWallet) {
-        connectedWallet = serverVerifiedWallet;
-    }
-    if (!connectedWallet) {
+    displayWallet = serverVerifiedWallet;
+    if (!displayWallet) {
         try {
             const earnAcct = JSON.parse(localStorage.getItem('earn_account') || 'null');
-            if (earnAcct && earnAcct.thr_address) {
-                connectedWallet = earnAcct.thr_address;
-            }
+            if (earnAcct && earnAcct.thr_address) displayWallet = earnAcct.thr_address;
         } catch {}
     }
-    if (!connectedWallet) {
+    if (!displayWallet) {
         try {
             const w = localStorage.getItem('walletAddress') || localStorage.getItem('thr_address');
-            if (w) connectedWallet = w;
+            if (w) displayWallet = w;
         } catch {}
     }
-    $('walletAddr').textContent = connectedWallet || '—';
-    if (!connectedWallet) {
+    $('walletAddr').textContent = displayWallet || '—';
+    if (!serverVerifiedWallet) {
         $('walletlessNotice').style.display = '';
     }
 }
@@ -410,7 +407,7 @@ function renderCourseRow(course, enrollment) {
         actions += `<button class="btn-sm" data-course-id="${safeId}" data-action="quiz">${el ? 'Λύσε το Quiz' : 'Take Quiz'}</button>`;
     }
     if (enrollment.reward_eligible && !enrollment.reward_claimed) {
-        if (connectedWallet) {
+        if (serverVerifiedWallet) {
             actions += `<button class="btn-sm primary" data-course-id="${safeId}" data-action="claim">${el ? 'Αξίωση L2E' : 'Claim L2E'}</button>`;
         } else {
             actions += `<button class="btn-sm primary" disabled title="${el ? 'Απαιτείται επαληθευμένο πορτοφόλι' : 'Verified wallet required'}">${el ? 'Αξίωση L2E' : 'Claim L2E'}</button>`;
@@ -452,15 +449,14 @@ document.addEventListener('click', function(e) {
 
 async function claimReward(courseId) {
     const safeId = sanitizeId(courseId);
-    if (!connectedWallet) {
-        alert(currentLang === 'el' ? 'Συνδέστε το πορτοφόλι σας πρώτα' : 'Connect your wallet first');
+    if (!serverVerifiedWallet) {
+        alert(currentLang === 'el' ? 'Απαιτείται επαληθευμένο πορτοφόλι για αξίωση L2E' : 'Server-verified wallet required for L2E claims');
         return;
     }
     try {
-        // Wallet signing authorization will be added when Wallet V1 signing is available
         const result = await apiPost(`/api/v1/courses/${encodeURIComponent(safeId)}/claim_reward`, {
-            learner_id: connectedWallet,
-            thr_addr: connectedWallet
+            learner_id: serverLearnerId,
+            thr_addr: serverVerifiedWallet
         });
         if (result.status === 'success') {
             alert(currentLang === 'el' ? 'L2E αξίωση επιτυχής!' : 'L2E claimed successfully!');
@@ -475,13 +471,13 @@ async function claimReward(courseId) {
 
 async function requestCert(courseId) {
     const safeId = sanitizeId(courseId);
-    if (!connectedWallet) {
-        alert(currentLang === 'el' ? 'Συνδέστε το πορτοφόλι σας πρώτα' : 'Connect your wallet first');
+    if (!serverLearnerId) {
+        alert(currentLang === 'el' ? 'Απαιτείται σύνδεση' : 'Sign-in required');
         return;
     }
     try {
-        const result = await apiPost(`/api/v1/courses/${encodeURIComponent(safeId)}/certificates/${encodeURIComponent(connectedWallet)}/request_approval`, {
-            actor_thr: connectedWallet
+        const result = await apiPost(`/api/v1/courses/${encodeURIComponent(safeId)}/certificates/${encodeURIComponent(serverLearnerId)}/request_approval`, {
+            actor_thr: serverVerifiedWallet || serverLearnerId
         });
         if (result.status === 'success') {
             alert(currentLang === 'el' ? 'Αίτηση πιστοποιητικού υποβλήθηκε!' : 'Certificate request submitted!');
@@ -500,11 +496,10 @@ function showDashboardError(msg) {
 }
 
 async function loadDashboard() {
-    const learnerId = connectedWallet || serverVerifiedWallet;
-    if (!learnerId) {
-        $('coursesList').innerHTML = `<div class="empty-state">
-            <span class="lang-el">Συνδέστε το πορτοφόλι σας ή συνδεθείτε για να δείτε τα μαθήματά σας</span>
-            <span class="lang-en">Connect your wallet or sign in to view your courses</span>
+    if (!serverLearnerId) {
+        $('coursesList').innerHTML = `<div class="empty-state" data-state="unauthenticated">
+            <span class="lang-el">Συνδεθείτε για να δείτε τα μαθήματά σας</span>
+            <span class="lang-en">Sign in to view your courses</span>
             <br><br>
             <a href="/courses" style="color:#3CFF7A;">
                 <span class="lang-el">Αναζήτηση Μαθημάτων →</span>
@@ -527,10 +522,10 @@ async function loadDashboard() {
         const courses = (data && data.courses) ? data.courses : [];
         allCourses = courses;
 
-        const enrolled = courses.filter(c => (c.students || []).includes(learnerId) || (c.enrollments || []).includes(learnerId));
+        const enrolled = courses.filter(c => (c.students || []).includes(serverLearnerId));
 
         if (enrolled.length === 0) {
-            $('coursesList').innerHTML = `<div class="empty-state">
+            $('coursesList').innerHTML = `<div class="empty-state" data-state="no-enrollments">
                 <span class="lang-el">Δεν έχετε εγγραφεί σε κανένα μάθημα ακόμα</span>
                 <span class="lang-en">You are not enrolled in any courses yet</span>
                 <br><br>
@@ -543,7 +538,7 @@ async function loadDashboard() {
             return;
         }
 
-        let enrolledCount = enrolled.length;
+        let enrolledCount = 0;
         let completedCount = 0;
         let quizPassedCount = 0;
         let certsCount = 0;
@@ -554,12 +549,13 @@ async function loadDashboard() {
         for (const course of enrolled) {
             let enrollment = {};
             try {
-                const eData = await apiGet(`/api/v1/courses/${encodeURIComponent(sanitizeId(course.id))}/enrollment/${encodeURIComponent(learnerId)}`);
+                const eData = await apiGet(`/api/v1/courses/${encodeURIComponent(sanitizeId(course.id))}/enrollment/${encodeURIComponent(serverLearnerId)}`);
                 enrollment = eData.enrollment || eData || {};
             } catch {
                 enrollment = { enrolled: true };
             }
 
+            enrolledCount++;
             if (enrollment.completed) completedCount++;
             if (enrollment.quiz_passed) quizPassedCount++;
             if (enrollment.certificate_issued) certsCount++;
@@ -572,7 +568,7 @@ async function loadDashboard() {
             if (enrollment.certificate_issued || enrollment.certificate_requested) {
                 let certTimeline = '';
                 try {
-                    const histData = await apiGet(`/api/v1/courses/${encodeURIComponent(sanitizeId(course.id))}/certificates/${encodeURIComponent(learnerId)}/history`);
+                    const histData = await apiGet(`/api/v1/courses/${encodeURIComponent(sanitizeId(course.id))}/certificates/${encodeURIComponent(serverLearnerId)}/history`);
                     const history = histData.history || [];
                     for (const evt of history) {
                         const ts = evt.timestamp ? new Date(evt.timestamp).toLocaleDateString() : '';
@@ -604,7 +600,7 @@ async function loadDashboard() {
         }
 
         try {
-            const bal = await apiGet(`/api/v1/l2e/balance/${encodeURIComponent(learnerId)}`);
+            const bal = await apiGet(`/api/v1/l2e/balance/${encodeURIComponent(serverLearnerId)}`);
             $('l2eBalance').textContent = bal.balance != null ? bal.balance : (bal.l2e_balance != null ? bal.l2e_balance : '0');
         } catch {}
 

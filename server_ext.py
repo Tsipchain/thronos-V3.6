@@ -2055,12 +2055,16 @@ from flask import render_template as _render_template
 @app.route("/student-dashboard")
 def l2e_student_dashboard_page():
     server_wallet = None
+    server_learner_id = None
     token = (_request.cookies.get('thr_session') or '').strip()
     if token:
         sess = _LOGIN_SESSION_STORE.get(token)
         if sess and sess.get('expires_at', 0) >= _time_wa.time():
             server_wallet = sess.get('address')
-    return _render_template("l2e_student_dashboard.html", server_wallet=server_wallet)
+            server_learner_id = sess.get('address')
+    return _render_template("l2e_student_dashboard.html",
+                           server_wallet=server_wallet,
+                           server_learner_id=server_learner_id)
 
 
 # ── Security: reject probe paths without banning shared proxy IPs ─────────────

@@ -44,11 +44,12 @@ jobs:
           npm install --prefix /tmp/wallet-e2e-js @noble/secp256k1@2.2.3
           npm ci --prefix thronos-wallet-app --ignore-scripts
           npm install --prefix mobile-sdk --ignore-scripts
-      - name: Typecheck native wallet and run SDK security gate
+      - name: Typecheck native wallet and run full SDK security/compatibility gate
         run: |
           ./thronos-wallet-app/node_modules/.bin/tsc --noEmit -p thronos-wallet-app/tsconfig.json
+          node tests/test_wallet_swap_device_approval.mjs
           cd mobile-sdk
-          npm exec -- jest src/__tests__/native-v2-security.test.js --runInBand
+          npm test -- --runInBand
       - name: Run Wallet V1 recovery regression and browser acceptance
         run: |
           python -m pytest -q \

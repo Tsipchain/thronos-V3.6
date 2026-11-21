@@ -70,6 +70,13 @@ const STORAGE_KEY_MNEMONIC_ENCRYPTED = '@thronos_wallet_mnemonic_encrypted';
 const STORAGE_KEY_TOKENS_CACHE = '@thronos_wallet_tokens_cache';
 const STORAGE_KEY_LAST_SYNC = '@thronos_wallet_last_sync';
 const STORAGE_KEY_PUBKEY = '@thronos_wallet_pubkey';
+const STORAGE_KEY_DERIVATION_VERSION = '@thronos_wallet_derivation_version';
+const STORAGE_KEY_ENCRYPTION_VERSION = '@thronos_wallet_encryption_version';
+
+export const ADDRESS_DERIVATION_LEGACY_V1 = 'mobile_sdk_hex_text_v1';
+export const ADDRESS_DERIVATION_CANONICAL_V2 = 'wallet_v1_pubkey_hash160_v2';
+export const MNEMONIC_ENCRYPTION_LEGACY_V1 = 'device_id_pbkdf2_v1';
+export const MNEMONIC_ENCRYPTION_OS_KEYSTORE_V2 = 'os_keystore_key_v2';
 
 export default class ThronosWallet {
     constructor(config) {
@@ -77,18 +84,25 @@ export default class ThronosWallet {
         this.apiUrl = config.apiUrl;
     }
 
-    /**
-     * Generate device-specific encryption key from device ID
-     * Uses PBKDF2-HMAC-SHA256 with 600,000 iterations (OWASP 2023)
-     * @returns {Promise<string>}
-     * @private
-     */
+    /** Return key material supplied by an OS Keychain/Keystore integration. */
     async getDeviceEncryptionKey() {
-        // Device ID typically comes from device info (e.g., Device.getUniqueId())
-        // For demo: use config device ID or generate stable key
-        const deviceId = this.config.deviceId || 'default-device-key';
+        if (typeof this.config.secureKeyProvider !== 'function') {
+            throw new Error('os_keystore_key_provider_required');
+        }
+        const key = await this.config.secureKeyProvider();
+        if (typeof key !== 'string' || key.length < 32 || key === 'default-device-key') {
+            throw new Error('invalid_os_keystore_key');
+        }
+        return key;
+    }
 
-        // In production, use PBKDF2 with 600k iterations
+    /** Derive the historical v1 key only inside the explicit migration flow. */
+    async getLegacyDeviceEncryptionKey() {
+        let deviceId = this.config.legacyDeviceId;
+        if (!deviceId && this.config.allowLegacyDefaultDeviceKeyMigration === true) {
+            deviceId = 'default-device-key';
+        }
+        if (!deviceId) throw new Error('legacy_device_key_required');
         const key = CryptoJS.PBKDF2(deviceId, 'thronos-device-kdf-v1', {
             keySize: 256 / 32,
             iterations: 600000
@@ -115,10 +129,13 @@ export default class ThronosWallet {
             }
 
             // Derive address from mnemonic
-            const address = await this.deriveAddressFromMnemonic(mnemonic);
+            const address = await this.deriveAddressFromMnemonic(
+                mnemonic,
+                ADDRESS_DERIVATION_CANONICAL_V2
+            );
 
             if (this.config.autoSave) {
-                await this.saveMnemonic(mnemonic, address);
+                await this.saveMnemonic(mnemonic, address, ADDRESS_DERIVATION_CANONICAL_V2);
             }
 
             return {
@@ -135,7 +152,7 @@ export default class ThronosWallet {
      * @param {string} mnemonic - BIP39 mnemonic (12 or 24 words)
      * @returns {Promise<{address: string}>}
      */
-    async import(mnemonic) {
+    async import(mnemonic, options = {}) {
         if (!mnemonic) {
             throw new Error('Mnemonic is required');
         }
@@ -144,13 +161,48 @@ export default class ThronosWallet {
             throw new Error('Invalid BIP39 mnemonic');
         }
 
-        const address = await this.deriveAddressFromMnemonic(mnemonic);
+        const canonicalAddress = await this.deriveAddressFromMnemonic(
+            mnemonic,
+            ADDRESS_DERIVATION_CANONICAL_V2
+        );
+        const legacyAddress = await this.deriveAddressFromMnemonic(
+            mnemonic,
+            ADDRESS_DERIVATION_LEGACY_V1
+        );
+        const existing = await this.get();
+        let address = canonicalAddress;
+        let derivationVersion = ADDRESS_DERIVATION_CANONICAL_V2;
 
-        if (this.config.autoSave) {
-            await this.saveMnemonic(mnemonic, address);
+        // Never overwrite a registered/stored identity because a newer SDK
+        // computes a different address. An existing address must match one of
+        // the explicit historical algorithms or be independently validated.
+        if (existing?.address) {
+            if (existing.address === legacyAddress) {
+                address = existing.address;
+                derivationVersion = ADDRESS_DERIVATION_LEGACY_V1;
+            } else if (existing.address === canonicalAddress) {
+                address = existing.address;
+            } else if (
+                options.authoritativeAddress === existing.address &&
+                typeof options.validateAuthoritativeIdentity === 'function' &&
+                await options.validateAuthoritativeIdentity({
+                    storedAddress: existing.address,
+                    canonicalAddress,
+                    legacyAddress,
+                }) === true
+            ) {
+                address = existing.address;
+                derivationVersion = existing.derivationVersion || 'authoritative_external_binding';
+            } else {
+                throw new Error('authoritative_identity_validation_required');
+            }
         }
 
-        return { address };
+        if (this.config.autoSave) {
+            await this.saveMnemonic(mnemonic, address, derivationVersion);
+        }
+
+        return { address, derivationVersion };
     }
 
     /**
@@ -160,7 +212,7 @@ export default class ThronosWallet {
      * @returns {Promise<string>}
      * @private
      */
-    async deriveAddressFromMnemonic(mnemonic) {
+    async deriveAddressFromMnemonic(mnemonic, version = ADDRESS_DERIVATION_CANONICAL_V2) {
         if (!bip32) {
             throw new Error('BIP32 library not available');
         }
@@ -176,13 +228,20 @@ export default class ThronosWallet {
             const path = "m/44'/1'/0'/0/0";
             const child = root.derivePath(path);
 
-            // Derive address from compressed public key using canonical Bitcoin-style algorithm
-            // 1. SHA256 of compressed public key
             const publicKeyHex = child.publicKey.toString('hex');
-            const sha256Hash = CryptoJS.SHA256(CryptoJS.enc.Hex.parse(publicKeyHex));
-
-            // 2. RIPEMD160 of SHA256 result
-            const ripemd160Hash = CryptoJS.RIPEMD160(sha256Hash).toString();
+            let ripemd160Hash;
+            if (version === ADDRESS_DERIVATION_LEGACY_V1) {
+                // Historical Mobile SDK behavior. CryptoJS hashes the UTF-8
+                // hexadecimal text twice; it is intentionally preserved only
+                // for restoring already-created identities.
+                const sha256HexText = CryptoJS.SHA256(publicKeyHex).toString();
+                ripemd160Hash = CryptoJS.RIPEMD160(sha256HexText).toString();
+            } else if (version === ADDRESS_DERIVATION_CANONICAL_V2) {
+                const sha256Bytes = CryptoJS.SHA256(CryptoJS.enc.Hex.parse(publicKeyHex));
+                ripemd160Hash = CryptoJS.RIPEMD160(sha256Bytes).toString();
+            } else {
+                throw new Error('unsupported_address_derivation_version');
+            }
 
             // 3. Take first 40 chars (uppercase) and prepend THR
             const address = `THR${ripemd160Hash.substring(0, 40).toUpperCase()}`;
@@ -199,14 +258,24 @@ export default class ThronosWallet {
      * @param {string} address - Derived wallet address
      * @returns {Promise<void>}
      */
-    async saveMnemonic(mnemonic, address) {
+    async saveMnemonic(
+        mnemonic,
+        address,
+        derivationVersion = ADDRESS_DERIVATION_CANONICAL_V2
+    ) {
         try {
+            if (derivationVersion !== 'authoritative_external_binding') {
+                const derived = await this.deriveAddressFromMnemonic(mnemonic, derivationVersion);
+                if (derived !== address) throw new Error('mnemonic_address_mismatch');
+            }
             const encryptionKey = await this.getDeviceEncryptionKey();
             const encrypted = CryptoJS.AES.encrypt(mnemonic, encryptionKey).toString();
 
             await AsyncStorage.multiSet([
                 [STORAGE_KEY_ADDRESS, address],
-                [STORAGE_KEY_MNEMONIC_ENCRYPTED, encrypted]
+                [STORAGE_KEY_MNEMONIC_ENCRYPTED, encrypted],
+                [STORAGE_KEY_DERIVATION_VERSION, derivationVersion],
+                [STORAGE_KEY_ENCRYPTION_VERSION, MNEMONIC_ENCRYPTION_OS_KEYSTORE_V2]
             ]);
         } catch (error) {
             throw new Error(`Failed to save wallet: ${error.message}`);
@@ -219,16 +288,21 @@ export default class ThronosWallet {
      */
     async get() {
         try {
-            const [[, address], [, pubkey]] = await AsyncStorage.multiGet([
+            const [[, address], [, pubkey], [, derivationVersion]] = await AsyncStorage.multiGet([
                 STORAGE_KEY_ADDRESS,
-                STORAGE_KEY_PUBKEY
+                STORAGE_KEY_PUBKEY,
+                STORAGE_KEY_DERIVATION_VERSION
             ]);
 
             if (!address) {
                 return null;
             }
 
-            return { address, pubkey: pubkey || null };
+            return {
+                address,
+                pubkey: pubkey || null,
+                derivationVersion: derivationVersion || null
+            };
         } catch (error) {
             console.error('Failed to get wallet:', error);
             return null;
@@ -242,23 +316,86 @@ export default class ThronosWallet {
      */
     async getMnemonicForSigning() {
         try {
-            const [[, encrypted]] = await AsyncStorage.multiGet([
-                STORAGE_KEY_MNEMONIC_ENCRYPTED
+            const [[, encrypted], [, encryptionVersion]] = await AsyncStorage.multiGet([
+                STORAGE_KEY_MNEMONIC_ENCRYPTED,
+                STORAGE_KEY_ENCRYPTION_VERSION
             ]);
 
             if (!encrypted) {
                 return null;
             }
 
+            if (encryptionVersion !== MNEMONIC_ENCRYPTION_OS_KEYSTORE_V2) {
+                throw new Error('legacy_mnemonic_migration_required');
+            }
             const encryptionKey = await this.getDeviceEncryptionKey();
             const decrypted = CryptoJS.AES.decrypt(encrypted, encryptionKey)
                 .toString(CryptoJS.enc.Utf8);
-
+            if (!bip39.validateMnemonic(decrypted)) throw new Error('mnemonic_decryption_failed');
             return decrypted;
         } catch (error) {
             console.error('Failed to decrypt mnemonic:', error);
-            return null;
+            throw error;
         }
+    }
+
+    /**
+     * Non-destructive transition for historical ciphertext. The old record is
+     * read only after explicit opt-in, matched to its stored address, approved
+     * by an authoritative recovery callback, and then atomically overwritten
+     * with an OS-backed v2 key. Failure leaves every old value untouched.
+     */
+    async migrateLegacyMnemonicStorage(validateRecovery) {
+        if (typeof validateRecovery !== 'function') {
+            throw new Error('recovery_validation_required');
+        }
+        const rows = await AsyncStorage.multiGet([
+            STORAGE_KEY_ADDRESS,
+            STORAGE_KEY_MNEMONIC_ENCRYPTED,
+            STORAGE_KEY_ENCRYPTION_VERSION
+        ]);
+        const address = rows[0][1];
+        const encrypted = rows[1][1];
+        const encryptionVersion = rows[2][1];
+        if (!address || !encrypted) throw new Error('legacy_wallet_not_found');
+        if (encryptionVersion === MNEMONIC_ENCRYPTION_OS_KEYSTORE_V2) {
+            return { migrated: false, address, reason: 'already_current' };
+        }
+
+        const legacyKey = await this.getLegacyDeviceEncryptionKey();
+        const mnemonic = CryptoJS.AES.decrypt(encrypted, legacyKey).toString(CryptoJS.enc.Utf8);
+        if (!bip39.validateMnemonic(mnemonic)) throw new Error('legacy_mnemonic_unlock_failed');
+        const canonicalAddress = await this.deriveAddressFromMnemonic(
+            mnemonic,
+            ADDRESS_DERIVATION_CANONICAL_V2
+        );
+        const legacyAddress = await this.deriveAddressFromMnemonic(
+            mnemonic,
+            ADDRESS_DERIVATION_LEGACY_V1
+        );
+        let derivationVersion;
+        if (address === legacyAddress) derivationVersion = ADDRESS_DERIVATION_LEGACY_V1;
+        else if (address === canonicalAddress) derivationVersion = ADDRESS_DERIVATION_CANONICAL_V2;
+        else throw new Error('stored_address_derivation_mismatch');
+
+        const verified = await validateRecovery({
+            address,
+            canonicalAddress,
+            legacyAddress,
+            derivationVersion,
+        });
+        if (verified !== true) throw new Error('recovery_validation_failed');
+        await this.saveMnemonic(mnemonic, address, derivationVersion);
+        return { migrated: true, address, derivationVersion };
+    }
+
+    async requireDeviceAuthentication(reason) {
+        if (typeof this.config.deviceAuthenticator !== 'function') {
+            throw new Error('device_authenticator_required');
+        }
+        const result = await this.config.deviceAuthenticator({ reason, allowDevicePasscode: true });
+        const approved = result === true || result?.success === true;
+        if (!approved) throw new Error('device_authentication_cancelled');
     }
 
     /**
@@ -279,7 +416,9 @@ export default class ThronosWallet {
             await AsyncStorage.multiRemove([
                 STORAGE_KEY_ADDRESS,
                 STORAGE_KEY_MNEMONIC_ENCRYPTED,
-                STORAGE_KEY_PUBKEY
+                STORAGE_KEY_PUBKEY,
+                STORAGE_KEY_DERIVATION_VERSION,
+                STORAGE_KEY_ENCRYPTION_VERSION
             ]);
         } catch (error) {
             throw new Error(`Failed to disconnect wallet: ${error.message}`);
@@ -294,6 +433,15 @@ export default class ThronosWallet {
      */
     async signTransaction(txParams) {
         try {
+            const beforeApproval = await this.get();
+            if (!beforeApproval?.address || beforeApproval.address !== txParams.from) {
+                throw new Error('wallet_address_mismatch');
+            }
+            await this.requireDeviceAuthentication('Approve Thronos transaction');
+            const afterApproval = await this.get();
+            if (!afterApproval?.address || afterApproval.address !== beforeApproval.address) {
+                throw new Error('wallet_changed_during_approval');
+            }
             const mnemonic = await this.getMnemonicForSigning();
             if (!mnemonic) {
                 throw new Error('Wallet not found or mnemonic not available');
@@ -350,6 +498,12 @@ export default class ThronosWallet {
         const wallet = await this.get();
         if (!wallet) {
             throw new Error('No wallet to export');
+        }
+
+        await this.requireDeviceAuthentication('Export Thronos recovery phrase');
+        const afterApproval = await this.get();
+        if (!afterApproval?.address || afterApproval.address !== wallet.address) {
+            throw new Error('wallet_changed_during_approval');
         }
 
         const mnemonic = await this.getMnemonicForSigning();

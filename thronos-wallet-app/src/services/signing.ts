@@ -107,20 +107,14 @@ export function canonicalWalletV1Json(value: CanonicalPayload): string {
 export async function signWalletV1FullPayloadRequest(
   action: string,
   payload: Record<string, any>,
-  options: { now?: number; ttlSeconds?: number; nonce?: string; requireDeviceApproval?: boolean } = {},
+  options: { now?: number; ttlSeconds?: number; nonce?: string } = {},
 ): Promise<WalletV1FullPayloadRequest> {
   const wallet = await getWallet();
   if (!wallet?.address) throw new Error('Wallet not initialized');
-
-  if (options.requireDeviceApproval !== false) {
-    const approved = await authenticateWithBiometrics(`Approve ${action.replace(/_/g, ' ')}`);
-    if (!approved) throw new Error('signing_cancelled');
-  }
-
-  // Do not decrypt or retrieve signing material until the operating-system
-  // approval gate succeeds. The key remains device-local for the short-lived
-  // signing operation and is never serialized into a request.
-  const privateKeyHex = await getPrivKeyHex();
+  const privateKeyHex = await approveAndGetSigningKey(
+    `Approve ${action.replace(/_/g, ' ')}`,
+    wallet.address,
+  );
   const privateKey = hexToBytes(privateKeyHex);
   const publicKey = secp256k1.getPublicKey(privateKey, true);
   const signerAddress = thrAddressFromPublicKey(publicKey);
@@ -179,6 +173,25 @@ async function getPrivKeyHex(): Promise<string> {
   return d.privateKey;
 }
 
+/**
+ * The OS prompt may offer the enrolled device passcode from the same system
+ * dialog. Explicit cancellation, lockout, expiry, or an exception returns
+ * false and is never followed by a second/weaker application fallback.
+ * Signing material is read only after approval and an account-switch check.
+ */
+async function approveAndGetSigningKey(prompt: string, expectedAddress?: string): Promise<string> {
+  const before = await getWallet();
+  if (!before?.address) throw new Error('Wallet not initialized');
+  if (expectedAddress && before.address !== expectedAddress) throw new Error('wallet_address_mismatch');
+
+  const approved = await authenticateWithBiometrics(prompt);
+  if (!approved) throw new Error('signing_cancelled');
+
+  const after = await getWallet();
+  if (!after?.address || after.address !== before.address) throw new Error('wallet_changed_during_approval');
+  return getPrivKeyHex();
+}
+
 function signHash(hash: Uint8Array, privHex: string): { signature: string; publicKey: string } {
   const privBytes = hexToBytes(privHex);
   const sig       = secp256k1.sign(hash, privBytes);
@@ -190,6 +203,8 @@ export async function signThronosTransaction(params: {
   from: string; to: string; amount: number; token?: string;
   fee?: number; nonce: string | number; timestamp?: number;
 }): Promise<SignedTransaction> {
+  const wallet = await getWallet();
+  if (!wallet?.address || wallet.address !== params.from) throw new Error('wallet_address_mismatch');
   const ts = params.timestamp || Math.floor(Date.now() / 1000);
   if (ts > 1e10) throw new Error('Use UNIX seconds for timestamp');
 
@@ -199,7 +214,7 @@ export async function signThronosTransaction(params: {
   };
 
   const hash            = sha256(new TextEncoder().encode(canonicalize(payload)));
-  const privHex         = await getPrivKeyHex();
+  const privHex         = await approveAndGetSigningKey('Approve Thronos transaction', params.from);
   const { signature, publicKey } = signHash(hash, privHex);
 
   return { ...payload, signature, publicKey, fee: params.fee || 0 };
@@ -207,7 +222,7 @@ export async function signThronosTransaction(params: {
 
 export async function signMessage(message: string): Promise<SignedMessage> {
   const hash            = sha256(new TextEncoder().encode(message));
-  const privHex         = await getPrivKeyHex();
+  const privHex         = await approveAndGetSigningKey('Approve message signature');
   const { signature, publicKey } = signHash(hash, privHex);
   return { message, signature, publicKey, timestamp: Math.floor(Date.now() / 1000) };
 }

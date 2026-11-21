@@ -43,6 +43,57 @@ against the replica.
 - Historical pledge migration remains separately versioned. Its credential
   lookup contract is intentionally unchanged and is not accepted as a fallback
   for V2 financial execution.
+- Every React Native signing entry point uses one approval boundary. The OS may
+  offer its enrolled device passcode inside that same system prompt. Explicit
+  cancel, denial, lockout, expiry, or an account change fails closed; the app
+  does not retry with an application PIN or other weaker fallback. Signing key
+  retrieval happens only after approval and the post-prompt account check.
+
+## Mobile SDK identity and storage compatibility
+
+The historical JavaScript Mobile SDK and canonical Wallet V1 do not hash the
+compressed public key in the same way:
+
+| Version | Input to SHA256 / RIPEMD160 | Purpose |
+|---|---|---|
+| `mobile_sdk_hex_text_v1` | UTF-8 public-key hex, then UTF-8 SHA256 hex | Restore an already stored historical Mobile SDK identity only |
+| `wallet_v1_pubkey_hash160_v2` | Compressed public-key bytes, then raw SHA256 digest | New enrollment and canonical Wallet V1 |
+
+For the synthetic BIP39 vector `abandon` x11 + `about`, v1 produces
+`THR7BBE7B233ED012758E8C1A7281AA805D26177F66`; v2 produces
+`THR3A2D4145A4F098523B3E8127F1DA87CFC55B8E79`. The SDK stores the selected
+version and never replaces an existing address merely because another version
+derives a different value. An address outside both vectors requires an
+independently authoritative validation callback before binding.
+
+New mnemonic persistence requires a caller-provided OS Keychain/Keystore key
+provider. `default-device-key` is rejected. Unversioned historical ciphertext
+is not decrypted during normal signing. Its opt-in migration requires the old
+device key, successful mnemonic validation, stored-address derivation matching,
+an affirmative recovery-validation callback, and a working OS-backed v2 key.
+No old value is deleted or rewritten until every check succeeds.
+
+The standalone SDK also requires a caller-provided system device authenticator
+before signing or recovery export. Cancellation produces no key access and no
+network call.
+
+## Legacy SDK test-debt classification
+
+The former 31 failures were stale expectations in one pre-client-side-wallet
+test file:
+
+- **Obsolete unsafe contract:** server-generated wallet secrets, raw
+  address/secret import, predictable network encryption keys, HMAC message
+  signing, secret export, and remote signature verification.
+- **Historical compatibility contract:** address persistence, mnemonic import,
+  export/recovery, disconnect, QR and lifecycle behavior. These are retained
+  with versioned golden vectors and device-approval tests.
+- **Genuine runtime regression:** the unversioned address derivation change and
+  predictable default encryption key. Both are corrected by this PR.
+- **Missing environment/dependency:** the old AsyncStorage mock omitted the
+  module's default export and its CryptoJS mock omitted hash/encoding APIs. The
+  replacement suite uses the real cryptography with an in-memory storage
+  adapter.
 
 ## Rollout and rollback
 

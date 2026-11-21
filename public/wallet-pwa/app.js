@@ -2330,9 +2330,6 @@ async function showEarn(options = {}) {
           <button class="btn earn-provider-btn" data-earn-provider="cpx" type="button" style="padding:10px;text-align:left">
             <strong>CPX Research</strong><small class="provider-state" style="display:block;color:var(--muted);margin-top:3px">Surveys</small>
           </button>
-          <button class="btn earn-provider-btn" data-earn-provider="bitcotasks" type="button" style="padding:10px;text-align:left">
-            <strong>BitcoTasks</strong><small class="provider-state" style="display:block;color:var(--muted);margin-top:3px">Offers &amp; tasks</small>
-          </button>
           <button class="btn earn-provider-btn" data-earn-provider="pure" type="button" style="padding:10px;text-align:left">
             <strong>PureSpectrum</strong><small class="provider-state" style="display:block;color:var(--muted);margin-top:3px">Provider pending</small>
           </button>
@@ -2530,7 +2527,6 @@ async function showEarn(options = {}) {
     });
     const providerDefinitions = {
       cpx: { endpoint: '/api/earn/cpx/offerwall', label: 'CPX Research' },
-      bitcotasks: { endpoint: '/api/earn/bitcotasks/offerwall', label: 'BitcoTasks' },
       pure: { endpoint: '/api/earn/pure/offerwall', label: 'PureSpectrum' },
       timewall: { endpoint: '/api/earn/timewall/offerwall', label: 'TimeWall' },
     };

@@ -42,58 +42,10 @@ You can assist with:
 - Compliance requirements
 """.strip()
 
-
-THRONOSLABS_KIDS_PROMPT = """
-You are the ThronosLabs Kids production AI.
-You create books, activities, comics and supporting publishing material from
-owner-approved canon. Treat character bibles, style bibles and creative memory
-as private tenant-scoped intellectual property.
-
-Rules:
-- Follow the target age and audience profile supplied by the production run.
-- For children, keep language and imagery age-appropriate and non-graphic.
-- Do not import mature game lore into children's adaptations unless it has been
-  explicitly rewritten and approved for that audience.
-- Preserve approved character identity, names, visual traits and relationships.
-- Do not silently invent canon facts. Mark proposals as new material.
-- Never reuse private characters, prompts or source material across tenants.
-- Never expose internal secrets, private keys, credentials or hidden metadata.
-""".strip()
-
-CRYPTO_HUNTERS_CHILDREN_PROMPT = """
-You are the Crypto Hunters children's adaptation production AI.
-Use only the owner-approved children's canon and aliases supplied in the request
-or retrieved from the authorized canon store.
-
-Rules:
-- Adapt all material to the target child age range.
-- Do not copy mature cybercrime, political, violent or dark-market framing from
-  the game canon directly into children's material.
-- Keep approved child character names and designs consistent.
-- Never invent replacement aliases for missing canon; flag the missing mapping.
-- Treat all characters and story material as private tenant-scoped IP.
-""".strip()
-
-CRYPTO_HUNTERS_GAME_PROMPT = """
-You are the Crypto Hunters game-production AI.
-Work from the approved game canon for characters, equipment, story, UI assets
-and gameplay content.
-
-Rules:
-- Preserve the game canon unless a production run explicitly proposes a change.
-- Keep children's-adaptation aliases separate from the main game canon.
-- Respect the production run's target audience and content constraints.
-- Treat character references and unreleased assets as private tenant-scoped IP.
-- Never expose internal secrets, credentials or hidden metadata.
-""".strip()
-
 # App ID → base prompt mapping
 APP_PROMPTS = {
     "verifyid": VERIFYID_BASE_PROMPT,
     "thronos": THRONOS_AUTONOMOUS_PROMPT,
-    "thronoslabs-kids": THRONOSLABS_KIDS_PROMPT,
-    "cryptohunters-children": CRYPTO_HUNTERS_CHILDREN_PROMPT,
-    "cryptohunters-game": CRYPTO_HUNTERS_GAME_PROMPT,
     "default": THRONOS_AUTONOMOUS_PROMPT,
 }
 
@@ -114,7 +66,7 @@ def register_ai_chat_routes(app, llm_router=None):
         AI Chat completion endpoint with app-specific routing.
         
         Headers:
-            X-Thronos-App: verifyid | thronos | thronoslabs-kids | cryptohunters-children | cryptohunters-game
+            X-Thronos-App: verifyid | thronos (default: thronos)
             X-Admin-Secret: Admin secret for internal requests (optional)
             Content-Type: application/json
         
@@ -230,7 +182,7 @@ def register_ai_chat_routes(app, llm_router=None):
             "default_app": AI_CORE_DEFAULT_APP,
             "endpoint": "POST /api/ai/chat",
             "headers": {
-                "X-Thronos-App": "verifyid | thronos | thronoslabs-kids | cryptohunters-children | cryptohunters-game"
+                "X-Thronos-App": "verifyid | thronos (default: thronos)"
             },
             "note": "Send X-Thronos-App header to get app-specific persona"
         }), 200

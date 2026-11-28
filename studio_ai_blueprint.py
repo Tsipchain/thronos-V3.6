@@ -259,8 +259,21 @@ def studio_chat():
     if not cleaned:
         return jsonify(ok=False, error="no_valid_messages"), 400
 
+    message_system = "\n\n".join(
+        item["content"] for item in cleaned if item["role"] == "system"
+    ).strip()
+    cleaned = [item for item in cleaned if item["role"] != "system"]
+    if not cleaned:
+        return jsonify(ok=False, error="user_or_assistant_message_required"), 400
+
     model = str(data.get("model") or "auto").strip()
     supplied_system = str(data.get("system_prompt") or "").strip()
+    if message_system:
+        supplied_system = (
+            f"{supplied_system}\n\n{message_system}".strip()
+            if supplied_system
+            else message_system
+        )
     temperature = float(data.get("temperature", 0.3))
     max_tokens = max(64, min(int(data.get("max_tokens", 2048)), 8192))
 
@@ -312,6 +325,14 @@ def studio_image():
 
     negative = str(data.get("negative_prompt") or "").strip()
     model = str(data.get("model") or os.getenv("AI_IMAGE_MODEL", "gpt-image-2")).strip()
+    allowed_models = {
+        item.strip()
+        for item in os.getenv("AI_IMAGE_ALLOWED_MODELS", "gpt-image-2").split(",")
+        if item.strip()
+    }
+    if model not in allowed_models:
+        return jsonify(ok=False, error="image_model_not_allowed"), 400
+
     quality = str(data.get("quality") or os.getenv("AI_IMAGE_QUALITY", "medium")).strip().lower()
     if quality not in {"auto", "low", "medium", "high"}:
         return jsonify(ok=False, error="invalid_quality"), 400

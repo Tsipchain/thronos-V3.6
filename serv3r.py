@@ -193,53 +193,9 @@ _PROMPT_FRAUD_ANALYST = (
     "Respond ONLY with valid JSON. No markdown, no code fences, no extra text."
 )
 
-_PROMPT_THRONOSLABS_KIDS = (
-    "You are the ThronosLabs Kids production AI. Work only from owner-approved "
-    "canon supplied by the requesting service. Follow the production run's target "
-    "age and audience profile. Preserve canonical character names, visual traits, "
-    "relationships and style rules. Never silently invent canon facts. Treat all "
-    "creative memory and character material as private tenant-scoped IP. Never "
-    "reuse private characters or source material across tenants."
-)
-
-_PROMPT_CRYPTOHUNTERS_CHILDREN = (
-    "You are the Crypto Hunters children's-adaptation production AI. Use only "
-    "owner-approved children's canon and aliases. Keep output age-appropriate. "
-    "Do not import mature cybercrime, political, violent or dark-market framing "
-    "directly from the game canon. Never invent missing child aliases; flag them. "
-    "Treat all characters and unreleased story material as private tenant-scoped IP."
-)
-
-_PROMPT_CRYPTOHUNTERS_GAME = (
-    "You are the Crypto Hunters game-production AI. Work from approved game canon "
-    "for characters, equipment, story, UI and gameplay assets. Keep children's "
-    "adaptation aliases separate from game canon. Treat unreleased character and "
-    "story material as private tenant-scoped IP."
-)
-
-_APP_PROMPTS = {
-    "thronos": _PROMPT_THRONOS,
-    "verifyid": _PROMPT_VERIFYID,
-    "thronoslabs-kids": _PROMPT_THRONOSLABS_KIDS,
-    "cryptohunters-children": _PROMPT_CRYPTOHUNTERS_CHILDREN,
-    "cryptohunters-game": _PROMPT_CRYPTOHUNTERS_GAME,
-}
-
 
 def _app_prompt(app_id: str) -> str:
-    return _APP_PROMPTS.get(app_id, _PROMPT_THRONOS)
-
-
-def _normalize_image_size(width: int, height: int) -> tuple[int, int]:
-    """Normalize GPT Image dimensions: <=3840, multiples of 16, <=3:1 ratio."""
-    width = max(256, min(int(width), 3840))
-    height = max(256, min(int(height), 3840))
-    width = max(256, (width // 16) * 16)
-    height = max(256, (height // 16) * 16)
-    ratio = max(width, height) / min(width, height)
-    if ratio > 3:
-        raise ValueError("Image aspect ratio must not exceed 3:1")
-    return width, height
+    return _PROMPT_VERIFYID if app_id == "verifyid" else _PROMPT_THRONOS
 
 
 # ---------------------------------------------------------------------------
@@ -516,9 +472,8 @@ def create_app() -> Flask:  # noqa: C901
                     "fraud":     "POST /api/v1/fraud/document (X-API-Key)",
                     "assistant": "POST /api/v1/assistant/ask  (X-API-Key)",
                     "ai_chat":   "POST /api/ai/chat           (X-Thronos-App)",
-                    "ai_image":  "POST /api/ai/image          (X-Internal-Key + X-Thronos-App)",
                 },
-                "apps": sorted(_APP_PROMPTS.keys()),
+                "apps": ["thronos", "verifyid"],
             }
         )
 
@@ -561,85 +516,6 @@ def create_app() -> Flask:  # noqa: C901
         except Exception as exc:
             logger.exception("[AI Core] /api/ai/chat error (app=%s)", app_id)
             return jsonify({"ok": False, "error": str(exc)}), 500
-
-    # ── /api/ai/image ────────────────────────────────────────────────────────
-    # Internal image generation for Thronos ecosystem services. Provider keys
-    # remain on AI Core; callers authenticate with APP_AI_KEY.
-
-    @app.route("/api/ai/image", methods=["POST"])
-    def api_ai_image():
-        if not _check_key(request):
-            return jsonify({"ok": False, "error": "unauthorized"}), 401
-
-        app_id = request.headers.get("X-Thronos-App", "thronos").lower().strip()
-        if app_id not in _APP_PROMPTS:
-            return jsonify({"ok": False, "error": "unsupported app scope"}), 400
-
-        data = request.get_json(silent=True) or {}
-        prompt = (data.get("prompt") or "").strip()
-        negative_prompt = (data.get("negative_prompt") or "").strip()
-        if not prompt:
-            return jsonify({"ok": False, "error": "prompt is required"}), 400
-
-        try:
-            width, height = _normalize_image_size(
-                int(data.get("width", 1024)),
-                int(data.get("height", 1536)),
-            )
-        except (TypeError, ValueError) as exc:
-            return jsonify({"ok": False, "error": f"invalid image size: {exc}"}), 400
-
-        api_key = os.getenv("OPENAI_API_KEY", "")
-        if not api_key:
-            return jsonify({"ok": False, "error": "image provider is not configured"}), 503
-
-        model = (data.get("model") or os.getenv("AI_IMAGE_MODEL", "gpt-image-2")).strip()
-        quality = (data.get("quality") or os.getenv("AI_IMAGE_QUALITY", "medium")).strip().lower()
-        if quality not in {"low", "medium", "high"}:
-            return jsonify({"ok": False, "error": "quality must be low, medium, or high"}), 400
-
-        scoped_prompt = f"{_app_prompt(app_id)}\n\nIMAGE TASK:\n{prompt}"
-        if negative_prompt:
-            scoped_prompt += f"\n\nAVOID:\n{negative_prompt}"
-
-        try:
-            import base64
-            import uuid as _uuid
-            from openai import OpenAI
-
-            client = OpenAI(api_key=api_key)
-            result = client.images.generate(
-                model=model,
-                prompt=scoped_prompt,
-                size=f"{width}x{height}",
-                quality=quality,
-            )
-            image_b64 = result.data[0].b64_json if result.data else None
-            if not image_b64:
-                raise RuntimeError("image provider returned no image data")
-
-            # Decode once here so malformed provider output never crosses the
-            # internal service boundary as a successful response.
-            image_bytes = base64.b64decode(image_b64, validate=True)
-            if not image_bytes:
-                raise RuntimeError("image provider returned empty image data")
-
-            request_id = str(_uuid.uuid4())
-            return jsonify({
-                "ok": True,
-                "id": request_id,
-                "job_id": request_id,
-                "image_base64": image_b64,
-                "format": "png",
-                "width": width,
-                "height": height,
-                "model": model,
-                "quality": quality,
-                "app_id": app_id,
-            })
-        except Exception as exc:
-            logger.exception("[AI Core] /api/ai/image error (app=%s)", app_id)
-            return jsonify({"ok": False, "error": str(exc)}), 503
 
     # ── CareerForge AI tx types ──────────────────────────────────────────────
     # Endpoint: POST /tx/submit

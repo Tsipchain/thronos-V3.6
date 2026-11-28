@@ -149,6 +149,15 @@ try:
 except Exception as exc:  # pragma: no cover
     app.logger.warning("[DELPHI] Blueprint NOT loaded: %s", exc)
 
+# ThronosLabs Studio AI — internal service-to-service production interface.
+# Uses the same server.py AI/provider layer; this is not a separate AI runtime.
+try:
+    from studio_ai_blueprint import studio_ai_bp
+    app.register_blueprint(studio_ai_bp, url_prefix="/api/studio")
+    app.logger.info("[StudioAI] Blueprint registered at /api/studio")
+except Exception as exc:  # pragma: no cover
+    app.logger.warning("[StudioAI] Blueprint NOT loaded: %s", exc)
+
 # ── Pledge-based v0 wallet migration ──────────────────────────────────────────
 # Lets pledge/HMAC users find their old THR address via send_secret only,
 # then migrate to a V1 wallet and set up PIN + passkey.

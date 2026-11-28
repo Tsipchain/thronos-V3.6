@@ -150,7 +150,7 @@ def _normalize_image_size(width: int, height: int) -> tuple[int, int]:
 def _scoped_system_prompt(app_id: str, supplied: str = "") -> str:
     base = _APP_PROMPTS[app_id]
     supplied = (supplied or "").strip()
-    return f"{base}\n\n{suppplied}" if supplied else base
+    return f"{base}\n\n{supplied}" if supplied else base
 
 
 def _call_existing_llm(
